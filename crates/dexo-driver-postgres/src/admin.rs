@@ -24,6 +24,20 @@ fn parse_pid(id: &str) -> Result<i32, DriverError> {
     })
 }
 
+fn duration_ms(row: &tokio_postgres::Row) -> Option<u64> {
+    // ponytail: EXTRACT(EPOCH) arrives as i64, f64 or numeric depending on PG/libpq.
+    row.try_get::<_, Option<i64>>(4)
+        .ok()
+        .flatten()
+        .map(|ms| ms.max(0) as u64)
+        .or_else(|| {
+            row.try_get::<_, Option<f64>>(4)
+                .ok()
+                .flatten()
+                .map(|ms| ms.max(0.0) as u64)
+        })
+}
+
 fn restricted_list<T>(error: tokio_postgres::Error) -> Result<AdminList<T>, DriverError> {
     if is_permission(&error) {
         Ok(AdminList {
@@ -87,7 +101,7 @@ impl AdministrationProvider for PostgresSession {
                     user: row.get(1),
                     database: row.get(2),
                     state: row.get(3),
-                    duration_ms: row.get::<_, Option<i64>>(4).map(|ms| ms.max(0) as u64),
+                    duration_ms: duration_ms(row),
                     current_query: row.get(5),
                 })
                 .collect(),
