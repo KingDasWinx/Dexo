@@ -2,6 +2,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use dexo_app::mcp::McpService;
+use dexo_app::mcp::grant::WRITE_TOOLS;
+use dexo_app::mcp::ledger::GrantLedger;
 use dexo_driver_api::Session;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
@@ -19,12 +21,16 @@ use crate::error::hidden_error;
 use crate::prompts;
 use crate::resources::{ResultStore, list_resources, read_resource};
 use crate::tools_read;
+use crate::tools_write;
 
 pub struct DexoMcpServer {
     pub service: Arc<McpService>,
     store: Arc<Mutex<ResultStore>>,
     cancel: CancellationToken,
     session: Option<Arc<dyn Session>>,
+    ledger: Option<Arc<dyn GrantLedger>>,
+    session_id: String,
+    last_revision: Arc<Mutex<u64>>,
 }
 
 impl DexoMcpServer {
@@ -35,11 +41,19 @@ impl DexoMcpServer {
             store: Arc::new(Mutex::new(ResultStore::new(profile))),
             cancel: CancellationToken::new(),
             session: None,
+            ledger: None,
+            session_id: uuid::Uuid::new_v4().to_string(),
+            last_revision: Arc::new(Mutex::new(0)),
         }
     }
 
     pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
         self.session = Some(session);
+        self
+    }
+
+    pub fn with_ledger(mut self, ledger: Arc<dyn GrantLedger>) -> Self {
+        self.ledger = Some(ledger);
         self
     }
 
@@ -68,6 +82,7 @@ impl ServerHandler for DexoMcpServer {
         ServerInfo::new(
             ServerCapabilities::builder()
                 .enable_tools()
+                .enable_tool_list_changed()
                 .enable_resources()
                 .enable_prompts()
                 .build(),
@@ -81,9 +96,21 @@ impl ServerHandler for DexoMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListToolsResult, McpError> {
-        Ok(ListToolsResult::with_all_items(tools_read::list_tools(
-            &self.service,
-        )))
+        let mut tools = tools_read::list_tools(&self.service);
+        if let Some(ledger) = &self.ledger {
+            for name in tools_write::write_tool_names(
+                ledger.as_ref(),
+                &self.service.profile.name,
+                tools_write::now_secs(),
+            ) {
+                tools.push(rmcp::model::Tool::new(
+                    name.clone(),
+                    name,
+                    tools_read::input_schema(),
+                ));
+            }
+        }
+        Ok(ListToolsResult::with_all_items(tools))
     }
 
     async fn call_tool(
@@ -95,6 +122,34 @@ impl ServerHandler for DexoMcpServer {
             return Ok(CallToolResult::error(vec![ContentBlock::text("cancelled")]).into());
         }
         let arguments = request.arguments.unwrap_or_default();
+        if WRITE_TOOLS
+            .iter()
+            .any(|name| *name == request.name.as_ref())
+        {
+            let Some(ledger) = &self.ledger else {
+                return Ok(CallToolResult::error(vec![ContentBlock::text(hidden_error())]).into());
+            };
+            match tools_write::call_write_tool(
+                &self.service,
+                ledger.as_ref(),
+                self.session.as_deref(),
+                &self.session_id,
+                &request.name,
+                arguments,
+                tools_write::now_secs(),
+            )
+            .await
+            {
+                Ok(text) => {
+                    return Ok(CallToolResult::success(vec![ContentBlock::text(text)]).into());
+                }
+                Err(error) => {
+                    return Ok(
+                        CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into(),
+                    );
+                }
+            }
+        }
         if request.name == "query_execute_read" {
             return execute_read_tool(self, arguments).await;
         }
@@ -123,11 +178,9 @@ impl ServerHandler for DexoMcpServer {
     ) -> Result<ReadResourceResponse, McpError> {
         let store = self.store.lock().expect("result store");
         match read_resource(&self.service, &store, &request.uri) {
-            Ok(body) => Ok(ReadResourceResult::new(vec![ResourceContents::text(
-                body,
-                request.uri,
-            )])
-            .into()),
+            Ok(body) => {
+                Ok(ReadResourceResult::new(vec![ResourceContents::text(body, request.uri)]).into())
+            }
             Err(_) => Err(McpError::resource_not_found(
                 hidden_error(),
                 Some(serde_json::json!({ "uri": request.uri })),
@@ -162,6 +215,36 @@ impl ServerHandler for DexoMcpServer {
             Ok(messages) => Ok(GetPromptResult::new(messages).into()),
             Err(_) => Err(McpError::invalid_params(hidden_error(), None)),
         }
+    }
+
+    async fn on_initialized(&self, context: NotificationContext<RoleServer>) {
+        let Some(ledger) = self.ledger.clone() else {
+            return;
+        };
+        let last_revision = Arc::clone(&self.last_revision);
+        let cancel = self.cancel.clone();
+        let peer = context.peer.clone();
+        tokio::spawn(async move {
+            loop {
+                tokio::select! {
+                    _ = cancel.cancelled() => break,
+                    _ = tokio::time::sleep(Duration::from_millis(150)) => {}
+                }
+                let revision = ledger.revision();
+                let changed = {
+                    let mut last = last_revision.lock().expect("revision");
+                    if revision != *last {
+                        *last = revision;
+                        true
+                    } else {
+                        false
+                    }
+                };
+                if changed {
+                    let _ = peer.notify_tool_list_changed().await;
+                }
+            }
+        });
     }
 
     async fn on_cancelled(

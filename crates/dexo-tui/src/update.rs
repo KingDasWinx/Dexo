@@ -241,6 +241,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.mcp_profiles.confirm_enable();
             Vec::new()
         }
+        Action::RevokeAllMcpGrants => {
+            model.mcp_profiles.revoke_all();
+            Vec::new()
+        }
         Action::Quit => vec![Effect::Quit],
     }
 }
@@ -329,6 +333,19 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             }
             KeyCode::Char('y') => {
                 model.data.confirm_production();
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
+    if model.mcp_profiles.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.mcp_profiles.open = false;
+                Vec::new()
+            }
+            KeyCode::Char('r') => {
+                model.mcp_profiles.revoke_all();
                 Vec::new()
             }
             _ => Vec::new(),
