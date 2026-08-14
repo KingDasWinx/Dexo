@@ -7,6 +7,7 @@ pub mod driver_registry;
 pub mod error;
 pub mod event;
 pub mod explain_service;
+pub mod mcp;
 pub mod project;
 pub mod query_service;
 pub mod schema;
