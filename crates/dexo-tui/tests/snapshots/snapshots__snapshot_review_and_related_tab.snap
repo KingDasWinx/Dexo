@@ -1,0 +1,34 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 100, 30)"
+---
+demo  local  public                                                                                 
+┌Explorer──────────────┐ SQL │ Data │ DDL │ Properties │ Explain │ demo.public.users                
+│[offline]             │┌SQL───────────────────────────────────────────────────────────────────────┐
+│▾ local               ││select 1                                                                  │
+│  ▸ public            ││                                                                          │
+│  ▸ mysql.use┌Review changes────────────────────────────────────────────────────────┐             │
+│actions: prop│target: demo.public.items                                             │             │
+│selected: loc│ops: 1                                                                │             │
+│             │status: Pending                                                       │             │
+│             │ready                                                                 │             │
+│             │INSERT INTO demo.public.items (id) VALUES ($1)                        │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             │                                                                      │             │
+│             └──────────────────────────────────────────────────────────────────────┘             │
+│                      ││                                                                          │
+│                      │└──────────────────────────────────────────────────────────────────────────┘
+│                      │┌Results (0)───────────────────────────────────────────────────────────────┐
+│                      ││                                                                          │
+│                      ││                                                                          │
+│                      ││                                                                          │
+│                      ││                                                                          │
+│                      ││                                                                          │
+│                      ││                                                                          │
+└──────────────────────┘└──────────────────────────────────────────────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette
