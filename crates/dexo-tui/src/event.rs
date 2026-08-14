@@ -17,6 +17,7 @@ pub fn action_from_event(event: Event) -> Option<Action> {
 }
 
 pub fn run() -> Result<(), TuiError> {
+    crate::terminal::install_panic_hook();
     tokio::runtime::Runtime::new()?.block_on(run_async())
 }
 

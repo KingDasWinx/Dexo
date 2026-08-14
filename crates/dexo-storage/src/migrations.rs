@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 6;
+pub const LATEST_SCHEMA_VERSION: u32 = 7;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -148,6 +148,26 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(6, datetime('now'));
 COMMIT;
 "#;
 
+pub const MIGRATION_7: &str = r#"
+BEGIN;
+CREATE TABLE workbench_layouts(
+  project_id TEXT PRIMARY KEY,
+  version INTEGER NOT NULL,
+  json TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  FOREIGN KEY(project_id) REFERENCES projects(id)
+);
+CREATE TABLE session_recovery(
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  clean_shutdown INTEGER NOT NULL DEFAULT 1,
+  layout_json TEXT,
+  tx_state TEXT NOT NULL DEFAULT 'idle',
+  updated_at TEXT NOT NULL
+);
+INSERT INTO schema_migrations(version, applied_at) VALUES(7, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -183,6 +203,10 @@ pub fn apply_pending(conn: &rusqlite::Connection) -> anyhow::Result<()> {
     }
     if current < 6 {
         conn.execute_batch(MIGRATION_6)?;
+        current = 6;
+    }
+    if current < 7 {
+        conn.execute_batch(MIGRATION_7)?;
     }
     Ok(())
 }
@@ -198,7 +222,7 @@ mod tests {
         conn.execute_batch(MIGRATION_1).unwrap();
         assert_eq!(read_schema_version(&conn), 1);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 6);
+        assert_eq!(read_schema_version(&conn), 7);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_history'",
@@ -217,7 +241,7 @@ mod tests {
         conn.execute_batch(MIGRATION_2).unwrap();
         assert_eq!(read_schema_version(&conn), 2);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 6);
+        assert_eq!(read_schema_version(&conn), 7);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_snapshots'",
@@ -237,7 +261,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_3).unwrap();
         assert_eq!(read_schema_version(&conn), 3);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 6);
+        assert_eq!(read_schema_version(&conn), 7);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_diff_snapshots'",
@@ -258,7 +282,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_4).unwrap();
         assert_eq!(read_schema_version(&conn), 4);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 6);
+        assert_eq!(read_schema_version(&conn), 7);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_profiles'",
@@ -280,7 +304,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_5).unwrap();
         assert_eq!(read_schema_version(&conn), 5);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 6);
+        assert_eq!(read_schema_version(&conn), 7);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_grants'",
@@ -289,5 +313,28 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name, "mcp_grants");
+    }
+
+    #[test]
+    fn migrates_v6_to_v7() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(MIGRATION_1).unwrap();
+        conn.execute_batch(MIGRATION_2).unwrap();
+        conn.execute_batch(super::MIGRATION_3).unwrap();
+        conn.execute_batch(super::MIGRATION_4).unwrap();
+        conn.execute_batch(super::MIGRATION_5).unwrap();
+        conn.execute_batch(super::MIGRATION_6).unwrap();
+        assert_eq!(read_schema_version(&conn), 6);
+        apply_pending(&conn).unwrap();
+        assert_eq!(read_schema_version(&conn), 7);
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "workbench_layouts");
     }
 }
