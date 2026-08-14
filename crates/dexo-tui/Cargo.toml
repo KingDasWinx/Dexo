@@ -11,7 +11,9 @@ crossterm.workspace = true
 dexo-app = { path = "../dexo-app" }
 dexo-driver-api = { path = "../dexo-driver-api" }
 ratatui.workspace = true
+serde.workspace = true
 tokio.workspace = true
+toml.workspace = true
 futures-util = "0.3"
 thiserror.workspace = true
 unicode-width.workspace = true
