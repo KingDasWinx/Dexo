@@ -10,10 +10,10 @@ demo  local  public
 │scope deny db.public.secrets                              │
 │tool catalog_search                                       │
 │tool object_describe                                      │
-│revoked all grants                                        │
-│                                                          │
-│                                                          │
-│                                                          │
+│resource db.public.items                                  │
+│grant data_write data_insert 900s                         │
+│diff profile db.public.* -> grant db.public.items         │
+│confirm revoke all grants                                 │
 │                                                          │
 │                                                          │
 │                                                          │
