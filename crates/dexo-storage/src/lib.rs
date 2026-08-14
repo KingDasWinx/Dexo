@@ -1,3 +1,4 @@
+mod layout;
 mod catalog_cache;
 mod connection;
 mod database;
@@ -8,9 +9,11 @@ mod mcp_profile;
 mod migrations;
 mod project;
 mod recovery;
+mod session_recovery;
 mod schema_snapshot;
 mod snippet;
 
+pub use layout::{LAYOUT_VERSION, LayoutRepository, Preferences, WorkbenchLayout};
 pub use catalog_cache::CatalogCache;
 pub use connection::{ConnectionRepository, ImportReport, export_portable, import_portable};
 pub use database::{AppPaths, Database};
@@ -20,5 +23,6 @@ pub use mcp::SqliteGrantLedger;
 pub use mcp_profile::McpProfileRepository;
 pub use project::ProjectRepository;
 pub use recovery::{RecoveryDocument, RecoveryRepository};
+pub use session_recovery::{SessionRecoveryRepository, SessionRecoveryState};
 pub use schema_snapshot::SchemaSnapshotStore;
 pub use snippet::SnippetRepository;

@@ -10,6 +10,8 @@ pub mod explain_service;
 pub mod mcp;
 pub mod project;
 pub mod query_service;
+pub mod recovery_service;
+pub mod diagnostic_service;
 pub mod schema;
 pub mod schema_diff;
 pub mod script;
