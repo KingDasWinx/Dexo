@@ -1,5 +1,5 @@
 use clap::Parser;
-use dexo_cli::args::{Args, McpCommand, McpConfigCommand, McpProfileCommand};
+use dexo_cli::args::{Args, McpCommand, McpConfigCommand, McpGrantCommand, McpProfileCommand};
 
 #[test]
 fn mcp_admin_args_parse() {
@@ -77,7 +77,64 @@ fn mcp_admin_args_parse() {
 }
 
 #[test]
-fn mcp_profile_lifecycle_and_config_print() {
+fn mcp_grant_args_parse() {
+    let create = Args::parse_from([
+        "dexo",
+        "mcp",
+        "grant",
+        "create",
+        "--profile",
+        "assistant",
+        "--connection",
+        "local",
+        "--capability",
+        "data_write",
+        "--tool",
+        "data_insert",
+        "--selector",
+        "db.public.items",
+        "--expires",
+        "15m",
+        "--confirm-target",
+        "local",
+    ]);
+    assert!(matches!(
+        create.command,
+        Some(dexo_cli::args::Command::Mcp {
+            command: McpCommand::Grant {
+                command: McpGrantCommand::Create { ref expires, .. }
+            }
+        }) if expires == "15m"
+    ));
+    let list = Args::parse_from(["dexo", "mcp", "grant", "list", "--profile", "assistant"]);
+    assert!(matches!(
+        list.command,
+        Some(dexo_cli::args::Command::Mcp {
+            command: McpCommand::Grant {
+                command: McpGrantCommand::List { .. }
+            }
+        })
+    ));
+    let revoke = Args::parse_from([
+        "dexo",
+        "mcp",
+        "grant",
+        "revoke",
+        "--id",
+        "00000000-0000-0000-0000-000000000001",
+    ]);
+    assert!(matches!(
+        revoke.command,
+        Some(dexo_cli::args::Command::Mcp {
+            command: McpCommand::Grant {
+                command: McpGrantCommand::Revoke { .. }
+            }
+        })
+    ));
+}
+
+#[test]
+fn mcp_grant_lifecycle_and_audit_export() {
     use dexo_app::DriverRegistry;
     use dexo_cli::run::run_dispatch;
     use std::sync::{Arc, atomic::AtomicBool};
@@ -156,4 +213,79 @@ fn mcp_profile_lifecycle_and_config_print() {
         || Ok(()),
     )
     .unwrap();
+    let missing_confirm = run_dispatch(
+        Args::parse_from([
+            "dexo",
+            "mcp",
+            "grant",
+            "create",
+            "--profile",
+            "assistant",
+            "--connection",
+            "local",
+            "--capability",
+            "data_write",
+            "--tool",
+            "data_insert",
+            "--selector",
+            "db.public.items",
+            "--expires",
+            "15m",
+        ]),
+        DriverRegistry::new(),
+        || Ok(()),
+    );
+    assert!(missing_confirm.is_err());
+    run_dispatch(
+        Args::parse_from([
+            "dexo",
+            "mcp",
+            "grant",
+            "create",
+            "--profile",
+            "assistant",
+            "--connection",
+            "local",
+            "--capability",
+            "data_write",
+            "--tool",
+            "data_insert",
+            "--selector",
+            "db.public.items",
+            "--expires",
+            "15m",
+            "--confirm-target",
+            "local",
+        ]),
+        DriverRegistry::new(),
+        || Ok(()),
+    )
+    .unwrap();
+    run_dispatch(
+        Args::parse_from(["dexo", "mcp", "grant", "list", "--profile", "assistant"]),
+        DriverRegistry::new(),
+        || Ok(()),
+    )
+    .unwrap();
+    run_dispatch(
+        Args::parse_from([
+            "dexo",
+            "mcp",
+            "grant",
+            "revoke-all",
+            "--profile",
+            "assistant",
+        ]),
+        DriverRegistry::new(),
+        || Ok(()),
+    )
+    .unwrap();
+    run_dispatch(
+        Args::parse_from(["dexo", "mcp", "audit", "--profile", "assistant"]),
+        DriverRegistry::new(),
+        || Ok(()),
+    )
+    .unwrap();
+    let tools = dexo_app::mcp::advertised_tools(&dexo_app::mcp::McpProfile::new("assistant"));
+    assert!(!tools.iter().any(|name| name.contains("grant")));
 }

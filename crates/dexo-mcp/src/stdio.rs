@@ -20,10 +20,21 @@ pub async fn serve_with_session(
     service: McpService,
     session: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
 ) -> anyhow::Result<()> {
+    serve_with_ledger(service, session, None).await
+}
+
+pub async fn serve_with_ledger(
+    service: McpService,
+    session: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
+    ledger: Option<std::sync::Arc<dyn dexo_app::mcp::GrantLedger>>,
+) -> anyhow::Result<()> {
     init_mcp_tracing();
     let mut server = DexoMcpServer::new(service);
     if let Some(session) = session {
         server = server.with_session(session);
+    }
+    if let Some(ledger) = ledger {
+        server = server.with_ledger(ledger);
     }
     let running = server.serve(rmcp::transport::io::stdio()).await?;
     running.waiting().await?;
@@ -35,8 +46,24 @@ where
     R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
+    serve_io_with_ledger(service, read, write, None).await
+}
+
+pub async fn serve_io_with_ledger<R, W>(
+    service: McpService,
+    read: R,
+    write: W,
+    ledger: Option<std::sync::Arc<dyn dexo_app::mcp::GrantLedger>>,
+) -> anyhow::Result<()>
+where
+    R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
+    W: tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
+{
     init_mcp_tracing();
-    let server = DexoMcpServer::new(service);
+    let mut server = DexoMcpServer::new(service);
+    if let Some(ledger) = ledger {
+        server = server.with_ledger(ledger);
+    }
     let running = server.serve((read, write)).await?;
     running.waiting().await?;
     Ok(())

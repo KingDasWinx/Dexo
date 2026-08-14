@@ -228,7 +228,7 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
         PaletteEntry {
             id: "mcp.profiles",
             title: "MCP Profiles",
-            keywords: &["mcp", "allowlist", "policy"],
+            keywords: &["mcp", "allowlist", "policy", "grant"],
             shortcut: None,
             disabled_reason: None,
             action: || Action::OpenMcpProfiles,
