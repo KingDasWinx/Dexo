@@ -269,6 +269,14 @@ pub enum McpCommand {
         #[arg(long)]
         profile: String,
     },
+    Grant {
+        #[command(subcommand)]
+        command: McpGrantCommand,
+    },
+    Audit {
+        #[arg(long)]
+        profile: Option<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -291,6 +299,38 @@ pub enum McpProfileCommand {
     Disable {
         #[arg(long)]
         name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpGrantCommand {
+    Create {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        connection: String,
+        #[arg(long)]
+        capability: String,
+        #[arg(long)]
+        tool: Vec<String>,
+        #[arg(long)]
+        selector: String,
+        #[arg(long, default_value = "15m")]
+        expires: String,
+        #[arg(long = "confirm-target")]
+        confirm_target: Option<String>,
+    },
+    List {
+        #[arg(long)]
+        profile: String,
+    },
+    Revoke {
+        #[arg(long)]
+        id: String,
+    },
+    RevokeAll {
+        #[arg(long)]
+        profile: String,
     },
 }
 

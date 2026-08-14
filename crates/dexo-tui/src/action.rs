@@ -77,6 +77,7 @@ pub enum Action {
     ConfirmAdmin,
     OpenMcpProfiles,
     ConfirmMcpEnable,
+    RevokeAllMcpGrants,
     Quit,
 }
 
