@@ -1,0 +1,54 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 160, 50)"
+---
+demo  local  public                                                                                                                                             
+┌Explorer─────────────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                  ┌Inspector────────────────────────┐
+│[offline]                        │┌SQL─────────────────────────────────────────────────────────────────────────────────────┐│No selection                     │
+│▾ local                          ││select 1                                                                                ││                                 │
+│  ▸ public                       ││                                                                                        ││                                 │
+│  ▸ mysql.users [restricted]     ││                                                                                        ││                                 │
+│actions: properties DDL data depe││                                                                                        ││                                 │
+│selected: local.public           ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││    ┌Sessions──────────────────────────────────────────────────────────────────────┐    ││                                 │
+│                                 ││    │admin captured_at=1710000000 paused=false                                     │    ││                                 │
+│                                 ││    │session 10 user=dexo db=dexo state=active duration_ms=1200 sql=select 1       │    ││                                 │
+│                                 ││    │session 11 user=dexo db=dexo state=idle in transaction duration_ms=4000 sql=lo│    ││                                 │
+│                                 ││    │block 11 -> 10 lock=AccessExclusiveLock rel=public.items                      │    ││                                 │
+│                                 ││    │preview SELECT pg_terminate_backend(11) lock=None confirm=TypeTarget          │    ││                                 │
+│                                 ││    │confirm-target= confirmed=false                                               │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    │                                                                              │    ││                                 │
+│                                 ││    └──────────────────────────────────────────────────────────────────────────────┘    ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 │└────────────────────────────────────────────────────────────────────────────────────────┘│                                 │
+│                                 │┌Results (0)─────────────────────────────────────────────────────────────────────────────┐│                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+│                                 ││                                                                                        ││                                 │
+└─────────────────────────────────┘└────────────────────────────────────────────────────────────────────────────────────────┘└─────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette

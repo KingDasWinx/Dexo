@@ -6,7 +6,10 @@ fn json_and_tree_goldens_and_unavailable_metrics() {
     assert_eq!(scan.root.kind, "Table scan");
     assert_eq!(scan.root.relation.as_deref(), Some("items"));
     assert_eq!(scan.root.estimates.rows, Some(1000.0));
-    assert!(scan.root.actual.rows.is_none(), "json actual must not be zeroed");
+    assert!(
+        scan.root.actual.rows.is_none(),
+        "json actual must not be zeroed"
+    );
     assert!(scan.root.loops.is_none());
 
     let join = parse_explain_json(include_str!("fixtures/explain/join.json")).unwrap();
@@ -37,8 +40,14 @@ fn capability_fallback_prefers_json_then_tree() {
         tree: true,
         tree_analyze: true,
     };
-    assert_eq!(select_format(false, full).unwrap(), NativeExplainFormat::Json);
-    assert_eq!(select_format(true, full).unwrap(), NativeExplainFormat::Tree);
+    assert_eq!(
+        select_format(false, full).unwrap(),
+        NativeExplainFormat::Json
+    );
+    assert_eq!(
+        select_format(true, full).unwrap(),
+        NativeExplainFormat::Tree
+    );
 }
 
 #[tokio::test]
@@ -73,5 +82,9 @@ async fn container_explain_json_and_analyze_tree() {
         .explain(ExplainRequest::analyzed("select 1"))
         .await
         .unwrap();
-    assert!(analyzed.raw.contains("->") || analyzed.root.loops.is_some() || !analyzed.root.kind.is_empty());
+    assert!(
+        analyzed.raw.contains("->")
+            || analyzed.root.loops.is_some()
+            || !analyzed.root.kind.is_empty()
+    );
 }
