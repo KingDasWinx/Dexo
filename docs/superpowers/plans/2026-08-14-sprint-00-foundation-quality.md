@@ -26,13 +26,13 @@
 
 **Files:** root manifests and all `crates/*` manifests/lib entrypoints.
 
-- [ ] **Step 1: Verify the workspace is absent**
+- [x] **Step 1: Verify the workspace is absent**
 
 Run: `cargo metadata --no-deps`
 
 Expected: FAIL because `Cargo.toml` does not exist.
 
-- [ ] **Step 2: Generate crate directories**
+- [x] **Step 2: Generate crate directories**
 
 Run exactly:
 
@@ -45,7 +45,7 @@ foreach ($name in $libs) { cargo new "crates/$name" --lib --vcs none }
 
 Expected: fourteen packages created without `.git` directories.
 
-- [ ] **Step 3: Replace the root workspace manifest**
+- [x] **Step 3: Replace the root workspace manifest**
 
 Create `Cargo.toml`:
 
@@ -84,13 +84,15 @@ components = ["clippy", "rustfmt"]
 profile = "minimal"
 ```
 
-- [ ] **Step 4: Verify all packages compile**
+- [x] **Step 4: Verify all packages compile**
 
 Run: `cargo check --workspace`
 
 Expected: PASS and a new `Cargo.lock`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Skipped: parent instruction prefers no commit unless the user asks.
 
 ```bash
 git add Cargo.toml Cargo.lock rust-toolchain.toml crates
@@ -101,7 +103,7 @@ git commit -m "build: bootstrap Dexo workspace"
 
 **Files:** `crates/dexo-app/src/error.rs`, `crates/dexo-app/src/event.rs`, `crates/dexo-app/src/lib.rs`.
 
-- [ ] **Step 1: Write the failing error contract test**
+- [x] **Step 1: Write the failing error contract test**
 
 Append to `crates/dexo-app/src/error.rs` after creating the module:
 
@@ -120,13 +122,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Run the test and observe failure**
+- [x] **Step 2: Run the test and observe failure**
 
 Run: `cargo test -p dexo-app public_error_never_exposes_technical_source`
 
 Expected: FAIL because `AppError` and `ErrorCategory` are undefined.
 
-- [ ] **Step 3: Implement the minimal stable error model**
+- [x] **Step 3: Implement the minimal stable error model**
 
 Create `crates/dexo-app/src/error.rs`:
 
@@ -178,13 +180,15 @@ pub enum AppEvent {
 
 Export both modules from `crates/dexo-app/src/lib.rs`.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test -p dexo-app`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Skipped: parent instruction prefers no commit unless the user asks.
 
 ```bash
 git add crates/dexo-app
@@ -195,7 +199,7 @@ git commit -m "feat(app): define stable errors and events"
 
 **Files:** `crates/dexo-runtime/src/task.rs`, `crates/dexo-runtime/src/lib.rs`, `crates/dexo-runtime/tests/task_registry.rs`.
 
-- [ ] **Step 1: Write the failing integration test**
+- [x] **Step 1: Write the failing integration test**
 
 ```rust
 use dexo_runtime::TaskRegistry;
@@ -211,13 +215,13 @@ async fn cancellation_reaches_registered_task() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-runtime --test task_registry`
 
 Expected: FAIL with unresolved `TaskRegistry`.
 
-- [ ] **Step 3: Implement registry and handle**
+- [x] **Step 3: Implement registry and handle**
 
 Create `crates/dexo-runtime/src/task.rs`:
 
@@ -251,13 +255,15 @@ impl TaskRegistry {
 
 Export the types from `lib.rs` and add workspace dependencies `tokio-util` and `uuid` to the crate.
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 Run: `cargo test -p dexo-runtime --test task_registry`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Skipped: parent instruction prefers no commit unless the user asks.
 
 ```bash
 git add crates/dexo-runtime
@@ -268,7 +274,7 @@ git commit -m "feat(runtime): add cancellable task registry"
 
 **Files:** `crates/dexo-cli/src/{args.rs,run.rs,lib.rs}`, `crates/dexo/src/main.rs`, `crates/dexo/tests/cli_smoke.rs`.
 
-- [ ] **Step 1: Write failing CLI tests**
+- [x] **Step 1: Write failing CLI tests**
 
 ```rust
 use assert_cmd::Command;
@@ -287,13 +293,13 @@ fn doctor_is_non_interactive() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo --test cli_smoke`
 
 Expected: FAIL because the binary has no `doctor` command.
 
-- [ ] **Step 3: Implement args and runner**
+- [x] **Step 3: Implement args and runner**
 
 Create `crates/dexo-cli/src/args.rs`:
 
@@ -325,13 +331,15 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 
 Export `args` and `run`; make `crates/dexo/src/main.rs` parse `Args` and call `run`. Add `assert_cmd` and `predicates` as dev-dependencies.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test -p dexo --test cli_smoke`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Skipped: parent instruction prefers no commit unless the user asks.
 
 ```bash
 git add crates/dexo crates/dexo-cli
@@ -342,13 +350,13 @@ git commit -m "feat(cli): establish version and doctor contracts"
 
 **Files:** `rustfmt.toml`, `deny.toml`, `.config/nextest.toml`, `.github/workflows/ci.yml`.
 
-- [ ] **Step 1: Run the intended gates before configuration**
+- [x] **Step 1: Run the intended gates before configuration**
 
 Run: `cargo fmt --all -- --check; cargo clippy --workspace --all-targets -- -D warnings; cargo nextest run --workspace`
 
 Expected: formatting/clippy pass; nextest may fail if not installed locally.
 
-- [ ] **Step 2: Add deterministic configuration**
+- [x] **Step 2: Add deterministic configuration**
 
 Create `rustfmt.toml`:
 
@@ -372,17 +380,19 @@ junit.path = "junit.xml"
 
 Create `deny.toml` allowing `MIT`, `Apache-2.0`, `BSD-2-Clause`, `BSD-3-Clause`, `ISC`, `Unicode-3.0`, and denying unknown registries/git sources.
 
-- [ ] **Step 3: Add native OS CI**
+- [x] **Step 3: Add native OS CI**
 
 Create `.github/workflows/ci.yml` with a matrix of `ubuntu-latest`, `macos-latest`, `windows-latest`; run `cargo fmt`, Clippy, `cargo nextest run --workspace`, and `cargo deny check` on Ubuntu. Pin actions by full commit SHA during implementation, not floating tags.
 
-- [ ] **Step 4: Run local gates**
+- [x] **Step 4: Run local gates**
 
 Run: `cargo fmt --all -- --check; cargo clippy --workspace --all-targets -- -D warnings; cargo test --workspace`
 
 Expected: PASS with zero warnings.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Skipped: parent instruction prefers no commit unless the user asks.
 
 ```bash
 git add rustfmt.toml deny.toml .config .github
@@ -393,7 +403,7 @@ git commit -m "ci: enforce Rust quality gates"
 
 **Files:** `crates/dexo-test-support/src/clock.rs`, `crates/dexo-test-support/src/lib.rs`.
 
-- [ ] **Step 1: Write failing fake clock test**
+- [x] **Step 1: Write failing fake clock test**
 
 ```rust
 #[cfg(test)]
@@ -410,13 +420,13 @@ mod tests {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-test-support fake_clock_advances_deterministically`
 
 Expected: FAIL because `FakeClock` is missing.
 
-- [ ] **Step 3: Implement clock contract**
+- [x] **Step 3: Implement clock contract**
 
 ```rust
 use std::{sync::Mutex, time::{Duration, SystemTime}};
@@ -432,13 +442,15 @@ impl FakeClock {
 impl Clock for FakeClock { fn now(&self) -> SystemTime { *self.0.lock().unwrap() } }
 ```
 
-- [ ] **Step 4: Run the full sprint gate**
+- [x] **Step 4: Run the full sprint gate**
 
 Run: `cargo fmt --all -- --check && cargo clippy --workspace --all-targets -- -D warnings && cargo test --workspace`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
+
+Skipped: parent instruction prefers no commit unless the user asks.
 
 ```bash
 git add crates/dexo-test-support
@@ -447,8 +459,8 @@ git commit -m "test: add deterministic clock support"
 
 ## Sprint exit
 
-- [ ] `cargo metadata --no-deps` lists fourteen packages.
-- [ ] `cargo test --workspace` passes without Docker.
-- [ ] `cargo clippy --workspace --all-targets -- -D warnings` passes.
-- [ ] `dexo --version` and `dexo doctor --json` match the public contract.
-- [ ] CI contains native Linux, macOS and Windows jobs.
+- [x] `cargo metadata --no-deps` lists fourteen packages.
+- [x] `cargo test --workspace` passes without Docker.
+- [x] `cargo clippy --workspace --all-targets -- -D warnings` passes.
+- [x] `dexo --version` and `dexo doctor --json` match the public contract.
+- [x] CI contains native Linux, macOS and Windows jobs.
