@@ -27,7 +27,7 @@
 - [x] **Step 2:** Run `cargo test -p dexo-driver-api catalog_object_round_trip`; expect FAIL.
 - [x] **Step 3:** Implement `ObjectKind` for catalog/schema/table/view/materialized-view/column/index/constraint/sequence/function/procedure/trigger/user/role plus `DriverSpecific(String)`. IDs are stable within snapshot and never derived from display text.
 - [x] **Step 4:** Run tests; expect lossless JSON round-trip.
-- [ ] **Step 5:** Commit with `git commit -m "feat(catalog): define normalized object model"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(catalog): define normalized object model"`.
 
 ### Task 2: Introspect PostgreSQL objects and extensions
 
@@ -37,7 +37,7 @@
 - [x] **Step 2:** Run ignored driver test; expect FAIL.
 - [x] **Step 3:** Query `pg_catalog` with bound namespace filters; fetch children on demand; preserve OIDs only as driver attributes; provide DDL and dependency queries separately.
 - [x] **Step 4:** Run PostgreSQL catalog contract; expect all seeded objects and no system schemas unless requested.
-- [ ] **Step 5:** Commit with `git commit -m "feat(postgres): introspect full catalog"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(postgres): introspect full catalog"`.
 
 ### Task 3: Introspect MySQL objects and extensions
 
@@ -47,7 +47,7 @@
 - [x] **Step 2:** Run ignored test; expect FAIL.
 - [x] **Step 3:** Query `information_schema`, `mysql` metadata only when permission permits, and `SHOW CREATE` through explicit methods. Permission denial marks capability `restricted` rather than failing the whole tree.
 - [x] **Step 4:** Run MySQL contract; expect all accessible objects and restriction reasons.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mysql): introspect full catalog"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(mysql): introspect full catalog"`.
 
 ### Task 4: Cache and invalidate catalog snapshots
 
@@ -68,7 +68,7 @@ fn ddl_invalidates_only_affected_subtree() {
 - [x] **Step 2:** Run target; expect FAIL.
 - [x] **Step 3:** Add `catalog_snapshots` and `catalog_objects` tables keyed by connection/database/snapshot/object; transactional replace; stale subtree markers; retention of latest complete snapshot.
 - [x] **Step 4:** Run v2->v3 migration, offline load and invalidation tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(storage): cache catalog snapshots"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(storage): cache catalog snapshots"`.
 
 ### Task 5: Search 100k objects deterministically
 
@@ -78,7 +78,7 @@ fn ddl_invalidates_only_affected_subtree() {
 - [x] **Step 2:** Run test; expect service absent.
 - [x] **Step 3:** Build normalized lowercase token index by name/schema/kind; score exact > prefix > word start > subsequence > recency/favorite; deterministic qualified-name tie-break.
 - [x] **Step 4:** Run test and `cargo bench -p dexo-app catalog_search`; record p95 baseline under `benchmarks/results/catalog-search.json`.
-- [ ] **Step 5:** Commit with `git commit -m "feat(catalog): index and search large catalogs"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(catalog): index and search large catalogs"`.
 
 ### Task 6: Build lazy explorer and object actions
 
@@ -88,7 +88,7 @@ fn ddl_invalidates_only_affected_subtree() {
 - [x] **Step 2:** Run snapshots; expect FAIL.
 - [x] **Step 3:** Implement node states unloaded/loading/loaded/restricted/error; background refresh; preserve selection by stable object ID; favorites and global search navigation.
 - [x] **Step 4:** Approve snapshots and run reducer tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): add lazy database explorer"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): add lazy database explorer"`.
 
 ### Task 7: Expose catalog inspection through CLI
 
@@ -98,7 +98,7 @@ fn ddl_invalidates_only_affected_subtree() {
 - [x] **Step 2:** Run tests; expect command absent.
 - [x] **Step 3:** Implement inspect/search/refresh options using `CatalogService`; stdout data only; restricted object exits permission category without revealing hidden candidates.
 - [x] **Step 4:** Run full sprint gate and both Docker catalog suites.
-- [ ] **Step 5:** Commit with `git commit -m "feat(cli): inspect and search catalog objects"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(cli): inspect and search catalog objects"`.
 
 ## Sprint exit
 

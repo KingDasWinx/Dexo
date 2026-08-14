@@ -1,6 +1,6 @@
 # Dexo Sprint 03: PostgreSQL and MySQL Query Vertical Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Conectar, executar consulta streaming, paginar, transacionar e cancelar com segurança em PostgreSQL e MySQL pela CLI.
 
@@ -51,7 +51,7 @@ Run: `cargo test -p dexo-test-support databases_are_reachable -- --ignored --noc
 
 Expected: PASS with both containers stopped on drop.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-test-support
@@ -99,7 +99,7 @@ Run: `cargo test -p dexo-driver-postgres --test query -- --ignored`
 
 Expected: PASS with three or more row batches.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-driver-postgres
@@ -138,7 +138,7 @@ Run: `cargo test -p dexo-driver-mysql --test query -- --ignored`
 
 Expected: PASS with `DbValue::U64(u64::MAX)`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-driver-mysql
@@ -185,7 +185,7 @@ Run: `cargo test -p dexo-runtime -p dexo-app && cargo test -p dexo-driver-postgr
 
 Expected: PASS; long `pg_sleep` and MySQL `SLEEP` end as `Cancelled`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-runtime crates/dexo-app
@@ -226,7 +226,7 @@ Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql transaction_contra
 
 Expected: PASS for both databases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-driver-api crates/dexo-driver-postgres crates/dexo-driver-mysql crates/dexo-app
@@ -269,7 +269,7 @@ Run: `cargo test -p dexo-cli --test query && cargo test --workspace -- --ignored
 
 Expected: PASS; stdout contains data only and cancellation exits with stable code.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo crates/dexo-cli crates/dexo-app
@@ -309,7 +309,7 @@ Run: `cargo test --workspace && cargo test --workspace -- --ignored && cargo cli
 
 Expected: PASS with Docker available.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-app

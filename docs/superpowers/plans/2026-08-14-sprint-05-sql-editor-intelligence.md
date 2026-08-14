@@ -1,6 +1,6 @@
 # Dexo Sprint 05: SQL Editor Intelligence Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Entregar documentos SQL completos, parsing tolerante, autocomplete contextual, parÃ¢metros, snippets, histÃ³rico e execuÃ§Ã£o de scripts.
 
@@ -40,7 +40,7 @@ fn unicode_edit_undo_redo_is_lossless() {
 
 - [x] **Step 4:** Run unit and proptest sequences of insert/delete/undo; expect exact string model parity.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(sql): add Unicode-safe document model"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(sql): add Unicode-safe document model"`.
 
 ### Task 2: Parse incomplete SQL incrementally
 
@@ -63,7 +63,7 @@ fn incomplete_select_still_highlights_keywords() {
 
 - [x] **Step 4:** Run parser corpus for PostgreSQL/MySQL valid, invalid and incomplete fixtures; expect no panic.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(sql): parse incomplete SQL incrementally"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(sql): parse incomplete SQL incrementally"`.
 
 ### Task 3: Select statements and classify risk conservatively
 
@@ -85,7 +85,7 @@ fn cte_delete_is_mutating() {
 
 - [x] **Step 4:** Run proptest ensuring concatenated spans cover non-whitespace input without overlap.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(sql): split and classify statements safely"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(sql): split and classify statements safely"`.
 
 ### Task 4: Add contextual completion and navigation
 
@@ -108,7 +108,7 @@ fn completes_columns_for_alias() {
 
 - [x] **Step 4:** Run tests with online and offline fake catalogs; expect same deterministic ranking.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(sql): add contextual completion and navigation"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(sql): add contextual completion and navigation"`.
 
 ### Task 5: Format and diagnose without corrupting SQL
 
@@ -122,7 +122,7 @@ fn completes_columns_for_alias() {
 
 - [x] **Step 4:** Run golden corpus; expect idempotence and exact literal preservation.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(sql): format and diagnose safely"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(sql): format and diagnose safely"`.
 
 ### Task 6: Persist parameters, snippets and history safely
 
@@ -146,7 +146,7 @@ fn history_excludes_parameter_values_by_default() {
 
 - [x] **Step 4:** Run storage migration v1->v2 and privacy tests.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(workbench): persist documents snippets and safe history"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(workbench): persist documents snippets and safe history"`.
 
 ### Task 7: Execute selections, statements and scripts from TUI/CLI
 
@@ -160,7 +160,7 @@ fn history_excludes_parameter_values_by_default() {
 
 - [x] **Step 4:** Run full sprint gate plus driver integration tests.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(workbench): execute SQL documents and scripts"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(workbench): execute SQL documents and scripts"`.
 
 ## Sprint exit
 

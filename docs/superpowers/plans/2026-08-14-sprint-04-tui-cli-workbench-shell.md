@@ -1,6 +1,6 @@
 # Dexo Sprint 04: TUI and CLI Workbench Shell Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Entregar uma TUI responsiva com layout IDE, command palette e grade streaming, sem regressão da CLI.
 
@@ -47,7 +47,7 @@ impl<B: TerminalControl> Drop for TerminalGuard<B> { fn drop(&mut self) { self.r
 
 - [x] **Step 4:** Run `cargo test -p dexo-tui terminal_guard_restores_once`; expect PASS.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): restore terminal safely"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): restore terminal safely"`.
 
 ### Task 2: Add deterministic model/update actions
 
@@ -75,7 +75,7 @@ pub enum Effect { StartQuery(QueryRequest), CancelQuery(QueryId), PersistLayout,
 
 - [x] **Step 4:** Run `cargo test -p dexo-tui`; expect reducer tests PASS.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): add pure application reducer"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): add pure application reducer"`.
 
 ### Task 3: Render responsive IDE layouts
 
@@ -97,7 +97,7 @@ fn layout_matches_terminal(width: u16, height: u16, expected: LayoutMode) {
 
 - [x] **Step 4:** Review snapshots with `cargo insta review`, accept only expected geometry, then rerun tests.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): render responsive workbench layouts"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): render responsive workbench layouts"`.
 
 ### Task 4: Virtualize the streaming result grid
 
@@ -121,7 +121,7 @@ fn renders_only_visible_rows() {
 
 - [x] **Step 4:** Run grid tests and a 100k-row benchmark smoke test; expect no allocation proportional to rendered offscreen rows.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): virtualize streaming result grid"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): virtualize streaming result grid"`.
 
 ### Task 5: Implement searchable command palette
 
@@ -144,7 +144,7 @@ fn palette_explains_disabled_commit() {
 
 - [x] **Step 4:** Run palette tests; expect search and disabled explanations PASS.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): add context-aware command palette"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): add context-aware command palette"`.
 
 ### Task 6: Dispatch TUI only when no CLI command is present
 
@@ -158,7 +158,7 @@ fn palette_explains_disabled_commit() {
 
 - [x] **Step 4:** Run `cargo test --workspace`; expect PASS without Docker.
 
-- [ ] **Step 5:** Commit with `git commit -m "feat: launch TUI or CLI from one binary"`.
+- [x] **Step 5:** Commit with `git commit -m "feat: launch TUI or CLI from one binary"`.
 
 ## Sprint exit
 

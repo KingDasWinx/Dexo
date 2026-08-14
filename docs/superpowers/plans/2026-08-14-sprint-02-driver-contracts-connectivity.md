@@ -76,7 +76,7 @@ Run: `cargo test -p dexo-driver-api --test contracts`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-driver-api
@@ -153,7 +153,7 @@ Run: `cargo test -p dexo-driver-api && cargo check --workspace`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-driver-api
@@ -199,7 +199,7 @@ Run: `cargo test -p dexo-transport --test proxy`
 
 Expected: PASS for direct rejection, valid CONNECT and non-2xx error.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-transport
@@ -236,7 +236,7 @@ Run: `cargo test -p dexo-transport --all-features --test tls`
 
 Expected: PASS for trusted test CA, hostname mismatch, expired cert and explicit insecure mode.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-transport
@@ -284,7 +284,7 @@ Run: `cargo test -p dexo-transport --test host_key`
 
 Expected: PASS, including new/trusted/changed cases.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-transport
@@ -329,7 +329,7 @@ Run: `cargo test -p dexo-driver-api -p dexo-transport -p dexo-app && cargo clipp
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-app
