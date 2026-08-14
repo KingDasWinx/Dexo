@@ -10,6 +10,7 @@ fn snapshot_model() -> Model {
         connection: ConnectionStatus {
             name: "local".into(),
             ready: true,
+            environment: String::new(),
         },
         schema: "public".into(),
         sql: "select 1".into(),

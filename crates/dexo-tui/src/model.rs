@@ -2,8 +2,11 @@ use dexo_app::event::TaskId;
 use dexo_app::{ExecutionTarget, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
 
+use crate::capabilities::TerminalCapabilities;
+use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan};
 use crate::screens::admin::AdminScreen;
+use crate::theme::Theme;
 use crate::screens::data::DataScreen;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
@@ -26,6 +29,7 @@ pub enum Focus {
 pub struct ConnectionStatus {
     pub name: String,
     pub ready: bool,
+    pub environment: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -516,6 +520,10 @@ pub struct Model {
     pub explain: ExplainScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
+    pub theme: Theme,
+    pub capabilities: TerminalCapabilities,
+    pub keymap: Keymap,
+    pub pending_chord: Chord,
 }
 
 impl Default for Model {
@@ -528,7 +536,16 @@ impl Default for Model {
             connection: ConnectionStatus {
                 name: String::new(),
                 ready: false,
+                environment: String::new(),
             },
+            theme: crate::theme::builtin_dark(),
+            capabilities: TerminalCapabilities {
+                color_depth: crate::capabilities::ColorDepth::TrueColor,
+                unicode: true,
+                mouse: true,
+            },
+            keymap: Keymap::default_profile(),
+            pending_chord: Chord { keys: Vec::new() },
             transaction: TransactionState::Idle,
             results: GridModel::default(),
             tabs: TabsState::default(),

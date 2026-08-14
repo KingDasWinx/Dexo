@@ -1,4 +1,7 @@
+pub mod accessibility;
 pub mod action;
+pub mod capabilities;
+pub mod keymap;
 pub mod event;
 pub mod layout;
 pub mod modals;
@@ -7,6 +10,7 @@ pub mod palette;
 pub mod render;
 pub mod screens;
 pub mod terminal;
+pub mod theme;
 pub mod update;
 pub mod widgets;
 

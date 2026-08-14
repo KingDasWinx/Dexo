@@ -1,16 +1,18 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
-use crate::model::{GridModel, Model, format_value, truncate_cell};
+use crate::model::{Model, format_value, truncate_cell};
+use crate::theme::Role;
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     if area.width < 2 || area.height < 2 {
-        frame.render_widget(Paragraph::new(preview_lines(&model.results, area)), area);
+        frame.render_widget(Paragraph::new(preview_lines(model, area)), area);
         return;
     }
     let title = if model.results.truncated() {
@@ -24,10 +26,11 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    frame.render_widget(Paragraph::new(preview_lines(&model.results, inner)), inner);
+    frame.render_widget(Paragraph::new(preview_lines(model, inner)), inner);
 }
 
-fn preview_lines(grid: &GridModel, area: Rect) -> Vec<Line<'static>> {
+fn preview_lines(model: &Model, area: Rect) -> Vec<Line<'static>> {
+    let grid = &model.results;
     let col_indices = grid.visible_column_indices();
     let widths = grid.column_widths();
     let mut header = Vec::new();
@@ -55,9 +58,17 @@ fn preview_lines(grid: &GridModel, area: Rect) -> Vec<Line<'static>> {
     }
     let mut lines = vec![Line::from(header)];
     let body_height = area.height.saturating_sub(1) as usize;
+    let selected = grid.selection();
+    let sel_marker = crate::accessibility::marker(Role::Selection, model.capabilities.unicode);
+    let sel_style = model.theme.style(Role::Selection, model.capabilities);
     for row in grid.visible_slice(grid.viewport().row_offset, body_height) {
         let mut remaining = area.width as usize;
         let mut spans = Vec::new();
+        let is_sel = selected.is_some_and(|(r, _)| r == row.source_index);
+        if is_sel {
+            spans.push(Span::styled(format!("{sel_marker} "), sel_style));
+            remaining = remaining.saturating_sub(sel_marker.chars().count() + 1);
+        }
         for index in grid.visible_column_indices() {
             let Some(value) = row.cells.get(index) else {
                 continue;
@@ -68,11 +79,15 @@ fn preview_lines(grid: &GridModel, area: Rect) -> Vec<Line<'static>> {
             }
             let width = widths.get(index).copied().unwrap_or(8) as usize;
             let cell_width = width.min(remaining);
-            spans.push(Span::raw(format!(
-                "{:width$}",
-                truncate_cell(&format_value(value), cell_width),
-                width = cell_width
-            )));
+            let style = if is_sel { sel_style } else { Style::default() };
+            spans.push(Span::styled(
+                format!(
+                    "{:width$}",
+                    truncate_cell(&format_value(value), cell_width),
+                    width = cell_width
+                ),
+                style,
+            ));
             remaining = remaining.saturating_sub(cell_width + 1);
             if remaining > 0 {
                 spans.push(Span::raw(" "));
