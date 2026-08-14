@@ -43,6 +43,13 @@ pub enum Command {
         #[arg(long)]
         json: bool,
     },
+    Connections {
+        #[command(subcommand)]
+        command: ConnectionsCommand,
+    },
+    Completion {
+        shell: String,
+    },
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
@@ -226,7 +233,18 @@ pub enum SessionsCommand {
 }
 
 #[derive(Debug, Subcommand)]
+pub enum ConnectionsCommand {
+    List,
+    Test {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
+    Show,
+    Path,
     Export {
         #[arg(long)]
         output: PathBuf,

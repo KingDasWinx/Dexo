@@ -3,9 +3,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::args::{
-    Args, Command, ConfigCommand, LaunchMode, McpCommand, McpConfigCommand, McpGrantCommand,
-    McpProfileCommand, OnError, OutputFormat, SchemaCommand, SchemaDiffFormat, SessionsCommand,
-    TransferCliFormat,
+    Args, Command, ConfigCommand, ConnectionsCommand, LaunchMode, McpCommand, McpConfigCommand,
+    McpGrantCommand, McpProfileCommand, OnError, OutputFormat, SchemaCommand, SchemaDiffFormat,
+    SessionsCommand, TransferCliFormat,
 };
 use crate::presenter;
 use dexo_app::mcp::{
@@ -66,6 +66,8 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
     match command {
         Command::Doctor { json: true } => println!(r#"{{"status":"ok"}}"#),
         Command::Doctor { json: false } => println!("Dexo: ok"),
+        Command::Connections { command } => run_connections(registry, command)?,
+        Command::Completion { shell } => print_completion(&shell)?,
         Command::Config { command } => run_config(command)?,
         Command::Query {
             connection,
@@ -312,12 +314,20 @@ async fn import_live(
 
 fn run_config(command: ConfigCommand) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
-    let db = Database::open(&paths.database)?;
     match command {
+        ConfigCommand::Show => {
+            let db = Database::open(&paths.database)?;
+            print!("{}", export_portable(db.connection())?);
+        }
+        ConfigCommand::Path => {
+            println!("{}", paths.config.display());
+        }
         ConfigCommand::Export { output } => {
+            let db = Database::open(&paths.database)?;
             std::fs::write(output, export_portable(db.connection())?)?;
         }
         ConfigCommand::Import { input } => {
+            let db = Database::open(&paths.database)?;
             let toml_text = std::fs::read_to_string(input)?;
             let report = import_portable(db.connection(), &toml_text)?;
             if report.connections_needing_secret.is_empty() {
@@ -330,6 +340,71 @@ fn run_config(command: ConfigCommand) -> anyhow::Result<()> {
                 );
             }
         }
+    }
+    Ok(())
+}
+
+fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    match command {
+        ConnectionsCommand::List => {
+            for profile in ConnectionRepository::new(db.connection()).list()? {
+                println!(
+                    "{}\t{}\t{}",
+                    profile.name, profile.driver, profile.environment
+                );
+            }
+        }
+        ConnectionsCommand::Test { name } => {
+            let profile = ConnectionRepository::new(db.connection())
+                .get_by_name(&name)?
+                .ok_or_else(|| {
+                    AppError::new(
+                        ErrorCategory::Configuration,
+                        format!("unknown connection '{name}'"),
+                    )
+                })?;
+            tokio::runtime::Runtime::new()?.block_on(async {
+                let _session = connect_session(&registry, &profile).await?;
+                println!("ok");
+                Ok::<_, anyhow::Error>(())
+            })?;
+        }
+    }
+    Ok(())
+}
+
+fn print_completion(shell: &str) -> anyhow::Result<()> {
+    let names = [
+        "doctor",
+        "connections",
+        "completion",
+        "config",
+        "query",
+        "run",
+        "inspect",
+        "schema",
+        "export",
+        "import",
+        "explain",
+        "sessions",
+        "mcp",
+    ];
+    match shell {
+        "bash" => {
+            println!("complete -W '{}' dexo", names.join(" "));
+        }
+        "powershell" | "pwsh" => {
+            println!(
+                "Register-ArgumentCompleter -CommandName dexo -ScriptBlock {{ '{}' -split ' ' }}",
+                names.join(" ")
+            );
+        }
+        "zsh" | "fish" => {
+            println!("{}", names.join("\n"));
+        }
+        other => anyhow::bail!("unsupported shell '{other}'"),
     }
     Ok(())
 }

@@ -1,0 +1,26 @@
+Local-first terminal database workbench
+
+Usage: dexo [COMMAND]
+
+Commands:
+  doctor       
+  connections  
+  completion   
+  config       
+  query        
+  run          
+  inspect      
+  schema       
+  export       
+  import       
+  explain      
+  sessions     
+  mcp          
+  help         Print this message or the help of the given subcommand(s)
+
+Options:
+  -h, --help
+          Print help
+
+  -V, --version
+          Print version
