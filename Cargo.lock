@@ -1418,7 +1418,7 @@ dependencies = [
 
 [[package]]
 name = "dexo"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1446,7 +1446,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-app"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "csv",
@@ -1468,7 +1468,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-cli"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1485,7 +1485,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-api"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "futures-core",
@@ -1498,7 +1498,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-mysql"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "dexo-app",
@@ -1513,7 +1513,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-postgres"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "async-trait",
  "dexo-app",
@@ -1529,7 +1529,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-mcp"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "dexo-app",
@@ -1547,7 +1547,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-runtime"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -1556,7 +1556,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-secrets"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "keyring",
  "secrecy",
@@ -1565,7 +1565,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-sql"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "proptest",
  "ropey",
@@ -1579,7 +1579,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-storage"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "dexo-app",
@@ -1595,7 +1595,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-test-support"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "anyhow",
  "testcontainers-modules",
@@ -1604,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-transport"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "rand 0.10.2",
  "rcgen",
@@ -1621,7 +1621,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-tui"
-version = "0.1.0"
+version = "1.0.0"
 dependencies = [
  "crossterm",
  "dexo-app",
