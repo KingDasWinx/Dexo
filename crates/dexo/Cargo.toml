@@ -14,7 +14,9 @@ dexo-cli = { path = "../dexo-cli" }
 dexo-driver-mysql = { path = "../dexo-driver-mysql" }
 dexo-driver-postgres = { path = "../dexo-driver-postgres" }
 dexo-tui = { path = "../dexo-tui" }
+dexo-storage = { path = "../dexo-storage" }
 tracing-subscriber.workspace = true
+tracing-appender.workspace = true
 
 [dev-dependencies]
 assert_cmd = "2.2.0"

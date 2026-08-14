@@ -16,11 +16,27 @@ fn main() -> anyhow::Result<()> {
 }
 
 fn init_tracing() {
-    let _ = tracing_subscriber::fmt()
-        .with_writer(std::io::stderr)
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn")),
-        )
-        .try_init();
+    let filter = || {
+        tracing_subscriber::EnvFilter::try_from_default_env()
+            .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("warn"))
+    };
+    let log_dir = dexo_storage::AppPaths::discover()
+        .map(|paths| paths.data_dir.join("logs"))
+        .unwrap_or_else(|_| std::env::temp_dir().join("dexo-logs"));
+    if let Ok(file) =
+        dexo_app::diagnostic_service::SizeRotatingWriter::open(&log_dir, "dexo", 1_048_576, 5)
+    {
+        let (writer, guard) = tracing_appender::non_blocking(file);
+        let _ = tracing_subscriber::fmt()
+            .with_writer(writer)
+            .with_env_filter(filter())
+            .try_init();
+        // ponytail: keep the non-blocking worker for process lifetime.
+        std::mem::forget(guard);
+    } else {
+        let _ = tracing_subscriber::fmt()
+            .with_writer(std::io::stderr)
+            .with_env_filter(filter())
+            .try_init();
+    }
 }
