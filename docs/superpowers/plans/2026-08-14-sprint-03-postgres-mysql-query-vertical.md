@@ -24,7 +24,7 @@
 
 **Files:** `dexo-test-support/src/containers.rs`, driver test manifests.
 
-- [ ] **Step 1: Write failing fixture smoke test**
+- [x] **Step 1: Write failing fixture smoke test**
 
 ```rust
 #[tokio::test]
@@ -35,17 +35,17 @@ async fn databases_are_reachable() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-test-support databases_are_reachable -- --ignored`
 
 Expected: FAIL because `DatabasePair` is missing.
 
-- [ ] **Step 3: Implement container fixture**
+- [x] **Step 3: Implement container fixture**
 
 Use `testcontainers_modules::{postgres::Postgres, mysql::Mysql}`. Pin images through explicit tags in one constants module. Create database `dexo`, user `dexo`, password `dexo_test_only`, wait for readiness, and expose URLs only to test code. Mark Docker tests `#[ignore = "requires Docker"]`.
 
-- [ ] **Step 4: Run fixture**
+- [x] **Step 4: Run fixture**
 
 Run: `cargo test -p dexo-test-support databases_are_reachable -- --ignored --nocapture`
 
@@ -62,7 +62,7 @@ git commit -m "test: add PostgreSQL and MySQL containers"
 
 **Files:** PostgreSQL driver files and integration test `tests/query.rs`.
 
-- [ ] **Step 1: Write failing driver contract test**
+- [x] **Step 1: Write failing driver contract test**
 
 ```rust
 #[tokio::test]
@@ -78,13 +78,13 @@ async fn streams_postgres_rows_without_collecting_all() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-driver-postgres --test query -- --ignored`
 
 Expected: FAIL because `PostgresFactory` is absent.
 
-- [ ] **Step 3: Implement factory/session/decoder**
+- [x] **Step 3: Implement factory/session/decoder**
 
 Connect using `tokio_postgres::Config` fields, never a logged URL. Spawn connection driver; use `query_raw` and emit batches of at most 256 rows. Decode NULL, bool, signed ints, floats as native text when lossless model lacks float, decimal, text, bytea, JSON, UUID, dates and arrays; unknown OIDs become `DbValue::Native`.
 
@@ -93,7 +93,7 @@ const ROW_BATCH_SIZE: usize = 256;
 pub struct PostgresSession { client: tokio_postgres::Client, cancel: tokio_postgres::CancelToken, capabilities: Vec<CapabilityState> }
 ```
 
-- [ ] **Step 4: Run integration test**
+- [x] **Step 4: Run integration test**
 
 Run: `cargo test -p dexo-driver-postgres --test query -- --ignored`
 
@@ -110,7 +110,7 @@ git commit -m "feat(postgres): stream query results"
 
 **Files:** MySQL driver files and integration test `tests/query.rs`.
 
-- [ ] **Step 1: Write equivalent failing MySQL test**
+- [x] **Step 1: Write equivalent failing MySQL test**
 
 ```rust
 #[tokio::test]
@@ -122,17 +122,17 @@ async fn streams_mysql_rows_and_unsigned_values() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-driver-mysql --test query -- --ignored`
 
 Expected: FAIL because `MysqlFactory` is absent.
 
-- [ ] **Step 3: Implement factory/session/decoder**
+- [x] **Step 3: Implement factory/session/decoder**
 
 Build `mysql_async::OptsBuilder` from typed fields and rustls settings. Use `QueryResult::stream_and_drop`, batch at 256, preserve unsigned values, decimal text, enum/set, JSON, zero-date native representation and unknown types.
 
-- [ ] **Step 4: Run integration test**
+- [x] **Step 4: Run integration test**
 
 Run: `cargo test -p dexo-driver-mysql --test query -- --ignored`
 
@@ -149,7 +149,7 @@ git commit -m "feat(mysql): stream query results"
 
 **Files:** `dexo-runtime/src/stream.rs`, `dexo-app/src/query_service.rs`, integration test.
 
-- [ ] **Step 1: Write failing backpressure test**
+- [x] **Step 1: Write failing backpressure test**
 
 ```rust
 #[tokio::test]
@@ -163,13 +163,13 @@ async fn producer_waits_when_two_batches_are_buffered() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-runtime producer_waits_when_two_batches_are_buffered`
 
 Expected: FAIL because `bounded_events` is missing.
 
-- [ ] **Step 3: Implement channel and query service**
+- [x] **Step 3: Implement channel and query service**
 
 ```rust
 pub fn bounded_events<T>(capacity: usize) -> (tokio::sync::mpsc::Sender<T>, tokio::sync::mpsc::Receiver<T>) {
@@ -179,7 +179,7 @@ pub fn bounded_events<T>(capacity: usize) -> (tokio::sync::mpsc::Sender<T>, toki
 
 `QueryService::start` registers a runtime task, forwards events through capacity 2, invokes driver cancel when token fires, and always removes the registry entry.
 
-- [ ] **Step 4: Run runtime and driver cancellation tests**
+- [x] **Step 4: Run runtime and driver cancellation tests**
 
 Run: `cargo test -p dexo-runtime -p dexo-app && cargo test -p dexo-driver-postgres -p dexo-driver-mysql cancel -- --ignored`
 
@@ -196,7 +196,7 @@ git commit -m "feat(query): add bounded streaming and cancellation"
 
 **Files:** driver API `transaction.rs`, both sessions, `dexo-app/src/transaction_service.rs`.
 
-- [ ] **Step 1: Write shared contract test**
+- [x] **Step 1: Write shared contract test**
 
 ```rust
 async fn transaction_contract(session: &dyn Session) {
@@ -210,17 +210,17 @@ async fn transaction_contract(session: &dyn Session) {
 }
 ```
 
-- [ ] **Step 2: Verify contract failure**
+- [x] **Step 2: Verify contract failure**
 
 Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql transaction_contract -- --ignored`
 
 Expected: FAIL because transaction methods do not exist.
 
-- [ ] **Step 3: Add `TransactionControl` capability**
+- [x] **Step 3: Add `TransactionControl` capability**
 
 Define a small `TransactionControl` trait with methods `begin`, `commit`, `rollback`, `savepoint`, `rollback_to`, `release_savepoint`, and state `Idle|Active|Failed|Unknown`; add `Session::transactions() -> Option<&dyn TransactionControl>`. PostgreSQL uses protocol transaction commands; MySQL uses explicit `START TRANSACTION`. Validate savepoint identifiers and never interpolate unvalidated input.
 
-- [ ] **Step 4: Run contracts**
+- [x] **Step 4: Run contracts**
 
 Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql transaction_contract -- --ignored`
 
@@ -237,7 +237,7 @@ git commit -m "feat(query): add transaction and savepoint control"
 
 **Files:** `dexo-cli/src/{args.rs,run.rs,presenter.rs}`, `dexo-cli/tests/query.rs`.
 
-- [ ] **Step 1: Write failing non-interactive CLI test**
+- [x] **Step 1: Write failing non-interactive CLI test**
 
 ```rust
 #[test]
@@ -248,13 +248,13 @@ fn jsonl_query_keeps_diagnostics_off_stdout() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-cli --test query`
 
 Expected: FAIL because query command/presenter is missing.
 
-- [ ] **Step 3: Implement public commands**
+- [x] **Step 3: Implement public commands**
 
 Add `query` for one statement and `run` for a file/stdin script. Inputs are mutually exclusive; parameters use repeated `--param name=value`; formats are table/csv/tsv/json/jsonl; `--non-interactive` denies any confirmation requirement with exit category `Permission`.
 
@@ -263,7 +263,7 @@ Add `query` for one statement and `run` for a file/stdin script. Inputs are mutu
 pub enum OutputFormat { Table, Csv, Tsv, Json, Jsonl }
 ```
 
-- [ ] **Step 4: Run CLI and Docker E2E**
+- [x] **Step 4: Run CLI and Docker E2E**
 
 Run: `cargo test -p dexo-cli --test query && cargo test --workspace -- --ignored`
 
@@ -280,7 +280,7 @@ git commit -m "feat(cli): query PostgreSQL and MySQL"
 
 **Files:** `dexo-app/src/session_manager.rs`, tests.
 
-- [ ] **Step 1: Write failing safety test**
+- [x] **Step 1: Write failing safety test**
 
 ```rust
 #[tokio::test]
@@ -293,17 +293,17 @@ async fn disconnect_during_transaction_never_retries_statement() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-app disconnect_during_transaction_never_retries_statement`
 
 Expected: FAIL because session lifecycle is absent.
 
-- [ ] **Step 3: Implement lifecycle**
+- [x] **Step 3: Implement lifecycle**
 
 Define `SessionState::{Connecting, Ready, Transaction, FailedTransaction, Unknown, Closed}`. Retry only pre-execution connection failures for read-only requests marked idempotent. Any disconnect after dispatch of a mutating statement sets `Unknown` and requires a new session.
 
-- [ ] **Step 4: Run sprint gate**
+- [x] **Step 4: Run sprint gate**
 
 Run: `cargo test --workspace && cargo test --workspace -- --ignored && cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
@@ -318,8 +318,8 @@ git commit -m "feat(session): fail safely on uncertain connection state"
 
 ## Sprint exit
 
-- [ ] Both databases stream 513+ rows in bounded batches.
-- [ ] Cancellation reaches the server and UI-facing task state.
-- [ ] Transactions/savepoints pass one shared contract suite.
-- [ ] CLI query/run supports structured formats and non-interactive semantics.
-- [ ] No mutating operation is retried after uncertain dispatch.
+- [x] Both databases stream 513+ rows in bounded batches.
+- [x] Cancellation reaches the server and UI-facing task state.
+- [x] Transactions/savepoints pass one shared contract suite.
+- [x] CLI query/run supports structured formats and non-interactive semantics.
+- [x] No mutating operation is retried after uncertain dispatch.

@@ -1,0 +1,30 @@
+[package]
+name = "dexo"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dexo-app = { path = "../dexo-app" }
+dexo-cli = { path = "../dexo-cli" }
+dexo-driver-mysql = { path = "../dexo-driver-mysql" }
+dexo-driver-postgres = { path = "../dexo-driver-postgres" }
+dexo-tui = { path = "../dexo-tui" }
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+assert_cmd = "2.2.0"
+dexo-app = { path = "../dexo-app" }
+dexo-secrets = { path = "../dexo-secrets" }
+dexo-storage = { path = "../dexo-storage" }
+dexo-test-support = { path = "../dexo-test-support" }
+predicates = "3.1.4"
+secrecy.workspace = true
+serde_json.workspace = true
+tempfile.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+uuid.workspace = true
