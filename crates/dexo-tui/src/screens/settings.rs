@@ -43,7 +43,10 @@ impl SettingsScreen {
             lines.push(format!("mouse {} -> {}", previous.mouse, self.mouse));
         }
         if self.animation != previous.animation {
-            lines.push(format!("animation {} -> {}", previous.animation, self.animation));
+            lines.push(format!(
+                "animation {} -> {}",
+                previous.animation, self.animation
+            ));
         }
         if self.unicode != previous.unicode {
             lines.push(format!("unicode {} -> {}", previous.unicode, self.unicode));

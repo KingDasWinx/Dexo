@@ -1,8 +1,8 @@
+use dexo_tui::action::Action;
 use dexo_tui::model::Model;
+use dexo_tui::palette::palette_entries;
 use dexo_tui::render::render_to_string;
 use dexo_tui::update::update;
-use dexo_tui::action::Action;
-use dexo_tui::palette::palette_entries;
 
 #[test]
 fn snapshot_settings_full_and_compact() {
@@ -61,14 +61,19 @@ fn action_registry_every_command_is_palette_reachable() {
 
 #[test]
 fn keyboard_only_opens_settings_and_recovery() {
-    let mut model = Model::default();
-    model.mouse = false;
-    update(&mut model, Action::Mouse(crossterm::event::MouseEvent {
-        kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-        column: 1,
-        row: 1,
-        modifiers: crossterm::event::KeyModifiers::NONE,
-    }));
+    let mut model = Model {
+        mouse: false,
+        ..Model::default()
+    };
+    update(
+        &mut model,
+        Action::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 1,
+            row: 1,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }),
+    );
     assert!(!model.settings.open);
     update(&mut model, Action::OpenSettings);
     assert!(model.settings.open);

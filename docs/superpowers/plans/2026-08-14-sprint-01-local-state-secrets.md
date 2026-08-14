@@ -1,6 +1,6 @@
 # Dexo Sprint 01: Local State and Secrets Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Persistir projetos e configurações não sensíveis localmente, proteger credenciais no keychain e recuperar estado sem cloud.
 
@@ -66,7 +66,7 @@ Run: `cargo test -p dexo-storage explicit_data_home_wins`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-storage
@@ -122,7 +122,7 @@ Run: `cargo test -p dexo-storage --test migration`
 
 Expected: PASS and `PRAGMA foreign_keys` equals `1`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-storage
@@ -190,7 +190,7 @@ Run: `cargo test -p dexo-storage --test project_repository`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-app crates/dexo-storage
@@ -242,7 +242,7 @@ Run: `cargo test -p dexo-secrets --test secret_store && cargo clippy -p dexo-sec
 
 Expected: PASS and no debug output containing `hunter2`.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-secrets
@@ -282,7 +282,7 @@ Run: `cargo test -p dexo-storage --test recovery`
 
 Expected: PASS.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-storage
@@ -325,7 +325,7 @@ Run: `cargo test -p dexo-storage -p dexo-secrets -p dexo-cli && cargo clippy --w
 
 Expected: PASS; sentinel absent from stdout, stderr and generated file.
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add crates/dexo-cli crates/dexo-storage

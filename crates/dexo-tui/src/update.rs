@@ -280,7 +280,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenDiagnostics => {
-            model.messages.push("diagnostic preview ready; never uploaded".into());
+            model
+                .messages
+                .push("diagnostic preview ready; never uploaded".into());
             Vec::new()
         }
         Action::ResultsUp => {
