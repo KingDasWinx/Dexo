@@ -35,3 +35,19 @@ jobs:
       - name: Deny
         if: runner.os == 'Linux'
         run: cargo deny check
+
+  mcp:
+    name: mcp conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+      - name: Protocol initialize ping tools list
+        run: |
+          cargo test -p dexo-mcp --test protocol --all-features
+          cargo test -p dexo --test mcp_stdio --all-features
+        env:
+          RUST_LOG: debug
