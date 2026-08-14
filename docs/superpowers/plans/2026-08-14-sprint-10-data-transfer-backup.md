@@ -20,39 +20,39 @@
 
 ### Task 1: Implement loss-aware codecs
 
-- [ ] **Step 1:** Add goldens for CSV/TSV/JSON/JSONL/SQL containing NULL, empty string, quotes, newlines, Unicode, decimal, date and bytes.
-- [ ] **Step 2:** Run; expect codecs absent.
-- [ ] **Step 3:** Define `RowEncoder`/`RowDecoder` streaming traits and `FormatOptions { null, delimiter, header, encoding, binary }`; SQL encoder delegates literals to driver dialect.
-- [ ] **Step 4:** Round-trip all lossless formats and explicitly assert documented lossy cases.
+- [x] **Step 1:** Add goldens for CSV/TSV/JSON/JSONL/SQL containing NULL, empty string, quotes, newlines, Unicode, decimal, date and bytes.
+- [x] **Step 2:** Run; expect codecs absent.
+- [x] **Step 3:** Define `RowEncoder`/`RowDecoder` streaming traits and `FormatOptions { null, delimiter, header, encoding, binary }`; SQL encoder delegates literals to driver dialect.
+- [x] **Step 4:** Round-trip all lossless formats and explicitly assert documented lossy cases.
 - [ ] **Step 5:** Commit with `git commit -m "feat(transfer): add streaming row codecs"`.
 
 ### Task 2: Export atomically with bounded memory
 
-- [ ] **Step 1:** Add test cancelling after 10k of 1m generated rows; destination must remain unchanged and temp file removed.
-- [ ] **Step 2:** Run; expect exporter absent.
-- [ ] **Step 3:** Stream query batches to `NamedTempFile` in destination directory, flush/sync per policy, then atomic persist; publish rows/bytes progress; never collect all rows.
-- [ ] **Step 4:** Run memory benchmark and cancellation test.
+- [x] **Step 1:** Add test cancelling after 10k of 1m generated rows; destination must remain unchanged and temp file removed.
+- [x] **Step 2:** Run; expect exporter absent.
+- [x] **Step 3:** Stream query batches to `NamedTempFile` in destination directory, flush/sync per policy, then atomic persist; publish rows/bytes progress; never collect all rows.
+- [x] **Step 4:** Run memory benchmark and cancellation test.
 - [ ] **Step 5:** Commit with `git commit -m "feat(transfer): export atomically with bounded memory"`.
 
 ### Task 3: Detect and preview imports
 
-- [ ] **Step 1:** Add fixtures for UTF-8/UTF-16, comma/tab/semicolon, header/no-header and ambiguous types; assert confidence plus user-overridable preview.
-- [ ] **Step 2:** Run; expect detector absent.
-- [ ] **Step 3:** Inspect bounded prefix only; detect BOM/encoding/delimiter/header; infer nullable bool/int/decimal/date/text without converting source; map source to target columns.
-- [ ] **Step 4:** Run fixtures and malformed input diagnostics with line/column.
+- [x] **Step 1:** Add fixtures for UTF-8/UTF-16, comma/tab/semicolon, header/no-header and ambiguous types; assert confidence plus user-overridable preview.
+- [x] **Step 2:** Run; expect detector absent.
+- [x] **Step 3:** Inspect bounded prefix only; detect BOM/encoding/delimiter/header; infer nullable bool/int/decimal/date/text without converting source; map source to target columns.
+- [x] **Step 4:** Run fixtures and malformed input diagnostics with line/column.
 - [ ] **Step 5:** Commit with `git commit -m "feat(transfer): detect and preview import files"`.
 
 ### Task 4: Import batches with explicit error strategy
 
-- [ ] **Step 1:** Add shared driver test with one invalid row under `Stop`, `Skip`, `RejectFile`; assert committed count and reject content.
-- [ ] **Step 2:** Run; expect import service absent.
-- [ ] **Step 3:** Implement bounded batches, bound values, transaction/savepoint strategy, cancel, progress and `RejectedRow { line, safe_error, original_fields }`; reject files use atomic writes.
-- [ ] **Step 4:** Run both databases and all strategies.
+- [x] **Step 1:** Add shared driver test with one invalid row under `Stop`, `Skip`, `RejectFile`; assert committed count and reject content.
+- [x] **Step 2:** Run; expect import service absent.
+- [x] **Step 3:** Implement bounded batches, bound values, transaction/savepoint strategy, cancel, progress and `RejectedRow { line, safe_error, original_fields }`; reject files use atomic writes.
+- [x] **Step 4:** Run both databases and all strategies.
 - [ ] **Step 5:** Commit with `git commit -m "feat(transfer): import batches with reject policies"`.
 
 ### Task 5: Wrap native backup and restore safely
 
-- [ ] **Step 1: Add fake process test**
+- [x] **Step 1: Add fake process test**
 
 ```rust
 #[tokio::test]
@@ -63,23 +63,23 @@ async fn password_never_appears_in_arguments_or_logs() {
 }
 ```
 
-- [ ] **Step 2:** Run target; expect adapter absent.
-- [ ] **Step 3:** Detect executable/version; enforce compatible major; create permission-restricted temporary passfile/defaults-extra-file, pass its path via supported environment/flag, delete on all exits; capture bounded sanitized stdout/stderr; terminate process tree on cancel.
-- [ ] **Step 4:** Run sentinel, version mismatch and cancel tests on all OS abstractions.
+- [x] **Step 2:** Run target; expect adapter absent.
+- [x] **Step 3:** Detect executable/version; enforce compatible major; create permission-restricted temporary passfile/defaults-extra-file, pass its path via supported environment/flag, delete on all exits; capture bounded sanitized stdout/stderr; terminate process tree on cancel.
+- [x] **Step 4:** Run sentinel, version mismatch and cancel tests on all OS abstractions.
 - [ ] **Step 5:** Commit with `git commit -m "feat(backup): wrap native tools without leaking secrets"`.
 
 ### Task 6: Add transfer TUI and CLI workflows
 
-- [ ] **Step 1:** Add CLI tests for stdin/file, mapping, formats and non-interactive error strategy; TUI snapshots for preview/progress/rejects.
-- [ ] **Step 2:** Run; expect absent workflows.
-- [ ] **Step 3:** Implement `dexo export`, `dexo import`, progress/cancel/retry-safe UI, local file chooser and native backup/restore actions in command palette.
-- [ ] **Step 4:** Run full sprint gate with 1m-row streaming fixture.
+- [x] **Step 1:** Add CLI tests for stdin/file, mapping, formats and non-interactive error strategy; TUI snapshots for preview/progress/rejects.
+- [x] **Step 2:** Run; expect absent workflows.
+- [x] **Step 3:** Implement `dexo export`, `dexo import`, progress/cancel/retry-safe UI, local file chooser and native backup/restore actions in command palette.
+- [x] **Step 4:** Run full sprint gate with 1m-row streaming fixture.
 - [ ] **Step 5:** Commit with `git commit -m "feat: expose import export backup and restore"`.
 
 ## Sprint exit
 
-- [ ] All formats cover NULL/empty/binary semantics.
-- [ ] Export cancellation preserves original destination.
-- [ ] Imports report exact line errors and strategy outcomes.
-- [ ] One-million-row test stays within recorded memory budget.
-- [ ] Secret sentinel is absent from args/env logs and artifacts after cleanup.
+- [x] All formats cover NULL/empty/binary semantics.
+- [x] Export cancellation preserves original destination.
+- [x] Imports report exact line errors and strategy outcomes.
+- [x] One-million-row test stays within recorded memory budget.
+- [x] Secret sentinel is absent from args/env logs and artifacts after cleanup.
