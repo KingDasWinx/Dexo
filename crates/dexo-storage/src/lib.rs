@@ -3,6 +3,7 @@ mod connection;
 mod database;
 mod document;
 mod history;
+mod mcp_profile;
 mod migrations;
 mod project;
 mod recovery;
@@ -14,6 +15,7 @@ pub use connection::{ConnectionRepository, ImportReport, export_portable, import
 pub use database::{AppPaths, Database};
 pub use document::{DocumentRepository, FileFingerprint, has_external_conflict};
 pub use history::HistoryRepository;
+pub use mcp_profile::McpProfileRepository;
 pub use project::ProjectRepository;
 pub use recovery::{RecoveryDocument, RecoveryRepository};
 pub use schema_snapshot::SchemaSnapshotStore;

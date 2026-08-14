@@ -68,6 +68,22 @@ impl<'a> CatalogCache<'a> {
         self.load_snapshot(&snapshot_id)
     }
 
+    pub fn load_latest_any(&self) -> anyhow::Result<Vec<CatalogObject>> {
+        let snapshot_id: Option<String> = self
+            .conn
+            .query_row(
+                "SELECT id FROM catalog_snapshots WHERE complete = 1
+                 ORDER BY created_at DESC LIMIT 1",
+                [],
+                |row| row.get(0),
+            )
+            .optional()?;
+        match snapshot_id {
+            Some(id) => self.load_snapshot(&id),
+            None => Ok(Vec::new()),
+        }
+    }
+
     pub fn load_snapshot(&self, snapshot_id: &str) -> anyhow::Result<Vec<CatalogObject>> {
         let mut stmt = self.conn.prepare(
             "SELECT json FROM catalog_objects WHERE snapshot_id = ?1 ORDER BY qualified_name",
