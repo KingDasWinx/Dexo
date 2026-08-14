@@ -1,0 +1,24 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 60, 20)"
+---
+┌Schema diff───────────────────────────────────────────────┐
+│prod@v1 -> prod@v2                                        │
+│filters added=true removed=false changed=true             │
+│confirm=false apply=blocked                               │
+│> added db.public.orders_new destructive=false data_loss=f│
+│  changed db.public.users destructive=false data_loss=true│
+│--- script ---                                            │
+│-- dexo:risk destructive=true data_loss=true lock=AccessEx│
+│DROP TABLE db.public.gone;                                │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette
