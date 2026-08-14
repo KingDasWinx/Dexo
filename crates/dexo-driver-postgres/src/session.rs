@@ -152,6 +152,10 @@ impl Session for PostgresSession {
     fn bulk(&self) -> Option<&dyn dexo_driver_api::BulkWriter> {
         Some(self)
     }
+
+    fn explain(&self) -> Option<&dyn dexo_driver_api::ExplainProvider> {
+        Some(self)
+    }
 }
 
 #[async_trait::async_trait]

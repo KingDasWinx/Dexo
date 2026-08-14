@@ -38,3 +38,10 @@ impl ConnectionFactory for FakeFactory {
 fn factory_is_object_safe() {
     let _: Box<dyn ConnectionFactory> = Box::new(FakeFactory);
 }
+
+#[test]
+fn explain_request_keeps_analyze_explicit() {
+    use dexo_driver_api::ExplainRequest;
+    assert!(!ExplainRequest::estimated("select 1").analyze);
+    assert!(ExplainRequest::analyzed("select 1").analyze);
+}
