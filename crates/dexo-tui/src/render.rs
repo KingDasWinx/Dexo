@@ -94,6 +94,18 @@ pub fn render(frame: &mut Frame, model: &Model) {
             );
         }
     }
+    if model.mcp_profiles.open {
+        let area = frame.area();
+        if area.width >= 10 && area.height >= 5 {
+            let popup = centered(area, 72, 14);
+            frame.render_widget(Clear, popup);
+            frame.render_widget(
+                Paragraph::new(model.mcp_profiles.lines().join("\n"))
+                    .block(Block::bordered().title("MCP profiles")),
+                popup,
+            );
+        }
+    }
 }
 
 fn render_compact(frame: &mut Frame, area: Rect, model: &Model) {

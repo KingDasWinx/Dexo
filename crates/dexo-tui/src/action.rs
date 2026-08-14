@@ -75,6 +75,8 @@ pub enum Action {
     AdminPause,
     AdminResume,
     ConfirmAdmin,
+    OpenMcpProfiles,
+    ConfirmMcpEnable,
     Quit,
 }
 

@@ -225,6 +225,14 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             disabled_reason: None,
             action: || Action::OpenAdmin,
         },
+        PaletteEntry {
+            id: "mcp.profiles",
+            title: "MCP Profiles",
+            keywords: &["mcp", "allowlist", "policy"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenMcpProfiles,
+        },
     ]
 }
 

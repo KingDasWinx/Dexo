@@ -7,6 +7,7 @@ use crate::screens::admin::AdminScreen;
 use crate::screens::data::DataScreen;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
+use crate::screens::mcp_profiles::McpProfilesScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
 use crate::screens::security::SecurityScreen;
@@ -514,6 +515,7 @@ pub struct Model {
     pub security: SecurityScreen,
     pub explain: ExplainScreen,
     pub admin: AdminScreen,
+    pub mcp_profiles: McpProfilesScreen,
 }
 
 impl Default for Model {
@@ -550,6 +552,7 @@ impl Default for Model {
             security: SecurityScreen::default(),
             explain: ExplainScreen::default(),
             admin: AdminScreen::default(),
+            mcp_profiles: McpProfilesScreen::default(),
         }
     }
 }
