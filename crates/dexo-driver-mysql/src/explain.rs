@@ -76,7 +76,10 @@ fn parse_value(value: &serde_json::Value) -> PlanNode {
 }
 
 fn parse_block(value: &serde_json::Value) -> PlanNode {
-    if let Some(nested) = value.get("nested_loop").and_then(serde_json::Value::as_array) {
+    if let Some(nested) = value
+        .get("nested_loop")
+        .and_then(serde_json::Value::as_array)
+    {
         let children: Vec<_> = nested.iter().map(parse_value).collect();
         return PlanNode {
             kind: "Nested loop".into(),
@@ -212,10 +215,7 @@ fn build_tree(lines: &[(usize, &str)], index: usize, indent: usize) -> (PlanNode
 }
 
 fn parse_tree_node(text: &str) -> PlanNode {
-    let (kind_rel, rest) = text
-        .split_once("  (")
-        .map(|(head, tail)| (head, tail))
-        .unwrap_or((text, ""));
+    let (kind_rel, rest) = text.split_once("  (").unwrap_or((text, ""));
     let (kind, relation) = kind_rel
         .split_once(" on ")
         .map(|(kind, rel)| (kind.trim().to_string(), Some(rel.trim().to_string())))
@@ -259,12 +259,11 @@ fn extract_number(text: &str, key: &str) -> Option<f64> {
 }
 
 fn extract_actual_time(text: &str) -> Option<f64> {
-    let rest = text.strip_prefix("time=").or_else(|| text.split("time=").nth(1))?;
+    let rest = text
+        .strip_prefix("time=")
+        .or_else(|| text.split("time=").nth(1))?;
     let end = rest.split("..").nth(1).unwrap_or(rest);
-    end.split(|ch: char| ch == ' ' || ch == ')')
-        .next()?
-        .parse()
-        .ok()
+    end.split([' ', ')']).next()?.parse().ok()
 }
 
 #[async_trait::async_trait]
@@ -280,11 +279,11 @@ impl ExplainProvider for MysqlSession {
         let raw = self.fetch_explain_text(&sql).await;
         let raw = match raw {
             Ok(raw) => raw,
-            Err(error)
-                if format == NativeExplainFormat::Json && !request.analyze =>
-            {
+            Err(error) if format == NativeExplainFormat::Json && !request.analyze => {
                 let fallback = wrap_explain(&request.sql, NativeExplainFormat::Tree, false);
-                self.fetch_explain_text(&fallback).await.map_err(|_| error)?
+                self.fetch_explain_text(&fallback)
+                    .await
+                    .map_err(|_| error)?
             }
             Err(error) => return Err(error),
         };
@@ -299,15 +298,17 @@ impl MysqlSession {
     async fn fetch_explain_text(&self, sql: &str) -> Result<String, DriverError> {
         let mut conn = self.conn.lock().await;
         let rows: Vec<(String,)> = conn.query(sql).await.map_err(map_error)?;
-        Ok(rows.into_iter().map(|row| row.0).collect::<Vec<_>>().join("\n"))
+        Ok(rows
+            .into_iter()
+            .map(|row| row.0)
+            .collect::<Vec<_>>()
+            .join("\n"))
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        MysqlExplainCaps, NativeExplainFormat, parse_json, select_format, wrap_explain,
-    };
+    use super::{MysqlExplainCaps, NativeExplainFormat, parse_json, select_format, wrap_explain};
 
     #[test]
     fn prefers_json_and_uses_tree_for_analyze() {
@@ -316,14 +317,23 @@ mod tests {
             tree: true,
             tree_analyze: true,
         };
-        assert_eq!(select_format(false, caps).unwrap(), NativeExplainFormat::Json);
-        assert_eq!(select_format(true, caps).unwrap(), NativeExplainFormat::Tree);
+        assert_eq!(
+            select_format(false, caps).unwrap(),
+            NativeExplainFormat::Json
+        );
+        assert_eq!(
+            select_format(true, caps).unwrap(),
+            NativeExplainFormat::Tree
+        );
         let no_json = MysqlExplainCaps {
             json: false,
             tree: true,
             tree_analyze: false,
         };
-        assert_eq!(select_format(false, no_json).unwrap(), NativeExplainFormat::Tree);
+        assert_eq!(
+            select_format(false, no_json).unwrap(),
+            NativeExplainFormat::Tree
+        );
         assert!(select_format(true, no_json).is_err());
     }
 

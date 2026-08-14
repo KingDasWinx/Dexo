@@ -18,7 +18,6 @@ pub use admin::{
     BlockingEdge, LockInfo, SessionInfo, SizeInfo, StatInfo, VariableInfo, VariableScope,
 };
 pub use capability::{Capability, CapabilityState};
-pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};
 pub use catalog::{
     CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction, ObjectId,
     ObjectKind,
@@ -26,6 +25,7 @@ pub use catalog::{
 pub use connection::{ConnectRequest, ConnectionFactory, Session};
 pub use ddl::{DdlExecutor, DdlOutcome, DdlPlan, DdlStatement, ObjectDdl, SecurityAdmin};
 pub use error::{DriverError, DriverErrorCategory};
+pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};
 pub use identifier::QualifiedName;
 pub use mutation::{
     ColumnId, DataMutator, DataPage, DataRequest, Filter, Mutation, MutationConflict, Page, Sort,

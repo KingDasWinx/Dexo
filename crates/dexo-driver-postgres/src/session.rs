@@ -156,6 +156,10 @@ impl Session for PostgresSession {
     fn explain(&self) -> Option<&dyn dexo_driver_api::ExplainProvider> {
         Some(self)
     }
+
+    fn admin(&self) -> Option<&dyn dexo_driver_api::AdministrationProvider> {
+        Some(self)
+    }
 }
 
 #[async_trait::async_trait]
