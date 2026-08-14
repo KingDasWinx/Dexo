@@ -1,0 +1,24 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 60, 20)"
+---
+demo  local  public                                         
+┌SQL───────────────────────────────────────────────────────┐
+┌MCP profiles──────────────────────────────────────────────┐
+│mcp profile=assistant enabled=true confirm=true           │
+│scope allow db.public.*                                   │
+│scope deny db.public.secrets                              │
+│tool catalog_search                                       │
+│tool object_describe                                      │
+│enabled assistant scopes=2 tools=2                        │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette

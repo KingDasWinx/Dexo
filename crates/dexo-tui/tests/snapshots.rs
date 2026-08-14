@@ -159,3 +159,15 @@ fn snapshot_admin_sessions_pause_and_preview() {
     update(&mut model, Action::AdminPause);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
 }
+
+#[test]
+fn snapshot_mcp_profiles_preview_and_confirm() {
+    use dexo_tui::action::Action;
+    use dexo_tui::update;
+
+    let mut model = snapshot_model();
+    update(&mut model, Action::OpenMcpProfiles);
+    insta::assert_snapshot!(render_to_string(&model, 160, 50));
+    update(&mut model, Action::ConfirmMcpEnable);
+    insta::assert_snapshot!(render_to_string(&model, 60, 20));
+}

@@ -233,6 +233,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 .unwrap_or_default();
             Vec::new()
         }
+        Action::OpenMcpProfiles => {
+            model.mcp_profiles = crate::screens::mcp_profiles::McpProfilesScreen::fixture();
+            Vec::new()
+        }
+        Action::ConfirmMcpEnable => {
+            model.mcp_profiles.confirm_enable();
+            Vec::new()
+        }
         Action::Quit => vec![Effect::Quit],
     }
 }
