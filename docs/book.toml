@@ -1,0 +1,5 @@
+[book]
+title = "Dexo"
+authors = ["Dexo"]
+language = "pt-BR"
+src = "src"
