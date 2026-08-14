@@ -1,0 +1,7 @@
+{
+  "budget_ms": 100,
+  "metric": "catalog_search",
+  "n": 100000,
+  "p95_ms": 13.6652,
+  "under_budget": true
+}
