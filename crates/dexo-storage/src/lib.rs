@@ -1,0 +1,20 @@
+mod catalog_cache;
+mod connection;
+mod database;
+mod document;
+mod history;
+mod migrations;
+mod project;
+mod recovery;
+mod schema_snapshot;
+mod snippet;
+
+pub use catalog_cache::CatalogCache;
+pub use connection::{ConnectionRepository, ImportReport, export_portable, import_portable};
+pub use database::{AppPaths, Database};
+pub use document::{DocumentRepository, FileFingerprint, has_external_conflict};
+pub use history::HistoryRepository;
+pub use project::ProjectRepository;
+pub use recovery::{RecoveryDocument, RecoveryRepository};
+pub use schema_snapshot::SchemaSnapshotStore;
+pub use snippet::SnippetRepository;
