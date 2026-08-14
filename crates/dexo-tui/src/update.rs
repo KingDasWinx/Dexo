@@ -190,6 +190,49 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.transfer.mode = "restore";
             Vec::new()
         }
+        Action::OpenExplain => {
+            model.tabs.active = 4;
+            model.explain = crate::screens::explain::ExplainScreen::fixture();
+            Vec::new()
+        }
+        Action::ExplainViewTree => {
+            model.explain.view = crate::screens::explain::ExplainView::Tree;
+            Vec::new()
+        }
+        Action::ExplainViewTable => {
+            model.explain.view = crate::screens::explain::ExplainView::Table;
+            Vec::new()
+        }
+        Action::ExplainViewSummary => {
+            model.explain.view = crate::screens::explain::ExplainView::Summary;
+            Vec::new()
+        }
+        Action::ConfirmExplainAnalyze => {
+            model.explain.analyze_confirmed = true;
+            Vec::new()
+        }
+        Action::OpenAdmin => {
+            model.admin = crate::screens::admin::AdminScreen::fixture();
+            Vec::new()
+        }
+        Action::AdminPause => {
+            model.admin.pause();
+            Vec::new()
+        }
+        Action::AdminResume => {
+            model.admin.resume();
+            Vec::new()
+        }
+        Action::ConfirmAdmin => {
+            model.admin.confirmed = true;
+            model.admin.confirm_target = model
+                .admin
+                .sessions
+                .first()
+                .map(|session| session.id.clone())
+                .unwrap_or_default();
+            Vec::new()
+        }
         Action::Quit => vec![Effect::Quit],
     }
 }

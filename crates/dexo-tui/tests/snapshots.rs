@@ -133,3 +133,29 @@ fn snapshot_transfer_preview_progress_rejects() {
     model.transfer = TransferScreen::fixture_rejects();
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }
+
+#[test]
+fn snapshot_explain_tree_table_summary() {
+    use dexo_tui::action::Action;
+    use dexo_tui::update;
+
+    let mut model = snapshot_model();
+    update(&mut model, Action::OpenExplain);
+    insta::assert_snapshot!(render_to_string(&model, 160, 50));
+    update(&mut model, Action::ExplainViewTable);
+    insta::assert_snapshot!(render_to_string(&model, 100, 30));
+    update(&mut model, Action::ExplainViewSummary);
+    insta::assert_snapshot!(render_to_string(&model, 60, 20));
+}
+
+#[test]
+fn snapshot_admin_sessions_pause_and_preview() {
+    use dexo_tui::action::Action;
+    use dexo_tui::update;
+
+    let mut model = snapshot_model();
+    update(&mut model, Action::OpenAdmin);
+    insta::assert_snapshot!(render_to_string(&model, 160, 50));
+    update(&mut model, Action::AdminPause);
+    insta::assert_snapshot!(render_to_string(&model, 60, 20));
+}

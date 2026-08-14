@@ -26,6 +26,13 @@ pub fn render(frame: &mut Frame, model: &Model) {
                     "Schema",
                     crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
                 );
+            } else if model.tabs.active == 4 {
+                render_panel(
+                    frame,
+                    plan.content,
+                    "Explain",
+                    model.explain.lines().join("\n"),
+                );
             } else {
                 crate::widgets::editor::render(frame, plan.content, model);
             }
@@ -75,6 +82,18 @@ pub fn render(frame: &mut Frame, model: &Model) {
             model.security.lines().join("\n"),
         );
     }
+    if model.admin.open {
+        let area = frame.area();
+        if area.width >= 10 && area.height >= 5 {
+            let popup = centered(area, 80, 16);
+            frame.render_widget(Clear, popup);
+            frame.render_widget(
+                Paragraph::new(model.admin.lines().join("\n"))
+                    .block(Block::bordered().title("Sessions")),
+                popup,
+            );
+        }
+    }
 }
 
 fn render_compact(frame: &mut Frame, area: Rect, model: &Model) {
@@ -93,6 +112,8 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model) {
                     "Schema",
                     crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
                 );
+            } else if model.tabs.active == 4 {
+                render_panel(frame, area, "Explain", model.explain.lines().join("\n"));
             } else {
                 crate::widgets::editor::render(frame, area, model);
             }

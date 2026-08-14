@@ -1,4 +1,6 @@
+pub mod admin;
 pub mod data;
+pub mod explain;
 pub mod explorer;
 pub mod schema_diff;
 pub mod schema_editor;
