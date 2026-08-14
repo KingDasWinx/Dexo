@@ -4,7 +4,7 @@ use std::time::Duration;
 
 use crate::args::{
     Args, Command, ConfigCommand, LaunchMode, OnError, OutputFormat, SchemaCommand,
-    SchemaDiffFormat, TransferCliFormat,
+    SchemaDiffFormat, SessionsCommand, TransferCliFormat,
 };
 use crate::presenter;
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
@@ -136,6 +136,15 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             mapping,
             non_interactive,
         )?,
+        Command::Explain {
+            connection,
+            sql,
+            file,
+            analyze,
+            confirm,
+            format,
+        } => run_explain(registry, connection, sql, file, analyze, confirm, format)?,
+        Command::Sessions { command } => run_sessions(registry, command)?,
     }
     Ok(())
 }
@@ -757,6 +766,190 @@ async fn execute_script(
     Ok(batches)
 }
 
+fn run_explain(
+    registry: DriverRegistry,
+    connection: String,
+    sql: Option<String>,
+    file: Option<std::path::PathBuf>,
+    analyze: bool,
+    confirm: bool,
+    format: OutputFormat,
+) -> anyhow::Result<()> {
+    let sql = load_sql(sql, file, false)?;
+    if analyze && !confirm {
+        anyhow::bail!("EXPLAIN ANALYZE executes the statement; pass --confirm");
+    }
+    let plan = tokio::runtime::Runtime::new()?
+        .block_on(explain_live(registry, connection, sql, analyze))?;
+    let mut stdout = std::io::stdout();
+    match format {
+        OutputFormat::Json | OutputFormat::Jsonl => {
+            serde_json::to_writer(&mut stdout, &plan)?;
+            writeln!(stdout)?;
+        }
+        _ => {
+            writeln!(stdout, "{}", dexo_app::explain_service::render_tree(&plan))?;
+        }
+    }
+    Ok(())
+}
+
+async fn explain_live(
+    registry: DriverRegistry,
+    connection: String,
+    sql: String,
+    analyze: bool,
+) -> anyhow::Result<dexo_driver_api::ExplainPlan> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = ConnectionRepository::new(db.connection())
+        .get_by_name(&connection)?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Configuration,
+                format!("unknown connection '{connection}'"),
+            )
+        })?;
+    let session = connect_session(&registry, &profile).await?;
+    let provider = session
+        .explain()
+        .ok_or_else(|| AppError::new(ErrorCategory::Capability, "explain is unavailable"))?;
+    Ok(provider
+        .explain(dexo_driver_api::ExplainRequest { sql, analyze })
+        .await
+        .map_err(map_driver_error)?)
+}
+
+fn run_sessions(registry: DriverRegistry, command: SessionsCommand) -> anyhow::Result<()> {
+    match command {
+        SessionsCommand::List { connection, format } => {
+            let list =
+                tokio::runtime::Runtime::new()?.block_on(admin_list(registry, connection))?;
+            writeln!(
+                std::io::stderr(),
+                "captured_at={} restriction={}",
+                list.captured_at,
+                list.restriction.as_deref().unwrap_or("-")
+            )?;
+            match format {
+                OutputFormat::Json | OutputFormat::Jsonl => {
+                    serde_json::to_writer(std::io::stdout(), &list.items)?;
+                    println!();
+                }
+                _ => {
+                    for session in list.items {
+                        println!(
+                            "{}\t{}\t{}\t{}\t{}",
+                            session.id,
+                            session.user.unwrap_or_else(|| "-".into()),
+                            session.database.unwrap_or_else(|| "-".into()),
+                            session.state,
+                            session.current_query.unwrap_or_else(|| "-".into())
+                        );
+                    }
+                }
+            }
+        }
+        SessionsCommand::Cancel {
+            connection,
+            session,
+            confirm,
+        } => {
+            if !confirm {
+                anyhow::bail!("cancel requires --confirm");
+            }
+            let outcome = tokio::runtime::Runtime::new()?.block_on(admin_action(
+                registry,
+                connection,
+                dexo_driver_api::AdminAction::CancelQuery {
+                    session_id: session,
+                },
+            ))?;
+            println!(
+                "ok={} noop={} {}",
+                outcome.ok, outcome.idempotent_noop, outcome.message
+            );
+        }
+        SessionsCommand::Terminate {
+            connection,
+            session,
+            confirm_target,
+        } => {
+            let target = confirm_target.ok_or_else(|| {
+                anyhow::anyhow!("terminate requires --confirm-target <session id>")
+            })?;
+            if target != session {
+                anyhow::bail!("confirm-target does not match session id");
+            }
+            let outcome = tokio::runtime::Runtime::new()?.block_on(admin_action(
+                registry,
+                connection,
+                dexo_driver_api::AdminAction::TerminateSession {
+                    session_id: session,
+                },
+            ))?;
+            println!(
+                "ok={} noop={} {}",
+                outcome.ok, outcome.idempotent_noop, outcome.message
+            );
+        }
+    }
+    Ok(())
+}
+
+async fn admin_list(
+    registry: DriverRegistry,
+    connection: String,
+) -> anyhow::Result<dexo_driver_api::AdminList<dexo_driver_api::SessionInfo>> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = ConnectionRepository::new(db.connection())
+        .get_by_name(&connection)?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Configuration,
+                format!("unknown connection '{connection}'"),
+            )
+        })?;
+    let session = connect_session(&registry, &profile).await?;
+    let admin = session
+        .admin()
+        .ok_or_else(|| AppError::new(ErrorCategory::Capability, "admin is unavailable"))?;
+    Ok(admin.list_sessions().await.map_err(map_driver_error)?)
+}
+
+async fn admin_action(
+    registry: DriverRegistry,
+    connection: String,
+    action: dexo_driver_api::AdminAction,
+) -> anyhow::Result<dexo_driver_api::AdminOutcome> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = ConnectionRepository::new(db.connection())
+        .get_by_name(&connection)?
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Configuration,
+                format!("unknown connection '{connection}'"),
+            )
+        })?;
+    let session = connect_session(&registry, &profile).await?;
+    let admin = session
+        .admin()
+        .ok_or_else(|| AppError::new(ErrorCategory::Capability, "admin is unavailable"))?;
+    let preview = admin.preview(&action).map_err(map_driver_error)?;
+    writeln!(
+        std::io::stderr(),
+        "command={} lock={:?}",
+        preview.command,
+        preview.lock_risk
+    )?;
+    Ok(admin
+        .execute_action(action)
+        .await
+        .map_err(map_driver_error)?)
+}
+
 fn parse_params(param: Vec<String>) -> anyhow::Result<Vec<DbValue>> {
     param
         .into_iter()
@@ -789,12 +982,14 @@ fn load_sql(
 
 fn looks_mutating(sql: &str) -> bool {
     let trimmed = sql.trim_start().to_ascii_lowercase();
+    let explain_analyze = trimmed.starts_with("explain") && trimmed.contains("analyze");
     trimmed.starts_with("insert")
         || trimmed.starts_with("update")
         || trimmed.starts_with("delete")
         || trimmed.starts_with("drop")
         || trimmed.starts_with("truncate")
         || trimmed.starts_with("alter")
+        || explain_analyze
 }
 
 pub fn present_events(

@@ -66,6 +66,15 @@ pub enum Action {
     OpenTransfer,
     OpenBackup,
     OpenRestore,
+    OpenExplain,
+    ExplainViewTree,
+    ExplainViewTable,
+    ExplainViewSummary,
+    ConfirmExplainAnalyze,
+    OpenAdmin,
+    AdminPause,
+    AdminResume,
+    ConfirmAdmin,
     Quit,
 }
 

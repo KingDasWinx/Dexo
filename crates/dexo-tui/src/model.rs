@@ -3,7 +3,9 @@ use dexo_app::{ExecutionTarget, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
 
 use crate::layout::{LayoutMode, LayoutPlan};
+use crate::screens::admin::AdminScreen;
 use crate::screens::data::DataScreen;
+use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
@@ -510,6 +512,8 @@ pub struct Model {
     pub schema_diff: SchemaDiffScreen,
     pub transfer: TransferScreen,
     pub security: SecurityScreen,
+    pub explain: ExplainScreen,
+    pub admin: AdminScreen,
 }
 
 impl Default for Model {
@@ -544,6 +548,8 @@ impl Default for Model {
             schema_diff: SchemaDiffScreen::default(),
             transfer: TransferScreen::default(),
             security: SecurityScreen::default(),
+            explain: ExplainScreen::default(),
+            admin: AdminScreen::default(),
         }
     }
 }

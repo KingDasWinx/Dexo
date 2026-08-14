@@ -209,6 +209,22 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             disabled_reason: None,
             action: || Action::OpenSecurity,
         },
+        PaletteEntry {
+            id: "explain.open",
+            title: "Explain Plan",
+            keywords: &["analyze", "plan", "cost"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenExplain,
+        },
+        PaletteEntry {
+            id: "admin.sessions",
+            title: "Inspect Sessions",
+            keywords: &["locks", "cancel", "terminate"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenAdmin,
+        },
     ]
 }
 
