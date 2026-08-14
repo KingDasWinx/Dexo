@@ -3,10 +3,11 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::args::{
-    Args, Command, ConfigCommand, LaunchMode, OnError, OutputFormat, SchemaCommand,
-    SchemaDiffFormat, SessionsCommand, TransferCliFormat,
+    Args, Command, ConfigCommand, LaunchMode, McpCommand, McpConfigCommand, McpProfileCommand,
+    OnError, OutputFormat, SchemaCommand, SchemaDiffFormat, SessionsCommand, TransferCliFormat,
 };
 use crate::presenter;
+use dexo_app::mcp::{Effect, McpProfile, McpService, SelectorRule, advertised_tools};
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
 use dexo_app::search_service::SearchService;
 use dexo_app::{
@@ -19,8 +20,8 @@ use dexo_driver_api::{
 use dexo_runtime::TaskRegistry;
 use dexo_secrets::{KeyringSecretStore, SecretStore};
 use dexo_storage::{
-    AppPaths, CatalogCache, ConnectionRepository, Database, SchemaSnapshotStore, export_portable,
-    import_portable,
+    AppPaths, CatalogCache, ConnectionRepository, Database, McpProfileRepository,
+    SchemaSnapshotStore, export_portable, import_portable,
 };
 
 pub fn run(args: Args) -> anyhow::Result<()> {
@@ -145,6 +146,7 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             format,
         } => run_explain(registry, connection, sql, file, analyze, confirm, format)?,
         Command::Sessions { command } => run_sessions(registry, command)?,
+        Command::Mcp { command } => run_mcp(registry, command)?,
     }
     Ok(())
 }
@@ -1025,4 +1027,197 @@ pub fn sample_select_one() -> Vec<QueryEvent> {
             rows_affected: Some(1),
         },
     ]
+}
+
+fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> {
+    match command {
+        McpCommand::Profile { command } => run_mcp_profile(command)?,
+        McpCommand::Allow {
+            profile,
+            selector,
+            deny,
+        } => mcp_allow(&profile, &selector, deny)?,
+        McpCommand::Policy { profile } => mcp_policy(&profile)?,
+        McpCommand::Doctor { profile, json } => mcp_doctor(profile.as_deref(), json)?,
+        McpCommand::Config { command } => match command {
+            McpConfigCommand::Print { profile, client } => {
+                mcp_config_print(&profile, client.as_deref())?
+            }
+        },
+        McpCommand::Serve { profile } => {
+            tokio::runtime::Runtime::new()?.block_on(mcp_serve(registry, profile))?;
+        }
+    }
+    Ok(())
+}
+
+fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let repo = McpProfileRepository::new(db.connection());
+    match command {
+        McpProfileCommand::List => {
+            for profile in repo.list()? {
+                println!(
+                    "{} enabled={} access=read_only",
+                    profile.name, profile.enabled
+                );
+            }
+        }
+        McpProfileCommand::Create { name } => {
+            let profile = McpProfile::new(&name);
+            repo.save(&profile)?;
+            println!("created {name} enabled=false access=read_only");
+        }
+        McpProfileCommand::Show { name } => mcp_policy(&name)?,
+        McpProfileCommand::Enable { name, confirm } => {
+            let mut profile = load_profile(&repo, &name)?;
+            println!("scopes:");
+            for rule in &profile.selectors {
+                println!("  {:?}", rule.effect);
+            }
+            println!("tools: {}", advertised_tools(&profile).join(", "));
+            if !confirm {
+                anyhow::bail!("pass --confirm to enable profile '{name}'");
+            }
+            profile.enabled = true;
+            repo.save(&profile)?;
+            println!("enabled {name}");
+        }
+        McpProfileCommand::Disable { name } => {
+            let mut profile = load_profile(&repo, &name)?;
+            profile.enabled = false;
+            repo.save(&profile)?;
+            println!("disabled {name}");
+        }
+    }
+    Ok(())
+}
+
+fn mcp_allow(name: &str, selector: &str, deny: bool) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let repo = McpProfileRepository::new(db.connection());
+    let mut profile = load_profile(&repo, name)?;
+    let effect = if deny { Effect::Deny } else { Effect::Allow };
+    profile
+        .selectors
+        .push(SelectorRule::parse(effect, selector)?);
+    repo.save(&profile)?;
+    println!("{} {selector}", if deny { "deny" } else { "allow" });
+    Ok(())
+}
+
+fn mcp_policy(name: &str) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
+    println!(
+        "name={} enabled={} access=read_only query_mode={:?} max_rows={} max_bytes={} timeout_secs={} max_concurrency={}",
+        profile.name,
+        profile.enabled,
+        profile.query_mode,
+        profile.limits.max_rows,
+        profile.limits.max_bytes,
+        profile.limits.timeout_secs,
+        profile.limits.max_concurrency
+    );
+    for rule in &profile.selectors {
+        println!("selector {:?}", rule.effect);
+    }
+    println!("tools: {}", advertised_tools(&profile).join(", "));
+    Ok(())
+}
+
+fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let repo = McpProfileRepository::new(db.connection());
+    let profiles = if let Some(name) = name {
+        vec![load_profile(&repo, name)?]
+    } else {
+        repo.list()?
+    };
+    if json {
+        println!(
+            "{}",
+            serde_json::json!({
+                "profiles": profiles.iter().map(|p| serde_json::json!({
+                    "name": p.name,
+                    "enabled": p.enabled,
+                    "access": "read_only",
+                    "tools": advertised_tools(p),
+                })).collect::<Vec<_>>()
+            })
+        );
+    } else {
+        for profile in profiles {
+            println!(
+                "{} enabled={} tools={}",
+                profile.name,
+                profile.enabled,
+                advertised_tools(&profile).join(",")
+            );
+        }
+    }
+    Ok(())
+}
+
+fn mcp_config_print(name: &str, client: Option<&str>) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    load_profile(&McpProfileRepository::new(db.connection()), name)?;
+    let snippet = match client.unwrap_or("cursor") {
+        "claude" => format!(
+            "{{\n  \"mcpServers\": {{\n    \"dexo\": {{\n      \"command\": \"dexo\",\n      \"args\": [\"mcp\", \"serve\", \"--profile\", \"{name}\"]\n    }}\n  }}\n}}"
+        ),
+        _ => format!(
+            "{{\n  \"mcpServers\": {{\n    \"dexo\": {{\n      \"command\": \"dexo\",\n      \"args\": [\"mcp\", \"serve\", \"--profile\", \"{name}\"]\n    }}\n  }}\n}}"
+        ),
+    };
+    println!("{snippet}");
+    Ok(())
+}
+
+fn load_profile(repo: &McpProfileRepository<'_>, name: &str) -> anyhow::Result<McpProfile> {
+    repo.get_by_name(name)?.ok_or_else(|| {
+        anyhow::anyhow!(AppError::new(
+            ErrorCategory::Configuration,
+            format!("unknown MCP profile '{name}'")
+        ))
+    })
+}
+
+async fn mcp_serve(registry: DriverRegistry, name: String) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = load_profile(&McpProfileRepository::new(db.connection()), &name)?;
+    if !profile.enabled {
+        anyhow::bail!("profile '{name}' is disabled");
+    }
+    let mut objects = CatalogCache::new(db.connection()).load_latest_any()?;
+    if objects.is_empty() {
+        for connection in &profile.connections {
+            if let Some(conn) =
+                ConnectionRepository::new(db.connection()).get_by_name(connection)?
+            {
+                objects = CatalogCache::new(db.connection())
+                    .load_latest(&conn.id.0.to_string(), "")
+                    .unwrap_or_default();
+            }
+        }
+    }
+    let service = McpService::new(profile, objects);
+    let session = if let Some(connection) = service.profile.connections.first() {
+        match ConnectionRepository::new(db.connection()).get_by_name(connection)? {
+            Some(conn) => connect_session(&registry, &conn)
+                .await
+                .ok()
+                .map(std::sync::Arc::from),
+            None => None,
+        }
+    } else {
+        None
+    };
+    dexo_mcp::serve_with_session(service, session).await
 }

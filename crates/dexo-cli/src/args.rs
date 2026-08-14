@@ -143,6 +143,10 @@ pub enum Command {
         #[command(subcommand)]
         command: SessionsCommand,
     },
+    Mcp {
+        #[command(subcommand)]
+        command: McpCommand,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -230,5 +234,72 @@ pub enum ConfigCommand {
     Import {
         #[arg(long)]
         input: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpCommand {
+    Profile {
+        #[command(subcommand)]
+        command: McpProfileCommand,
+    },
+    Allow {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        selector: String,
+        #[arg(long)]
+        deny: bool,
+    },
+    Policy {
+        #[arg(long)]
+        profile: String,
+    },
+    Doctor {
+        #[arg(long)]
+        profile: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    Config {
+        #[command(subcommand)]
+        command: McpConfigCommand,
+    },
+    Serve {
+        #[arg(long)]
+        profile: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpProfileCommand {
+    List,
+    Create {
+        #[arg(long)]
+        name: String,
+    },
+    Show {
+        #[arg(long)]
+        name: String,
+    },
+    Enable {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    Disable {
+        #[arg(long)]
+        name: String,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum McpConfigCommand {
+    Print {
+        #[arg(long)]
+        profile: String,
+        #[arg(long)]
+        client: Option<String>,
     },
 }
