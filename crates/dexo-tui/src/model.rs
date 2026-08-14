@@ -4,13 +4,16 @@ use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
 
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
-use crate::layout::{LayoutMode, LayoutPlan};
+use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
 use crate::theme::Theme;
 use crate::screens::data::DataScreen;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
+use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
+use crate::screens::recovery::RecoveryScreen;
+use crate::screens::settings::SettingsScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
 use crate::screens::security::SecurityScreen;
@@ -520,10 +523,16 @@ pub struct Model {
     pub explain: ExplainScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
+    pub settings: SettingsScreen,
+    pub recovery: RecoveryScreen,
+    pub mcp_audit: McpAuditScreen,
     pub theme: Theme,
     pub capabilities: TerminalCapabilities,
     pub keymap: Keymap,
     pub pending_chord: Chord,
+    pub panes: PaneLayout,
+    pub mouse: bool,
+    pub animation: bool,
 }
 
 impl Default for Model {
@@ -546,6 +555,16 @@ impl Default for Model {
             },
             keymap: Keymap::default_profile(),
             pending_chord: Chord { keys: Vec::new() },
+            panes: PaneLayout {
+                explorer_visible: true,
+                inspector_visible: true,
+                results_visible: true,
+                explorer_width: 28,
+                inspector_width: 28,
+                results_height: 12,
+            },
+            mouse: true,
+            animation: true,
             transaction: TransactionState::Idle,
             results: GridModel::default(),
             tabs: TabsState::default(),
@@ -570,6 +589,9 @@ impl Default for Model {
             explain: ExplainScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
+            settings: SettingsScreen::default(),
+            recovery: RecoveryScreen::default(),
+            mcp_audit: McpAuditScreen::default(),
         }
     }
 }
@@ -600,7 +622,11 @@ impl Model {
     pub fn apply_size(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
-        self.layout_mode =
-            LayoutPlan::for_area(ratatui::layout::Rect::new(0, 0, width, height)).mode;
+        self.layout_mode = LayoutPlan::for_area_with(
+            ratatui::layout::Rect::new(0, 0, width, height),
+            Some(&self.panes.clamp(width, height)),
+        )
+        .mode;
+        self.panes = self.panes.clamp(width, height);
     }
 }

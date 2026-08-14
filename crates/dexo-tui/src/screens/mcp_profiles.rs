@@ -13,8 +13,10 @@ pub struct McpProfilesScreen {
     pub name: String,
     pub enabled: bool,
     pub confirm_enable: bool,
+    pub confirm_revoke: bool,
     pub scopes: Vec<String>,
     pub tools: Vec<String>,
+    pub resources: Vec<String>,
     pub grants: Vec<GrantLine>,
     pub preview: String,
 }
@@ -26,8 +28,10 @@ impl McpProfilesScreen {
             name: "assistant".into(),
             enabled: false,
             confirm_enable: false,
+            confirm_revoke: false,
             scopes: vec!["allow db.public.*".into(), "deny db.public.secrets".into()],
             tools: vec!["catalog_search".into(), "object_describe".into()],
+            resources: vec!["db.public.items".into()],
             grants: vec![GrantLine {
                 id: "g1".into(),
                 capability: "data_write".into(),
@@ -57,7 +61,13 @@ impl McpProfilesScreen {
     }
 
     pub fn revoke_all(&mut self) {
+        if !self.confirm_revoke {
+            self.confirm_revoke = true;
+            self.preview = "confirm revoke all grants".into();
+            return;
+        }
         self.grants.clear();
+        self.confirm_revoke = false;
         self.preview = "revoked all grants".into();
     }
 
@@ -71,6 +81,9 @@ impl McpProfilesScreen {
         }
         for tool in &self.tools {
             lines.push(format!("tool {tool}"));
+        }
+        for resource in &self.resources {
+            lines.push(format!("resource {resource}"));
         }
         for grant in &self.grants {
             lines.push(format!(
@@ -100,6 +113,8 @@ mod tests {
         assert!(screen.lines().join("\n").contains("grant data_write"));
         screen.tick();
         assert_eq!(screen.grants[0].expires_in_secs, 899);
+        screen.revoke_all();
+        assert!(screen.preview.contains("confirm revoke"));
         screen.revoke_all();
         assert!(screen.grants.is_empty());
         assert!(screen.preview.contains("revoked all"));

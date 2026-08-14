@@ -7,7 +7,7 @@ use crate::model::{Focus, Model};
 use crate::palette::{filter_entries, palette_entries};
 
 pub fn render(frame: &mut Frame, model: &Model) {
-    let plan = LayoutPlan::for_area(frame.area());
+    let plan = LayoutPlan::for_area_with(frame.area(), Some(&model.panes));
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
         crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model),
@@ -105,6 +105,33 @@ pub fn render(frame: &mut Frame, model: &Model) {
                 popup,
             );
         }
+    }
+    if model.settings.open {
+        let popup = centered(frame.area(), 64, 12);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.settings.lines().join("\n"))
+                .block(Block::bordered().title("Settings")),
+            popup,
+        );
+    }
+    if model.recovery.open {
+        let popup = centered(frame.area(), 64, 12);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.recovery.lines().join("\n"))
+                .block(Block::bordered().title("Session recovery")),
+            popup,
+        );
+    }
+    if model.mcp_audit.open {
+        let popup = centered(frame.area(), 72, 12);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.mcp_audit.lines().join("\n"))
+                .block(Block::bordered().title("MCP audit")),
+            popup,
+        );
     }
 }
 

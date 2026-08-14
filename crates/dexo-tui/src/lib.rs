@@ -19,5 +19,6 @@ pub use event::run;
 pub use model::{Focus, GridModel, Model};
 pub use terminal::{
     CrosstermTerminal, RecordingTerminal, TerminalControl, TerminalGuard, TuiError,
+    install_panic_hook,
 };
 pub use update::update;
