@@ -69,6 +69,8 @@ pub(crate) fn capabilities() -> Vec<CapabilityState> {
         CapabilityState::available(Capability::Transactions),
         CapabilityState::available(Capability::DataWrite),
         CapabilityState::available(Capability::Ddl),
+        CapabilityState::available(Capability::Explain),
+        CapabilityState::available(Capability::ExplainAnalyze),
         CapabilityState::available(Capability::Admin),
         CapabilityState::available(Capability::Import),
         CapabilityState::available(Capability::Export),

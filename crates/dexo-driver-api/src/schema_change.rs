@@ -402,6 +402,14 @@ pub fn classify_raw_sql(sql: &str) -> ChangeRisk {
         return ChangeRisk::unknown_sql();
     }
     let upper = trimmed.to_ascii_uppercase();
+    if upper.starts_with("EXPLAIN") && upper.contains("ANALYZE") {
+        return ChangeRisk {
+            destructive: true,
+            data_loss: true,
+            lock_level: LockLevel::Share,
+            reversible: false,
+        };
+    }
     if upper.starts_with("DROP ") {
         return ChangeRisk {
             destructive: true,
@@ -586,5 +594,16 @@ mod tests {
         assert!(risk.destructive);
         assert!(!risk.reversible);
         assert_eq!(risk.lock_level, LockLevel::AccessExclusive);
+    }
+
+    #[test]
+    fn explain_analyze_is_execution_aware() {
+        let risk = classify_raw_sql("EXPLAIN (ANALYZE, FORMAT JSON) SELECT 1");
+        assert!(risk.destructive);
+        assert!(risk.data_loss);
+        assert_eq!(risk.lock_level, LockLevel::Share);
+        let estimated = classify_raw_sql("EXPLAIN (FORMAT JSON) SELECT 1");
+        assert!(estimated.destructive);
+        assert_eq!(estimated.lock_level, LockLevel::AccessExclusive);
     }
 }
