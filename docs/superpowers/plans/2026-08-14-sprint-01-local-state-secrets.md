@@ -23,7 +23,7 @@
 
 **Files:** `crates/dexo-storage/src/database.rs`, `crates/dexo-storage/src/lib.rs`.
 
-- [ ] **Step 1: Write a failing path test**
+- [x] **Step 1: Write a failing path test**
 
 ```rust
 #[test]
@@ -34,13 +34,13 @@ fn explicit_data_home_wins() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-storage explicit_data_home_wins`
 
 Expected: FAIL because `AppPaths` is undefined.
 
-- [ ] **Step 3: Implement paths without global environment mutation**
+- [x] **Step 3: Implement paths without global environment mutation**
 
 ```rust
 use std::path::PathBuf;
@@ -60,7 +60,7 @@ impl AppPaths {
 }
 ```
 
-- [ ] **Step 4: Run test**
+- [x] **Step 4: Run test**
 
 Run: `cargo test -p dexo-storage explicit_data_home_wins`
 
@@ -77,7 +77,7 @@ git commit -m "feat(storage): resolve native application paths"
 
 **Files:** `crates/dexo-storage/src/{database.rs,migrations.rs}`, `crates/dexo-storage/tests/migration.rs`.
 
-- [ ] **Step 1: Write failing migration test**
+- [x] **Step 1: Write failing migration test**
 
 ```rust
 use dexo_storage::Database;
@@ -88,13 +88,13 @@ fn fresh_database_reaches_schema_one() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-storage --test migration`
 
 Expected: FAIL because `Database` is missing.
 
-- [ ] **Step 3: Implement migration one**
+- [x] **Step 3: Implement migration one**
 
 Define `MIGRATION_1` in `migrations.rs` with concrete tables `projects`, `connections`, `recovery_documents`, and `schema_migrations`. `connections` must contain `secret_ref TEXT NOT NULL` and must not contain password/secret columns.
 
@@ -116,7 +116,7 @@ COMMIT;
 
 `Database::open` creates a recoverable `.bak` copy before any future destructive migration; `open_in_memory` skips backup and runs the same SQL.
 
-- [ ] **Step 4: Run migration tests**
+- [x] **Step 4: Run migration tests**
 
 Run: `cargo test -p dexo-storage --test migration`
 
@@ -133,7 +133,7 @@ git commit -m "feat(storage): add versioned local schema"
 
 **Files:** `crates/dexo-storage/src/{project.rs,connection.rs}`, `crates/dexo-app/src/{project.rs,connection_profile.rs}`.
 
-- [ ] **Step 1: Write a failing repository test**
+- [x] **Step 1: Write a failing repository test**
 
 ```rust
 #[test]
@@ -154,13 +154,13 @@ fn deleting_connection_does_not_delete_secret() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-storage --test project_repository`
 
 Expected: FAIL with missing repositories/types.
 
-- [ ] **Step 3: Implement stable records**
+- [x] **Step 3: Implement stable records**
 
 ```rust
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -184,7 +184,7 @@ impl SecretRef { pub fn new(value: String) -> Self { Self(value) } pub fn as_str
 
 Repository methods use bound rusqlite parameters, return `Result`, and never call the secret store.
 
-- [ ] **Step 4: Run repository tests**
+- [x] **Step 4: Run repository tests**
 
 Run: `cargo test -p dexo-storage --test project_repository`
 
@@ -201,7 +201,7 @@ git commit -m "feat(storage): persist projects and connection profiles"
 
 **Files:** `crates/dexo-secrets/src/{store.rs,memory_store.rs,keyring_store.rs,lib.rs}`, `crates/dexo-secrets/tests/secret_store.rs`.
 
-- [ ] **Step 1: Write contract tests against memory store**
+- [x] **Step 1: Write contract tests against memory store**
 
 ```rust
 use dexo_secrets::{MemorySecretStore, SecretStore};
@@ -217,13 +217,13 @@ fn secret_round_trip_and_delete() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-secrets --test secret_store`
 
 Expected: FAIL because the trait/store is undefined.
 
-- [ ] **Step 3: Implement trait and stores**
+- [x] **Step 3: Implement trait and stores**
 
 ```rust
 use secrecy::SecretString;
@@ -236,7 +236,7 @@ pub trait SecretStore: Send + Sync {
 
 `MemorySecretStore` uses `Mutex<HashMap<String, SecretString>>`. `KeyringSecretStore` creates `keyring::Entry` with service `dev.dexo.connection` and the opaque reference as user. Map unavailable/locked keychain to `SecretError::Unavailable`; never fall back to a file.
 
-- [ ] **Step 4: Run contract and lint**
+- [x] **Step 4: Run contract and lint**
 
 Run: `cargo test -p dexo-secrets --test secret_store && cargo clippy -p dexo-secrets --all-targets -- -D warnings`
 
@@ -253,7 +253,7 @@ git commit -m "feat(secrets): integrate opaque keychain storage"
 
 **Files:** `crates/dexo-storage/src/recovery.rs`, `crates/dexo-storage/tests/recovery.rs`.
 
-- [ ] **Step 1: Write failing checkpoint test**
+- [x] **Step 1: Write failing checkpoint test**
 
 ```rust
 #[test]
@@ -266,17 +266,17 @@ fn latest_checkpoint_replaces_older_content() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-storage --test recovery`
 
 Expected: FAIL because `RecoveryRepository` is missing.
 
-- [ ] **Step 3: Implement atomic upsert and clear**
+- [x] **Step 3: Implement atomic upsert and clear**
 
 Use one bound `INSERT ... ON CONFLICT(id) DO UPDATE` statement and provide `load`, `list_for_project`, and `clear`. Checkpoint content is document SQL only; it must not serialize connection secrets or parameter values.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test -p dexo-storage --test recovery`
 
@@ -293,7 +293,7 @@ git commit -m "feat(storage): checkpoint recoverable documents"
 
 **Files:** `crates/dexo-cli/src/{args.rs,run.rs}`, `crates/dexo-storage/src/connection.rs`, test `crates/dexo/tests/config_roundtrip.rs`.
 
-- [ ] **Step 1: Write failing sentinel test**
+- [x] **Step 1: Write failing sentinel test**
 
 ```rust
 #[test]
@@ -304,13 +304,13 @@ fn exported_config_contains_reference_not_secret() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo --test config_roundtrip`
 
 Expected: FAIL because export is absent.
 
-- [ ] **Step 3: Implement commands and DTO**
+- [x] **Step 3: Implement commands and DTO**
 
 Add `dexo config export --output <path>` and `dexo config import --input <path>`. Serialize a versioned TOML DTO containing projects, non-secret connection configuration and an empty `secret_ref` import marker. Import generates fresh secret references and reports which connections need a secret.
 
@@ -319,7 +319,7 @@ Add `dexo config export --output <path>` and `dexo config import --input <path>`
 struct PortableConfig { version: u32, projects: Vec<PortableProject>, connections: Vec<PortableConnection> }
 ```
 
-- [ ] **Step 4: Run full sprint gate**
+- [x] **Step 4: Run full sprint gate**
 
 Run: `cargo test -p dexo-storage -p dexo-secrets -p dexo-cli && cargo clippy --workspace --all-targets -- -D warnings`
 
@@ -334,8 +334,8 @@ git commit -m "feat(config): export and import secret-free settings"
 
 ## Sprint exit
 
-- [ ] SQLite schema v1 migrates from a fresh database.
-- [ ] No local table or TOML field can store a plaintext password.
-- [ ] Real keychain failures request per-session input rather than file fallback.
-- [ ] Projects, connections and recovery documents round-trip.
-- [ ] Portable export passes the secret sentinel test.
+- [x] SQLite schema v1 migrates from a fresh database.
+- [x] No local table or TOML field can store a plaintext password.
+- [x] Real keychain failures request per-session input rather than file fallback.
+- [x] Projects, connections and recovery documents round-trip.
+- [x] Portable export passes the secret sentinel test.
