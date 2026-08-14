@@ -89,7 +89,9 @@ fn redact_assignment(text: &str, needle: &str) -> String {
         out.push_str("[redacted]");
         rest = &rest[idx + needle.len()..];
         if needle.ends_with('=') {
-            let skip = rest.find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',').unwrap_or(rest.len());
+            let skip = rest
+                .find(|c: char| c.is_whitespace() || c == '"' || c == '\'' || c == ',')
+                .unwrap_or(rest.len());
             rest = &rest[skip..];
         } else {
             let skip = rest.find(|c: char| c.is_whitespace()).unwrap_or(rest.len());
@@ -109,7 +111,12 @@ pub struct SizeRotatingWriter {
 }
 
 impl SizeRotatingWriter {
-    pub fn open(dir: impl Into<PathBuf>, stem: &str, max_bytes: u64, max_files: usize) -> io::Result<Self> {
+    pub fn open(
+        dir: impl Into<PathBuf>,
+        stem: &str,
+        max_bytes: u64,
+        max_files: usize,
+    ) -> io::Result<Self> {
         let dir = dir.into();
         fs::create_dir_all(&dir)?;
         let path = dir.join(format!("{stem}.log"));
@@ -134,7 +141,10 @@ impl SizeRotatingWriter {
         }
         self.file.flush()?;
         self.file = File::create(self.dir.join(format!("{}.rotating", self.stem)))?;
-        let _ = fs::remove_file(self.dir.join(format!("{}.{}.log", self.stem, self.max_files)));
+        let _ = fs::remove_file(
+            self.dir
+                .join(format!("{}.{}.log", self.stem, self.max_files)),
+        );
         for index in (2..=self.max_files).rev() {
             let from = self.dir.join(format!("{}.{}.log", self.stem, index - 1));
             let to = self.dir.join(format!("{}.{}.log", self.stem, index));
@@ -283,7 +293,8 @@ mod tests {
 
     #[test]
     fn redacts_connection_and_password() {
-        let text = format!("password={SECRET_SENTINEL} postgres://user:{SECRET_SENTINEL}@localhost/db");
+        let text =
+            format!("password={SECRET_SENTINEL} postgres://user:{SECRET_SENTINEL}@localhost/db");
         let redacted = redact_text(&text);
         assert!(!redacted.contains(SECRET_SENTINEL));
         assert!(!format!("{:?}", OpaqueSecret::new(SECRET_SENTINEL)).contains(SECRET_SENTINEL));
@@ -321,7 +332,7 @@ mod tests {
             format!("connected password={SECRET_SENTINEL}\n"),
         );
         assert!(!bundle.preview.contains(SECRET_SENTINEL));
-        assert!(bundle.preview.contains("never uploads") || true);
+        assert!(bundle.preview.contains("versions:"));
         let zip_path = dir.path().join("diag.zip");
         bundle.write_zip(&zip_path).unwrap();
         let bytes = std::fs::read(&zip_path).unwrap();

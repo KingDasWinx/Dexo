@@ -32,12 +32,11 @@ impl LayoutPlan {
         } else {
             LayoutMode::Compact
         };
-        let plan = match mode {
+        match mode {
             LayoutMode::Full => full_layout(area, panes),
             LayoutMode::Reduced => reduced_layout(area, panes),
             LayoutMode::Compact => compact_layout(area),
-        };
-        plan
+        }
     }
 }
 
@@ -82,8 +81,20 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         status_h,
     );
     let body = Rect::new(area.x, area.y.saturating_add(context_h), area.width, body_h);
-    let explorer_w = pane_width(panes, |p| p.explorer_visible, |p| p.explorer_width, body.width, 22);
-    let inspector_w = pane_width(panes, |p| p.inspector_visible, |p| p.inspector_width, body.width, 22);
+    let explorer_w = pane_width(
+        panes,
+        |p| p.explorer_visible,
+        |p| p.explorer_width,
+        body.width,
+        22,
+    );
+    let inspector_w = pane_width(
+        panes,
+        |p| p.inspector_visible,
+        |p| p.inspector_width,
+        body.width,
+        22,
+    );
     let center_w = body.width.saturating_sub(explorer_w + inspector_w);
     let explorer = Rect::new(body.x, body.y, explorer_w, body.height);
     let center = Rect::new(
@@ -156,7 +167,13 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         status_h,
     );
     let body = Rect::new(area.x, area.y.saturating_add(context_h), area.width, body_h);
-    let explorer_w = pane_width(panes, |p| p.explorer_visible, |p| p.explorer_width, body.width, 24);
+    let explorer_w = pane_width(
+        panes,
+        |p| p.explorer_visible,
+        |p| p.explorer_width,
+        body.width,
+        24,
+    );
     let center_w = body.width.saturating_sub(explorer_w);
     let explorer = Rect::new(body.x, body.y, explorer_w, body.height);
     let center = Rect::new(

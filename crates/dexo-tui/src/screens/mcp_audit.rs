@@ -1,18 +1,8 @@
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpAuditScreen {
     pub open: bool,
     pub events: Vec<String>,
     pub confirm_revoke_all: bool,
-}
-
-impl Default for McpAuditScreen {
-    fn default() -> Self {
-        Self {
-            open: false,
-            events: Vec::new(),
-            confirm_revoke_all: false,
-        }
-    }
 }
 
 impl McpAuditScreen {
@@ -34,9 +24,10 @@ impl McpAuditScreen {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![
-            format!("mcp audit confirm_revoke={}", self.confirm_revoke_all),
-        ];
+        let mut lines = vec![format!(
+            "mcp audit confirm_revoke={}",
+            self.confirm_revoke_all
+        )];
         for event in &self.events {
             lines.push(format!("audit {event}"));
         }

@@ -98,12 +98,18 @@ mod tests {
             &["SUPER_SECRET_SENTINEL"],
         );
         assert_eq!(checkpoint.transaction, "unknown");
-        assert!(!checkpoint.documents[0].content.contains("SUPER_SECRET_SENTINEL"));
-        assert!(!checkpoint
-            .layout_json
-            .as_deref()
-            .unwrap()
-            .contains("SUPER_SECRET_SENTINEL"));
+        assert!(
+            !checkpoint.documents[0]
+                .content
+                .contains("SUPER_SECRET_SENTINEL")
+        );
+        assert!(
+            !checkpoint
+                .layout_json
+                .as_deref()
+                .unwrap()
+                .contains("SUPER_SECRET_SENTINEL")
+        );
         assert!(!contains_session_handle(&checkpoint.documents[0].content));
     }
 
