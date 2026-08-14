@@ -1,0 +1,23 @@
+[package]
+name = "dexo-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+clap.workspace = true
+dexo-app = { path = "../dexo-app" }
+dexo-driver-api = { path = "../dexo-driver-api" }
+dexo-runtime = { path = "../dexo-runtime" }
+dexo-secrets = { path = "../dexo-secrets" }
+dexo-storage = { path = "../dexo-storage" }
+serde_json.workspace = true
+tokio.workspace = true
+
+[dev-dependencies]
+clap.workspace = true
+dexo-driver-api = { path = "../dexo-driver-api" }
+serde_json.workspace = true
