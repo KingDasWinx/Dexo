@@ -125,6 +125,24 @@ pub enum Command {
         #[arg(long)]
         non_interactive: bool,
     },
+    Explain {
+        #[arg(long)]
+        connection: String,
+        #[arg(long)]
+        sql: Option<String>,
+        #[arg(long)]
+        file: Option<PathBuf>,
+        #[arg(long)]
+        analyze: bool,
+        #[arg(long)]
+        confirm: bool,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+        format: OutputFormat,
+    },
+    Sessions {
+        #[command(subcommand)]
+        command: SessionsCommand,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]
@@ -174,6 +192,32 @@ pub enum SchemaCommand {
         rename: Vec<String>,
         #[arg(long)]
         connection: Option<String>,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+pub enum SessionsCommand {
+    List {
+        #[arg(long)]
+        connection: String,
+        #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
+        format: OutputFormat,
+    },
+    Cancel {
+        #[arg(long)]
+        connection: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long)]
+        confirm: bool,
+    },
+    Terminate {
+        #[arg(long)]
+        connection: String,
+        #[arg(long)]
+        session: String,
+        #[arg(long = "confirm-target")]
+        confirm_target: Option<String>,
     },
 }
 

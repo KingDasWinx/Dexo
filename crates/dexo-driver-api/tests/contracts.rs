@@ -45,3 +45,15 @@ fn explain_request_keeps_analyze_explicit() {
     assert!(!ExplainRequest::estimated("select 1").analyze);
     assert!(ExplainRequest::analyzed("select 1").analyze);
 }
+
+#[test]
+fn missing_admin_metrics_are_none_not_zero() {
+    use dexo_driver_api::SizeInfo;
+    let size = SizeInfo {
+        object: "public.items".into(),
+        native_size: None,
+        bytes: None,
+    };
+    assert!(size.bytes.is_none());
+    assert!(size.native_size.is_none());
+}
