@@ -1,0 +1,44 @@
+[package]
+name = "dexo-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+dexo-sql = { path = "../crates/dexo-sql" }
+dexo-app = { path = "../crates/dexo-app" }
+dexo-storage = { path = "../crates/dexo-storage" }
+dexo-driver-postgres = { path = "../crates/dexo-driver-postgres" }
+dexo-driver-mysql = { path = "../crates/dexo-driver-mysql" }
+
+[workspace]
+members = ["."]
+resolver = "3"
+
+[[bin]]
+name = "splitter"
+path = "fuzz_targets/splitter.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "quoting"
+path = "fuzz_targets/quoting.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "transfer"
+path = "fuzz_targets/transfer.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "config_mcp"
+path = "fuzz_targets/config_mcp.rs"
+test = false
+doc = false

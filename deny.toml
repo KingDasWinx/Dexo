@@ -1,0 +1,23 @@
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Zlib",
+    "CDLA-Permissive-2.0",
+]
+
+[advisories]
+ignore = [
+    # ponytail: rsa has no patched release (Marvin). Transitive via russh. Drop when rsa publishes constant-time.
+    { id = "RUSTSEC-2023-0071", reason = "no patched rsa crate; pulled by russh. Prefer Ed25519 SSH keys until upstream ships a fix." },
+]
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

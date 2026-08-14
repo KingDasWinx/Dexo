@@ -1,0 +1,2 @@
+-> Aggregate: count(0)  (cost=27.00 rows=10) (actual time=0.300..0.310 rows=10 loops=1)
+    -> Table scan on items  (cost=22.50 rows=1000) (actual time=0.010..0.140 rows=1000 loops=1)

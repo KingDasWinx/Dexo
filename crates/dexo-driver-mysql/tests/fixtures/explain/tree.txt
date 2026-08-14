@@ -1,0 +1,2 @@
+-> Sort: items.name  (cost=72.50 rows=1000)
+    -> Table scan on items  (cost=22.50 rows=1000)

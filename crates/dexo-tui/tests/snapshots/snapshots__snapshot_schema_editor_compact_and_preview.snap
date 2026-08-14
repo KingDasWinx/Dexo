@@ -1,0 +1,24 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 60, 20)"
+---
+demo  local  public                                         
+┌Schema────────────────────────────────────────────────────┐
+┌DDL preview───────────────────────────────────────────────┐
+│target: public.orders                                     │
+│risk: destructive=false lock=AccessExclusive              │
+│CREATE TABLE public.orders                                │
+│ready                                                     │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette

@@ -1,0 +1,5 @@
+theme = "dark"
+keymap = "default"
+mouse = true
+animation = true
+unicode = true

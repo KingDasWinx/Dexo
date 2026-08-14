@@ -1,0 +1,504 @@
+use std::collections::HashMap;
+
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum KeyContext {
+    Global,
+    Editor,
+    Explorer,
+    Results,
+    Inspector,
+    Palette,
+    Modal,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct KeySpec {
+    pub modifiers: KeyModifiers,
+    pub code: KeyCode,
+}
+
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub struct Chord {
+    pub keys: Vec<KeySpec>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Binding {
+    pub chord: Chord,
+    pub command: String,
+    pub context: KeyContext,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeymapConflict {
+    pub chord: String,
+    pub context: KeyContext,
+    pub commands: Vec<String>,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct KeymapError {
+    pub field: String,
+    pub reason: String,
+}
+
+impl std::fmt::Display for KeymapError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "{}: {}", self.field, self.reason)
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Keymap {
+    pub name: String,
+    pub bindings: Vec<Binding>,
+}
+
+impl Keymap {
+    pub fn default_profile() -> Self {
+        parse_keymap(DEFAULT_TOML).expect("builtin default keymap")
+    }
+
+    pub fn vim_profile() -> Self {
+        parse_keymap(VIM_TOML).expect("builtin vim keymap")
+    }
+
+    pub fn emacs_profile() -> Self {
+        parse_keymap(EMACS_TOML).expect("builtin emacs keymap")
+    }
+
+    pub fn conflicts(&self) -> Vec<KeymapConflict> {
+        let mut grouped: HashMap<(KeyContext, String), Vec<String>> = HashMap::new();
+        for binding in &self.bindings {
+            grouped
+                .entry((binding.context, chord_label(&binding.chord)))
+                .or_default()
+                .push(binding.command.clone());
+        }
+        grouped
+            .into_iter()
+            .filter(|(_, commands)| commands.iter().any(|command| command != &commands[0]))
+            .map(|((context, chord), mut commands)| {
+                commands.sort();
+                commands.dedup();
+                KeymapConflict {
+                    chord,
+                    context,
+                    commands,
+                }
+            })
+            .collect()
+    }
+
+    pub fn resolve(
+        &self,
+        chord: &Chord,
+        active: KeyContext,
+    ) -> Result<Option<&str>, KeymapConflict> {
+        let label = chord_label(chord);
+        let mut matches = self
+            .bindings
+            .iter()
+            .filter(|binding| {
+                chord_label(&binding.chord) == label
+                    && (binding.context == KeyContext::Global || binding.context == active)
+            })
+            .collect::<Vec<_>>();
+        if matches.is_empty() {
+            return Ok(None);
+        }
+        matches.sort_by_key(|binding| match binding.context {
+            KeyContext::Global => 1,
+            _ => 0,
+        });
+        let specific: Vec<_> = matches
+            .iter()
+            .filter(|binding| binding.context == active)
+            .copied()
+            .collect();
+        let pool = if specific.is_empty() {
+            matches
+        } else {
+            specific
+        };
+        let command = pool[0].command.as_str();
+        if pool.iter().any(|binding| binding.command != command) {
+            return Err(KeymapConflict {
+                chord: label,
+                context: active,
+                commands: {
+                    let mut commands: Vec<_> = pool.iter().map(|b| b.command.clone()).collect();
+                    commands.sort();
+                    commands.dedup();
+                    commands
+                },
+            });
+        }
+        Ok(Some(command))
+    }
+
+    pub fn command_ids(&self) -> Vec<&str> {
+        self.bindings.iter().map(|b| b.command.as_str()).collect()
+    }
+
+    pub fn is_prefix(&self, chord: &Chord, active: KeyContext) -> bool {
+        self.bindings.iter().any(|binding| {
+            (binding.context == KeyContext::Global || binding.context == active)
+                && binding.chord.keys.starts_with(&chord.keys)
+                && binding.chord.keys.len() > chord.keys.len()
+        })
+    }
+}
+
+pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
+    let table: toml::Table = src.parse().map_err(|err: toml::de::Error| KeymapError {
+        field: "keymap".into(),
+        reason: err.message().to_string(),
+    })?;
+    let name = table
+        .get("profile")
+        .and_then(|v| v.as_str())
+        .unwrap_or("custom")
+        .to_string();
+    let mut bindings = Vec::new();
+    for (key, value) in &table {
+        if key == "profile" {
+            continue;
+        }
+        let context = parse_context(key)?;
+        let Some(map) = value.as_table() else {
+            return Err(KeymapError {
+                field: key.clone(),
+                reason: "context must be a table of chord = command".into(),
+            });
+        };
+        for (chord, command) in map {
+            let command = command.as_str().ok_or_else(|| KeymapError {
+                field: format!("{key}.{chord}"),
+                reason: "command id must be a string".into(),
+            })?;
+            bindings.push(Binding {
+                chord: parse_chord(chord).map_err(|reason| KeymapError {
+                    field: format!("{key}.{chord}"),
+                    reason,
+                })?,
+                command: command.to_string(),
+                context,
+            });
+        }
+    }
+    let keymap = Keymap { name, bindings };
+    let conflicts = keymap.conflicts();
+    if let Some(conflict) = conflicts.into_iter().next() {
+        return Err(KeymapError {
+            field: format!("{:?}.{}", conflict.context, conflict.chord),
+            reason: format!("ambiguous commands {}", conflict.commands.join(" / ")),
+        });
+    }
+    Ok(keymap)
+}
+
+pub fn parse_chord(spec: &str) -> Result<Chord, String> {
+    let keys = spec
+        .split_whitespace()
+        .map(parse_key)
+        .collect::<Result<Vec<_>, _>>()?;
+    if keys.is_empty() {
+        return Err("empty chord".into());
+    }
+    Ok(Chord { keys })
+}
+
+pub fn chord_from_event(event: KeyEvent) -> Chord {
+    Chord {
+        keys: vec![KeySpec {
+            modifiers: event.modifiers,
+            code: event.code,
+        }],
+    }
+}
+
+pub fn parse_key(spec: &str) -> Result<KeySpec, String> {
+    let mut modifiers = KeyModifiers::NONE;
+    let mut token = spec.trim().to_ascii_lowercase();
+    loop {
+        if let Some(rest) = token.strip_prefix("ctrl+") {
+            modifiers |= KeyModifiers::CONTROL;
+            token = rest.to_string();
+            continue;
+        }
+        if let Some(rest) = token.strip_prefix("alt+") {
+            modifiers |= KeyModifiers::ALT;
+            token = rest.to_string();
+            continue;
+        }
+        if let Some(rest) = token.strip_prefix("shift+") {
+            modifiers |= KeyModifiers::SHIFT;
+            token = rest.to_string();
+            continue;
+        }
+        break;
+    }
+    let code = match token.as_str() {
+        "esc" | "escape" => KeyCode::Esc,
+        "enter" | "return" => KeyCode::Enter,
+        "tab" => KeyCode::Tab,
+        "backspace" => KeyCode::Backspace,
+        "up" => KeyCode::Up,
+        "down" => KeyCode::Down,
+        "left" => KeyCode::Left,
+        "right" => KeyCode::Right,
+        "space" => KeyCode::Char(' '),
+        "pageup" => KeyCode::PageUp,
+        "pagedown" => KeyCode::PageDown,
+        other if other.starts_with('f') && other.len() <= 3 => {
+            let n: u8 = other[1..]
+                .parse()
+                .map_err(|_| format!("unknown key `{spec}`"))?;
+            KeyCode::F(n)
+        }
+        other if other.chars().count() == 1 => KeyCode::Char(other.chars().next().unwrap()),
+        _ => return Err(format!("unknown key `{spec}`")),
+    };
+    Ok(KeySpec { modifiers, code })
+}
+
+fn parse_context(name: &str) -> Result<KeyContext, KeymapError> {
+    match name {
+        "global" => Ok(KeyContext::Global),
+        "editor" => Ok(KeyContext::Editor),
+        "explorer" => Ok(KeyContext::Explorer),
+        "results" => Ok(KeyContext::Results),
+        "inspector" => Ok(KeyContext::Inspector),
+        "palette" => Ok(KeyContext::Palette),
+        "modal" => Ok(KeyContext::Modal),
+        other => Err(KeymapError {
+            field: other.into(),
+            reason: format!("unknown keymap context `{other}`"),
+        }),
+    }
+}
+
+pub fn chord_label(chord: &Chord) -> String {
+    chord
+        .keys
+        .iter()
+        .map(key_label)
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn key_label(key: &KeySpec) -> String {
+    let mut out = String::new();
+    if key.modifiers.contains(KeyModifiers::CONTROL) {
+        out.push_str("ctrl+");
+    }
+    if key.modifiers.contains(KeyModifiers::ALT) {
+        out.push_str("alt+");
+    }
+    if key.modifiers.contains(KeyModifiers::SHIFT) {
+        out.push_str("shift+");
+    }
+    out.push_str(&match key.code {
+        KeyCode::Char(' ') => "space".into(),
+        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::F(n) => format!("f{n}"),
+        KeyCode::Esc => "esc".into(),
+        KeyCode::Enter => "enter".into(),
+        KeyCode::Tab => "tab".into(),
+        KeyCode::Backspace => "backspace".into(),
+        KeyCode::Up => "up".into(),
+        KeyCode::Down => "down".into(),
+        KeyCode::Left => "left".into(),
+        KeyCode::Right => "right".into(),
+        KeyCode::PageUp => "pageup".into(),
+        KeyCode::PageDown => "pagedown".into(),
+        other => format!("{other:?}").to_ascii_lowercase(),
+    });
+    out
+}
+
+const DEFAULT_TOML: &str = r#"
+profile = "default"
+[global]
+"ctrl+p" = "palette.open"
+"ctrl+q" = "workbench.quit"
+"f5" = "query.execute"
+"ctrl+c" = "query.cancel"
+[editor]
+"ctrl+enter" = "query.execute"
+[explorer]
+"enter" = "explorer.expand"
+"c" = "explorer.copy_name"
+[results]
+"up" = "results.up"
+"down" = "results.down"
+"left" = "results.left"
+"right" = "results.right"
+"pageup" = "results.pageup"
+"pagedown" = "results.pagedown"
+"#;
+
+const VIM_TOML: &str = r#"
+profile = "vim"
+[global]
+"ctrl+p" = "palette.open"
+"ctrl+q" = "workbench.quit"
+"f5" = "query.execute"
+[editor]
+"ctrl+enter" = "query.execute"
+[explorer]
+"enter" = "explorer.expand"
+"c" = "explorer.copy_name"
+[results]
+"k" = "results.up"
+"j" = "results.down"
+"h" = "results.left"
+"l" = "results.right"
+"g g" = "results.top"
+"#;
+
+const EMACS_TOML: &str = r#"
+profile = "emacs"
+[global]
+"alt+x" = "palette.open"
+"ctrl+x ctrl+c" = "workbench.quit"
+"f5" = "query.execute"
+"ctrl+c ctrl+c" = "query.execute"
+[editor]
+"ctrl+enter" = "query.execute"
+[explorer]
+"enter" = "explorer.expand"
+"c" = "explorer.copy_name"
+[results]
+"ctrl+p" = "results.up"
+"ctrl+n" = "results.down"
+"#;
+
+#[cfg(test)]
+mod tests {
+    use super::{KeyContext, Keymap, chord_from_event, parse_chord, parse_keymap};
+    use crate::model::Model;
+    use crate::palette::palette_entries;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    #[test]
+    fn builtin_profiles_parse() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            assert!(keymap.conflicts().is_empty(), "{}", keymap.name);
+        }
+        assert!(
+            Keymap::vim_profile()
+                .resolve(&parse_chord("g g").unwrap(), KeyContext::Results)
+                .unwrap()
+                == Some("results.top")
+        );
+        assert!(
+            Keymap::emacs_profile()
+                .resolve(&parse_chord("ctrl+x ctrl+c").unwrap(), KeyContext::Editor)
+                .unwrap()
+                == Some("workbench.quit")
+        );
+    }
+
+    #[test]
+    fn same_key_allowed_in_disjoint_contexts() {
+        let keymap = parse_keymap(
+            r#"
+profile = "overlap"
+[explorer]
+"c" = "explorer.copy_name"
+[editor]
+"c" = "query.execute"
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            keymap
+                .resolve(&parse_chord("c").unwrap(), KeyContext::Explorer)
+                .unwrap(),
+            Some("explorer.copy_name")
+        );
+        assert_eq!(
+            keymap
+                .resolve(&parse_chord("c").unwrap(), KeyContext::Editor)
+                .unwrap(),
+            Some("query.execute")
+        );
+    }
+
+    #[test]
+    fn same_context_conflict_is_exact() {
+        let err = parse_keymap(
+            r#"
+[editor]
+"ctrl+p" = "palette.open"
+"Ctrl+P" = "query.execute"
+"#,
+        )
+        .unwrap_err();
+        assert!(err.field.contains("ctrl+p") || err.reason.contains("ambiguous"));
+        assert!(
+            err.reason.contains("palette.open") && err.reason.contains("query.execute")
+                || err.field.contains("editor")
+        );
+    }
+
+    #[test]
+    fn active_context_ambiguity_is_reported() {
+        let keymap = Keymap {
+            name: "broken".into(),
+            bindings: vec![
+                super::Binding {
+                    chord: parse_chord("x").unwrap(),
+                    command: "query.execute".into(),
+                    context: KeyContext::Editor,
+                },
+                super::Binding {
+                    chord: parse_chord("x").unwrap(),
+                    command: "workbench.quit".into(),
+                    context: KeyContext::Editor,
+                },
+            ],
+        };
+        let err = keymap
+            .resolve(&parse_chord("x").unwrap(), KeyContext::Editor)
+            .unwrap_err();
+        assert_eq!(err.chord, "x");
+        assert!(err.commands.contains(&"query.execute".into()));
+        assert!(err.commands.contains(&"workbench.quit".into()));
+    }
+
+    #[test]
+    fn every_registered_command_is_palette_reachable() {
+        let ids: Vec<_> = palette_entries(&Model::default())
+            .into_iter()
+            .map(|e| e.id.to_string())
+            .collect();
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            for command in keymap.command_ids() {
+                assert!(
+                    ids.iter().any(|id| id == command),
+                    "{} command `{command}` missing from palette",
+                    keymap.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn chord_from_single_key_event() {
+        let chord = chord_from_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
+        assert_eq!(super::chord_label(&chord), "ctrl+p");
+    }
+}

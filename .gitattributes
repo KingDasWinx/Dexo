@@ -1,2 +1,2 @@
-# Auto detect text files and perform LF normalization
-* text=auto
+# rustfmt newline_style = Unix; Windows runners default to autocrlf=true
+* text=auto eol=lf

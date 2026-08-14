@@ -1,0 +1,24 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 60, 20)"
+---
+demo  local  public                                         
+┌Sessions──────────────────────────────────────────────────┐
+│admin captured_at=1710000000 paused=true                  │
+│session 10 user=dexo db=dexo state=active duration_ms=1200│
+│session 11 user=dexo db=dexo state=idle in transaction dur│
+│block 11 -> 10 lock=AccessExclusiveLock rel=public.items  │
+│preview SELECT pg_terminate_backend(11) lock=None confirm=│
+│confirm-target= confirmed=false                           │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette

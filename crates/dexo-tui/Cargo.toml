@@ -1,0 +1,35 @@
+[package]
+name = "dexo-tui"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+crossterm.workspace = true
+dexo-app = { path = "../dexo-app" }
+dexo-driver-api = { path = "../dexo-driver-api" }
+ratatui.workspace = true
+serde.workspace = true
+tokio.workspace = true
+toml.workspace = true
+futures-util = "0.3"
+thiserror.workspace = true
+unicode-width.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+insta.workspace = true
+
+[[bench]]
+name = "first_frame"
+harness = false
+
+[[bench]]
+name = "input_frame"
+harness = false
+
+[[bench]]
+name = "grid_viewport"
+harness = false
