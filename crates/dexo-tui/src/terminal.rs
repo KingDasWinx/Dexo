@@ -49,6 +49,15 @@ impl<B: TerminalControl> TerminalGuard<B> {
     }
 }
 
+pub fn install_panic_hook() {
+    let previous = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        let _ = disable_raw_mode();
+        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+        previous(info);
+    }));
+}
+
 impl<B: TerminalControl> Drop for TerminalGuard<B> {
     fn drop(&mut self) {
         self.restore();

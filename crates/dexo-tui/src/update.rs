@@ -244,6 +244,43 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::RevokeAllMcpGrants => {
             model.mcp_profiles.revoke_all();
+            model.mcp_audit.revoke_all();
+            Vec::new()
+        }
+        Action::OpenSettings => {
+            model.settings = crate::screens::settings::SettingsScreen::fixture();
+            Vec::new()
+        }
+        Action::ConfirmResetSettings => {
+            if !model.settings.confirm_reset {
+                model.settings.confirm_reset = true;
+            } else {
+                model.settings.reset();
+            }
+            Vec::new()
+        }
+        Action::OpenRecovery => {
+            model.recovery = crate::screens::recovery::RecoveryScreen::fixture();
+            Vec::new()
+        }
+        Action::ConfirmRecover => {
+            model.recovery.recover();
+            Vec::new()
+        }
+        Action::ConfirmDiscardRecovery => {
+            if !model.recovery.confirm_discard {
+                model.recovery.confirm_discard = true;
+            } else {
+                model.recovery.discard();
+            }
+            Vec::new()
+        }
+        Action::OpenMcpAudit => {
+            model.mcp_audit = crate::screens::mcp_audit::McpAuditScreen::fixture();
+            Vec::new()
+        }
+        Action::OpenDiagnostics => {
+            model.messages.push("diagnostic preview ready; never uploaded".into());
             Vec::new()
         }
         Action::ResultsUp => {
@@ -382,6 +419,37 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.mcp_profiles.revoke_all();
                 Vec::new()
             }
+            _ => Vec::new(),
+        };
+    }
+    if model.settings.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.settings.open = false;
+                Vec::new()
+            }
+            KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
+            _ => Vec::new(),
+        };
+    }
+    if model.recovery.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.recovery.open = false;
+                Vec::new()
+            }
+            KeyCode::Char('y') => update(model, Action::ConfirmRecover),
+            KeyCode::Char('n') => update(model, Action::ConfirmDiscardRecovery),
+            _ => Vec::new(),
+        };
+    }
+    if model.mcp_audit.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.mcp_audit.open = false;
+                Vec::new()
+            }
+            KeyCode::Char('r') => update(model, Action::RevokeAllMcpGrants),
             _ => Vec::new(),
         };
     }
