@@ -1,0 +1,24 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&snapshot_model(), 60, 20)"
+---
+demo  local  public                                         
+┌SQL───────────────────────────────────────────────────────┐
+│select 1                                                  │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+connected:local  tx:idle  rows:0  ctrl+p palette
