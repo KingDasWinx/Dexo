@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Entregar documentos SQL completos, parsing tolerante, autocomplete contextual, parâmetros, snippets, histórico e execução de scripts.
+**Goal:** Entregar documentos SQL completos, parsing tolerante, autocomplete contextual, parÃ¢metros, snippets, histÃ³rico e execuÃ§Ã£o de scripts.
 
 **Architecture:** `dexo-sql` owns text and language services with dialect adapters. Editor state stays independent from TUI widgets; catalog lookup is an injected read-only interface and may use offline snapshots.
 
@@ -21,24 +21,24 @@
 
 **Files:** `document.rs`, `edit.rs`.
 
-- [ ] **Step 1: Write failing Unicode undo test**
+- [x] **Step 1: Write failing Unicode undo test**
 
 ```rust
 #[test]
 fn unicode_edit_undo_redo_is_lossless() {
-    let mut doc = SqlDocument::new("select 'ação'\n");
-    doc.replace_chars(8..12, "café").unwrap();
-    assert_eq!(doc.text(), "select 'café'\n");
-    doc.undo().unwrap(); assert_eq!(doc.text(), "select 'ação'\n");
-    doc.redo().unwrap(); assert_eq!(doc.text(), "select 'café'\n");
+    let mut doc = SqlDocument::new("select 'aÃ§Ã£o'\n");
+    doc.replace_chars(8..12, "cafÃ©").unwrap();
+    assert_eq!(doc.text(), "select 'cafÃ©'\n");
+    doc.undo().unwrap(); assert_eq!(doc.text(), "select 'aÃ§Ã£o'\n");
+    doc.redo().unwrap(); assert_eq!(doc.text(), "select 'cafÃ©'\n");
 }
 ```
 
-- [ ] **Step 2:** Run `cargo test -p dexo-sql unicode_edit_undo_redo_is_lossless`; expect FAIL.
+- [x] **Step 2:** Run `cargo test -p dexo-sql unicode_edit_undo_redo_is_lossless`; expect FAIL.
 
-- [ ] **Step 3:** Implement rope-backed char-indexed edits, cursor/selection, grouped undo/redo and monotonically increasing document revision. Reject ranges not on char boundaries.
+- [x] **Step 3:** Implement rope-backed char-indexed edits, cursor/selection, grouped undo/redo and monotonically increasing document revision. Reject ranges not on char boundaries.
 
-- [ ] **Step 4:** Run unit and proptest sequences of insert/delete/undo; expect exact string model parity.
+- [x] **Step 4:** Run unit and proptest sequences of insert/delete/undo; expect exact string model parity.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(sql): add Unicode-safe document model"`.
 
@@ -46,7 +46,7 @@ fn unicode_edit_undo_redo_is_lossless() {
 
 **Files:** `parse.rs`, `dialect.rs`, tests.
 
-- [ ] **Step 1: Add failing incomplete-input test**
+- [x] **Step 1: Add failing incomplete-input test**
 
 ```rust
 #[test]
@@ -57,11 +57,11 @@ fn incomplete_select_still_highlights_keywords() {
 }
 ```
 
-- [ ] **Step 2:** Run targeted test; expect missing parser.
+- [x] **Step 2:** Run targeted test; expect missing parser.
 
-- [ ] **Step 3:** Wire Tree-sitter incremental edits and highlight queries. Wrap best-effort `sqlparser` AST as `Option`; tree errors create local diagnostics but never make text unexecutable.
+- [x] **Step 3:** Wire Tree-sitter incremental edits and highlight queries. Wrap best-effort `sqlparser` AST as `Option`; tree errors create local diagnostics but never make text unexecutable.
 
-- [ ] **Step 4:** Run parser corpus for PostgreSQL/MySQL valid, invalid and incomplete fixtures; expect no panic.
+- [x] **Step 4:** Run parser corpus for PostgreSQL/MySQL valid, invalid and incomplete fixtures; expect no panic.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(sql): parse incomplete SQL incrementally"`.
 
@@ -69,7 +69,7 @@ fn incomplete_select_still_highlights_keywords() {
 
 **Files:** `statement.rs`, property tests.
 
-- [ ] **Step 1: Add tests** for semicolons inside strings/comments/dollar quotes, current cursor statement and `WITH ... DELETE` classification.
+- [x] **Step 1: Add tests** for semicolons inside strings/comments/dollar quotes, current cursor statement and `WITH ... DELETE` classification.
 
 ```rust
 #[test]
@@ -79,11 +79,11 @@ fn cte_delete_is_mutating() {
 }
 ```
 
-- [ ] **Step 2:** Run tests; expect FAIL.
+- [x] **Step 2:** Run tests; expect FAIL.
 
-- [ ] **Step 3:** Implement `StatementSpan { byte_range, effect, understood }`; unknown syntax maps to `StatementEffect::Unknown`, never `ReadOnly`.
+- [x] **Step 3:** Implement `StatementSpan { byte_range, effect, understood }`; unknown syntax maps to `StatementEffect::Unknown`, never `ReadOnly`.
 
-- [ ] **Step 4:** Run proptest ensuring concatenated spans cover non-whitespace input without overlap.
+- [x] **Step 4:** Run proptest ensuring concatenated spans cover non-whitespace input without overlap.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(sql): split and classify statements safely"`.
 
@@ -91,7 +91,7 @@ fn cte_delete_is_mutating() {
 
 **Files:** `completion.rs`, `dialect.rs`.
 
-- [ ] **Step 1: Write failing alias completion test**
+- [x] **Step 1: Write failing alias completion test**
 
 ```rust
 #[test]
@@ -102,11 +102,11 @@ fn completes_columns_for_alias() {
 }
 ```
 
-- [ ] **Step 2:** Run target; expect FAIL.
+- [x] **Step 2:** Run target; expect FAIL.
 
-- [ ] **Step 3:** Implement context extraction for aliases, CTEs, SELECT/FROM/JOIN/WHERE, functions and keywords. Rank local aliases, current schema, favorites, recency, then lexical order. Add definition target IDs and signature help.
+- [x] **Step 3:** Implement context extraction for aliases, CTEs, SELECT/FROM/JOIN/WHERE, functions and keywords. Rank local aliases, current schema, favorites, recency, then lexical order. Add definition target IDs and signature help.
 
-- [ ] **Step 4:** Run tests with online and offline fake catalogs; expect same deterministic ranking.
+- [x] **Step 4:** Run tests with online and offline fake catalogs; expect same deterministic ranking.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(sql): add contextual completion and navigation"`.
 
@@ -114,13 +114,13 @@ fn completes_columns_for_alias() {
 
 **Files:** `format.rs`, `diagnostic.rs`.
 
-- [ ] **Step 1: Add failing idempotence test**: `format(format(sql)) == format(sql)` and literals/comments unchanged.
+- [x] **Step 1: Add failing idempotence test**: `format(format(sql)) == format(sql)` and literals/comments unchanged.
 
-- [ ] **Step 2:** Run test; expect formatter absent.
+- [x] **Step 2:** Run test; expect formatter absent.
 
-- [ ] **Step 3:** Implement dialect-aware token formatter with preview diff. Emit local parse diagnostics as `Local`; map server code/position as `Server`. Refuse format when token round-trip differs.
+- [x] **Step 3:** Implement dialect-aware token formatter with preview diff. Emit local parse diagnostics as `Local`; map server code/position as `Server`. Refuse format when token round-trip differs.
 
-- [ ] **Step 4:** Run golden corpus; expect idempotence and exact literal preservation.
+- [x] **Step 4:** Run golden corpus; expect idempotence and exact literal preservation.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(sql): format and diagnose safely"`.
 
@@ -128,7 +128,7 @@ fn completes_columns_for_alias() {
 
 **Files:** `parameter.rs`, `snippet.rs`, storage repositories/migration 2.
 
-- [ ] **Step 1: Write failing history privacy test**
+- [x] **Step 1: Write failing history privacy test**
 
 ```rust
 #[test]
@@ -140,11 +140,11 @@ fn history_excludes_parameter_values_by_default() {
 }
 ```
 
-- [ ] **Step 2:** Run target; expect FAIL.
+- [x] **Step 2:** Run target; expect FAIL.
 
-- [ ] **Step 3:** Add migration 2 tables `sql_history`, `snippets`, `documents`; repositories with retention by age/count; typed parameter editor; snippet placeholders `${1:name}`; external file mtime/hash conflict detection.
+- [x] **Step 3:** Add migration 2 tables `sql_history`, `snippets`, `documents`; repositories with retention by age/count; typed parameter editor; snippet placeholders `${1:name}`; external file mtime/hash conflict detection.
 
-- [ ] **Step 4:** Run storage migration v1->v2 and privacy tests.
+- [x] **Step 4:** Run storage migration v1->v2 and privacy tests.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(workbench): persist documents snippets and safe history"`.
 
@@ -152,21 +152,21 @@ fn history_excludes_parameter_values_by_default() {
 
 **Files:** `dexo-app/query_service.rs`, workbench screen, CLI run.
 
-- [ ] **Step 1: Add failing script test** proving three statements produce three result tabs in order and a failure stops sequential execution unless `--continue-on-error` is explicit.
+- [x] **Step 1: Add failing script test** proving three statements produce three result tabs in order and a failure stops sequential execution unless `--continue-on-error` is explicit.
 
-- [ ] **Step 2:** Run app/CLI/TUI tests; expect FAIL.
+- [x] **Step 2:** Run app/CLI/TUI tests; expect FAIL.
 
-- [ ] **Step 3:** Implement `ExecutionTarget::{Selection,CurrentStatement,Document}` and `ScriptPolicy::{StopOnError,ContinueOnError}`; bind parameters separately; expose commit/rollback/savepoints persistently in workbench status.
+- [x] **Step 3:** Implement `ExecutionTarget::{Selection,CurrentStatement,Document}` and `ScriptPolicy::{StopOnError,ContinueOnError}`; bind parameters separately; expose commit/rollback/savepoints persistently in workbench status.
 
-- [ ] **Step 4:** Run full sprint gate plus driver integration tests.
+- [x] **Step 4:** Run full sprint gate plus driver integration tests.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(workbench): execute SQL documents and scripts"`.
 
 ## Sprint exit
 
-- [ ] Unicode edit/undo property tests pass.
-- [ ] Parser corpus never panics and highlights incomplete input.
-- [ ] Unknown statements are never classified read-only.
-- [ ] Autocomplete works from offline catalog.
-- [ ] History privacy and v1->v2 migrations pass.
-- [ ] TUI/CLI execute selection/current/document consistently.
+- [x] Unicode edit/undo property tests pass.
+- [x] Parser corpus never panics and highlights incomplete input.
+- [x] Unknown statements are never classified read-only.
+- [x] Autocomplete works from offline catalog.
+- [x] History privacy and v1->v2 migrations pass.
+- [x] TUI/CLI execute selection/current/document consistently.
