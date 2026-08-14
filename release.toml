@@ -1,0 +1,6 @@
+# cargo-release config. Tags are created locally; publishing is the release workflow.
+sign-commit = false
+sign-tag = true
+push = false
+publish = false
+consolidate-commits = true

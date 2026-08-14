@@ -1,0 +1,38 @@
+name: Integration
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    - cron: "0 4 * * 1"
+
+jobs:
+  drivers:
+    name: ${{ matrix.package }} (${{ matrix.image }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - package: dexo-driver-postgres
+            image: postgres:14.18-alpine
+          - package: dexo-driver-postgres
+            image: postgres:16.9-alpine
+          - package: dexo-driver-postgres
+            image: postgres:17.5-alpine
+          - package: dexo-driver-mysql
+            image: mysql:8.0.42
+          - package: dexo-driver-mysql
+            image: mysql:8.4.5
+          - package: dexo-driver-mysql
+            image: mysql:9.3.0
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: 1.93.1
+      - name: Driver contracts
+        run: cargo test -p ${{ matrix.package }} --all-features -j 4
+        env:
+          DEXO_IT_IMAGE: ${{ matrix.image }}
