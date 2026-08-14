@@ -8,7 +8,10 @@ fn version_uses_stdout() {
         .arg("--version")
         .assert()
         .success()
-        .stdout(predicate::str::starts_with("dexo 0.1.0"));
+        .stdout(predicate::str::starts_with(concat!(
+            "dexo ",
+            env!("CARGO_PKG_VERSION")
+        )));
 }
 
 #[test]
