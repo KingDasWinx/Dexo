@@ -1,4 +1,13 @@
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct GrantLine {
+    pub id: String,
+    pub capability: String,
+    pub tools: String,
+    pub expires_in_secs: i64,
+    pub diff: String,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpProfilesScreen {
     pub open: bool,
     pub name: String,
@@ -6,6 +15,7 @@ pub struct McpProfilesScreen {
     pub confirm_enable: bool,
     pub scopes: Vec<String>,
     pub tools: Vec<String>,
+    pub grants: Vec<GrantLine>,
     pub preview: String,
 }
 
@@ -18,6 +28,13 @@ impl McpProfilesScreen {
             confirm_enable: false,
             scopes: vec!["allow db.public.*".into(), "deny db.public.secrets".into()],
             tools: vec!["catalog_search".into(), "object_describe".into()],
+            grants: vec![GrantLine {
+                id: "g1".into(),
+                capability: "data_write".into(),
+                tools: "data_insert".into(),
+                expires_in_secs: 900,
+                diff: "profile db.public.* -> grant db.public.items".into(),
+            }],
             preview: "enable requires local confirmation".into(),
         }
     }
@@ -33,6 +50,17 @@ impl McpProfilesScreen {
         );
     }
 
+    pub fn tick(&mut self) {
+        for grant in &mut self.grants {
+            grant.expires_in_secs = grant.expires_in_secs.saturating_sub(1);
+        }
+    }
+
+    pub fn revoke_all(&mut self) {
+        self.grants.clear();
+        self.preview = "revoked all grants".into();
+    }
+
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!(
             "mcp profile={} enabled={} confirm={}",
@@ -43,6 +71,13 @@ impl McpProfilesScreen {
         }
         for tool in &self.tools {
             lines.push(format!("tool {tool}"));
+        }
+        for grant in &self.grants {
+            lines.push(format!(
+                "grant {} {} {}s",
+                grant.capability, grant.tools, grant.expires_in_secs
+            ));
+            lines.push(format!("diff {}", grant.diff));
         }
         if !self.preview.is_empty() {
             lines.push(self.preview.clone());
@@ -62,5 +97,11 @@ mod tests {
         screen.confirm_enable();
         assert!(screen.enabled);
         assert!(screen.lines().join("\n").contains("deny db.public.secrets"));
+        assert!(screen.lines().join("\n").contains("grant data_write"));
+        screen.tick();
+        assert_eq!(screen.grants[0].expires_in_secs, 899);
+        screen.revoke_all();
+        assert!(screen.grants.is_empty());
+        assert!(screen.preview.contains("revoked all"));
     }
 }

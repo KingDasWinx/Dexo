@@ -3,7 +3,7 @@ use dexo_storage::Database;
 #[test]
 fn fresh_database_reaches_schema_four() {
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 5);
+    assert_eq!(db.schema_version().unwrap(), 6);
 }
 
 #[test]
