@@ -413,11 +413,10 @@ mod tests {
 
     #[test]
     fn invalid_role_color_names_field_and_keeps_file() {
-        let path = std::env::temp_dir().join(format!(
-            "dexo-theme-invalid-{}.toml",
-            std::process::id()
-        ));
-        let original = "name = \"broken\"\nkind = \"dark\"\n[roles]\nproduction = \"not-a-color\"\n";
+        let path =
+            std::env::temp_dir().join(format!("dexo-theme-invalid-{}.toml", std::process::id()));
+        let original =
+            "name = \"broken\"\nkind = \"dark\"\n[roles]\nproduction = \"not-a-color\"\n";
         std::fs::write(&path, original).unwrap();
         let loaded = load_theme_file(&path, builtin_dark());
         let err = loaded.error.expect("invalid theme");
@@ -450,13 +449,20 @@ mod tests {
         let prod = text.lines().find(|l| l.starts_with("production")).unwrap();
         let err = text.lines().find(|l| l.starts_with("error")).unwrap();
         let sel = text.lines().find(|l| l.starts_with("selection")).unwrap();
-        assert_ne!(prod.split_whitespace().nth(1), err.split_whitespace().nth(1));
-        assert_ne!(prod.split_whitespace().nth(1), sel.split_whitespace().nth(1));
+        assert_ne!(
+            prod.split_whitespace().nth(1),
+            err.split_whitespace().nth(1)
+        );
+        assert_ne!(
+            prod.split_whitespace().nth(1),
+            sel.split_whitespace().nth(1)
+        );
     }
 
     #[test]
     fn parse_hex_role() {
-        let theme = parse_theme("name=\"x\"\nkind=\"light\"\n[roles]\nerror=\"#cc0000\"\n").unwrap();
+        let theme =
+            parse_theme("name=\"x\"\nkind=\"light\"\n[roles]\nerror=\"#cc0000\"\n").unwrap();
         assert_eq!(theme.name, "x");
         assert_eq!(
             theme.color(

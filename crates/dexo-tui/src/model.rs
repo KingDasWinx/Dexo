@@ -6,18 +6,18 @@ use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
-use crate::theme::Theme;
 use crate::screens::data::DataScreen;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
 use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
 use crate::screens::recovery::RecoveryScreen;
-use crate::screens::settings::SettingsScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
 use crate::screens::security::SecurityScreen;
+use crate::screens::settings::SettingsScreen;
 use crate::screens::transfer::TransferScreen;
+use crate::theme::Theme;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {

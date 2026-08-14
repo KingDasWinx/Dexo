@@ -79,11 +79,7 @@ impl Keymap {
         }
         grouped
             .into_iter()
-            .filter(|(_, commands)| {
-                commands
-                    .iter()
-                    .any(|command| command != &commands[0])
-            })
+            .filter(|(_, commands)| commands.iter().any(|command| command != &commands[0]))
             .map(|((context, chord), mut commands)| {
                 commands.sort();
                 commands.dedup();
@@ -96,7 +92,11 @@ impl Keymap {
             .collect()
     }
 
-    pub fn resolve(&self, chord: &Chord, active: KeyContext) -> Result<Option<&str>, KeymapConflict> {
+    pub fn resolve(
+        &self,
+        chord: &Chord,
+        active: KeyContext,
+    ) -> Result<Option<&str>, KeymapConflict> {
         let label = chord_label(chord);
         let mut matches = self
             .bindings
@@ -194,10 +194,7 @@ pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
     if let Some(conflict) = conflicts.into_iter().next() {
         return Err(KeymapError {
             field: format!("{:?}.{}", conflict.context, conflict.chord),
-            reason: format!(
-                "ambiguous commands {}",
-                conflict.commands.join(" / ")
-            ),
+            reason: format!("ambiguous commands {}", conflict.commands.join(" / ")),
         });
     }
     Ok(keymap)
@@ -257,7 +254,9 @@ pub fn parse_key(spec: &str) -> Result<KeySpec, String> {
         "pageup" => KeyCode::PageUp,
         "pagedown" => KeyCode::PageDown,
         other if other.starts_with('f') && other.len() <= 3 => {
-            let n: u8 = other[1..].parse().map_err(|_| format!("unknown key `{spec}`"))?;
+            let n: u8 = other[1..]
+                .parse()
+                .map_err(|_| format!("unknown key `{spec}`"))?;
             KeyCode::F(n)
         }
         other if other.chars().count() == 1 => KeyCode::Char(other.chars().next().unwrap()),
@@ -380,16 +379,18 @@ profile = "emacs"
 
 #[cfg(test)]
 mod tests {
-    use super::{
-        KeyContext, Keymap, chord_from_event, parse_chord, parse_keymap,
-    };
+    use super::{KeyContext, Keymap, chord_from_event, parse_chord, parse_keymap};
     use crate::model::Model;
     use crate::palette::palette_entries;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn builtin_profiles_parse() {
-        for keymap in [Keymap::default_profile(), Keymap::vim_profile(), Keymap::emacs_profile()] {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
             assert!(keymap.conflicts().is_empty(), "{}", keymap.name);
         }
         assert!(
@@ -480,8 +481,11 @@ profile = "overlap"
             .into_iter()
             .map(|e| e.id.to_string())
             .collect();
-        for keymap in [Keymap::default_profile(), Keymap::vim_profile(), Keymap::emacs_profile()]
-        {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
             for command in keymap.command_ids() {
                 assert!(
                     ids.iter().any(|id| id == command),

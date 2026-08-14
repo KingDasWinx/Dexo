@@ -36,7 +36,9 @@ impl TerminalCapabilities {
         } else {
             ColorDepth::Ansi16
         };
-        let unicode = get("DEXO_ASCII").map(|v| v.is_empty() || v == "0").unwrap_or(true)
+        let unicode = get("DEXO_ASCII")
+            .map(|v| v.is_empty() || v == "0")
+            .unwrap_or(true)
             && !term.contains("linux");
         Self {
             color_depth,
@@ -68,10 +70,8 @@ mod tests {
 
     #[test]
     fn no_color_wins() {
-        let caps = TerminalCapabilities::from_env(env(&[
-            ("NO_COLOR", "1"),
-            ("COLORTERM", "truecolor"),
-        ]));
+        let caps =
+            TerminalCapabilities::from_env(env(&[("NO_COLOR", "1"), ("COLORTERM", "truecolor")]));
         assert_eq!(caps.color_depth, ColorDepth::None);
     }
 
