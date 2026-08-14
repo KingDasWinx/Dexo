@@ -1,6 +1,6 @@
 # Dexo Sprint 02: Driver Contracts and Connectivity Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Definir contratos modulares de drivers e estabelecer transportes TCP, TLS, proxy e SSH verificáveis.
 
@@ -22,7 +22,7 @@
 
 **Files:** `dexo-driver-api` files above.
 
-- [ ] **Step 1: Write failing round-trip tests**
+- [x] **Step 1: Write failing round-trip tests**
 
 ```rust
 use dexo_driver_api::{Capability, CapabilityState, DbValue, QualifiedName};
@@ -42,13 +42,13 @@ fn unavailable_capability_keeps_reason() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-driver-api --test contracts`
 
 Expected: FAIL with unresolved exported types.
 
-- [ ] **Step 3: Implement the exact domain types**
+- [x] **Step 3: Implement the exact domain types**
 
 ```rust
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -70,7 +70,7 @@ pub enum DbValue { Null, Bool(bool), I64(i64), U64(u64), Decimal(String), Text(S
 
 Implement `QualifiedName` with optional catalog/schema and non-empty object name. Export all types.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test -p dexo-driver-api --test contracts`
 
@@ -87,7 +87,7 @@ git commit -m "feat(driver-api): define canonical values and capabilities"
 
 **Files:** `connection.rs`, `query.rs`, `error.rs`, `lib.rs`.
 
-- [ ] **Step 1: Write a compile-time fake driver test**
+- [x] **Step 1: Write a compile-time fake driver test**
 
 ```rust
 use dexo_driver_api::*;
@@ -101,13 +101,13 @@ impl ConnectionFactory for FakeFactory {
 fn factory_is_object_safe() { let _: Box<dyn ConnectionFactory> = Box::new(FakeFactory); }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-driver-api factory_is_object_safe`
 
 Expected: FAIL because contracts are absent.
 
-- [ ] **Step 3: Implement contracts**
+- [x] **Step 3: Implement contracts**
 
 ```rust
 #[derive(Clone, Debug)]
@@ -147,7 +147,7 @@ impl QueryRequest {
 
 Define `ColumnMeta`, `RowBatch`, `QueryEvent`, and `QueryStream = Pin<Box<dyn Stream<Item=Result<QueryEvent, DriverError>> + Send>>`. `DriverError` contains stable category, safe message, native code/position, and retryable flag.
 
-- [ ] **Step 4: Compile all dependents**
+- [x] **Step 4: Compile all dependents**
 
 Run: `cargo test -p dexo-driver-api && cargo check --workspace`
 
@@ -164,7 +164,7 @@ git commit -m "feat(driver-api): add object-safe connection and query contracts"
 
 **Files:** `crates/dexo-transport/src/{config.rs,tcp.rs,proxy.rs,lib.rs}`, test `proxy.rs`.
 
-- [ ] **Step 1: Write failing config validation test**
+- [x] **Step 1: Write failing config validation test**
 
 ```rust
 #[test]
@@ -174,13 +174,13 @@ fn rejects_proxy_without_port() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-transport --test proxy`
 
 Expected: FAIL because `ProxyConfig` is undefined.
 
-- [ ] **Step 3: Implement transport contracts**
+- [x] **Step 3: Implement transport contracts**
 
 ```rust
 pub trait AsyncStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
@@ -193,7 +193,7 @@ pub enum ProxyConfig { Socks5 { host: String, port: u16 }, HttpConnect { host: S
 
 Implement direct `TcpStream::connect`, SOCKS5 via `tokio-socks`, and HTTP CONNECT by writing a bounded request and accepting only 2xx. Credentials use `SecretString` and never implement `Debug` as plaintext.
 
-- [ ] **Step 4: Run proxy tests with a local fake server**
+- [x] **Step 4: Run proxy tests with a local fake server**
 
 Run: `cargo test -p dexo-transport --test proxy`
 
@@ -210,7 +210,7 @@ git commit -m "feat(transport): add TCP and proxy connectors"
 
 **Files:** `tls.rs`, `config.rs`, test `tls.rs`.
 
-- [ ] **Step 1: Write failing policy test**
+- [x] **Step 1: Write failing policy test**
 
 ```rust
 #[test]
@@ -220,17 +220,17 @@ fn insecure_tls_requires_explicit_flag() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-transport --test tls`
 
 Expected: FAIL because TLS config is absent.
 
-- [ ] **Step 3: Implement verified modes**
+- [x] **Step 3: Implement verified modes**
 
 Define `TlsMode::{Preferred, Required, VerifyCa, VerifyFull, DisableVerification}`. Build rustls using platform verifier by default; load a PEM CA only from the explicit path; load client certificate/key through typed inputs. `DisableVerification` compiles behind feature `dangerous-tls` and still requires `explicit_insecure=true`.
 
-- [ ] **Step 4: Run TLS tests**
+- [x] **Step 4: Run TLS tests**
 
 Run: `cargo test -p dexo-transport --all-features --test tls`
 
@@ -247,7 +247,7 @@ git commit -m "feat(transport): verify TLS by default"
 
 **Files:** `ssh.rs`, `host_key.rs`, test `host_key.rs`.
 
-- [ ] **Step 1: Write failing changed-key test**
+- [x] **Step 1: Write failing changed-key test**
 
 ```rust
 #[test]
@@ -258,13 +258,13 @@ fn changed_host_key_is_never_accepted() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-transport --test host_key`
 
 Expected: FAIL because host-key model is missing.
 
-- [ ] **Step 3: Implement verification and tunnel API**
+- [x] **Step 3: Implement verification and tunnel API**
 
 ```rust
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -278,7 +278,7 @@ pub struct SshTunnelRequest {
 
 Use `russh` client authentication for agent, private key or password. The host-key callback returns an error for `Changed`, returns a typed confirmation requirement for `New`, and accepts only `Trusted` without interaction.
 
-- [ ] **Step 4: Run tests**
+- [x] **Step 4: Run tests**
 
 Run: `cargo test -p dexo-transport --test host_key`
 
@@ -295,7 +295,7 @@ git commit -m "feat(transport): add verified SSH tunneling"
 
 **Files:** `crates/dexo-app/src/connection_policy.rs` and tests in the same module.
 
-- [ ] **Step 1: Write failing production policy test**
+- [x] **Step 1: Write failing production policy test**
 
 ```rust
 #[test]
@@ -307,13 +307,13 @@ fn production_defaults_to_strict_controls() {
 }
 ```
 
-- [ ] **Step 2: Verify failure**
+- [x] **Step 2: Verify failure**
 
 Run: `cargo test -p dexo-app production_defaults_to_strict_controls`
 
 Expected: FAIL because the policy is missing.
 
-- [ ] **Step 3: Implement policy values**
+- [x] **Step 3: Implement policy values**
 
 ```rust
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -323,7 +323,7 @@ pub struct ConnectionPolicy { pub read_only: bool, pub confirm_destructive: bool
 
 Production defaults: confirmations on, verified TLS required, 10k rows, 30 seconds. Local defaults: confirmations on for DROP/TRUNCATE, 100k rows, 120 seconds. Explicit user configuration may tighten or loosen except the UI must retain an insecure indicator.
 
-- [ ] **Step 4: Run full sprint gate**
+- [x] **Step 4: Run full sprint gate**
 
 Run: `cargo test -p dexo-driver-api -p dexo-transport -p dexo-app && cargo clippy --workspace --all-targets --all-features -- -D warnings`
 
@@ -338,8 +338,8 @@ git commit -m "feat(app): enforce connection safety policies"
 
 ## Sprint exit
 
-- [ ] Driver traits are object-safe and contain no TUI/MCP types.
-- [ ] Values preserve native bytes/type names without lossy conversion.
-- [ ] TLS verification and SSH host-key changes fail closed.
-- [ ] Direct, SOCKS5, HTTP CONNECT and SSH connectors have local integration tests.
-- [ ] Production policy is strict and tested.
+- [x] Driver traits are object-safe and contain no TUI/MCP types.
+- [x] Values preserve native bytes/type names without lossy conversion.
+- [x] TLS verification and SSH host-key changes fail closed.
+- [x] Direct, SOCKS5, HTTP CONNECT and SSH connectors have local integration tests.
+- [x] Production policy is strict and tested.
