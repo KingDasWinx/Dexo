@@ -1619,8 +1619,10 @@ dependencies = [
  "futures-util",
  "insta",
  "ratatui",
+ "serde",
  "thiserror 2.0.20",
  "tokio",
+ "toml",
  "unicode-width",
  "uuid",
 ]

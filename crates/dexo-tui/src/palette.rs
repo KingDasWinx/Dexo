@@ -233,7 +233,86 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             disabled_reason: None,
             action: || Action::OpenMcpProfiles,
         },
+        PaletteEntry {
+            id: "explorer.expand",
+            title: "Expand Explorer Node",
+            keywords: &["tree", "open"],
+            shortcut: Some("Enter"),
+            disabled_reason: None,
+            action: || Action::ExplorerExpand,
+        },
+        PaletteEntry {
+            id: "explorer.copy_name",
+            title: "Copy Object Name",
+            keywords: &["clipboard", "tree"],
+            shortcut: Some("c"),
+            disabled_reason: None,
+            action: || Action::ExplorerCopyName,
+        },
+        PaletteEntry {
+            id: "results.up",
+            title: "Results Up",
+            keywords: &["grid", "scroll"],
+            shortcut: Some("Up"),
+            disabled_reason: None,
+            action: || Action::ResultsUp,
+        },
+        PaletteEntry {
+            id: "results.down",
+            title: "Results Down",
+            keywords: &["grid", "scroll"],
+            shortcut: Some("Down"),
+            disabled_reason: None,
+            action: || Action::ResultsDown,
+        },
+        PaletteEntry {
+            id: "results.left",
+            title: "Results Left",
+            keywords: &["grid", "scroll"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ResultsLeft,
+        },
+        PaletteEntry {
+            id: "results.right",
+            title: "Results Right",
+            keywords: &["grid", "scroll"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ResultsRight,
+        },
+        PaletteEntry {
+            id: "results.pageup",
+            title: "Results Page Up",
+            keywords: &["grid", "scroll"],
+            shortcut: Some("PageUp"),
+            disabled_reason: None,
+            action: || Action::ResultsPageUp,
+        },
+        PaletteEntry {
+            id: "results.pagedown",
+            title: "Results Page Down",
+            keywords: &["grid", "scroll"],
+            shortcut: Some("PageDown"),
+            disabled_reason: None,
+            action: || Action::ResultsPageDown,
+        },
+        PaletteEntry {
+            id: "results.top",
+            title: "Results Top",
+            keywords: &["grid", "home"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ResultsTop,
+        },
     ]
+}
+
+pub fn action_by_id(id: &str) -> Option<Action> {
+    palette_entries(&Model::default())
+        .into_iter()
+        .find(|entry| entry.id == id)
+        .map(|entry| (entry.action)())
 }
 
 pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a PaletteEntry> {

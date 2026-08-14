@@ -78,6 +78,13 @@ pub enum Action {
     OpenMcpProfiles,
     ConfirmMcpEnable,
     RevokeAllMcpGrants,
+    ResultsUp,
+    ResultsDown,
+    ResultsLeft,
+    ResultsRight,
+    ResultsPageUp,
+    ResultsPageDown,
+    ResultsTop,
     Quit,
 }
 

@@ -8,6 +8,7 @@ use crate::model::{Focus, GridModel, Model};
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
         Action::Key(key) => handle_key(model, key),
+        Action::Mouse(_) if !model.mouse => Vec::new(),
         Action::Mouse(_) => Vec::new(),
         Action::Resize { width, height } => {
             model.apply_size(width, height);
@@ -245,6 +246,39 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.mcp_profiles.revoke_all();
             Vec::new()
         }
+        Action::ResultsUp => {
+            model.results.scroll_rows(-1);
+            Vec::new()
+        }
+        Action::ResultsDown => {
+            model.results.scroll_rows(1);
+            Vec::new()
+        }
+        Action::ResultsLeft => {
+            model.results.scroll_columns(-1);
+            Vec::new()
+        }
+        Action::ResultsRight => {
+            model.results.scroll_columns(1);
+            Vec::new()
+        }
+        Action::ResultsPageUp => {
+            model
+                .results
+                .scroll_rows(-(model.results.viewport().height as i32));
+            Vec::new()
+        }
+        Action::ResultsPageDown => {
+            model
+                .results
+                .scroll_rows(model.results.viewport().height as i32);
+            Vec::new()
+        }
+        Action::ResultsTop => {
+            let offset = model.results.viewport().row_offset as i32;
+            model.results.scroll_rows(-offset);
+            Vec::new()
+        }
         Action::Quit => vec![Effect::Quit],
     }
 }
@@ -351,63 +385,51 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
-    match (key.modifiers, key.code) {
-        (KeyModifiers::CONTROL, KeyCode::Char('c')) => {
-            if model.active_query.is_some() {
-                cancel_query(model)
-            } else {
-                vec![Effect::Quit]
+    let spec = crate::keymap::KeySpec {
+        modifiers: key.modifiers,
+        code: key.code,
+    };
+    let mut chord = model.pending_chord.clone();
+    chord.keys.push(spec);
+    let ctx = active_key_context(model);
+    if model.keymap.is_prefix(&chord, ctx) {
+        model.pending_chord = chord;
+        return Vec::new();
+    }
+    match model.keymap.resolve(&chord, ctx) {
+        Ok(Some(command)) => {
+            model.pending_chord.keys.clear();
+            if let Some(action) = crate::palette::action_by_id(command) {
+                return update(model, action);
             }
         }
-        (KeyModifiers::CONTROL, KeyCode::Char('q')) => vec![Effect::Quit],
-        (KeyModifiers::CONTROL, KeyCode::Char('p')) => {
-            open_palette(model);
-            Vec::new()
+        Ok(None) => model.pending_chord.keys.clear(),
+        Err(conflict) => {
+            model.pending_chord.keys.clear();
+            model.messages.push(format!(
+                "keymap conflict {}: {}",
+                conflict.chord,
+                conflict.commands.join(" / ")
+            ));
+            return Vec::new();
         }
-        (_, KeyCode::F(5)) => start_query(model),
-        (_, KeyCode::Up) if model.focus == Focus::Results => {
-            model.results.scroll_rows(-1);
-            Vec::new()
-        }
-        (_, KeyCode::Down) if model.focus == Focus::Results => {
-            model.results.scroll_rows(1);
-            Vec::new()
-        }
-        (_, KeyCode::Left) if model.focus == Focus::Results => {
-            model.results.scroll_columns(-1);
-            Vec::new()
-        }
-        (_, KeyCode::Right) if model.focus == Focus::Results => {
-            model.results.scroll_columns(1);
-            Vec::new()
-        }
-        (_, KeyCode::PageUp) if model.focus == Focus::Results => {
-            model
-                .results
-                .scroll_rows(-(model.results.viewport().height as i32));
-            Vec::new()
-        }
-        (_, KeyCode::PageDown) if model.focus == Focus::Results => {
-            model
-                .results
-                .scroll_rows(model.results.viewport().height as i32);
-            Vec::new()
-        }
-        (_, KeyCode::Enter) if model.focus == Focus::Explorer => {
-            if let Some(id) = model.explorer.selected.clone() {
-                let _ = model.explorer.expand(&id);
-            }
-            Vec::new()
-        }
-        (_, KeyCode::Char('c')) if model.focus == Focus::Explorer => {
-            model.explorer.copy_selected_name();
-            Vec::new()
-        }
-        (_, KeyCode::Tab) if model.tabs.active == 2 => {
-            model.schema_editor.focus_next();
-            Vec::new()
-        }
-        _ => Vec::new(),
+    }
+    if key.code == KeyCode::Tab && model.tabs.active == 2 {
+        model.schema_editor.focus_next();
+    }
+    Vec::new()
+}
+
+fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
+    use crate::keymap::KeyContext;
+    if model.palette.open {
+        return KeyContext::Palette;
+    }
+    match model.focus {
+        Focus::Explorer => KeyContext::Explorer,
+        Focus::Results => KeyContext::Results,
+        Focus::Inspector => KeyContext::Inspector,
+        Focus::Editor | Focus::Palette => KeyContext::Editor,
     }
 }
 
