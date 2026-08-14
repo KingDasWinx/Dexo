@@ -1,0 +1,8 @@
+---
+source: crates/dexo-tui/tests/theme_snapshots.rs
+expression: text
+---
+theme=light kind=Light depth=Ansi256 unicode=true
+production ●PROD color=ansi:124
+error ✗ color=ansi:160
+selection ▸ color=ansi:27

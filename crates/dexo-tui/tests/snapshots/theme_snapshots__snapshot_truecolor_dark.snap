@@ -1,0 +1,8 @@
+---
+source: crates/dexo-tui/tests/theme_snapshots.rs
+expression: text
+---
+theme=dark kind=Dark depth=TrueColor unicode=true
+production ●PROD color=#dc3232
+error ✗ color=#f04646
+selection ▸ color=#326ed2
