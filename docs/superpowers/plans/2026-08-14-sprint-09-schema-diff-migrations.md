@@ -1,6 +1,6 @@
 # Dexo Sprint 09: Schema Diff and Migrations Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Comparar bancos/snapshots, ordenar mudanças e gerar scripts de migração revisáveis e seguros.
 
@@ -24,7 +24,7 @@
 - [x] **Step 2:** Run target; expect snapshot type absent.
 - [x] **Step 3:** Implement `SchemaSnapshot { format_version: 1, driver, server_version, captured_at, scope, objects, digest }`; canonicalize object order before digest; migration 4 stores compressed JSON only after measuring benefit.
 - [x] **Step 4:** Run v3->v4 and tampered-digest rejection tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(diff): persist versioned schema snapshots"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(diff): persist versioned schema snapshots"`.
 
 ### Task 2: Normalize only proven equivalences
 
@@ -32,7 +32,7 @@
 - [x] **Step 2:** Run tests; expect normalizers absent.
 - [x] **Step 3:** Implement common normalization plus `DriverNormalizer`; sort unordered sets, normalize server defaults only from explicit version rules, preserve unknown attributes.
 - [x] **Step 4:** Run idempotence property `normalize(normalize(x)) == normalize(x)`.
-- [ ] **Step 5:** Commit with `git commit -m "feat(diff): normalize schemas conservatively"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(diff): normalize schemas conservatively"`.
 
 ### Task 3: Compute structural changes without guessing renames
 
@@ -40,7 +40,7 @@
 - [x] **Step 2:** Run target; expect diff absent.
 - [x] **Step 3:** Implement `SchemaDifference::{Added,Removed,Changed}` keyed by qualified identity and `RenameMapping` explicit input; filters by scope/kind.
 - [x] **Step 4:** Run bidirectional test where swapping inputs reverses added/removed and before/after.
-- [ ] **Step 5:** Commit with `git commit -m "feat(diff): compute explicit structural changes"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(diff): compute explicit structural changes"`.
 
 ### Task 4: Order dependencies and surface cycles
 
@@ -48,7 +48,7 @@
 - [x] **Step 2:** Run target; expect graph absent.
 - [x] **Step 3:** Implement deterministic Kahn topological sort and strongly connected component reporting; do not invent an order inside cycles.
 - [x] **Step 4:** Run graph property tests ensuring every non-cycle edge respects output order.
-- [ ] **Step 5:** Commit with `git commit -m "feat(diff): order migrations by dependencies"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(diff): order migrations by dependencies"`.
 
 ### Task 5: Generate risk-classified forward/reverse scripts
 
@@ -56,7 +56,7 @@
 - [x] **Step 2:** Run goldens; expect generator absent.
 - [x] **Step 3:** Convert differences to Sprint 08 `SchemaChange`, render through driver, prepend machine-readable comments for risk; emit reverse only where every change is reversible.
 - [x] **Step 4:** Apply forward to fixture, re-introspect and assert empty diff; apply reverse for reversible fixture.
-- [ ] **Step 5:** Commit with `git commit -m "feat(diff): generate reviewed migration scripts"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(diff): generate reviewed migration scripts"`.
 
 ### Task 6: Expose diff in TUI and CLI
 
@@ -64,7 +64,7 @@
 - [x] **Step 2:** Run; expect commands/screens absent.
 - [x] **Step 3:** Implement background capture, object filters, explicit rename mapping, save report/script and protected apply through workbench. CLI never applies unless `--apply --confirm-target` is supplied.
 - [x] **Step 4:** Run full sprint gate and driver round-trip E2E.
-- [ ] **Step 5:** Commit with `git commit -m "feat(schema): compare schemas and review migrations"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(schema): compare schemas and review migrations"`.
 
 ## Sprint exit
 

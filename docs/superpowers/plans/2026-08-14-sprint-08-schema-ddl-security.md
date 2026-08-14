@@ -1,6 +1,6 @@
 # Dexo Sprint 08: Schema DDL and Security Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Criar e alterar objetos, usuários, roles e grants por mudanças tipadas com preview DDL e proteção proporcional ao risco.
 
@@ -26,7 +26,7 @@
 - [x] **Step 2:** Run target; expect types absent.
 - [x] **Step 3:** Implement `SchemaChange::{CreateTable,AlterTable,CreateView,AlterRoutine,CreateIndex,DropObject,RenameObject,Grant,Revoke}` and `ChangeRisk { destructive, data_loss, lock_level, reversible }`; validate non-empty qualified targets.
 - [x] **Step 4:** Run exhaustive match test proving every variant has risk classification.
-- [ ] **Step 5:** Commit with `git commit -m "feat(schema): model typed DDL changes and risk"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(schema): model typed DDL changes and risk"`.
 
 ### Task 2: Render PostgreSQL DDL
 
@@ -36,7 +36,7 @@
 - [x] **Step 2:** Run goldens; expect renderer absent.
 - [x] **Step 3:** Implement quoting via one `PgDialect` service; render a `DdlPlan { statements, rollback, warnings }`; never accept raw identifier strings outside `QualifiedName`.
 - [x] **Step 4:** Execute plans against a container, re-introspect and assert requested shape.
-- [ ] **Step 5:** Commit with `git commit -m "feat(postgres): render and verify DDL plans"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(postgres): render and verify DDL plans"`.
 
 ### Task 3: Render MySQL DDL
 
@@ -46,7 +46,7 @@
 - [x] **Step 2:** Run goldens; expect renderer absent.
 - [x] **Step 3:** Implement `MysqlDialect` plans, marking implicit-commit statements and operations with table rebuild/lock risk.
 - [x] **Step 4:** Execute against container and re-introspect exact shape.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mysql): render and verify DDL plans"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(mysql): render and verify DDL plans"`.
 
 ### Task 4: Preview dependencies and enforce destructive policies
 
@@ -65,7 +65,7 @@ fn production_drop_requires_typed_target() {
 - [x] **Step 2:** Run target; expect FAIL.
 - [x] **Step 3:** Combine DDL plan, known dependents, grants and risk into preview. Apply only after exact confirmation; execute transactionally when driver says possible; otherwise report committed statement boundary.
 - [x] **Step 4:** Run production/read-only/unknown-SQL/cancel tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(schema): preview impact and protect DDL"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(schema): preview impact and protect DDL"`.
 
 ### Task 5: Build common-object TUI forms and raw DDL escape hatch
 
@@ -75,7 +75,7 @@ fn production_drop_requires_typed_target() {
 - [x] **Step 2:** Run snapshots; expect screens absent.
 - [x] **Step 3:** Implement focus-safe forms producing typed changes. Raw DDL uses editor/workbench execution and the same risk classifier; show generated diff before replacing form state.
 - [x] **Step 4:** Run snapshots at full/compact sizes.
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): edit schema objects with DDL preview"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): edit schema objects with DDL preview"`.
 
 ### Task 6: Manage users, roles and grants
 
@@ -85,7 +85,7 @@ fn production_drop_requires_typed_target() {
 - [x] **Step 2:** Run both container tests; expect FAIL.
 - [x] **Step 3:** Implement list/effective grants when available, create/alter/drop principal, grant/revoke object/role. Password inputs go straight from `SecretString` to protocol and never SQLite/history/preview.
 - [x] **Step 4:** Run grant contracts and sentinel scan.
-- [ ] **Step 5:** Commit with `git commit -m "feat(security): manage database roles and grants"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(security): manage database roles and grants"`.
 
 ### Task 7: Invalidate catalog only after confirmed DDL outcome
 
@@ -95,7 +95,7 @@ fn production_drop_requires_typed_target() {
 - [x] **Step 2:** Run target; expect FAIL.
 - [x] **Step 3:** Map outcome `RolledBack|Committed|PartiallyCommitted|Unknown` to precise cache invalidation and mandatory refresh indicator.
 - [x] **Step 4:** Run full sprint gate and both DDL suites.
-- [ ] **Step 5:** Commit with `git commit -m "feat(catalog): invalidate after DDL outcomes"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(catalog): invalidate after DDL outcomes"`.
 
 ## Sprint exit
 

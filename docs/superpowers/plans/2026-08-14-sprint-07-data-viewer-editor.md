@@ -26,7 +26,7 @@
 - [x] **Step 2:** Run target; expect missing types.
 - [x] **Step 3:** Implement `DataRequest { object, columns, filter, sort, page }`, `Page { offset, limit<=10_000 }`, boolean filter AST and null-aware operators. Each driver quotes catalog metadata and binds values.
 - [x] **Step 4:** Run property tests for identifiers/values and Docker paging contracts.
-- [ ] **Step 5:** Commit with `git commit -m "feat(data): add typed server paging and filters"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(data): add typed server paging and filters"`.
 
 ### Task 2: Complete grid selection and copy formats
 
@@ -36,7 +36,7 @@
 - [x] **Step 2:** Run tests; expect failures.
 - [x] **Step 3:** Implement formatters that distinguish NULL, empty text and empty bytes; SQL copy delegates quoting/literals to driver dialect; never copy truncated bytes as complete.
 - [x] **Step 4:** Run snapshot and formatter golden tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(data): add complete grid selection and copy"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(data): add complete grid selection and copy"`.
 
 ### Task 3: Render and fetch large/native values safely
 
@@ -46,7 +46,7 @@
 - [x] **Step 2:** Run target; expect viewer absent.
 - [x] **Step 3:** Implement inline byte threshold, on-demand fetch token, max download policy and atomic save chosen locally by the user. Do not infer image by extension; inspect bounded magic bytes.
 - [x] **Step 4:** Run large-value tests with 100MB fixture while asserting bounded cache bytes.
-- [ ] **Step 5:** Commit with `git commit -m "feat(data): inspect large and native values safely"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(data): inspect large and native values safely"`.
 
 ### Task 4: Build immutable row identities and change sets
 
@@ -65,7 +65,7 @@ fn table_without_unique_identity_is_read_only() {
 - [x] **Step 2:** Run target; expect FAIL.
 - [x] **Step 3:** Choose primary key, else non-null unique key; snapshot original identity values. Implement pending insert/update/delete states, validation errors and discard/revert without mutating loaded rows.
 - [x] **Step 4:** Run change-set property tests for add/edit/delete/revert sequences.
-- [ ] **Step 5:** Commit with `git commit -m "feat(data): stage edits in safe change sets"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(data): stage edits in safe change sets"`.
 
 ### Task 5: Render and apply bound mutations with conflict detection
 
@@ -75,7 +75,7 @@ fn table_without_unique_identity_is_read_only() {
 - [x] **Step 2:** Run both driver tests; expect FAIL.
 - [x] **Step 3:** Generate INSERT/UPDATE/DELETE with bound parameters, quoted metadata identifiers, identity predicates and optional original-value version predicate. Execute one change set transactionally; validate affected rows exactly one; rollback on error.
 - [x] **Step 4:** Run conflict, partial failure, cancel and successful batch tests on both databases.
-- [ ] **Step 5:** Commit with `git commit -m "feat(data): apply edits with optimistic conflicts"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(data): apply edits with optimistic conflicts"`.
 
 ### Task 6: Navigate foreign-key relationships
 
@@ -85,7 +85,7 @@ fn table_without_unique_identity_is_read_only() {
 - [x] **Step 2:** Run target; expect missing navigator.
 - [x] **Step 3:** Implement inbound/outbound relationship list, NULL handling, composite key order and open-related-data action in a new tab.
 - [x] **Step 4:** Run navigation tests and TUI snapshot.
-- [ ] **Step 5:** Commit with `git commit -m "feat(data): navigate foreign-key records"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(data): navigate foreign-key records"`.
 
 ### Task 7: Expose review/apply/revert in TUI
 
@@ -95,7 +95,7 @@ fn table_without_unique_identity_is_read_only() {
 - [x] **Step 2:** Run tests; expect FAIL.
 - [x] **Step 3:** Implement review modal showing fully qualified target, operations, parameter-safe preview, affected row policy and transaction choice. Keep failed and unsubmitted changes editable.
 - [x] **Step 4:** Run full sprint gate including both mutation contract suites.
-- [ ] **Step 5:** Commit with `git commit -m "feat(tui): review and apply data edits"`.
+- [x] **Step 5:** Commit with `git commit -m "feat(tui): review and apply data edits"`.
 
 ## Sprint exit
 
