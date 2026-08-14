@@ -1,3 +1,4 @@
+pub mod admin_service;
 pub mod catalog_service;
 pub mod connection_policy;
 pub mod connection_profile;
@@ -5,6 +6,7 @@ pub mod data;
 pub mod driver_registry;
 pub mod error;
 pub mod event;
+pub mod explain_service;
 pub mod project;
 pub mod query_service;
 pub mod schema;

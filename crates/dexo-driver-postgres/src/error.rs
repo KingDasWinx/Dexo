@@ -16,12 +16,21 @@ pub fn map_error(error: tokio_postgres::Error) -> DriverError {
 
 fn category(error: &tokio_postgres::Error) -> DriverErrorCategory {
     if error.is_closed() {
-        DriverErrorCategory::Network
-    } else if error.as_db_error().is_some() {
-        DriverErrorCategory::Syntax
-    } else {
-        DriverErrorCategory::Internal
+        return DriverErrorCategory::Network;
     }
+    if let Some(db) = error.as_db_error() {
+        if db.code().code() == "42501" {
+            return DriverErrorCategory::Permission;
+        }
+        return DriverErrorCategory::Syntax;
+    }
+    DriverErrorCategory::Internal
+}
+
+pub fn is_permission(error: &tokio_postgres::Error) -> bool {
+    error
+        .as_db_error()
+        .is_some_and(|db| db.code().code() == "42501")
 }
 
 fn safe_message(error: &tokio_postgres::Error) -> String {
