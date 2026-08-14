@@ -21,7 +21,7 @@
 
 **Files:** `terminal.rs`, `event_loop.rs`.
 
-- [ ] **Step 1: Write a failing lifecycle test**
+- [x] **Step 1: Write a failing lifecycle test**
 
 ```rust
 #[test]
@@ -32,9 +32,9 @@ fn terminal_guard_restores_once() {
 }
 ```
 
-- [ ] **Step 2:** Run `cargo test -p dexo-tui terminal_guard_restores_once`; expect unresolved types.
+- [x] **Step 2:** Run `cargo test -p dexo-tui terminal_guard_restores_once`; expect unresolved types.
 
-- [ ] **Step 3: Implement an idempotent guard**
+- [x] **Step 3: Implement an idempotent guard**
 
 ```rust
 pub struct TerminalGuard<B: TerminalControl> { backend: B, restored: bool }
@@ -45,7 +45,7 @@ impl<B: TerminalControl> TerminalGuard<B> {
 impl<B: TerminalControl> Drop for TerminalGuard<B> { fn drop(&mut self) { self.restore(); } }
 ```
 
-- [ ] **Step 4:** Run `cargo test -p dexo-tui terminal_guard_restores_once`; expect PASS.
+- [x] **Step 4:** Run `cargo test -p dexo-tui terminal_guard_restores_once`; expect PASS.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(tui): restore terminal safely"`.
 
@@ -53,7 +53,7 @@ impl<B: TerminalControl> Drop for TerminalGuard<B> { fn drop(&mut self) { self.r
 
 **Files:** `model.rs`, `action.rs`, `update.rs`.
 
-- [ ] **Step 1: Write failing reducer test**
+- [x] **Step 1: Write failing reducer test**
 
 ```rust
 #[test]
@@ -65,15 +65,15 @@ fn query_events_do_not_change_editor_focus() {
 }
 ```
 
-- [ ] **Step 2:** Run `cargo test -p dexo-tui query_events_do_not_change_editor_focus`; expect FAIL.
+- [x] **Step 2:** Run `cargo test -p dexo-tui query_events_do_not_change_editor_focus`; expect FAIL.
 
-- [ ] **Step 3: Implement `Model`, `Focus`, `Action`, and pure `update`** with actions for key/mouse/resize, connection state, query metadata/rows/messages, transaction state, palette and quit. `update` returns `Vec<Effect>`; it never calls a driver.
+- [x] **Step 3: Implement `Model`, `Focus`, `Action`, and pure `update`** with actions for key/mouse/resize, connection state, query metadata/rows/messages, transaction state, palette and quit. `update` returns `Vec<Effect>`; it never calls a driver.
 
 ```rust
 pub enum Effect { StartQuery(QueryRequest), CancelQuery(QueryId), PersistLayout, Quit }
 ```
 
-- [ ] **Step 4:** Run `cargo test -p dexo-tui`; expect reducer tests PASS.
+- [x] **Step 4:** Run `cargo test -p dexo-tui`; expect reducer tests PASS.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(tui): add pure application reducer"`.
 
@@ -81,7 +81,7 @@ pub enum Effect { StartQuery(QueryRequest), CancelQuery(QueryId), PersistLayout,
 
 **Files:** `layout.rs`, `render.rs`, widget status/tabs, snapshots.
 
-- [ ] **Step 1: Add snapshots** for 160x50 full layout, 100x30 reduced inspector and 60x20 compact single-panel mode using `ratatui::backend::TestBackend`.
+- [x] **Step 1: Add snapshots** for 160x50 full layout, 100x30 reduced inspector and 60x20 compact single-panel mode using `ratatui::backend::TestBackend`.
 
 ```rust
 #[test_case(160, 50, LayoutMode::Full)]
@@ -91,11 +91,11 @@ fn layout_matches_terminal(width: u16, height: u16, expected: LayoutMode) {
 }
 ```
 
-- [ ] **Step 2:** Run `cargo insta test -p dexo-tui`; expect new/failing snapshots.
+- [x] **Step 2:** Run `cargo insta test -p dexo-tui`; expect new/failing snapshots.
 
-- [ ] **Step 3:** Implement breakpoints full >=120x35, reduced >=80x24, compact otherwise; render top context, explorer, tabs, content, results/inspector and status without panics for areas down to 20x8.
+- [x] **Step 3:** Implement breakpoints full >=120x35, reduced >=80x24, compact otherwise; render top context, explorer, tabs, content, results/inspector and status without panics for areas down to 20x8.
 
-- [ ] **Step 4:** Review snapshots with `cargo insta review`, accept only expected geometry, then rerun tests.
+- [x] **Step 4:** Review snapshots with `cargo insta review`, accept only expected geometry, then rerun tests.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(tui): render responsive workbench layouts"`.
 
@@ -103,7 +103,7 @@ fn layout_matches_terminal(width: u16, height: u16, expected: LayoutMode) {
 
 **Files:** `widgets/grid.rs`, `model.rs`, grid tests.
 
-- [ ] **Step 1: Write failing viewport test**
+- [x] **Step 1: Write failing viewport test**
 
 ```rust
 #[test]
@@ -115,11 +115,11 @@ fn renders_only_visible_rows() {
 }
 ```
 
-- [ ] **Step 2:** Run targeted test; expect missing grid model.
+- [x] **Step 2:** Run targeted test; expect missing grid model.
 
-- [ ] **Step 3:** Implement bounded `ResultBuffer` measured by rows and estimated bytes, a `GridViewport { row_offset, column_offset, height, width }`, selection, column widths, horizontal/vertical scroll and truncation markers.
+- [x] **Step 3:** Implement bounded `ResultBuffer` measured by rows and estimated bytes, a `GridViewport { row_offset, column_offset, height, width }`, selection, column widths, horizontal/vertical scroll and truncation markers.
 
-- [ ] **Step 4:** Run grid tests and a 100k-row benchmark smoke test; expect no allocation proportional to rendered offscreen rows.
+- [x] **Step 4:** Run grid tests and a 100k-row benchmark smoke test; expect no allocation proportional to rendered offscreen rows.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(tui): virtualize streaming result grid"`.
 
@@ -127,7 +127,7 @@ fn renders_only_visible_rows() {
 
 **Files:** `palette.rs`, `action.rs`, tests.
 
-- [ ] **Step 1: Write failing context test**
+- [x] **Step 1: Write failing context test**
 
 ```rust
 #[test]
@@ -138,11 +138,11 @@ fn palette_explains_disabled_commit() {
 }
 ```
 
-- [ ] **Step 2:** Run targeted test; expect FAIL.
+- [x] **Step 2:** Run targeted test; expect FAIL.
 
-- [ ] **Step 3:** Define stable command IDs, title, keywords, shortcut, availability and action factory. Fuzzy score prefix > word-start > subsequence, with stable alphabetical tie-break.
+- [x] **Step 3:** Define stable command IDs, title, keywords, shortcut, availability and action factory. Fuzzy score prefix > word-start > subsequence, with stable alphabetical tie-break.
 
-- [ ] **Step 4:** Run palette tests; expect search and disabled explanations PASS.
+- [x] **Step 4:** Run palette tests; expect search and disabled explanations PASS.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat(tui): add context-aware command palette"`.
 
@@ -150,20 +150,20 @@ fn palette_explains_disabled_commit() {
 
 **Files:** `dexo/src/main.rs`, `dexo-cli/src/run.rs`, smoke tests.
 
-- [ ] **Step 1: Add failing dispatch tests** asserting `dexo doctor --json` never enters raw mode and `dexo` invokes a fake TUI runner.
+- [x] **Step 1: Add failing dispatch tests** asserting `dexo doctor --json` never enters raw mode and `dexo` invokes a fake TUI runner.
 
-- [ ] **Step 2:** Run `cargo test -p dexo-cli -p dexo`; expect FAIL.
+- [x] **Step 2:** Run `cargo test -p dexo-cli -p dexo`; expect FAIL.
 
-- [ ] **Step 3:** Introduce `LaunchMode::{Tui,Cli(Command)}` from parsed args; inject `TuiRunner` in tests; initialize tracing before dispatch and preserve stdout purity for CLI.
+- [x] **Step 3:** Introduce `LaunchMode::{Tui,Cli(Command)}` from parsed args; inject `TuiRunner` in tests; initialize tracing before dispatch and preserve stdout purity for CLI.
 
-- [ ] **Step 4:** Run `cargo test --workspace`; expect PASS without Docker.
+- [x] **Step 4:** Run `cargo test --workspace`; expect PASS without Docker.
 
 - [ ] **Step 5:** Commit with `git commit -m "feat: launch TUI or CLI from one binary"`.
 
 ## Sprint exit
 
-- [ ] Terminal restoration is tested on every exit path.
-- [ ] 160x50, 100x30 and 60x20 snapshots are approved.
-- [ ] Streaming rows appear without moving editor focus.
-- [ ] Grid rendering cost follows viewport size, not total rows.
-- [ ] Every current action is available in the command palette.
+- [x] Terminal restoration is tested on every exit path.
+- [x] 160x50, 100x30 and 60x20 snapshots are approved.
+- [x] Streaming rows appear without moving editor focus.
+- [x] Grid rendering cost follows viewport size, not total rows.
+- [x] Every current action is available in the command palette.
