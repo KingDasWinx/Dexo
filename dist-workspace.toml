@@ -1,0 +1,18 @@
+[workspace]
+members = ["cargo:."]
+
+[dist]
+cargo-dist-version = "0.28.2"
+ci = ["github"]
+installers = ["shell", "powershell"]
+install-path = "CARGO_HOME"
+targets = [
+  "x86_64-unknown-linux-gnu",
+  "aarch64-unknown-linux-gnu",
+  "x86_64-apple-darwin",
+  "aarch64-apple-darwin",
+  "x86_64-pc-windows-msvc",
+]
+unix-archive = ".tar.gz"
+windows-archive = ".zip"
+# ponytail: Homebrew tap and MSI/WiX need publisher setup; archives + shell/ps1 are the 1.0 channels.

@@ -17,3 +17,7 @@ tree-sitter-sequel.workspace = true
 
 [dev-dependencies]
 proptest.workspace = true
+
+[[bench]]
+name = "parse"
+harness = false

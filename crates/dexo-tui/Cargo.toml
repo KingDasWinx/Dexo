@@ -21,3 +21,15 @@ uuid.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+
+[[bench]]
+name = "first_frame"
+harness = false
+
+[[bench]]
+name = "input_frame"
+harness = false
+
+[[bench]]
+name = "grid_viewport"
+harness = false

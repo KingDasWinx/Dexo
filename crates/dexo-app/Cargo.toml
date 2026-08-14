@@ -29,3 +29,11 @@ proptest.workspace = true
 [[bench]]
 name = "catalog_search"
 harness = false
+
+[[bench]]
+name = "export"
+harness = false
+
+[[bench]]
+name = "schema_diff"
+harness = false
