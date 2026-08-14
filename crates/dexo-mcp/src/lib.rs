@@ -1,14 +1,11 @@
-pub fn add(left: u64, right: u64) -> u64 {
-    left + right
-}
+pub mod error;
+pub mod prompts;
+pub mod resources;
+pub mod schema;
+pub mod server;
+pub mod stdio;
+pub mod tools_read;
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn it_works() {
-        let result = add(2, 2);
-        assert_eq!(result, 4);
-    }
-}
+pub use error::hidden_error;
+pub use server::DexoMcpServer;
+pub use stdio::{init_mcp_tracing, serve_io, serve_profile, serve_with_session};
