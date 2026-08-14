@@ -117,4 +117,19 @@ mod tests {
         assert_eq!(db.schema_version().unwrap(), 7);
         assert!(backup_path(&path).exists());
     }
+
+    #[test]
+    fn disk_full_backup_leaves_original_db() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        {
+            let conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(crate::migrations::MIGRATION_1).unwrap();
+        }
+        std::fs::create_dir(backup_path(&path)).unwrap();
+        assert!(Database::open(&path).is_err());
+        let conn = rusqlite::Connection::open(&path).unwrap();
+        let version = crate::migrations::read_schema_version(&conn);
+        assert_eq!(version, 1);
+    }
 }

@@ -198,4 +198,38 @@ mod tests {
         let wins = usize::from(a.join().unwrap()) + usize::from(b.join().unwrap());
         assert_eq!(wins, 1);
     }
+
+    #[test]
+    fn grant_expiry_survives_reopen() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        let id;
+        {
+            let _db = crate::Database::open(&path).unwrap();
+            let ledger = SqliteGrantLedger::open(&path).unwrap();
+            let mut profile = McpProfile::new("assistant");
+            profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
+            let grant = Grant::new(
+                &profile,
+                "local",
+                GrantCapability::DataWrite,
+                vec!["data_insert".into()],
+                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+                0,
+                DEFAULT_TTL_SECS,
+            )
+            .unwrap();
+            id = grant.id;
+            ledger.insert_grant(grant).unwrap();
+            assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+        }
+        let ledger = SqliteGrantLedger::open(&path).unwrap();
+        assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+        assert!(
+            ledger
+                .active_grants("assistant", DEFAULT_TTL_SECS)
+                .is_empty()
+        );
+        assert!(!ledger.is_revoked(id));
+    }
 }

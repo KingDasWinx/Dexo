@@ -181,6 +181,11 @@ pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
 
 pub fn apply_pending(conn: &rusqlite::Connection) -> anyhow::Result<()> {
     let mut current = read_schema_version(conn);
+    if current > LATEST_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported local schema version {current} (latest is {LATEST_SCHEMA_VERSION})"
+        );
+    }
     if current < 1 {
         conn.execute_batch(MIGRATION_1)?;
         current = 1;
@@ -336,5 +341,46 @@ mod tests {
             )
             .unwrap();
         assert_eq!(name, "workbench_layouts");
+    }
+
+    #[test]
+    fn upgrades_each_released_schema_to_current() {
+        for version in 1..=6u32 {
+            let conn = rusqlite::Connection::open_in_memory().unwrap();
+            conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+            conn.execute_batch(MIGRATION_1).unwrap();
+            if version >= 2 {
+                conn.execute_batch(MIGRATION_2).unwrap();
+            }
+            if version >= 3 {
+                conn.execute_batch(super::MIGRATION_3).unwrap();
+            }
+            if version >= 4 {
+                conn.execute_batch(super::MIGRATION_4).unwrap();
+            }
+            if version >= 5 {
+                conn.execute_batch(super::MIGRATION_5).unwrap();
+            }
+            if version >= 6 {
+                conn.execute_batch(super::MIGRATION_6).unwrap();
+            }
+            assert_eq!(read_schema_version(&conn), version);
+            apply_pending(&conn).unwrap();
+            assert_eq!(read_schema_version(&conn), 7);
+        }
+    }
+
+    #[test]
+    fn rejects_future_unsupported_schema() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO schema_migrations(version, applied_at) VALUES(99, datetime('now'))",
+            [],
+        )
+        .unwrap();
+        let err = apply_pending(&conn).unwrap_err().to_string();
+        assert!(err.contains("unsupported local schema version 99"));
     }
 }

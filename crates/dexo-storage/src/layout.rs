@@ -198,10 +198,12 @@ mod tests {
     #[test]
     fn layout_round_trip_and_version() {
         let (db, project) = db_with_project();
-        let mut layout = WorkbenchLayout::default();
-        layout.explorer_width = 40;
-        layout.focused_panel = "results".into();
-        layout.active_tab = 2;
+        let layout = WorkbenchLayout {
+            explorer_width: 40,
+            focused_panel: "results".into(),
+            active_tab: 2,
+            ..WorkbenchLayout::default()
+        };
         LayoutRepository::new(db.connection())
             .save(&project, &layout)
             .unwrap();
