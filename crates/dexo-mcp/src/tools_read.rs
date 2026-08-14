@@ -64,7 +64,7 @@ pub fn call_tool(
     CallToolResult::success(vec![ContentBlock::text(text)])
 }
 
-fn input_schema() -> Arc<JsonObject> {
+pub(crate) fn input_schema() -> Arc<JsonObject> {
     let value = serde_json::json!({
         "type": "object",
         "properties": {

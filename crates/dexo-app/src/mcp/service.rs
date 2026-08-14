@@ -114,6 +114,23 @@ impl McpService {
         Ok(())
     }
 
+    pub fn authorize_write_sql(&self, sql: &str) -> Result<(), AppError> {
+        let spans = split_statements(sql);
+        if spans.len() != 1 || !spans[0].understood {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "statement effect is not understood",
+            ));
+        }
+        if spans[0].effect != StatementEffect::DataWrite {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "statement is outside grant capability",
+            ));
+        }
+        Ok(())
+    }
+
     pub async fn execute_read(
         &self,
         session: &dyn Session,

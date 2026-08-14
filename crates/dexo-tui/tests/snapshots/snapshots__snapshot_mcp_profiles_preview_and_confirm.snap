@@ -20,9 +20,9 @@ demo  local  public
 │                                 ││        │scope deny db.public.secrets                                          │        ││                                 │
 │                                 ││        │tool catalog_search                                                   │        ││                                 │
 │                                 ││        │tool object_describe                                                  │        ││                                 │
+│                                 ││        │grant data_write data_insert 900s                                     │        ││                                 │
+│                                 ││        │diff profile db.public.* -> grant db.public.items                     │        ││                                 │
 │                                 ││        │enable requires local confirmation                                    │        ││                                 │
-│                                 ││        │                                                                      │        ││                                 │
-│                                 ││        │                                                                      │        ││                                 │
 │                                 ││        │                                                                      │        ││                                 │
 │                                 ││        │                                                                      │        ││                                 │
 │                                 ││        │                                                                      │        ││                                 │
