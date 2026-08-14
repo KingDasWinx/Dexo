@@ -10,7 +10,7 @@ demo  local  public
 │scope deny db.public.secrets                              │
 │tool catalog_search                                       │
 │tool object_describe                                      │
-│enabled assistant scopes=2 tools=2                        │
+│revoked all grants                                        │
 │                                                          │
 │                                                          │
 │                                                          │

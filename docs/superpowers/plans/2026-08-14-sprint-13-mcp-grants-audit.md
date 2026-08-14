@@ -1,6 +1,6 @@
 # Dexo Sprint 13: MCP Grants and Audit Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Adicionar elevação MCP temporária e separada para data_write/ddl/admin com idempotência, revogação e auditoria sanitizada.
 
@@ -20,39 +20,39 @@
 
 ### Task 1: Persist bounded grants transactionally
 
-- [ ] **Step 1:** Add tests for default 15m, hard max 24h, one-use consumption and independent `DataWrite|Ddl|Admin` capabilities.
-- [ ] **Step 2:** Run; expect types absent.
-- [ ] **Step 3:** Add grant/audit/operation tables; implement `Grant { id, profile, connection, selectors, tools, capability, expires_at, remaining_uses }`; reject `all`, empty tools and scope broader than profile.
-- [ ] **Step 4:** Run v5->v6, concurrent consume and fake-clock expiration tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): persist bounded temporary grants"`.
+- [x] **Step 1:** Add tests for default 15m, hard max 24h, one-use consumption and independent `DataWrite|Ddl|Admin` capabilities.
+- [x] **Step 2:** Run; expect types absent.
+- [x] **Step 3:** Add grant/audit/operation tables; implement `Grant { id, profile, connection, selectors, tools, capability, expires_at, remaining_uses }`; reject `all`, empty tools and scope broader than profile.
+- [x] **Step 4:** Run v5->v6, concurrent consume and fake-clock expiration tests.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): persist bounded temporary grants"`.
 
 ### Task 2: Create/revoke grants only from local UX
 
-- [ ] **Step 1:** Add CLI tests for `grant create|list|revoke`, typed target and `--expires 15m`; assert MCP tool catalog has no grant-management tool.
-- [ ] **Step 2:** Run; expect commands absent.
-- [ ] **Step 3:** Implement local commands and TUI countdown/diff/revoke-all. Validate requested tool/capability/target against effective profile and connection policy before writing.
-- [ ] **Step 4:** Run CLI/TUI/protocol catalog tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): manage grants only through local interfaces"`.
+- [x] **Step 1:** Add CLI tests for `grant create|list|revoke`, typed target and `--expires 15m`; assert MCP tool catalog has no grant-management tool.
+- [x] **Step 2:** Run; expect commands absent.
+- [x] **Step 3:** Implement local commands and TUI countdown/diff/revoke-all. Validate requested tool/capability/target against effective profile and connection policy before writing.
+- [x] **Step 4:** Run CLI/TUI/protocol catalog tests.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): manage grants only through local interfaces"`.
 
 ### Task 3: Advertise mutating tools dynamically
 
-- [ ] **Step 1:** Add initialized-client test: create grant externally, receive `notifications/tools/list_changed`, list contains only granted tool; revoke and verify removal.
-- [ ] **Step 2:** Run; expect FAIL.
-- [ ] **Step 3:** Observe grant revision changes; emit notification only when negotiated; recompute authorization on every list/call regardless of notification. Add concrete tools `data_insert/update/delete/execute_sql`, `schema_apply_ddl` and specific admin actions.
-- [ ] **Step 4:** Run list-change, expiration and client-without-notification tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): publish tools from active grants"`.
+- [x] **Step 1:** Add initialized-client test: create grant externally, receive `notifications/tools/list_changed`, list contains only granted tool; revoke and verify removal.
+- [x] **Step 2:** Run; expect FAIL.
+- [x] **Step 3:** Observe grant revision changes; emit notification only when negotiated; recompute authorization on every list/call regardless of notification. Add concrete tools `data_insert/update/delete/execute_sql`, `schema_apply_ddl` and specific admin actions.
+- [x] **Step 4:** Run list-change, expiration and client-without-notification tests.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): publish tools from active grants"`.
 
 ### Task 4: Execute mutations through existing protected services
 
-- [ ] **Step 1:** Add E2E tests proving `data_write` cannot DDL, `ddl` cannot terminate session, admin cannot read hidden table and every target stays inside grant selectors.
-- [ ] **Step 2:** Run; expect write tools absent.
-- [ ] **Step 3:** Map structured inputs to Sprint 07 change sets, DDL to Sprint 08 plans and admin to Sprint 11 actions. Require `operation_id`, active grant, connection policy and actual DB privilege. `data_execute_sql` requires explicit tool rule and understood effect.
-- [ ] **Step 4:** Run PostgreSQL/MySQL capability-isolation tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): execute scoped mutation tools"`.
+- [x] **Step 1:** Add E2E tests proving `data_write` cannot DDL, `ddl` cannot terminate session, admin cannot read hidden table and every target stays inside grant selectors.
+- [x] **Step 2:** Run; expect write tools absent.
+- [x] **Step 3:** Map structured inputs to Sprint 07 change sets, DDL to Sprint 08 plans and admin to Sprint 11 actions. Require `operation_id`, active grant, connection policy and actual DB privilege. `data_execute_sql` requires explicit tool rule and understood effect.
+- [x] **Step 4:** Run PostgreSQL/MySQL capability-isolation tests.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): execute scoped mutation tools"`.
 
 ### Task 5: Guarantee operation idempotency
 
-- [ ] **Step 1: Add exact replay tests**
+- [x] **Step 1: Add exact replay tests**
 
 ```rust
 #[tokio::test]
@@ -66,32 +66,32 @@ async fn same_operation_and_payload_executes_once() {
 
 Also assert same ID/different payload fails and unknown outcome never retries.
 
-- [ ] **Step 2:** Run; expect FAIL.
-- [ ] **Step 3:** Transactionally reserve `(profile,session,operation_id,tool,payload_hash)` before grant use; states `Running|Succeeded|Failed|Unknown`; replay same payload returns recorded result, otherwise conflict. Expire records after configured TTL.
-- [ ] **Step 4:** Run concurrent duplicate and process-interruption tests.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): make mutations idempotent per session"`.
+- [x] **Step 2:** Run; expect FAIL.
+- [x] **Step 3:** Transactionally reserve `(profile,session,operation_id,tool,payload_hash)` before grant use; states `Running|Succeeded|Failed|Unknown`; replay same payload returns recorded result, otherwise conflict. Expire records after configured TTL.
+- [x] **Step 4:** Run concurrent duplicate and process-interruption tests.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): make mutations idempotent per session"`.
 
 ### Task 6: Revoke safely during active calls
 
-- [ ] **Step 1:** Add race tests revoking before dispatch, during read, during transactional DML, after irreversible MySQL DDL commit.
-- [ ] **Step 2:** Run; expect incorrect/absent handling.
-- [ ] **Step 3:** Recheck grant before dispatch; bind cancellation token to grant revision; rollback when uncommitted; report `Committed|RolledBack|PartiallyCommitted|Unknown` exactly and never claim reversal after commit.
-- [ ] **Step 4:** Run race suite repeatedly with `cargo nextest run -E 'test(revoke_)' --retries 0`.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): revoke grants with explicit side-effect state"`.
+- [x] **Step 1:** Add race tests revoking before dispatch, during read, during transactional DML, after irreversible MySQL DDL commit.
+- [x] **Step 2:** Run; expect incorrect/absent handling.
+- [x] **Step 3:** Recheck grant before dispatch; bind cancellation token to grant revision; rollback when uncommitted; report `Committed|RolledBack|PartiallyCommitted|Unknown` exactly and never claim reversal after commit.
+- [x] **Step 4:** Run race suite repeatedly with `cargo nextest run -E 'test(revoke_)' --retries 0`.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): revoke grants with explicit side-effect state"`.
 
 ### Task 7: Record and export sanitized audit
 
-- [ ] **Step 1:** Add sentinel test covering allowed/denied/resource/tool/grant/replay calls; result data and `SUPER_SECRET_SENTINEL` must be absent.
-- [ ] **Step 2:** Run; expect audit absent.
-- [ ] **Step 3:** Record timestamp, request/operation, profile, declared client info, target, decision, grant, duration, rows, bytes, status and known effects. SQL mode `None|Hash|Sanitized`; export local-only with preview and retention prune.
-- [ ] **Step 4:** Run sentinel, retention and CLI/TUI audit tests plus MCP conformance.
-- [ ] **Step 5:** Commit with `git commit -m "feat(mcp): audit calls without storing results or secrets"`.
+- [x] **Step 1:** Add sentinel test covering allowed/denied/resource/tool/grant/replay calls; result data and `SUPER_SECRET_SENTINEL` must be absent.
+- [x] **Step 2:** Run; expect audit absent.
+- [x] **Step 3:** Record timestamp, request/operation, profile, declared client info, target, decision, grant, duration, rows, bytes, status and known effects. SQL mode `None|Hash|Sanitized`; export local-only with preview and retention prune.
+- [x] **Step 4:** Run sentinel, retention and CLI/TUI audit tests plus MCP conformance.
+- [x] **Step 5:** Commit with `git commit -m "feat(mcp): audit calls without storing results or secrets"`.
 
 ## Sprint exit
 
-- [ ] MCP cannot create/renew grants.
-- [ ] Capability groups never imply each other.
-- [ ] One-use and expiry are race-safe.
-- [ ] Duplicate operation executes once.
-- [ ] Revocation reports exact outcome.
-- [ ] Audit contains metadata, never results/secrets.
+- [x] MCP cannot create/renew grants.
+- [x] Capability groups never imply each other.
+- [x] One-use and expiry are race-safe.
+- [x] Duplicate operation executes once.
+- [x] Revocation reports exact outcome.
+- [x] Audit contains metadata, never results/secrets.
