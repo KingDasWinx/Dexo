@@ -10,11 +10,11 @@
 
 ## 1. Resumo executivo
 
-Dexo é um gerenciador e visualizador local de bancos de dados executado no terminal. Ele combina uma TUI rica, voltada ao uso interativo, com uma CLI não interativa adequada a scripts e automações. O produto busca paridade ampla com os fluxos profissionais centrais de ferramentas como DataGrip: conexão, exploração, edição SQL, visualização e alteração de dados, engenharia de schemas, diagnóstico e administração.
+Dexo é um gerenciador e visualizador local de bancos de dados executado no terminal. Ele combina uma TUI rica, voltada ao uso interativo, com uma CLI não interativa adequada a scripts e automações. Também pode operar como servidor MCP local e governado, permitindo que clientes de IA usem capacidades previamente autorizadas sem receber credenciais. O produto busca paridade ampla com os fluxos profissionais centrais de ferramentas como DataGrip: conexão, exploração, edição SQL, visualização e alteração de dados, engenharia de schemas, diagnóstico e administração.
 
 A primeira geração terá suporte oficial a PostgreSQL e MySQL. O sistema será um Cargo workspace modular, com drivers oficiais compilados no binário e contratos orientados a capacidades. Essa separação permitirá adicionar bancos futuramente sem acoplar a interface, o executor ou o armazenamento local aos detalhes de um protocolo.
 
-Dexo é local-first: não exige conta, servidor próprio ou cloud. Configurações, histórico, snippets, cache de catálogo e layouts permanecem na máquina. Segredos são guardados exclusivamente pelo keychain nativo do sistema operacional.
+Dexo é local-first: não exige conta, backend remoto ou cloud. Configurações, histórico, snippets, cache de catálogo e layouts permanecem na máquina. Segredos são guardados exclusivamente pelo keychain nativo do sistema operacional.
 
 ## 2. Objetivos
 
@@ -23,9 +23,10 @@ Dexo é local-first: não exige conta, servidor próprio ou cloud. Configuraçõ
 3. Oferecer profundidade real em PostgreSQL e MySQL, sem reduzir ambos a um subconjunto SQL genérico.
 4. Permitir que um novo banco oficial seja implementado como crate independente atrás de contratos estáveis.
 5. Proteger o usuário contra operações destrutivas acidentais com políticas configuráveis e contexto visível.
-6. Compartilhar o mesmo domínio e casos de uso entre TUI e CLI.
+6. Compartilhar o mesmo domínio e casos de uso entre TUI, CLI e MCP.
 7. Funcionar de forma nativa e consistente em Linux, macOS e Windows.
 8. Ser distribuído como software open source permissivo, auditável e sem telemetria obrigatória.
+9. Expor contexto e operações de banco a clientes MCP com least privilege, limites e auditoria local.
 
 ## 3. Não objetivos
 
@@ -38,6 +39,9 @@ Dexo é local-first: não exige conta, servidor próprio ou cloud. Configuraçõ
 - Executar migrações geradas sem revisão explícita por padrão.
 - Oferecer um servidor intermediário obrigatório entre o usuário e o banco.
 - Implementar controle de versão próprio; arquivos SQL continuam compatíveis com Git e outras ferramentas existentes.
+- Embutir um modelo, chat de IA ou dependência de qualquer provedor de IA.
+- Atuar como cliente MCP ou encaminhar dados para outros servidores MCP.
+- Expor MCP por HTTP, rede ou daemon permanente na primeira arquitetura.
 
 ## 4. Princípios de produto
 
@@ -60,6 +64,10 @@ Conexão, catálogo, execução e resultados compartilham contratos comuns. Dial
 ### 4.5 Segurança visível
 
 Ambiente, conexão e estado transacional permanecem visíveis durante qualquer operação mutável. Proteções não dependem apenas de cor nem de um alerta momentâneo.
+
+### 4.6 IA sob governança local
+
+Um cliente de IA nunca recebe credenciais nem escolhe o próprio escopo. O MCP reutiliza as mesmas políticas e casos de uso da TUI/CLI, começa read-only e só eleva capacidades por uma concessão temporária criada fora do protocolo.
 
 ## 5. Escopo funcional
 
@@ -278,6 +286,167 @@ Contratos da CLI:
 - Respeito a `NO_COLOR` na CLI.
 - Diagnóstico de capacidades do terminal acessível pela aplicação.
 
+### 5.14 Servidor MCP local
+
+#### 5.14.1 Papel e fronteira
+
+Dexo atua somente como servidor MCP. Ele não incorpora chat, não chama modelos, não solicita sampling e não consome outros servidores MCP. Clientes externos usam as capacidades do Dexo sem receber connection strings, senhas, chaves SSH ou certificados privados.
+
+O MCP é um adapter sobre `dexo-app`, equivalente à TUI e à CLI. Toda chamada segue a cadeia:
+
+```text
+MCP -> perfil -> policy engine -> caso de uso -> driver -> auditoria
+```
+
+O adapter não acessa drivers, SQLite ou keychain diretamente. Regras MCP se somam às políticas da conexão e aos privilégios reais do usuário do banco; a decisão mais restritiva vence.
+
+#### 5.14.2 Transporte e lifecycle
+
+- O único transporte inicial é `stdio` sob demanda.
+- O cliente inicia `dexo mcp serve --profile <nome>`.
+- Não existe porta, HTTP listener ou daemon permanente.
+- `stdout` é reservado ao protocolo JSON-RPC.
+- Logs sanitizados usam arquivo local ou `stderr` sem cor e sem mensagens não estruturadas em `stdout`.
+- O servidor negocia a versão do protocolo e anuncia somente capacidades implementadas.
+- Desconexão cancela leituras, tenta cancelar tarefas longas, faz rollback de mutações ainda não confirmadas e fecha sessões.
+- Estado desconhecido após falha é reportado; o Dexo nunca afirma rollback sem confirmação do banco.
+
+#### 5.14.3 Perfis de autorização
+
+Um perfil MCP é desabilitado por padrão até o usuário concluir sua configuração. Ele define:
+
+- conexões autorizadas;
+- allowlists de database/catalog, schema, tabela e view;
+- allowlists ou bloqueios de colunas;
+- resources, prompts e tools expostos;
+- limites de linhas, bytes, duração e concorrência;
+- permissão de explain, schema diff e diagnóstico;
+- modo de consulta estruturada ou SQL livre read-only;
+- retenção e nível de detalhe da auditoria.
+
+Seletores usam identificadores qualificados e padrões explícitos. Uma regra mais específica pode restringir, mas não ampliar, o nível superior. `deny` sempre vence `allow`. O perfil não revela nomes de conexões ou objetos fora do escopo nem por mensagens de erro.
+
+Restrições de coluna não tornam SQL livre uma sandbox segura: uma expressão, função ou view poderia derivar o mesmo dado. Portanto:
+
+- perfis com isolamento forte por coluna usam tools estruturadas e não recebem SQL livre;
+- SQL livre só é habilitado quando o usuário/role do banco já possui privilégios adequados;
+- a documentação recomenda credencial read-only exclusiva para IA e views/grants no próprio banco;
+- filtros e redaction do Dexo são defesa adicional, não substituto de autorização no servidor de banco.
+
+O mesmo vale para allowlists de objetos diante de extensões, routines ou SQL dinâmico que o parser local não compreenda. O Dexo resolve e valida todos os objetos identificáveis, mas só oferece garantia forte de isolamento para SQL livre quando os grants/views do próprio banco refletem o escopo do perfil. Sem essa garantia, o perfil deve usar tools estruturadas.
+
+#### 5.14.4 Concessões temporárias
+
+Leitura é o máximo persistente de um perfil. Escrita exige uma concessão criada pela TUI ou CLI; nenhuma tool MCP cria, renova ou amplia concessões.
+
+Capacidades elevadas são independentes:
+
+- `data_write` para alterações de linhas;
+- `ddl` para alterações de schema;
+- `admin` para ações operacionais ou administrativas.
+
+Cada concessão vincula perfil, conexão, objetos, tools concretas, capacidade, limites, validade e número de usos. Não existe `all`, wildcard de capacidade ou permissão implícita entre grupos. `data_write` não autoriza DDL; `ddl` não autoriza administração.
+
+Regras de lifecycle:
+
+- duração sugerida de 15 minutos;
+- duração máxima configurável limitada a 24 horas;
+- opção de uso único ou múltiplo;
+- uso único é consumido quando uma chamada válida é aceita, impedindo retry mutável acidental;
+- revogação imediata por grant, perfil ou todas as concessões;
+- perfil desabilitado, grant expirado ou política alterada é reavaliado em toda chamada;
+- revogação impede novas operações e tenta cancelar a atual quando isso for seguro;
+- uma side effect já confirmada nunca é ocultada pela revogação posterior.
+
+Toda tool mutável exige um `operation_id` fornecido pelo chamador. O registro fica vinculado a perfil, sessão MCP, grant, tool e hash do payload. Na mesma sessão, repetir ID e payload retorna o resultado conhecido sem reexecutar, inclusive depois de consumir um grant de uso único; reutilizar o ID com payload diferente falha. Depois do TTL do registro ou em outra sessão, a chamada precisa de grant válido novamente. Estado desconhecido continua desconhecido e nunca dispara retry automático.
+
+#### 5.14.5 Resources
+
+Resources MCP são somente leitura e respeitam o mesmo perfil:
+
+- capacidades e limites ativos;
+- catálogo autorizado;
+- descrição, colunas, constraints e índices de objeto;
+- relacionamentos e dependências;
+- DDL de objetos autorizados;
+- snapshots de schema autorizados;
+- páginas temporárias de resultados grandes.
+
+Resources de resultado usam URIs opacas, TTL curto, contagem/bytes limitados e vínculo à sessão MCP que os criou. Não há resource para histórico SQL, segredos, logs brutos ou arquivos arbitrários.
+
+#### 5.14.6 Tools de leitura
+
+O catálogo inicial inclui:
+
+- `catalog_search`;
+- `object_describe`;
+- `object_get_ddl`;
+- `object_relationships`;
+- `query_validate`;
+- `query_execute_read`;
+- `query_explain`;
+- `schema_diff`;
+- tools de diagnóstico explicitamente liberadas.
+
+`query_execute_read` aceita um único statement, exige política de SQL livre, aplica timeout e limites, e abre contexto read-only no banco quando suportado. Classificação sintática não é a única defesa. Stored routines, funções mutáveis e recursos que escapem do read-only são negados pelo banco/role e pelas capacidades do driver.
+
+#### 5.14.7 Tools mutáveis
+
+Tools aparecem apenas com grant ativo e compatível:
+
+- `data_insert`;
+- `data_update`;
+- `data_delete`;
+- `data_execute_sql`, somente quando o grant permite SQL mutável livre;
+- `schema_apply_ddl`;
+- tools administrativas específicas, como cancelar query, encerrar sessão ou executar manutenção.
+
+Grants autorizam tools concretas dentro da capacidade. O servidor não oferece shell, leitura arbitrária de arquivo, escrita em path escolhido pelo agente ou tool genérica sem classificação. Annotations MCP descrevem risco para o cliente, mas nunca substituem autorização no servidor.
+
+O processo observa alterações no grant store. Quando o cliente negociou a notificação correspondente, grant criado, expirado ou revogado emite `tools/list_changed`; independentemente da notificação, autorização é recalculada ao listar ou chamar uma tool.
+
+#### 5.14.8 Prompts
+
+Prompts opcionais podem orientar exploração de schema, revisão de migração e análise de plano. São user-controlled, não executam ações e não carregam permissões próprias. O conteúdo retornado referencia apenas resources e tools permitidos pelo perfil.
+
+#### 5.14.9 Resultados, progresso e cancelamento
+
+- Resultados pequenos retornam diretamente.
+- Resultados maiores retornam preview e resources paginados temporários.
+- Limites são aplicados antes de conteúdo entrar no contexto do modelo.
+- Tarefas reportam progresso e aceitam cancelamento quando o cliente negocia essas capacidades.
+- Recursos experimentais do protocolo permanecem desabilitados até estabilização e conformidade.
+- Cancelamento de tool mutável informa efeitos já confirmados e estado desconhecido quando necessário.
+
+#### 5.14.10 Administração pela CLI e TUI
+
+```text
+dexo mcp serve --profile <nome>
+dexo mcp profile create|list|show|edit|enable|disable|delete
+dexo mcp allow add|remove|list
+dexo mcp policy set|show|validate
+dexo mcp grant create|list|revoke
+dexo mcp audit list|export|prune
+dexo mcp doctor
+dexo mcp config print
+```
+
+`config print` produz snippets para clientes MCP sem editar arquivos externos. A TUI oferece editor de perfil, árvore de escopos, preview das tools/resources, grants com contagem regressiva, auditoria e revogação emergencial.
+
+#### 5.14.11 Auditoria
+
+Cada chamada registra localmente:
+
+- timestamp e request/operation ID;
+- perfil e identificação declarada pelo cliente;
+- tool/resource e alvo autorizado;
+- decisão da policy e motivo seguro;
+- grant utilizado;
+- duração, linhas e bytes;
+- status, erro categorizado e side effects conhecidos.
+
+A identificação anunciada por `clientInfo` é informativa e não é tratada como autenticação. Resultados e segredos não são armazenados na auditoria. SQL pode ser armazenado sanitizado ou apenas como hash, conforme o perfil. Exportar auditoria exige ação local explícita e passa pela sanitização normal.
+
 ## 6. Suporte por banco
 
 ### 6.1 Política de versões
@@ -314,6 +483,7 @@ Dexo usa um Cargo workspace modular com drivers oficiais orientados a capacidade
 | `dexo-app` | Casos de uso, estado, comandos, eventos e políticas de aplicação |
 | `dexo-tui` | Loop visual, painéis, editor, grade, modais, temas e input |
 | `dexo-cli` | Parsing de comandos, presenters, stdout/stderr e exit codes |
+| `dexo-mcp` | Adapter MCP server-only, schemas de tools/resources, stdio e presenters do protocolo |
 | `dexo-driver-api` | Contratos de driver, capacidades e tipos canônicos |
 | `dexo-driver-postgres` | Protocolo, catálogo, dialeto e recursos PostgreSQL |
 | `dexo-driver-mysql` | Protocolo, catálogo, dialeto e recursos MySQL |
@@ -326,7 +496,7 @@ Dexo usa um Cargo workspace modular com drivers oficiais orientados a capacidade
 
 ### 7.3 Regra de dependência
 
-TUI e CLI dependem de `dexo-app`. A aplicação depende dos contratos, não dos drivers concretos. Drivers e infraestrutura implementam contratos e são registrados apenas em `dexo`. Nenhum driver importa código visual. `dexo-driver-api` não depende de Tokio quando um tipo de domínio síncrono for suficiente; detalhes assíncronos aparecem apenas nos contratos que realizam I/O.
+TUI, CLI e MCP dependem de `dexo-app`. A aplicação depende dos contratos, não dos drivers concretos. Drivers e infraestrutura implementam contratos e são registrados apenas em `dexo`. Nenhum driver importa código visual ou de protocolo MCP. `dexo-mcp` não acessa driver, keychain ou storage diretamente. `dexo-driver-api` não depende de Tokio quando um tipo de domínio síncrono for suficiente; detalhes assíncronos aparecem apenas nos contratos que realizam I/O.
 
 ### 7.4 API orientada a capacidades
 
@@ -369,6 +539,8 @@ O runtime separa:
 
 Fechar uma aba não abandona silenciosamente uma consulta. O usuário escolhe cancelar, manter em background ou voltar.
 
+No modo MCP, o lifecycle do processo substitui o lifecycle visual. Cada request recebe tarefa, policy snapshot e contexto de auditoria próprios. Alterações de perfil/grant são reconsultadas antes da execução; encerramento do `stdio` propaga cancelamento e cleanup a todas as tarefas da sessão.
+
 ## 8. Persistência local
 
 ### 8.1 SQLite
@@ -383,7 +555,10 @@ O SQLite local armazena apenas dados não secretos:
 - snippets, favoritos e consultas nomeadas;
 - layouts, temas e atalhos;
 - cache e snapshots de catálogo;
-- tarefas recentes e metadados de exportação.
+- tarefas recentes e metadados de exportação;
+- perfis MCP, selectors, policies e estado habilitado;
+- grants MCP, uso, expiração e revogação;
+- auditoria MCP sanitizada e sua política de retenção.
 
 Migrations do armazenamento criam backup recuperável antes de mudanças destrutivas. Escritas usam transações. Arquivos temporários e journals permanecem no diretório de dados da aplicação.
 
@@ -441,6 +616,19 @@ Cada conexão referencia um identificador aleatório, não o segredo. O item do 
 6. Permitir edição e salvamento.
 7. Aplicar apenas pelo fluxo explícito de execução protegida.
 
+### 9.5 Chamada MCP
+
+1. Negociar protocolo e carregar perfil habilitado.
+2. Publicar apenas capabilities, resources e tools permitidos.
+3. Validar JSON Schema e limites do request.
+4. Resolver targets contra allowlist sem revelar objetos negados.
+5. Reavaliar policy, grant e expiração.
+6. Criar registro de auditoria e tarefa cancelável.
+7. Executar o mesmo caso de uso utilizado por TUI/CLI.
+8. Aplicar redaction, paginação e limites ao resultado.
+9. Finalizar auditoria com side effects e estado conhecidos.
+10. Limpar resources temporários no TTL ou ao encerrar a sessão.
+
 ## 10. Segurança e proteção contra acidentes
 
 ### 10.1 Segredos e logs
@@ -473,6 +661,20 @@ Políticas podem variar por conexão e ambiente. O conjunto padrão de produçã
 
 O analisador de segurança é conservador. Falha em compreender SQL não significa que o statement seja seguro. Ao mesmo tempo, a aplicação não bloqueia extensões válidas para sempre: um usuário autorizado pode confirmar a execução conforme a política.
 
+### 10.4 Ameaças e controles MCP
+
+- `stdio` limita alcance ao processo cliente e evita listener local exposto.
+- Inputs passam por JSON Schema, validação de domínio, policy e validação do driver.
+- Tool descriptions e annotations não são controles de autorização.
+- `clientInfo` é declarativo e nunca concede acesso.
+- Perfis começam desabilitados e read-only.
+- O MCP não pode criar grants, revelar segredos ou escolher outra conexão fora da allowlist.
+- Limites de concorrência, duração, linhas e bytes reduzem exfiltração e denial of service.
+- Erros negados não confirmam a existência de objetos fora do escopo.
+- Grants temporários, operation IDs e auditoria reduzem repetição e efeitos acidentais.
+- A credencial/role do banco é a última fronteira e deve aplicar least privilege.
+- Nenhuma autorização MCP é transmitida como token para o banco; o Dexo usa apenas a credencial da conexão selecionada.
+
 ## 11. Erros e recuperação
 
 Erros públicos possuem categoria, mensagem segura, causa técnica opcional, contexto, código do servidor, posição SQL quando disponível e indicação de retry. Categorias estáveis incluem:
@@ -487,6 +689,7 @@ Erros públicos possuem categoria, mensagem segura, causa técnica opcional, con
 - timeout;
 - cancelamento;
 - capacidade indisponível;
+- protocolo ou policy MCP;
 - armazenamento local;
 - ferramenta externa;
 - bug interno.
@@ -514,6 +717,10 @@ Eventos de teclado são interpretados por contexto e depois convertidos em coman
 
 Produção usa texto/ícone persistente além de cor. Ações destrutivas mostram alvo totalmente qualificado, conexão e database antes da confirmação.
 
+### 12.3 Área MCP
+
+A área MCP apresenta perfis e estado habilitado, árvore de conexões/objetos permitidos, tools/resources efetivamente expostos, limites, grants ativos com contagem regressiva e auditoria. Alterações exibem um diff de permissões antes de salvar. Revogar tudo é uma ação local destacada e disponível pela command palette.
+
 ## 13. Stack aprovada
 
 - Rust stable, edition 2024, MSRV explícita e `Cargo.lock` versionado.
@@ -531,6 +738,7 @@ Produção usa texto/ícone persistente além de cor. Ações destrutivas mostra
 - Serde, TOML, JSON, UUID, tipos temporais e decimais sem perda.
 - `tracing` para observabilidade local sanitizada.
 - `thiserror` nos crates; `anyhow` apenas na fronteira do binário.
+- SDK Rust oficial `rmcp`, somente com features de servidor e transporte `stdio`.
 
 Versões exatas são escolhidas e fixadas no primeiro plano de implementação, depois mantidas pelo `Cargo.lock`. Dependências novas exigem justificativa de capacidade, manutenção e licença.
 
@@ -565,7 +773,21 @@ A mesma suíte valida conexão, catálogo, tipos, streaming, cancelamento, trans
 - Certificado inválido e host key alterada.
 - Asserções de que segredos sentinela não aparecem em logs, erros, histórico ou artefatos.
 
-### 14.6 Matriz e ferramentas
+### 14.6 MCP
+
+- Suíte oficial de conformidade para a versão negociada.
+- Clients fixtures com versões compatíveis do protocolo.
+- Garantia byte a byte de que `stdout` contém somente JSON-RPC.
+- Validação de schemas, payloads malformados e inputs excessivos.
+- Isolamento entre perfis e ausência de enumeração de targets negados.
+- Allowlist/deny, restrição por coluna e bloqueio de SQL livre.
+- Grant expirado, revogado, de uso único e concorrência com revogação.
+- `operation_id` repetido com payload igual ou divergente.
+- Cancelamento, desconexão, rollback e estado desconhecido.
+- TTL, paginação e vínculo de resources à sessão.
+- Sentinelas de segredo e dados bloqueados em resposta, erro, log e auditoria.
+
+### 14.7 Matriz e ferramentas
 
 `cargo-nextest` executa a suíte em CI. GitHub Actions usa runners nativos de Linux, macOS e Windows. `rustfmt`, Clippy, `cargo-deny` e auditoria RustSec bloqueiam regressões. Testes com containers são separados dos unitários, mas obrigatórios antes de release.
 
@@ -600,7 +822,7 @@ Caches são limitados simultaneamente por contagem e bytes. Valores grandes são
 
 ### Marco 1 — Fundação e conexões
 
-Workspace, qualidade, runtime, storage, keychain, transportes, drivers PostgreSQL/MySQL, gerenciador de conexões, explorador inicial e vertical slice de `SELECT` por TUI e CLI.
+Workspace, qualidade, runtime, storage, keychain, transportes, drivers PostgreSQL/MySQL, gerenciador de conexões, explorador inicial e vertical slice de `SELECT` por TUI e CLI. Depois dessa slice, o mesmo caso de uso é exposto por um perfil MCP read-only mínimo, validando o adapter sem antecipar mutações.
 
 ### Marco 2 — Workbench SQL
 
@@ -608,11 +830,11 @@ Documentos, parser incremental, highlighting, autocomplete, formatação, parâm
 
 ### Marco 3 — Catálogo, dados e DDL
 
-Introspecção completa, busca, dependências, grade editável, foreign-key navigation, formulários de objetos, DDL, usuários e permissões.
+Introspecção completa, busca, dependências, grade editável, foreign-key navigation, formulários de objetos, DDL, usuários e permissões. Perfis MCP ganham allowlists completas e grants temporários de `data_write` após o change set e a auditoria estarem estáveis.
 
 ### Marco 4 — Engenharia e operações
 
-Schema diff, scripts de migração, import/export completo, explain estruturado, sessões, locks, estatísticas, administração e integrações de backup/restore.
+Schema diff, scripts de migração, import/export completo, explain estruturado, sessões, locks, estatísticas, administração e integrações de backup/restore. Grants MCP de `ddl` e `admin` são ativados por tool conforme cada caso de uso recebe proteções e testes próprios.
 
 ### Marco 5 — Paridade e versão 1.0
 
@@ -632,6 +854,7 @@ Uma capacidade só está concluída quando:
 6. Tem testes unitários e integração proporcional ao risco.
 7. Está documentada para usuário e mantenedor.
 8. Funciona na matriz oficial de plataformas e versões aplicável.
+9. Quando exposta por MCP, tem schema, policy, limites, auditoria, cancelamento e teste de conformidade correspondentes.
 
 ## 19. Riscos e mitigação
 
@@ -647,6 +870,11 @@ Uma capacidade só está concluída quando:
 | Escopo equivalente a IDE atrasar entregas | Marcos verticais, software utilizável ao fim de cada marco e planos separados |
 | Schema diff gerar DDL perigoso | Grafo de dependências, classificação de risco e script revisável por padrão |
 | Dependência de ferramentas de backup | Detecção explícita, compatibilidade de versão e mensagens acionáveis |
+| Agente MCP tentar enumerar ou exfiltrar dados | Allowlist, mensagens não enumeráveis, limits, tools estruturadas e role least-privilege no banco |
+| SQL livre contornar bloqueio de coluna | SQL livre incompatível com isolamento forte por coluna; usar role/views e tools estruturadas |
+| Retry MCP repetir mutação | `operation_id`, grant de uso único e ausência de retry automático em estado desconhecido |
+| Revogação concorrer com operação ativa | Revalidação por call, cancelamento seguro e auditoria de side effects conhecidos |
+| Log corromper transporte `stdio` | Writer exclusivo de protocolo e teste byte a byte de `stdout` |
 
 ## 20. Referências primárias da stack
 
@@ -660,3 +888,6 @@ Uma capacidade só está concluída quando:
 - [cargo-nextest](https://www.nexte.st/)
 - [cargo-deny](https://embarkstudios.github.io/cargo-deny/)
 - [cargo-dist](https://axodotdev.github.io/cargo-dist/book/reference/config.html)
+- [MCP — server features](https://modelcontextprotocol.io/specification/2025-06-18/server/index)
+- [MCP — security best practices](https://modelcontextprotocol.io/docs/tutorials/security/security_best_practices)
+- [SDK Rust oficial do MCP](https://github.com/modelcontextprotocol/rust-sdk)
