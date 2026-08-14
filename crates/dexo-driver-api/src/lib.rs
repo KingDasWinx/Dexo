@@ -9,6 +9,7 @@ mod identifier;
 mod mutation;
 mod query;
 mod schema_change;
+mod support;
 mod transaction;
 mod transfer;
 mod value;
@@ -37,6 +38,7 @@ pub use schema_change::{
     RoutineDef, RoutineKind, SchemaChange, SchemaChangeError, TableDef, TableShape, ViewDef,
     classify_raw_sql,
 };
+pub use support::{MatrixStatus, mysql_matrix_status, postgres_matrix_status};
 pub use transaction::{TransactionControl, TransactionMode, TransactionState, validate_savepoint};
 pub use transfer::BulkWriter;
 pub use value::DbValue;
