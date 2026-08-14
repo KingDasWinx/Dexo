@@ -1,8 +1,10 @@
+mod admin;
 mod capability;
 mod catalog;
 mod connection;
 mod ddl;
 mod error;
+mod explain;
 mod identifier;
 mod mutation;
 mod query;
@@ -11,7 +13,12 @@ mod transaction;
 mod transfer;
 mod value;
 
+pub use admin::{
+    AdminAction, AdminConfirmKind, AdminList, AdminOutcome, AdminPreview, AdministrationProvider,
+    BlockingEdge, LockInfo, SessionInfo, SizeInfo, StatInfo, VariableInfo, VariableScope,
+};
 pub use capability::{Capability, CapabilityState};
+pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};
 pub use catalog::{
     CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction, ObjectId,
     ObjectKind,

@@ -1,8 +1,9 @@
 use secrecy::SecretString;
 
 use crate::{
-    BulkWriter, CapabilityState, CatalogReader, DataMutator, DdlExecutor, DriverError, QueryId,
-    QueryRequest, QueryStream, SecurityAdmin, TransactionControl,
+    AdministrationProvider, BulkWriter, CapabilityState, CatalogReader, DataMutator, DdlExecutor,
+    DriverError, ExplainProvider, QueryId, QueryRequest, QueryStream, SecurityAdmin,
+    TransactionControl,
 };
 
 #[derive(Clone, Debug)]
@@ -47,6 +48,14 @@ pub trait Session: Send + Sync {
     }
 
     fn bulk(&self) -> Option<&dyn BulkWriter> {
+        None
+    }
+
+    fn explain(&self) -> Option<&dyn ExplainProvider> {
+        None
+    }
+
+    fn admin(&self) -> Option<&dyn AdministrationProvider> {
         None
     }
 }
