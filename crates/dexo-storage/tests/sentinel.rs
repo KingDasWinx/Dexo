@@ -2,8 +2,8 @@ use dexo_app::diagnostic_service::{
     DiagnosticBundle, SECRET_SENTINEL, contains_sentinel, redact_text,
 };
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
-use dexo_storage::{Database, Preferences, ProjectRepository};
 use dexo_app::{Project, ProjectId};
+use dexo_storage::{Database, Preferences, ProjectRepository};
 
 #[test]
 fn sentinel_absent_from_db_toml_logs_audit_and_zip() {
@@ -47,7 +47,10 @@ fn sentinel_absent_from_db_toml_logs_audit_and_zip() {
         status: "ok".into(),
         sql: None,
     }
-    .sanitize(SqlAuditMode::Sanitized, Some(&format!("select '{SECRET_SENTINEL}'")));
+    .sanitize(
+        SqlAuditMode::Sanitized,
+        Some(&format!("select '{SECRET_SENTINEL}'")),
+    );
     assert!(!event.export_line().contains(SECRET_SENTINEL));
 
     let bundle = DiagnosticBundle::assemble(
