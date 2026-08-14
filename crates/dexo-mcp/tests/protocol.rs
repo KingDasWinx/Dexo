@@ -152,3 +152,110 @@ fn disconnect_clears_result_pages() {
         "not found"
     );
 }
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn grant_publishes_tool_then_revoke_removes_it() {
+    use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
+    use dexo_app::mcp::ledger::{GrantLedger, MemoryGrantLedger};
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+
+    let mut profile = McpProfile::new("assistant");
+    profile.enabled = true;
+    profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
+    let service = McpService::new(profile.clone(), vec![table("users")]);
+    let ledger = std::sync::Arc::new(MemoryGrantLedger::default());
+    let (client, server_io) = tokio::io::duplex(64 * 1024);
+    let (server_read, server_write) = tokio::io::split(server_io);
+    let (client_read, mut client_write) = tokio::io::split(client);
+    let server_ledger = std::sync::Arc::clone(&ledger);
+    let handle = tokio::spawn(async move {
+        dexo_mcp::serve_io_with_ledger(service, server_read, server_write, Some(server_ledger))
+            .await
+    });
+    let init = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 1,
+        "method": "initialize",
+        "params": {
+            "protocolVersion": "2025-11-25",
+            "capabilities": {"tools": {"listChanged": true}},
+            "clientInfo": {"name": "test", "version": "0.0.1"}
+        }
+    });
+    let initialized = serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"});
+    client_write
+        .write_all(format!("{init}\n{initialized}\n").as_bytes())
+        .await
+        .unwrap();
+    let mut lines = BufReader::new(client_read).lines();
+    let _init = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    let now = dexo_mcp::tools_write::now_secs();
+    let grant = Grant::new(
+        &profile,
+        "local",
+        GrantCapability::DataWrite,
+        vec!["data_insert".into()],
+        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        now,
+        DEFAULT_TTL_SECS,
+    )
+    .unwrap();
+    let grant_id = grant.id;
+    ledger.insert_grant(grant).unwrap();
+    let mut saw_change = false;
+    for _ in 0..20 {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(1), lines.next_line())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        let Some(line) = line else { continue };
+        if line.contains("tools/list_changed") {
+            saw_change = true;
+            break;
+        }
+    }
+    assert!(saw_change, "expected tools/list_changed after grant");
+    client_write
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n")
+        .await
+        .unwrap();
+    let listed = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(listed.contains("data_insert"));
+    assert!(!listed.contains("grant_create"));
+    ledger.revoke(grant_id).unwrap();
+    let mut saw_revoke = false;
+    for _ in 0..20 {
+        let line = tokio::time::timeout(std::time::Duration::from_secs(1), lines.next_line())
+            .await
+            .ok()
+            .and_then(Result::ok)
+            .flatten();
+        let Some(line) = line else { continue };
+        if line.contains("tools/list_changed") {
+            saw_revoke = true;
+            break;
+        }
+    }
+    assert!(saw_revoke, "expected tools/list_changed after revoke");
+    client_write
+        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}\n")
+        .await
+        .unwrap();
+    let listed = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+    assert!(!listed.contains("data_insert"));
+    drop(client_write);
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+}

@@ -169,5 +169,6 @@ fn snapshot_mcp_profiles_preview_and_confirm() {
     update(&mut model, Action::OpenMcpProfiles);
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     update(&mut model, Action::ConfirmMcpEnable);
+    update(&mut model, Action::RevokeAllMcpGrants);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
 }

@@ -3,11 +3,15 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use crate::args::{
-    Args, Command, ConfigCommand, LaunchMode, McpCommand, McpConfigCommand, McpProfileCommand,
-    OnError, OutputFormat, SchemaCommand, SchemaDiffFormat, SessionsCommand, TransferCliFormat,
+    Args, Command, ConfigCommand, LaunchMode, McpCommand, McpConfigCommand, McpGrantCommand,
+    McpProfileCommand, OnError, OutputFormat, SchemaCommand, SchemaDiffFormat, SessionsCommand,
+    TransferCliFormat,
 };
 use crate::presenter;
-use dexo_app::mcp::{Effect, McpProfile, McpService, SelectorRule, advertised_tools};
+use dexo_app::mcp::{
+    Effect, Grant, GrantCapability, GrantLedger, McpProfile, McpService, SelectorRule,
+    advertised_tools,
+};
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
 use dexo_app::search_service::SearchService;
 use dexo_app::{
@@ -21,7 +25,7 @@ use dexo_runtime::TaskRegistry;
 use dexo_secrets::{KeyringSecretStore, SecretStore};
 use dexo_storage::{
     AppPaths, CatalogCache, ConnectionRepository, Database, McpProfileRepository,
-    SchemaSnapshotStore, export_portable, import_portable,
+    SchemaSnapshotStore, SqliteGrantLedger, export_portable, import_portable,
 };
 
 pub fn run(args: Args) -> anyhow::Result<()> {
@@ -1047,6 +1051,8 @@ fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> 
         McpCommand::Serve { profile } => {
             tokio::runtime::Runtime::new()?.block_on(mcp_serve(registry, profile))?;
         }
+        McpCommand::Grant { command } => run_mcp_grant(command)?,
+        McpCommand::Audit { profile } => mcp_audit(profile.as_deref())?,
     }
     Ok(())
 }
@@ -1219,5 +1225,113 @@ async fn mcp_serve(registry: DriverRegistry, name: String) -> anyhow::Result<()>
     } else {
         None
     };
-    dexo_mcp::serve_with_session(service, session).await
+    dexo_mcp::serve_with_ledger(
+        service,
+        session,
+        Some(std::sync::Arc::new(SqliteGrantLedger::open(
+            &paths.database,
+        )?)),
+    )
+    .await
+}
+
+fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let ledger = SqliteGrantLedger::open(&paths.database)?;
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    match command {
+        McpGrantCommand::Create {
+            profile,
+            connection,
+            capability,
+            tool,
+            selector,
+            expires,
+            confirm_target,
+        } => {
+            if confirm_target.as_deref() != Some(connection.as_str())
+                && confirm_target.as_deref() != Some(selector.as_str())
+            {
+                anyhow::bail!("type the connection or selector as --confirm-target");
+            }
+            let loaded = load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
+            if !loaded.connections.is_empty()
+                && !loaded.connections.iter().any(|name| name == &connection)
+            {
+                anyhow::bail!("connection is not allowed for this profile");
+            }
+            let ttl = dexo_app::mcp::parse_ttl(&expires)?;
+            let grant = Grant::new(
+                &loaded,
+                connection,
+                GrantCapability::parse(&capability)?,
+                tool,
+                vec![SelectorRule::parse(Effect::Allow, &selector)?],
+                now,
+                ttl,
+            )?;
+            println!("grant {} expires_at={} uses=1", grant.id, grant.expires_at);
+            ledger.insert_grant(grant)?;
+        }
+        McpGrantCommand::List { profile } => {
+            for grant in ledger.active_grants(&profile, now) {
+                println!(
+                    "{} {} {} uses={} expires={}",
+                    grant.id,
+                    capability_label(grant.capability),
+                    grant.tools.join(","),
+                    grant.remaining_uses,
+                    grant.expires_at - now
+                );
+            }
+        }
+        McpGrantCommand::Revoke { id } => {
+            ledger.revoke_str(&id)?;
+            println!("revoked {id}");
+        }
+        McpGrantCommand::RevokeAll { profile } => {
+            ledger.revoke_profile(&profile)?;
+            println!("revoked all grants for {profile}");
+        }
+    }
+    Ok(())
+}
+
+fn capability_label(capability: GrantCapability) -> &'static str {
+    match capability {
+        GrantCapability::DataWrite => "data_write",
+        GrantCapability::Ddl => "ddl",
+        GrantCapability::Admin => "admin",
+    }
+}
+
+fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
+    let paths = AppPaths::discover()?;
+    let _db = Database::open(&paths.database)?;
+    let ledger = SqliteGrantLedger::open(&paths.database)?;
+    ledger.prune_audits(now_minus_retention(30));
+    for event in ledger.audits() {
+        if profile.is_some_and(|name| event.profile != name) {
+            continue;
+        }
+        let line = event.export_line();
+        anyhow::ensure!(
+            !line.contains("SUPER_SECRET_SENTINEL"),
+            "audit export refused"
+        );
+        println!("{line}");
+    }
+    Ok(())
+}
+
+fn now_minus_retention(days: i64) -> i64 {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs() as i64)
+        .unwrap_or(0);
+    now.saturating_sub(days.saturating_mul(86400))
 }
