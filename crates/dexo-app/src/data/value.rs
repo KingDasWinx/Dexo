@@ -68,10 +68,14 @@ fn inspect_bytes(bytes: &[u8], total: u64) -> ValueView {
         };
     }
     if let Some(mime) = image_mime(bytes) {
+        let (width, height) = image::load_from_memory(bytes)
+            .ok()
+            .map(|img| (img.width(), img.height()))
+            .unzip();
         return ValueView::Image {
             mime,
-            width: None,
-            height: None,
+            width,
+            height,
         };
     }
     if bytes.first() == Some(&b'[') {

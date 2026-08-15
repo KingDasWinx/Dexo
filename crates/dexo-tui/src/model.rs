@@ -185,6 +185,7 @@ pub struct GridModel {
     pub kind: GridSelection,
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
+    pub cells: std::collections::BTreeMap<(usize, usize), GridCell>,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -197,19 +198,15 @@ pub enum OperationStatus {
 }
 
 #[derive(Clone, Debug, PartialEq)]
-#[allow(dead_code)] // ponytail: spool/remote variants fill in Task 5; isolation uses Inline via GridModel.
 pub enum GridCell {
     Inline(DbValue),
     Spool {
         id: uuid::Uuid,
+        path: std::path::PathBuf,
         loaded: u64,
         total: u64,
     },
-    Remote {
-        object: String,
-        column: String,
-        total: u64,
-    },
+    Remote(dexo_driver_api::RemoteValueRef),
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -293,6 +290,7 @@ static EMPTY_GRID: GridModel = GridModel {
     kind: GridSelection::Cell { row: 0, col: 0 },
     frozen_columns: 0,
     hidden_columns: Vec::new(),
+    cells: std::collections::BTreeMap::new(),
 };
 
 impl std::ops::Deref for ResultsState {
@@ -332,6 +330,7 @@ impl GridModel {
             kind: GridSelection::Cell { row: 0, col: 0 },
             frozen_columns: 0,
             hidden_columns: Vec::new(),
+            cells: std::collections::BTreeMap::new(),
         }
     }
 
@@ -372,16 +371,37 @@ impl GridModel {
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<DbValue>>) {
-        self.buffer.append_rows(rows);
+        for row in rows {
+            let row_index = self.buffer.row_count();
+            let mut display = Vec::with_capacity(row.len());
+            for (col, value) in row.into_iter().enumerate() {
+                let (shown, deferred) = bound_value(value);
+                if let Some(cell) = deferred {
+                    self.cells.insert((row_index, col), cell);
+                }
+                display.push(shown);
+            }
+            self.buffer.append_rows(vec![display]);
+        }
         self.recompute_column_widths();
     }
 
     pub fn clear(&mut self) {
+        for cell in self.cells.values() {
+            if let GridCell::Spool { path, .. } = cell {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        self.cells.clear();
         self.buffer.clear();
         self.viewport.row_offset = 0;
         self.viewport.column_offset = 0;
         self.selection = None;
         self.column_widths.clear();
+    }
+
+    pub fn cell_at(&self, row: usize, col: usize) -> Option<&GridCell> {
+        self.cells.get(&(row, col))
     }
 
     pub fn viewport(&self) -> GridViewport {
@@ -626,6 +646,55 @@ fn estimated_row_bytes(row: &[DbValue]) -> usize {
             DbValue::Native { bytes, text, .. } => bytes.len() + text.len(),
         })
         .sum()
+}
+
+fn spool_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("dexo-spool-{}", std::process::id()))
+}
+
+fn bound_value(value: DbValue) -> (DbValue, Option<GridCell>) {
+    let inline = dexo_app::data::value::INLINE_BYTES as usize;
+    match value {
+        DbValue::Bytes(bytes) if bytes.len() > inline => spool_or_prefix(bytes, inline),
+        DbValue::Text(text) if text.len() > inline => {
+            spool_or_prefix(text.into_bytes(), inline)
+        }
+        DbValue::Json(text) if text.len() > inline => {
+            spool_or_prefix(text.into_bytes(), inline)
+        }
+        DbValue::Native { bytes, text, type_name } if bytes.len() > inline => {
+            let (shown, cell) = spool_or_prefix(bytes, inline);
+            match shown {
+                DbValue::Bytes(prefix) => (
+                    DbValue::Native {
+                        type_name,
+                        bytes: prefix,
+                        text,
+                    },
+                    cell,
+                ),
+                other => (other, cell),
+            }
+        }
+        other => (other, None),
+    }
+}
+
+fn spool_or_prefix(bytes: Vec<u8>, inline: usize) -> (DbValue, Option<GridCell>) {
+    let total = bytes.len() as u64;
+    let prefix = bytes[..inline.min(bytes.len())].to_vec();
+    match crate::runtime::result_spool::spool_bytes(&spool_dir(), &bytes) {
+        Ok(file) => (
+            DbValue::Bytes(prefix),
+            Some(GridCell::Spool {
+                id: file.id,
+                path: file.path,
+                loaded: inline as u64,
+                total,
+            }),
+        ),
+        Err(_) => (DbValue::Bytes(prefix), None),
+    }
 }
 
 #[derive(Clone, Debug)]

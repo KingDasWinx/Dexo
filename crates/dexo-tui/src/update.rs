@@ -404,8 +404,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if catalog_generation_matches(model, &session, generation) {
                 model.data.apply_page(page.clone());
                 model.results.clear();
-                model.results.set_columns(page.columns);
+                model.results.set_columns(page.columns.clone());
                 model.results.append_rows(page.rows);
+                promote_remote_cells(model, &page.columns);
             }
             Vec::new()
         }
@@ -417,6 +418,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.data.loading = false;
                 model.data.last_error = Some(message.clone());
                 model.messages.push(message);
+            }
+            Vec::new()
+        }
+        Action::ValueFetched { generation, bytes } => {
+            if generation == model.session_generation {
+                model.data.viewer = Some(crate::screens::value_viewer::view(&DbValue::Bytes(bytes)));
             }
             Vec::new()
         }
@@ -539,11 +546,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.data.revert();
             Vec::new()
         }
-        Action::InspectValue => {
-            inspect_selected(model);
-            Vec::new()
-        }
+        Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
+        Action::DataNavBack => data_nav_back(model),
         Action::OpenDdlPreview => {
             open_ddl_preview(model);
             Vec::new()
@@ -1948,24 +1953,98 @@ fn copy_ddl(model: &mut Model) -> Vec<Effect> {
     }
 }
 
-fn inspect_selected(model: &mut Model) {
+fn inspect_selected(model: &mut Model) -> Vec<Effect> {
     let Some((row, col)) = model.results.selection() else {
-        return;
+        return Vec::new();
     };
+    if let Some(cell) = model.results.cell_at(row, col).cloned() {
+        match cell {
+            crate::model::GridCell::Remote(value) => {
+                let Some(session) = model.active_session else {
+                    model
+                        .messages
+                        .push("connect a session to fetch the value".into());
+                    return Vec::new();
+                };
+                return vec![Effect::FetchValue {
+                    value,
+                    offset: 0,
+                    limit: 64 * 1024,
+                    session,
+                    generation: model.session_generation,
+                }];
+            }
+            crate::model::GridCell::Spool { path, total, .. } => {
+                let bytes = std::fs::read(&path).unwrap_or_default();
+                let loaded = bytes.len() as u64;
+                model.data.viewer = Some(inspect_value(
+                    &DbValue::Bytes(bytes),
+                    loaded.min(total),
+                    total,
+                ));
+                return Vec::new();
+            }
+            crate::model::GridCell::Inline(value) => {
+                model.data.viewer = Some(crate::screens::value_viewer::view(&value));
+                return Vec::new();
+            }
+        }
+    }
     let Some(value) = model
         .results
         .rows()
         .get(row)
         .and_then(|cells| cells.get(col))
     else {
+        return Vec::new();
+    };
+    model.data.viewer = Some(crate::screens::value_viewer::view(value));
+    Vec::new()
+}
+
+fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMeta]) {
+    let Some(identity_cols) = dexo_app::data::RowIdentity::from_table(&model.data.table) else {
         return;
     };
-    let loaded = match value {
-        DbValue::Bytes(bytes) | DbValue::Native { bytes, .. } => bytes.len() as u64,
-        DbValue::Text(text) | DbValue::Json(text) => text.len() as u64,
-        _ => 0,
-    };
-    model.data.viewer = Some(inspect_value(value, loaded, loaded));
+    let rows = model.results.rows().to_vec();
+    for (row_idx, row) in rows.iter().enumerate() {
+        let identity: Vec<(dexo_driver_api::ColumnId, DbValue)> = identity_cols
+            .iter()
+            .filter_map(|name| {
+                let index = columns.iter().position(|column| column.name == *name)?;
+                Some((
+                    dexo_driver_api::ColumnId(name.clone()),
+                    row.get(index).cloned().unwrap_or(DbValue::Null),
+                ))
+            })
+            .collect();
+        if identity.len() != identity_cols.len() {
+            continue;
+        }
+        for (col_idx, value) in row.iter().enumerate() {
+            let total = match value {
+                DbValue::Native { type_name, text, .. } if type_name.starts_with("truncated") => {
+                    text.parse().unwrap_or(0)
+                }
+                _ => continue,
+            };
+            if total == 0 {
+                continue;
+            }
+            let Some(column) = columns.get(col_idx) else {
+                continue;
+            };
+            model.results.cells.insert(
+                (row_idx, col_idx),
+                crate::model::GridCell::Remote(dexo_driver_api::RemoteValueRef {
+                    object: model.data.target.clone(),
+                    identity: identity.clone(),
+                    column: dexo_driver_api::ColumnId(column.name.clone()),
+                    total,
+                }),
+            );
+        }
+    }
 }
 
 fn open_related(model: &mut Model) -> Vec<Effect> {
@@ -1979,12 +2058,35 @@ fn open_related(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     let title = fk.referenced_table.display_unquoted();
+    model.data.crumbs.push((
+        model.data.target.clone(),
+        model.data.filter.clone(),
+        model.data.page_offset,
+    ));
+    model.data.crumb_forward.clear();
     model.tabs.titles.push(title.clone());
     model.tabs.active = model.tabs.titles.len() - 1;
     model.data.target = fk.referenced_table.clone();
     model.data.filter = Some(filter);
     model.data.related_open.push(title);
     model.data.page_offset = 0;
+    model.data.loading = true;
+    reload_object_data(model)
+}
+
+fn data_nav_back(model: &mut Model) -> Vec<Effect> {
+    let Some((target, filter, offset)) = model.data.crumbs.pop() else {
+        return Vec::new();
+    };
+    model.data.crumb_forward.push((
+        model.data.target.clone(),
+        model.data.filter.clone(),
+        model.data.page_offset,
+    ));
+    model.data.related_open.pop();
+    model.data.target = target;
+    model.data.filter = filter;
+    model.data.page_offset = offset;
     model.data.loading = true;
     reload_object_data(model)
 }

@@ -179,7 +179,7 @@ git commit -m "feat(results): copy real selections to system clipboard"
 
 **Files:** driver API mutation/value, both drivers, app value, runtime result spool/data manager, value/image widgets, Cargo dependencies, tests.
 
-- [ ] **Step 1: Add large text/blob contracts**
+- [x] **Step 1: Add large text/blob contracts**
 
 Seed a 40 MiB blob and JSON/XML/image values. Assert a table-data page returns a bounded remote reference, range fetch works, arbitrary-query ingestion spools above threshold, cancellation deletes partial files, and the grid never owns 40 MiB.
 
@@ -187,7 +187,7 @@ Run: `cargo test -p dexo-tui --test data_flow large_value`
 
 Expected: FAIL.
 
-- [ ] **Step 2: Add remote value capability**
+- [x] **Step 2: Add remote value capability**
 
 ```rust
 pub struct RemoteValueRef { pub object: QualifiedName, pub identity: Vec<(ColumnId, DbValue)>, pub column: ColumnId, pub total: u64 }
@@ -202,11 +202,11 @@ pub trait DataMutator: Send + Sync {
 
 Drivers use bound identity predicates and database substring functions. Only create a remote ref when stable identity exists; otherwise runtime spools the already-streamed value to a project temp directory.
 
-- [ ] **Step 3: Implement real viewers**
+- [x] **Step 3: Implement real viewers**
 
 Pretty-print JSON/XML, hex/UTF-8 bytes, arrays, image metadata, and progressive load. Decode images with bounded dimensions and use `ratatui_image::picker::Picker::from_query_stdio()` once; fall back to halfblocks/text metadata. Saving uses atomic output and refuses above configured limit until confirmed.
 
-- [ ] **Step 4: Test memory/cleanup and commit**
+- [x] **Step 4: Test memory/cleanup and commit**
 
 Run: `cargo test -p dexo-tui --test data_flow large_value && cargo test -p dexo-app data::value`
 

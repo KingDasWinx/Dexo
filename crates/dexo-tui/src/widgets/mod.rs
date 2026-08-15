@@ -1,3 +1,4 @@
+pub mod image_viewer;
 pub mod editor;
 pub mod form;
 pub mod grid;

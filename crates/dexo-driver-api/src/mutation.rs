@@ -134,9 +134,23 @@ impl MutationConflict {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct RemoteValueRef {
+    pub object: QualifiedName,
+    pub identity: Vec<(ColumnId, DbValue)>,
+    pub column: ColumnId,
+    pub total: u64,
+}
+
 #[async_trait::async_trait]
 pub trait DataMutator: Send + Sync {
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError>;
+    async fn fetch_value(
+        &self,
+        value: &RemoteValueRef,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<u8>, DriverError>;
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError>;
 }
 

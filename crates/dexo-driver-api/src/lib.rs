@@ -32,7 +32,8 @@ pub use error::{DriverError, DriverErrorCategory};
 pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};
 pub use identifier::QualifiedName;
 pub use mutation::{
-    ColumnId, DataMutator, DataPage, DataRequest, Filter, Mutation, MutationConflict, Page, Sort,
+    ColumnId, DataMutator, DataPage, DataRequest, Filter, Mutation, MutationConflict, Page,
+    RemoteValueRef, Sort,
 };
 pub use query::{
     ColumnMeta, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch, SessionEvent,

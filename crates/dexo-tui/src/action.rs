@@ -148,6 +148,18 @@ pub enum Action {
         generation: u64,
         message: String,
     },
+    ValueFetched {
+        generation: u64,
+        bytes: Vec<u8>,
+    },
+    MutationsApplied {
+        generation: u64,
+        session: String,
+    },
+    MutationsFailed {
+        generation: u64,
+        message: String,
+    },
     GoToDefinition,
     InspectorLoaded {
         generation: u64,
@@ -192,6 +204,7 @@ pub enum Action {
     RevertChanges,
     InspectValue,
     OpenRelated,
+    DataNavBack,
     OpenDdlPreview,
     ConfirmDdl,
     ApplyDdl,
@@ -477,6 +490,18 @@ pub enum Effect {
     },
     LoadTableData {
         request: dexo_driver_api::DataRequest,
+        session: SessionId,
+        generation: u64,
+    },
+    FetchValue {
+        value: dexo_driver_api::RemoteValueRef,
+        offset: u64,
+        limit: u32,
+        session: SessionId,
+        generation: u64,
+    },
+    ApplyMutations {
+        mutations: Vec<dexo_driver_api::Mutation>,
         session: SessionId,
         generation: u64,
     },

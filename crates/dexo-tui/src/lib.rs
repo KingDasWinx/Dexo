@@ -17,7 +17,9 @@ pub mod widgets;
 
 pub use action::{Action, Effect};
 pub use event::run;
-pub use model::{Focus, GridModel, Model, OperationStatus, ResultKey, ResultTab, ResultsState};
+pub use model::{
+    Focus, GridCell, GridModel, Model, OperationStatus, ResultKey, ResultTab, ResultsState,
+};
 pub use terminal::{
     CrosstermTerminal, RecordingTerminal, TerminalControl, TerminalGuard, TuiError,
     install_panic_hook,

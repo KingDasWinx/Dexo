@@ -198,6 +198,47 @@ fn render_mutation(mutation: &Mutation) -> Result<(String, Binder), DriverError>
     Ok((sql, binder))
 }
 
+fn identity_predicate(
+    identity: &[(ColumnId, DbValue)],
+    binder: &mut Binder,
+) -> Result<String, DriverError> {
+    if identity.is_empty() {
+        return Err(DriverError::unsupported(
+            "remote value requires a stable row identity",
+        ));
+    }
+    Ok(identity
+        .iter()
+        .map(|(column, value)| match value {
+            DbValue::Null => format!("{} IS NULL", quote(&column.0)),
+            _ => format!("{} = {}", quote(&column.0), binder.push(value.clone())),
+        })
+        .collect::<Vec<_>>()
+        .join(" AND "))
+}
+
+fn cap_row(row: Vec<DbValue>) -> Vec<DbValue> {
+    row.into_iter().map(cap_value).collect()
+}
+
+fn cap_value(value: DbValue) -> DbValue {
+    // ponytail: cap after fetch; ceiling: large cells are still materialized once. Upgrade: substring() in SELECT by column type.
+    const CAP: usize = 64 * 1024;
+    match value {
+        DbValue::Bytes(bytes) if bytes.len() > CAP => DbValue::Native {
+            type_name: "truncated".into(),
+            text: bytes.len().to_string(),
+            bytes: bytes[..CAP].to_vec(),
+        },
+        DbValue::Text(text) if text.len() > CAP => DbValue::Native {
+            type_name: "truncated-text".into(),
+            text: text.len().to_string(),
+            bytes: text.as_bytes()[..CAP].to_vec(),
+        },
+        other => other,
+    }
+}
+
 fn predicate(
     identity: &[(ColumnId, DbValue)],
     original: &[(ColumnId, DbValue)],
@@ -240,10 +281,50 @@ impl DataMutator for PostgresSession {
             });
         Ok(DataPage::from_fetched(
             columns,
-            rows.iter().map(decode_row).collect(),
+            rows.iter().map(|row| cap_row(decode_row(row))).collect(),
             request.page.offset,
             request.page.limit,
         ))
+    }
+
+    async fn fetch_value(
+        &self,
+        value: &dexo_driver_api::RemoteValueRef,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<u8>, DriverError> {
+        if value.identity.is_empty() {
+            return Err(DriverError::unsupported(
+                "remote value requires a stable row identity",
+            ));
+        }
+        let mut binder = Binder::new();
+        let start = binder.push(DbValue::I64(offset.saturating_add(1) as i64));
+        let len = binder.push(DbValue::I64(i64::from(limit)));
+        let pred = identity_predicate(&value.identity, &mut binder)?;
+        let sql = format!(
+            "SELECT substring({} from {start} for {len}) FROM {} WHERE {pred}",
+            quote(&value.column.0),
+            qualify(&value.object)
+        );
+        let boxed = binder.boxed();
+        let refs: Vec<&(dyn ToSql + Sync)> =
+            boxed.iter().map(|value| value.as_ref() as _).collect();
+        let row = self
+            .client
+            .query_opt(&sql, &refs)
+            .await
+            .map_err(map_error)?;
+        let Some(row) = row else {
+            return Ok(Vec::new());
+        };
+        if let Ok(bytes) = row.try_get::<_, Vec<u8>>(0) {
+            Ok(bytes)
+        } else if let Ok(text) = row.try_get::<_, String>(0) {
+            Ok(text.into_bytes())
+        } else {
+            Ok(Vec::new())
+        }
     }
 
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError> {

@@ -17,6 +17,7 @@ use crate::action::{
 pub mod catalog_manager;
 pub mod clipboard;
 pub mod connection_manager;
+pub mod result_spool;
 pub mod data_manager;
 pub mod document_io;
 pub mod project_manager;
@@ -267,6 +268,41 @@ impl WorkbenchRuntime {
                     data_manager::fetch_page(
                         Arc::clone(&active.session),
                         request,
+                        generation,
+                        session,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::FetchValue {
+                value,
+                offset,
+                limit,
+                session,
+                generation,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    data_manager::fetch_value(
+                        Arc::clone(&active.session),
+                        value,
+                        offset,
+                        limit,
+                        generation,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::ApplyMutations {
+                mutations,
+                session,
+                generation,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    data_manager::apply_mutations(
+                        Arc::clone(&active.session),
+                        mutations,
                         generation,
                         session,
                         self.action_tx.clone(),

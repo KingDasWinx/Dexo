@@ -242,3 +242,97 @@ fn arbitrary_select_emits_derived_script() {
     )));
     assert!(model.results.tabs[0].local_only.is_none());
 }
+
+#[test]
+fn large_value_grid_never_owns_blob() {
+    let mut model = Model::default();
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "blob".into(),
+        type_name: "bytea".into(),
+        nullable: true,
+    }]);
+    let total = 40 * 1024 * 1024;
+    model
+        .results
+        .append_rows(vec![vec![DbValue::Bytes(vec![7u8; total])]]);
+    assert!(model.results.estimated_bytes() < 1024 * 1024);
+    assert!(matches!(
+        model.results.cell_at(0, 0),
+        Some(dexo_tui::GridCell::Spool { total: stored, .. }) if *stored == total as u64
+    ));
+    model.results.clear();
+    assert!(model.results.cell_at(0, 0).is_none());
+}
+
+#[test]
+fn large_value_cancel_deletes_partial_files() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dexo_tui::runtime::result_spool::spool_bytes(dir.path(), b"payload").unwrap();
+    assert!(file.path.exists());
+    dexo_tui::runtime::result_spool::delete_spool(&file);
+    assert!(!file.path.exists());
+    let tmp = dir.path().join("partial.tmp");
+    std::fs::write(&tmp, b"partial").unwrap();
+    dexo_tui::runtime::result_spool::delete_partial(dir.path());
+    assert!(!tmp.exists());
+}
+
+#[test]
+fn apply_changes_emits_mutations_and_conflict_keeps_edits() {
+    let mut model = Model::default();
+    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
+    model.session_generation = 1;
+    model.data.table = dexo_app::data::TableMeta {
+        columns: vec![dexo_app::data::ColumnDef {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+            nullable: false,
+        }],
+    };
+    model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
+    model.data.target = dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "items");
+    model
+        .data
+        .changes
+        .insert(vec![("id".into(), DbValue::I64(1))]);
+    update(&mut model, Action::OpenReview);
+    let effects = update(&mut model, Action::ApplyChanges);
+    assert!(effects
+        .iter()
+        .any(|effect| matches!(effect, dexo_tui::Effect::ApplyMutations { .. })));
+    update(
+        &mut model,
+        Action::MutationsFailed {
+            generation: 1,
+            message: "mutation conflict".into(),
+        },
+    );
+    assert_eq!(model.data.changes.pending().len(), 1);
+    assert!(model.data.failed_still_editable());
+}
+
+#[test]
+fn foreign_key_composite_loads_destination() {
+    let mut model = Model::default();
+    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
+    model.session_generation = 1;
+    model.data.related_fk = Some(dexo_app::data::ForeignKey {
+        local: vec!["org_id".into(), "user_id".into()],
+        referenced_table: dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "users"),
+        referenced: vec!["org".into(), "id".into()],
+    });
+    model.data.related_row = vec![
+        ("org_id".into(), Some(DbValue::I64(7))),
+        ("user_id".into(), Some(DbValue::I64(3))),
+    ];
+    let effects = update(&mut model, Action::OpenRelated);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        dexo_tui::Effect::LoadTableData { request, .. }
+            if matches!(request.filter, Some(dexo_driver_api::Filter::And(ref parts)) if parts.len() == 2)
+    )));
+    assert_eq!(model.data.crumbs.len(), 1);
+    update(&mut model, Action::DataNavBack);
+    assert!(model.data.crumbs.is_empty());
+}

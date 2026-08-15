@@ -27,6 +27,9 @@ sha2.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
 arboard.workspace = true
+ratatui-image.workspace = true
+image.workspace = true
+tempfile.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
