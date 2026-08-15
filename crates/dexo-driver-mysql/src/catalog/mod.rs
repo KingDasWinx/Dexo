@@ -441,21 +441,58 @@ impl MysqlSession {
             .await?
         {
             Ok(constraints) => {
+                let mut fk_map: std::collections::BTreeMap<
+                    String,
+                    (Vec<String>, Vec<String>, Option<String>, Option<String>),
+                > = std::collections::BTreeMap::new();
+                if let Ok(Ok(fks)) = self
+                    .try_exec_rows::<mysql_async::Row>(
+                        "SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA,
+                                REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME
+                         FROM information_schema.KEY_COLUMN_USAGE
+                         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
+                           AND REFERENCED_TABLE_NAME IS NOT NULL
+                         ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION",
+                        (schema.to_string(), table.to_string()),
+                    )
+                    .await
+                {
+                    for row in fks {
+                        let name = cell_string(&row, 0);
+                        let entry = fk_map.entry(name).or_insert((
+                            Vec::new(),
+                            Vec::new(),
+                            None,
+                            None,
+                        ));
+                        entry.0.push(cell_string(&row, 1));
+                        entry.1.push(cell_string(&row, 4));
+                        entry.2 = Some(cell_string(&row, 2));
+                        entry.3 = Some(cell_string(&row, 3));
+                    }
+                }
                 for row in constraints {
                     let name = cell_string(&row, 0);
                     let constraint_type = cell_string(&row, 1);
-                    objects.push(
-                        CatalogObject::new(
-                            my_id("constraint", format!("{schema}/{table}/{name}")),
-                            ObjectKind::Constraint,
-                            QualifiedName::new(Some(schema), None::<String>, name),
-                            Some(parent.clone()),
-                        )
-                        .with_attribute(
-                            "driver.mysql.constraint_type",
-                            serde_json::json!(constraint_type),
-                        ),
+                    let mut object = CatalogObject::new(
+                        my_id("constraint", format!("{schema}/{table}/{name}")),
+                        ObjectKind::Constraint,
+                        QualifiedName::new(Some(schema), None::<String>, name.clone()),
+                        Some(parent.clone()),
+                    )
+                    .with_attribute(
+                        "driver.mysql.constraint_type",
+                        serde_json::json!(constraint_type),
                     );
+                    if let Some((local, referenced, fk_schema, fk_table)) = fk_map.get(&name) {
+                        object = object
+                            .with_attribute("fk_local", serde_json::json!(local))
+                            .with_attribute("fk_referenced", serde_json::json!(referenced))
+                            .with_attribute("fk_schema", serde_json::json!(fk_schema))
+                            .with_attribute("fk_table", serde_json::json!(fk_table))
+                            .with_attribute("fk_catalog", serde_json::json!(schema));
+                    }
+                    objects.push(object);
                 }
             }
             Err(reason) => restrictions.push(CatalogRestriction {

@@ -221,7 +221,7 @@ git commit -m "feat(data): inspect bounded large and image values"
 
 **Files:** app change set/apply, runtime data manager, screen data, grid/update, driver mutation tests, TUI/live tests.
 
-- [ ] **Step 1: Add TUI-to-database change tests**
+- [x] **Step 1: Add TUI-to-database change tests**
 
 Test insert/update/delete, review SQL placeholders, production confirmation, read-only denial, no unique identity, concurrent modification conflict, partial failure rollback, reload/retry/revert.
 
@@ -229,7 +229,7 @@ Run: `cargo test -p dexo --test tui_data_live changes -- --ignored --nocapture`
 
 Expected: FAIL because TUI apply changes only reducer state.
 
-- [ ] **Step 2: Preserve stable identities and originals**
+- [x] **Step 2: Preserve stable identities and originals**
 
 ```rust
 pub struct EditableRow {
@@ -242,11 +242,11 @@ pub struct EditableRow {
 
 Introspect primary/unique keys. No safe identity means read-only. Build `Mutation` with original values for optimistic conflict detection.
 
-- [ ] **Step 3: Dispatch protected apply**
+- [x] **Step 3: Dispatch protected apply**
 
 Review lists exact operations but never secrets. `ApplyChanges` evaluates connection policy, asks typed confirmation when required, calls `DataMutator::apply`, then reloads the page. On conflict, retain edits and show reload/merge/retry/revert choices.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql --test mutation -- --ignored --nocapture && cargo test -p dexo --test tui_data_live changes -- --ignored --nocapture`
 
@@ -261,7 +261,7 @@ git commit -m "feat(data): review and apply protected row changes"
 
 **Files:** app foreign key, catalog drivers if metadata missing, runtime/screen data, tests.
 
-- [ ] **Step 1: Add composite-FK navigation tests**
+- [x] **Step 1: Add composite-FK navigation tests**
 
 Assert NULL FK disables navigation, composite mapping creates typed `And(Eq...)`, destination opens a separate data tab, back/forward breadcrumb restores page/filter, and permission failure is visible.
 
@@ -269,11 +269,11 @@ Run: `cargo test -p dexo-tui --test data_flow foreign_key`
 
 Expected: FAIL because `open_related` only appends an empty tab.
 
-- [ ] **Step 2: Load FK metadata and dispatch destination fetch**
+- [x] **Step 2: Load FK metadata and dispatch destination fetch**
 
 Use catalog constraint attributes to build `ForeignKey`; call `related_filter`, then `DataMutator::fetch` for referenced table. Correlate the new tab and preserve origin breadcrumb.
 
-- [ ] **Step 3: Run live tests and commit**
+- [x] **Step 3: Run live tests and commit**
 
 Run: `cargo test -p dexo --test tui_data_live foreign_key -- --ignored --nocapture`
 

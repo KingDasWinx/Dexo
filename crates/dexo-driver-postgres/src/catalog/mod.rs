@@ -390,8 +390,21 @@ impl PostgresSession {
         let constraints = self
             .client
             .query(
-                "SELECT oid::bigint, conname::text, contype::text
-                 FROM pg_constraint WHERE conrelid = $1::bigint::oid ORDER BY conname",
+                "SELECT c.oid::bigint, c.conname::text, c.contype::text,
+                        nsp.nspname::text, rel.relname::text,
+                        ARRAY(SELECT a.attname::text
+                              FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                              ORDER BY ord),
+                        ARRAY(SELECT a.attname::text
+                              FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+                              JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum
+                              ORDER BY ord)
+                 FROM pg_constraint c
+                 LEFT JOIN pg_class rel ON rel.oid = c.confrelid
+                 LEFT JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                 WHERE c.conrelid = $1::bigint::oid
+                 ORDER BY c.conname",
                 &[&relid],
             )
             .await
@@ -400,16 +413,27 @@ impl PostgresSession {
             let oid: i64 = row.get(0);
             let name: String = row.get(1);
             let contype: String = row.get(2);
-            objects.push(
-                CatalogObject::new(
-                    pg_id("constraint", oid),
-                    ObjectKind::Constraint,
-                    QualifiedName::new(Some(catalog), Some(schema), name),
-                    Some(parent.clone()),
-                )
-                .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
-                .with_attribute("driver.postgres.contype", serde_json::json!(contype)),
-            );
+            let mut object = CatalogObject::new(
+                pg_id("constraint", oid),
+                ObjectKind::Constraint,
+                QualifiedName::new(Some(catalog), Some(schema), name),
+                Some(parent.clone()),
+            )
+            .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+            .with_attribute("driver.postgres.contype", serde_json::json!(contype));
+            if contype == "f" {
+                let fk_schema: Option<String> = row.get(3);
+                let fk_table: Option<String> = row.get(4);
+                let local: Vec<String> = row.get(5);
+                let referenced: Vec<String> = row.get(6);
+                object = object
+                    .with_attribute("fk_local", serde_json::json!(local))
+                    .with_attribute("fk_referenced", serde_json::json!(referenced))
+                    .with_attribute("fk_schema", serde_json::json!(fk_schema))
+                    .with_attribute("fk_table", serde_json::json!(fk_table))
+                    .with_attribute("fk_catalog", serde_json::json!(catalog));
+            }
+            objects.push(object);
         }
 
         let triggers = self
