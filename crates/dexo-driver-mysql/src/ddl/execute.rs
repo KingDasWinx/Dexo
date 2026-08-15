@@ -1,5 +1,6 @@
 use dexo_driver_api::{
-    DdlExecutor, DdlOutcome, DdlPlan, DriverError, GrantRecord, QualifiedName, SecurityAdmin,
+    DdlExecutor, DdlOutcome, DdlPlan, DriverError, GrantRecord, QualifiedName, SchemaChange,
+    SecurityAdmin,
 };
 use mysql_async::prelude::Queryable;
 
@@ -8,9 +9,37 @@ use crate::session::MysqlSession;
 
 #[async_trait::async_trait]
 impl DdlExecutor for MysqlSession {
+    fn plan_change(&self, change: &SchemaChange) -> Result<DdlPlan, DriverError> {
+        crate::ddl::plan_ddl(change)
+    }
+
     async fn apply_ddl(&self, plan: &DdlPlan) -> Result<DdlOutcome, DriverError> {
         apply_ddl(self, plan).await
     }
+}
+
+pub(crate) fn plan_or_unsupported(
+    driver: &str,
+    change: &SchemaChange,
+    plan: DdlPlan,
+) -> Result<DdlPlan, DriverError> {
+    if plan.statements.is_empty() {
+        return Err(DriverError::unsupported(format!(
+            "{driver} cannot plan {}",
+            match change {
+                SchemaChange::CreateTable { .. } => "CreateTable",
+                SchemaChange::AlterTable { .. } => "AlterTable",
+                SchemaChange::CreateView { .. } => "CreateView",
+                SchemaChange::AlterRoutine { .. } => "AlterRoutine",
+                SchemaChange::CreateIndex { .. } => "CreateIndex",
+                SchemaChange::DropObject { .. } => "DropObject",
+                SchemaChange::RenameObject { .. } => "RenameObject",
+                SchemaChange::Grant { .. } => "Grant",
+                SchemaChange::Revoke { .. } => "Revoke",
+            }
+        )));
+    }
+    Ok(plan)
 }
 
 pub async fn apply_ddl(session: &MysqlSession, plan: &DdlPlan) -> Result<DdlOutcome, DriverError> {

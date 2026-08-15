@@ -81,6 +81,16 @@ mod tests {
 
     #[async_trait::async_trait]
     impl DdlExecutor for FakeDdl {
+        fn plan_change(
+            &self,
+            change: &dexo_driver_api::SchemaChange,
+        ) -> Result<DdlPlan, DriverError> {
+            Ok(DdlPlan {
+                risk: change.risk(),
+                ..drop_plan()
+            })
+        }
+
         async fn apply_ddl(&self, _: &DdlPlan) -> Result<DdlOutcome, DriverError> {
             self.called.store(true, Ordering::SeqCst);
             if let Some(error) = &self.fail {
@@ -99,6 +109,12 @@ mod tests {
             rollback: vec![],
             warnings: vec![],
             transactional: true,
+            risk: dexo_driver_api::ChangeRisk {
+                destructive: true,
+                data_loss: true,
+                lock_level: dexo_driver_api::LockLevel::AccessExclusive,
+                reversible: false,
+            },
         }
     }
 

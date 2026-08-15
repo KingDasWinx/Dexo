@@ -66,6 +66,7 @@ mod tests {
                 rollback: vec![],
                 warnings: vec![],
                 transactional: true,
+                ..DdlPlan::default()
             },
             vec![QualifiedName::new(
                 Some("prod"),

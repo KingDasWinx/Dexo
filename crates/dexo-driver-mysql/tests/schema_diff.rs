@@ -2,10 +2,11 @@ use dexo_app::schema_diff::{
     OrderedChange, SchemaDifference, generate_script, infer_edges, order_changes,
 };
 use dexo_driver_api::{
-    CatalogListOptions, CatalogObject, ConnectRequest, ConnectionFactory, DdlPlan, ObjectId,
-    ObjectKind, QualifiedName, SchemaChange, Session,
+    AlterOp, CatalogListOptions, CatalogObject, ColumnSpec, ConnectRequest, ConnectionFactory,
+    DdlPlan, IndexDef, ObjectId, ObjectKind, PrivilegeDef, QualifiedName, SchemaChange, Session,
+    TableDef, TableShape, ViewDef,
 };
-use dexo_driver_mysql::{MysqlFactory, render_ddl};
+use dexo_driver_mysql::{MysqlFactory, plan_ddl, render_ddl};
 use dexo_test_support::DatabasePair;
 use secrecy::SecretString;
 
@@ -20,6 +21,129 @@ fn table(schema: &str, name: &str) -> CatalogObject {
 
 fn mysql_render(change: &SchemaChange) -> Result<DdlPlan, String> {
     render_ddl(change).map_err(|error| error.to_string())
+}
+
+struct Planner;
+
+impl Planner {
+    fn plan_change(&self, change: &SchemaChange) -> Result<DdlPlan, dexo_driver_api::DriverError> {
+        plan_ddl(change)
+    }
+}
+
+fn ddl() -> Planner {
+    Planner
+}
+
+fn ident(name: &str) -> QualifiedName {
+    QualifiedName::new(None::<String>, None::<String>, name)
+}
+
+fn q(schema: &str, object: &str) -> QualifiedName {
+    QualifiedName::new(Some(schema), None::<String>, object)
+}
+
+fn create_table(schema: &str, name: &str) -> SchemaChange {
+    SchemaChange::CreateTable {
+        target: q(schema, name),
+        def: TableDef {
+            shape: TableShape::Table,
+            columns: vec![ColumnSpec {
+                name: ident("id"),
+                data_type: "int".into(),
+                nullable: false,
+                default_sql: None,
+                identity: None,
+                auto_increment: true,
+                generated: None,
+                primary_key: true,
+            }],
+            constraints: vec![],
+            partition: None,
+            engine: None,
+            charset: None,
+            collation: None,
+        },
+    }
+}
+
+#[test]
+fn plan_change_uses_driver_quoting_and_reports_risk() {
+    let plan = ddl().plan_change(&create_table("Sales", "Order")).unwrap();
+    assert!(plan.statements[0].sql.contains("`Sales`.`Order`"));
+    assert!(!plan.statements[0].sql.contains("Sales.Order"));
+    assert!(!plan.risk.destructive);
+}
+
+#[test]
+fn plan_change_covers_drop_alter_grant_and_unsupported() {
+    let drop = ddl()
+        .plan_change(&SchemaChange::DropObject {
+            target: q("Sales", "Order"),
+            kind: ObjectKind::Table,
+        })
+        .unwrap();
+    assert!(
+        drop.statements[0]
+            .sql
+            .contains("DROP TABLE `Sales`.`Order`")
+    );
+    assert!(drop.risk.destructive);
+
+    let alter = ddl()
+        .plan_change(&SchemaChange::AlterTable {
+            target: q("Sales", "Order"),
+            ops: vec![AlterOp::AddColumn(ColumnSpec {
+                name: ident("qty"),
+                data_type: "int".into(),
+                nullable: true,
+                default_sql: None,
+                identity: None,
+                auto_increment: false,
+                generated: None,
+                primary_key: false,
+            })],
+        })
+        .unwrap();
+    assert!(
+        alter.statements[0]
+            .sql
+            .contains("ALTER TABLE `Sales`.`Order`")
+    );
+
+    let grant = ddl()
+        .plan_change(&SchemaChange::Grant {
+            target: q("Sales", "Order"),
+            def: PrivilegeDef {
+                principal: ident("reporter"),
+                privileges: vec!["SELECT".into()],
+                with_grant_option: false,
+                role_membership: false,
+                create_principal: false,
+                login: false,
+            },
+        })
+        .unwrap();
+    assert!(grant.statements[0].sql.contains("GRANT SELECT"));
+
+    let domain = SchemaChange::CreateTable {
+        target: q("Sales", "posint"),
+        def: TableDef {
+            shape: TableShape::Domain {
+                base_type: "int".into(),
+                check: None,
+            },
+            columns: vec![],
+            constraints: vec![],
+            partition: None,
+            engine: None,
+            charset: None,
+            collation: None,
+        },
+    };
+    let err = ddl().plan_change(&domain).unwrap_err();
+    assert!(err.to_string().contains("mysql"));
+    assert!(err.to_string().contains("CreateTable"));
 }
 
 #[test]

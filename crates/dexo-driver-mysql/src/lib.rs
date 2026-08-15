@@ -9,7 +9,7 @@ mod mutation;
 mod session;
 
 pub use admin::preview_mysql;
-pub use ddl::{MysqlDialect, render as render_ddl};
+pub use ddl::{MysqlDialect, plan_ddl, render as render_ddl};
 pub use explain::{
     MysqlExplainCaps, NativeExplainFormat, parse_json as parse_explain_json,
     parse_tree as parse_explain_tree, select_format, wrap_explain,

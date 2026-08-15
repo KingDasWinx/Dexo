@@ -63,6 +63,7 @@ async fn mysql_ddl_round_trip_matches_introspected_shape() {
         rollback: vec![],
         warnings: vec![],
         transactional: false,
+        ..dexo_driver_api::DdlPlan::default()
     };
     fixture
         .session

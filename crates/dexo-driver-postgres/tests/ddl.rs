@@ -74,6 +74,7 @@ async fn postgres_ddl_round_trip_matches_introspected_shape() {
             rollback: vec![],
             warnings: vec![],
             transactional: true,
+            ..dexo_driver_api::DdlPlan::default()
         })
         .await
         .unwrap(),

@@ -2168,6 +2168,7 @@ fn open_ddl_preview(model: &mut Model) {
         rollback: vec![],
         warnings: vec![],
         transactional: true,
+        ..dexo_driver_api::DdlPlan::default()
     };
     let preview = dexo_app::schema::preview_change(
         &change,

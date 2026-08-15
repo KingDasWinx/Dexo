@@ -24,6 +24,17 @@ pub struct ChangeRisk {
     pub reversible: bool,
 }
 
+impl Default for ChangeRisk {
+    fn default() -> Self {
+        Self {
+            destructive: false,
+            data_loss: false,
+            lock_level: LockLevel::None,
+            reversible: true,
+        }
+    }
+}
+
 impl ChangeRisk {
     pub const fn unknown_sql() -> Self {
         Self {
