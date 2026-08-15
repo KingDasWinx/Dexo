@@ -41,6 +41,10 @@ impl SessionRegistry {
         id
     }
 
+    pub fn ids(&self) -> Vec<SessionId> {
+        self.sessions.keys().copied().collect()
+    }
+
     pub fn remove(&mut self, id: SessionId) -> Option<ActiveSession> {
         self.sessions.remove(&id)
     }

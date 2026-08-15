@@ -11,6 +11,7 @@ use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
+use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::connections::ConnectionsScreen;
 use crate::screens::data::DataScreen;
@@ -19,6 +20,7 @@ use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
 use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
+use crate::screens::projects::ProjectsScreen;
 use crate::screens::recovery::RecoveryScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
@@ -619,6 +621,8 @@ pub struct Model {
     pub mcp_profiles: McpProfilesScreen,
     pub connection_form: ConnectionForm,
     pub connections: ConnectionsScreen,
+    pub projects: ProjectsScreen,
+    pub config_transfer: ConfigTransferScreen,
     pub secret_prompt: SecretPrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
@@ -631,6 +635,7 @@ pub struct Model {
     pub panes: PaneLayout,
     pub mouse: bool,
     pub animation: bool,
+    pub layout_dirty: bool,
 }
 
 impl Default for Model {
@@ -664,6 +669,7 @@ impl Default for Model {
             },
             mouse: true,
             animation: true,
+            layout_dirty: false,
             transaction: TransactionState::Idle,
             results: GridModel::default(),
             tabs: TabsState::default(),
@@ -694,6 +700,8 @@ impl Default for Model {
             mcp_profiles: McpProfilesScreen::default(),
             connection_form: ConnectionForm::default(),
             connections: ConnectionsScreen::default(),
+            projects: ProjectsScreen::default(),
+            config_transfer: ConfigTransferScreen::default(),
             secret_prompt: SecretPrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
@@ -724,6 +732,32 @@ impl From<TransactionState> for Model {
 impl Model {
     pub fn fixture(seed: impl Into<Self>) -> Self {
         seed.into()
+    }
+
+    pub fn workbench_layout(&self) -> dexo_storage::WorkbenchLayout {
+        dexo_storage::WorkbenchLayout {
+            version: dexo_storage::LAYOUT_VERSION,
+            explorer_visible: self.panes.explorer_visible,
+            inspector_visible: self.panes.inspector_visible,
+            results_visible: self.panes.results_visible,
+            explorer_width: self.panes.explorer_width,
+            inspector_width: self.panes.inspector_width,
+            results_height: self.panes.results_height,
+            focused_panel: format!("{:?}", self.focus).to_ascii_lowercase(),
+            active_tab: self.tabs.active,
+            tabs: self.tabs.titles.clone(),
+            document_ids: self.documents.iter().map(|d| d.id.clone()).collect(),
+            active_document_id: self
+                .documents
+                .get(self.active_document)
+                .map(|d| d.id.clone()),
+            active_connection_id: if self.connection.name.is_empty() {
+                None
+            } else {
+                Some(self.connection.name.clone())
+            },
+            active_result_tab: 0,
+        }
     }
 
     pub fn apply_size(&mut self, width: u16, height: u16) {

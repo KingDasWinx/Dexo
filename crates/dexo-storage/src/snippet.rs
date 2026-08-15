@@ -45,10 +45,13 @@ impl<'a> SnippetRepository<'a> {
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
-    pub fn list_for_project(&self, project_id: &str) -> anyhow::Result<Vec<(String, String, String)>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, name, body FROM snippets WHERE project_id = ?1 ORDER BY name",
-        )?;
+    pub fn list_for_project(
+        &self,
+        project_id: &str,
+    ) -> anyhow::Result<Vec<(String, String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, body FROM snippets WHERE project_id = ?1 ORDER BY name")?;
         let rows = stmt.query_map(params![project_id], |row| {
             Ok((row.get(0)?, row.get(1)?, row.get(2)?))
         })?;
@@ -56,9 +59,10 @@ impl<'a> SnippetRepository<'a> {
     }
 
     pub fn rename(&self, id: &str, name: &str) -> anyhow::Result<()> {
-        let changed = self
-            .conn
-            .execute("UPDATE snippets SET name = ?1 WHERE id = ?2", params![name, id])?;
+        let changed = self.conn.execute(
+            "UPDATE snippets SET name = ?1 WHERE id = ?2",
+            params![name, id],
+        )?;
         if changed == 0 {
             anyhow::bail!("unknown snippet {id}");
         }

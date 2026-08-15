@@ -51,7 +51,7 @@ async fn run_loop(
 ) -> Result<(), TuiError> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
-    let _ = crate::update::update(&mut model, Action::Bootstrapped(bootstrap));
+    let _ = crate::update::update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
     let mut events = EventStream::new();
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);

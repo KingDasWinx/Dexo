@@ -1,4 +1,5 @@
 pub mod admin;
+pub mod config_transfer;
 pub mod connection;
 pub mod connections;
 pub mod data;
@@ -7,6 +8,7 @@ pub mod explain;
 pub mod explorer;
 pub mod mcp_audit;
 pub mod mcp_profiles;
+pub mod projects;
 pub mod recovery;
 pub mod schema_diff;
 pub mod schema_editor;

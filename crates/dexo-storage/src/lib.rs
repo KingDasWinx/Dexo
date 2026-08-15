@@ -15,7 +15,10 @@ mod session_recovery;
 mod snippet;
 
 pub use catalog_cache::CatalogCache;
-pub use connection::{ConnectionRepository, ImportReport, export_portable, import_portable};
+pub use connection::{
+    ConnectionRepository, ImportPreview, ImportReport, ImportResolution, export_portable,
+    import_portable, import_portable_resolved, preview_import,
+};
 pub use database::{AppPaths, Database};
 pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};
 pub use history::HistoryRepository;

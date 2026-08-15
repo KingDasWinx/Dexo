@@ -352,6 +352,20 @@ pub struct ImportReport {
     pub connections_needing_secret: Vec<String>,
 }
 
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub enum ImportResolution {
+    Replace,
+    Rename(String),
+    #[default]
+    Skip,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ImportPreview {
+    pub conflicts: Vec<String>,
+    pub connections_needing_secret: Vec<String>,
+}
+
 pub fn export_portable(conn: &Connection) -> anyhow::Result<String> {
     let projects = crate::ProjectRepository::new(conn)
         .list()?
@@ -422,6 +436,107 @@ pub fn import_portable(conn: &Connection, toml_text: &str) -> anyhow::Result<Imp
         profile.policy = policy;
         connections.save(&profile)?;
         connections_needing_secret.push(item.name);
+    }
+    Ok(ImportReport {
+        connections_needing_secret,
+    })
+}
+
+pub fn preview_import(conn: &Connection, toml_text: &str) -> anyhow::Result<ImportPreview> {
+    let portable: PortableConfig = toml::from_str(toml_text)?;
+    if portable.version != PORTABLE_VERSION {
+        anyhow::bail!("unsupported config version {}", portable.version);
+    }
+    let existing: HashMap<String, ConnectionProfile> = ConnectionRepository::new(conn)
+        .list()?
+        .into_iter()
+        .map(|profile| (profile.name.clone(), profile))
+        .collect();
+    let mut conflicts = Vec::new();
+    let mut connections_needing_secret = Vec::new();
+    for item in &portable.connections {
+        if existing.contains_key(&item.name) {
+            conflicts.push(item.name.clone());
+        }
+        connections_needing_secret.push(item.name.clone());
+    }
+    Ok(ImportPreview {
+        conflicts,
+        connections_needing_secret,
+    })
+}
+
+pub fn import_portable_resolved(
+    conn: &Connection,
+    toml_text: &str,
+    resolutions: &HashMap<String, ImportResolution>,
+) -> anyhow::Result<ImportReport> {
+    let portable: PortableConfig = toml::from_str(toml_text)?;
+    if portable.version != PORTABLE_VERSION {
+        anyhow::bail!("unsupported config version {}", portable.version);
+    }
+    let projects = crate::ProjectRepository::new(conn);
+    for project in portable.projects {
+        projects.save(&dexo_app::Project {
+            id: dexo_app::ProjectId(parse_uuid_anyhow(&project.id)?),
+            name: project.name,
+            created_at: project.created_at,
+        })?;
+    }
+    let connections = ConnectionRepository::new(conn);
+    let existing: HashMap<String, ConnectionProfile> = connections
+        .list()?
+        .into_iter()
+        .map(|profile| (profile.name.clone(), profile))
+        .collect();
+    let mut connections_needing_secret = Vec::new();
+    for item in portable.connections {
+        let resolution = if existing.contains_key(&item.name) {
+            resolutions
+                .get(&item.name)
+                .cloned()
+                .unwrap_or(ImportResolution::Skip)
+        } else {
+            ImportResolution::Replace
+        };
+        let replace = matches!(resolution, ImportResolution::Replace);
+        let name = match resolution {
+            ImportResolution::Skip => continue,
+            ImportResolution::Rename(name) => name,
+            ImportResolution::Replace => item.name.clone(),
+        };
+        let config: Value = serde_json::from_str(&item.config_json)?;
+        let policy = if item.policy_json.trim().is_empty() {
+            ConnectionPolicyOverrides::default()
+        } else {
+            serde_json::from_str(&item.policy_json)?
+        };
+        let id = if replace {
+            existing
+                .get(&item.name)
+                .map(|profile| profile.id)
+                .unwrap_or_else(|| {
+                    ConnectionId(parse_uuid_anyhow(&item.id).unwrap_or_else(|_| Uuid::new_v4()))
+                })
+        } else {
+            ConnectionId(Uuid::new_v4())
+        };
+        let mut profile = ConnectionProfile::new(
+            id,
+            item.project_id
+                .as_deref()
+                .map(parse_uuid_anyhow)
+                .transpose()?,
+            name.clone(),
+            item.driver,
+            item.environment,
+            config,
+            SecretRef::new(Uuid::new_v4().to_string()),
+        );
+        profile.group_path = item.group_path;
+        profile.policy = policy;
+        connections.save(&profile)?;
+        connections_needing_secret.push(name);
     }
     Ok(ImportReport {
         connections_needing_secret,

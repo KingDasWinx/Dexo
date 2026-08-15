@@ -95,7 +95,7 @@ pub enum Action {
         message: String,
     },
     OperationCancelled(OperationKey),
-    Bootstrapped(crate::runtime::storage_worker::BootstrapState),
+    Bootstrapped(Box<crate::runtime::storage_worker::BootstrapState>),
     OpenPalette,
     ClosePalette,
     PaletteQuery(String),
@@ -174,6 +174,55 @@ pub enum Action {
     DocumentConflict {
         path: String,
     },
+    OpenProjects,
+    SwitchProject {
+        name: String,
+    },
+    ProjectSwitchTarget(dexo_app::Project),
+    CreateProject {
+        name: String,
+    },
+    RenameProject {
+        name: String,
+    },
+    DeleteProject,
+    ConfirmProjectDelete,
+    ConfirmSwitchDirty,
+    CancelProjectSwitch,
+    ProjectsLoaded(Vec<dexo_app::Project>),
+    ProjectLoaded {
+        project: dexo_app::Project,
+        documents: Vec<(String, String)>,
+        layout: Option<dexo_storage::WorkbenchLayout>,
+    },
+    ProjectDeleted {
+        name: String,
+    },
+    OpenConfigTransfer,
+    ExportConfig {
+        path: std::path::PathBuf,
+    },
+    ImportConfig {
+        path: std::path::PathBuf,
+    },
+    ConfigPreviewed {
+        conflicts: Vec<String>,
+        needing_secret: Vec<String>,
+    },
+    ConfigImported {
+        needing_secret: Vec<String>,
+    },
+    DocumentsFlushed,
+    LayoutPersisted,
+    ProjectSessionsClosed,
+    ProjectSwitchFailed {
+        message: String,
+    },
+    ProjectDeletePreviewed {
+        project: dexo_app::Project,
+        preview: dexo_storage::ProjectDeletePreview,
+    },
+    ApplyConfigImport,
     Quit,
 }
 
@@ -212,8 +261,17 @@ pub struct RecoveryCheckpointRequest {
 
 #[derive(Clone, Debug)]
 pub struct PersistHistoryRequest {
+    pub project_id: Option<String>,
     pub connection_id: Option<String>,
     pub sql: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct FlushedDocument {
+    pub id: String,
+    pub title: String,
+    pub content: String,
+    pub path: Option<std::path::PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -293,6 +351,42 @@ pub enum Effect {
     ClearHistory {
         connection_id: String,
     },
+    SwitchProject {
+        name: String,
+    },
+    CreateProject {
+        name: String,
+    },
+    RenameProject {
+        id: String,
+        name: String,
+    },
+    DeleteProject {
+        id: String,
+        delete_connections: bool,
+    },
+    PreviewProjectDelete {
+        id: String,
+    },
+    LoadProject {
+        id: String,
+    },
+    ListProjects,
+    ExportConfig {
+        path: std::path::PathBuf,
+    },
+    ImportConfig {
+        path: std::path::PathBuf,
+    },
+    ApplyConfigImport {
+        path: std::path::PathBuf,
+        resolutions: std::collections::HashMap<String, dexo_storage::ImportResolution>,
+    },
+    FlushDocuments {
+        project_id: String,
+        documents: Vec<FlushedDocument>,
+    },
+    CloseProjectSessions,
     Shutdown,
     Quit,
 }

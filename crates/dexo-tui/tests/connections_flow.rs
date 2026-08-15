@@ -91,8 +91,10 @@ fn bootstrap_lists_profiles_without_auto_connecting() {
             transaction: "idle".into(),
         },
         layout: None,
+        documents: Vec::new(),
+        projects: Vec::new(),
     };
-    let _ = update(&mut model, Action::Bootstrapped(bootstrap));
+    let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
     assert_eq!(model.connections.profiles.len(), 1);
     assert!(!model.connection.ready);
 }

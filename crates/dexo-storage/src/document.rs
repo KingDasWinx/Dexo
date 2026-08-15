@@ -32,6 +32,7 @@ impl<'a> DocumentRepository<'a> {
             "INSERT INTO documents (id, project_id, title, content, path, mtime, content_hash, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
+               project_id = excluded.project_id,
                title = excluded.title,
                content = excluded.content,
                path = excluded.path,

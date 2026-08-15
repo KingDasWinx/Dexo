@@ -16,6 +16,7 @@ use crate::action::{
 
 pub mod connection_manager;
 pub mod document_io;
+pub mod project_manager;
 pub mod query_runner;
 pub mod session_registry;
 pub mod storage_worker;
@@ -196,6 +197,26 @@ impl WorkbenchRuntime {
             crate::Effect::PersistLayout { project_id, layout } => {
                 self.persist_layout(project_id, layout).await
             }
+            crate::Effect::SwitchProject { name } => self.switch_project(name).await,
+            crate::Effect::CreateProject { name } => self.create_project(name).await,
+            crate::Effect::RenameProject { id, name } => self.rename_project(id, name).await,
+            crate::Effect::DeleteProject {
+                id,
+                delete_connections,
+            } => self.delete_project(id, delete_connections).await,
+            crate::Effect::PreviewProjectDelete { id } => self.preview_delete(id).await,
+            crate::Effect::LoadProject { id } => self.load_project(id).await,
+            crate::Effect::ListProjects => self.list_projects().await,
+            crate::Effect::ExportConfig { path } => self.export_config(path).await,
+            crate::Effect::ImportConfig { path } => self.preview_import(path).await,
+            crate::Effect::ApplyConfigImport { path, resolutions } => {
+                self.apply_import(path, resolutions).await
+            }
+            crate::Effect::FlushDocuments {
+                project_id,
+                documents,
+            } => self.flush_documents(project_id, documents).await,
+            crate::Effect::CloseProjectSessions => self.close_project_sessions().await,
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
     }
@@ -603,21 +624,203 @@ impl WorkbenchRuntime {
     }
 
     async fn persist_layout(&mut self, project_id: String, layout: dexo_storage::WorkbenchLayout) {
-        if let Some(storage) = &self.storage {
-            let _ = storage.persist_layout(project_id, layout);
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.persist_layout_wait(project_id, layout).await {
+            Ok(()) => self.emit(Action::LayoutPersisted).await,
+            Err(error) => {
+                self.emit(Action::ProjectSwitchFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
         }
     }
 
-    async fn shutdown(&mut self) {
-        if let Some(storage) = &self.storage {
-            let _ = storage.mark_clean_shutdown();
-            storage.shutdown();
+    async fn flush_documents(
+        &mut self,
+        project_id: String,
+        documents: Vec<crate::action::FlushedDocument>,
+    ) {
+        let Some(storage) = &self.storage else {
+            self.emit(Action::DocumentsFlushed).await;
+            return;
+        };
+        match storage.flush_documents(project_id, documents).await {
+            Ok(()) => self.emit(Action::DocumentsFlushed).await,
+            Err(error) => {
+                self.emit(Action::ProjectSwitchFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
         }
+    }
+
+    async fn list_projects(&mut self) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.list_projects().await {
+            Ok(projects) => self.emit(Action::ProjectsLoaded(projects)).await,
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn create_project(&mut self, name: String) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.create_project(name).await {
+            Ok(projects) => self.emit(Action::ProjectsLoaded(projects)).await,
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn rename_project(&mut self, id: String, name: String) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.rename_project(id, name).await {
+            Ok(projects) => self.emit(Action::ProjectsLoaded(projects)).await,
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn delete_project(&mut self, id: String, delete_connections: bool) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.delete_project(id, delete_connections).await {
+            Ok(name) => {
+                self.emit(Action::ProjectDeleted { name }).await;
+                if let Ok(projects) = storage.list_projects().await {
+                    self.emit(Action::ProjectsLoaded(projects)).await;
+                }
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn preview_delete(&mut self, id: String) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.preview_delete(id).await {
+            Ok((project, preview)) => {
+                self.emit(Action::ProjectDeletePreviewed { project, preview })
+                    .await;
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn switch_project(&mut self, name: String) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.get_project_by_name(name.clone()).await {
+            Ok(Some(project)) => {
+                self.emit(Action::ProjectSwitchTarget(project)).await;
+            }
+            Ok(None) => {
+                self.fail_project(anyhow::anyhow!("unknown project {name}"))
+                    .await;
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn load_project(&mut self, id: String) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.load_project(id).await {
+            Ok(loaded) => {
+                self.emit(Action::ProjectLoaded {
+                    project: loaded.project,
+                    documents: loaded
+                        .documents
+                        .into_iter()
+                        .map(|document| (document.id, document.content))
+                        .collect(),
+                    layout: loaded.layout,
+                })
+                .await;
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn close_project_sessions(&mut self) {
+        for id in self.sessions.ids() {
+            self.sessions.remove(id);
+            self.emit(Action::SessionClosed { session: id }).await;
+        }
+        self.emit(Action::ProjectSessionsClosed).await;
+    }
+
+    async fn export_config(&mut self, path: std::path::PathBuf) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.export_config(path).await {
+            Ok(()) => {
+                self.emit(Action::ConfigImported {
+                    needing_secret: Vec::new(),
+                })
+                .await;
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn preview_import(&mut self, path: std::path::PathBuf) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.preview_import(path).await {
+            Ok(preview) => {
+                self.emit(Action::ConfigPreviewed {
+                    conflicts: preview.conflicts,
+                    needing_secret: preview.connections_needing_secret,
+                })
+                .await;
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn apply_import(
+        &mut self,
+        path: std::path::PathBuf,
+        resolutions: std::collections::HashMap<String, dexo_storage::ImportResolution>,
+    ) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.apply_import(path, resolutions).await {
+            Ok(report) => {
+                self.emit(Action::ConfigImported {
+                    needing_secret: report.connections_needing_secret,
+                })
+                .await;
+            }
+            Err(error) => self.fail_project(error).await,
+        }
+    }
+
+    async fn fail_project(&self, error: impl ToString) {
+        self.emit(Action::ProjectSwitchFailed {
+            message: error.to_string(),
+        })
+        .await;
     }
 
     async fn persist_history(&mut self, request: PersistHistoryRequest) {
         if let Some(storage) = &self.storage {
-            let _ = storage.persist_history(request.connection_id, request.sql);
+            let _ = storage.persist_history(request.project_id, request.connection_id, request.sql);
         }
     }
 
@@ -640,6 +843,13 @@ impl WorkbenchRuntime {
     async fn clear_history(&mut self, connection_id: String) {
         if let Some(storage) = &self.storage {
             let _ = storage.clear_history(connection_id);
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(storage) = &self.storage {
+            let _ = storage.mark_clean_shutdown();
+            storage.shutdown();
         }
     }
 

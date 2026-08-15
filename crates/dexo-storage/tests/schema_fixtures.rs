@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use dexo_app::{ConnectionId, ConnectionProfile, Project, ProjectId, SecretRef};
 use dexo_storage::{
     ConnectionRepository, Database, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4,
-    MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, ProjectRepository, export_portable,
-    import_portable,
+    MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, ProjectRepository,
+    export_portable, import_portable,
 };
 
 fn fixture(name: &str) -> PathBuf {

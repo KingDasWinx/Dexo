@@ -12,7 +12,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::Mouse(_) => Vec::new(),
         Action::Resize { width, height } => {
             model.apply_size(width, height);
-            vec![persist_layout_effect(model)]
+            model.layout_dirty = true;
+            // ponytail: skip-until-flush debounce; add a timer if live resize must persist mid-session.
+            Vec::new()
         }
         Action::ConnectionChanged {
             name,
@@ -125,7 +127,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::Bootstrapped(state) => {
-            apply_bootstrap(model, state);
+            apply_bootstrap(model, *state);
             Vec::new()
         }
         Action::SecretRequired {
@@ -598,6 +600,128 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             effects.push(Effect::Shutdown);
             effects
         }
+        Action::OpenProjects => {
+            model.projects.open = true;
+            vec![Effect::ListProjects]
+        }
+        Action::SwitchProject { name } => switch_project(model, name),
+        Action::ProjectSwitchTarget(project) => start_switch(model, project),
+        Action::CreateProject { name } => {
+            model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+            model.projects.name_input.clear();
+            vec![Effect::CreateProject { name }]
+        }
+        Action::RenameProject { name } => model
+            .projects
+            .selected()
+            .map(|project| Effect::RenameProject {
+                id: project.id.0.to_string(),
+                name,
+            })
+            .into_iter()
+            .collect(),
+        Action::DeleteProject => model
+            .projects
+            .selected()
+            .map(|project| Effect::PreviewProjectDelete {
+                id: project.id.0.to_string(),
+            })
+            .into_iter()
+            .collect(),
+        Action::ConfirmProjectDelete => confirm_project_delete(model),
+        Action::ConfirmSwitchDirty => complete_switch_stage(model),
+        Action::CancelProjectSwitch => {
+            model.projects.pending = None;
+            Vec::new()
+        }
+        Action::ProjectsLoaded(projects) => {
+            model.projects.load(projects);
+            Vec::new()
+        }
+        Action::ProjectLoaded {
+            project,
+            documents,
+            layout,
+        } => {
+            apply_loaded_project(model, project, documents, layout);
+            Vec::new()
+        }
+        Action::ProjectDeleted { name } => {
+            model.projects.delete = None;
+            model.projects.recents.retain(|item| item != &name);
+            if model.project == name {
+                model.project.clear();
+                model.project_id.clear();
+            }
+            Vec::new()
+        }
+        Action::DocumentsFlushed => {
+            for document in &mut model.documents {
+                document.saved_revision = document.sql.revision();
+            }
+            complete_switch_stage(model)
+        }
+        Action::LayoutPersisted => {
+            model.layout_dirty = false;
+            complete_switch_stage(model)
+        }
+        Action::ProjectSessionsClosed => {
+            model.active_session = None;
+            complete_switch_stage(model)
+        }
+        Action::ProjectSwitchFailed { message } => {
+            model.projects.pending = None;
+            model.messages.push(message);
+            Vec::new()
+        }
+        Action::ProjectDeletePreviewed { project, preview } => {
+            model.projects.mode = crate::screens::projects::ProjectsMode::DeleteConfirm;
+            model.projects.delete = Some(crate::screens::projects::ProjectDeletePrompt {
+                project,
+                preview,
+                delete_connections: false,
+                typed: String::new(),
+            });
+            Vec::new()
+        }
+        Action::OpenConfigTransfer => {
+            model.config_transfer.open = true;
+            model.config_transfer.mode =
+                crate::screens::config_transfer::ConfigTransferMode::Export;
+            Vec::new()
+        }
+        Action::ExportConfig { path } => {
+            model.config_transfer.path = path.clone();
+            model.config_transfer.mode =
+                crate::screens::config_transfer::ConfigTransferMode::Export;
+            vec![Effect::ExportConfig { path }]
+        }
+        Action::ImportConfig { path } => {
+            model.config_transfer.path = path.clone();
+            model.config_transfer.mode =
+                crate::screens::config_transfer::ConfigTransferMode::Import;
+            vec![Effect::ImportConfig { path }]
+        }
+        Action::ApplyConfigImport => {
+            let path = model.config_transfer.path.clone();
+            let resolutions = model.config_transfer.resolutions.clone();
+            vec![Effect::ApplyConfigImport { path, resolutions }]
+        }
+        Action::ConfigPreviewed {
+            conflicts,
+            needing_secret,
+        } => {
+            model.config_transfer.preview = Some(dexo_storage::ImportPreview {
+                conflicts,
+                connections_needing_secret: needing_secret,
+            });
+            Vec::new()
+        }
+        Action::ConfigImported { needing_secret } => {
+            model.config_transfer.needing_secret = needing_secret;
+            model.config_transfer.message = Some("ok".into());
+            Vec::new()
+        }
     }
 }
 
@@ -610,6 +734,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.secret_prompt.open {
         return handle_secret_prompt_key(model, key);
+    }
+    if model.projects.open {
+        return handle_projects_key(model, key);
+    }
+    if model.config_transfer.open {
+        return handle_config_transfer_key(model, key);
     }
     if model.connections.open && !model.connection_form.open {
         return handle_connections_key(model, key);
@@ -1060,18 +1190,7 @@ fn close_palette(model: &mut Model) {
 fn persist_layout_effect(model: &Model) -> Effect {
     Effect::PersistLayout {
         project_id: model.project_id.clone(),
-        layout: dexo_storage::WorkbenchLayout {
-            version: dexo_storage::LAYOUT_VERSION,
-            explorer_visible: model.panes.explorer_visible,
-            inspector_visible: model.panes.inspector_visible,
-            results_visible: model.panes.results_visible,
-            explorer_width: model.panes.explorer_width,
-            inspector_width: model.panes.inspector_width,
-            results_height: model.panes.results_height,
-            focused_panel: format!("{:?}", model.focus).to_ascii_lowercase(),
-            active_tab: model.tabs.active,
-            tabs: model.tabs.titles.clone(),
-        },
+        layout: model.workbench_layout(),
     }
 }
 
@@ -1104,6 +1223,11 @@ fn persist_history_effect(model: &Model) -> Vec<Effect> {
     // Sensitive parameter values are never stored; HistoryPolicy::SqlOnly is the default.
     vec![Effect::PersistHistory(
         crate::action::PersistHistoryRequest {
+            project_id: if model.project_id.is_empty() {
+                None
+            } else {
+                Some(model.project_id.clone())
+            },
             connection_id: if model.connection.name.is_empty() {
                 None
             } else {
@@ -1174,20 +1298,19 @@ fn cancel_query(model: &mut Model) -> Vec<Effect> {
 }
 
 fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::BootstrapState) {
-    model.project = state.active_project.name;
+    model.project = state.active_project.name.clone();
     model.project_id = state.active_project.id.0.to_string();
-    if let Some(layout) = state.layout {
-        model.panes.explorer_visible = layout.explorer_visible;
-        model.panes.inspector_visible = layout.inspector_visible;
-        model.panes.results_visible = layout.results_visible;
-        model.panes.explorer_width = layout.explorer_width;
-        model.panes.inspector_width = layout.inspector_width;
-        model.panes.results_height = layout.results_height;
-        model.tabs.active = layout.active_tab;
-        if !layout.tabs.is_empty() {
-            model.tabs.titles = layout.tabs;
-        }
+    model.projects.load(state.projects);
+    model.projects.touch_recent(&state.active_project.name);
+    if !state.documents.is_empty() {
+        model.documents = state
+            .documents
+            .into_iter()
+            .map(document_from_stored)
+            .collect();
+        model.active_document = 0;
     }
+    apply_layout(model, state.layout);
     if state.recovery.needs_recovery() {
         model.recovery.open = true;
         model.recovery.transaction = state.recovery.transaction;
@@ -1199,6 +1322,41 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
             .collect();
     }
     model.connections.load_profiles(state.connections);
+}
+
+fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::EditorDocument {
+    let mut document = crate::model::EditorDocument::with_text(&stored.content);
+    document.id = stored.id;
+    document.title = stored.title;
+    document.path = stored.path.map(std::path::PathBuf::from);
+    document
+}
+
+fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>) {
+    let Some(layout) = layout.map(|layout| layout.clamp(model.width, model.height)) else {
+        return;
+    };
+    model.panes.explorer_visible = layout.explorer_visible;
+    model.panes.inspector_visible = layout.inspector_visible;
+    model.panes.results_visible = layout.results_visible;
+    model.panes.explorer_width = layout.explorer_width;
+    model.panes.inspector_width = layout.inspector_width;
+    model.panes.results_height = layout.results_height;
+    model.tabs.active = layout.active_tab;
+    if !layout.tabs.is_empty() {
+        model.tabs.titles = layout.tabs;
+    }
+    if let Some(id) = &layout.active_document_id
+        && let Some(index) = model
+            .documents
+            .iter()
+            .position(|document| &document.id == id)
+    {
+        model.active_document = index;
+    }
+    if let Some(name) = layout.active_connection_id {
+        model.connection.name = name;
+    }
 }
 
 fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool {
@@ -1303,6 +1461,227 @@ fn apply_ddl(model: &mut Model) {
     }
     model.schema_editor.preview = None;
     model.messages.push("ddl queued".into());
+}
+
+fn switch_project(model: &mut Model, name: String) -> Vec<Effect> {
+    let target = if name.is_empty() {
+        model.projects.selected().cloned()
+    } else {
+        model.projects.by_name(&name)
+    };
+    match target {
+        Some(project) => start_switch(model, project),
+        None if name.is_empty() => vec![Effect::ListProjects],
+        None => vec![Effect::SwitchProject { name }],
+    }
+}
+
+fn start_switch(model: &mut Model, target: dexo_app::Project) -> Vec<Effect> {
+    match crate::runtime::project_manager::begin_switch(model, target) {
+        Err(message) => {
+            model.messages.push(message);
+            Vec::new()
+        }
+        Ok(switch) => {
+            model.projects.pending = Some(switch.clone());
+            crate::runtime::project_manager::advance(model, &switch)
+        }
+    }
+}
+
+fn complete_switch_stage(model: &mut Model) -> Vec<Effect> {
+    let Some(mut switch) = model.projects.pending.clone() else {
+        return Vec::new();
+    };
+    if switch.stage == crate::runtime::project_manager::ProjectSwitchStage::Complete {
+        model.projects.pending = None;
+        return Vec::new();
+    }
+    switch.stage = crate::runtime::project_manager::next_stage(switch.stage);
+    model.projects.pending = Some(switch.clone());
+    crate::runtime::project_manager::advance(model, &switch)
+}
+
+fn confirm_project_delete(model: &mut Model) -> Vec<Effect> {
+    let Some(delete) = model.projects.delete.take() else {
+        return Vec::new();
+    };
+    if delete.typed != delete.project.name {
+        model
+            .messages
+            .push("type the project name to confirm".into());
+        model.projects.delete = Some(delete);
+        return Vec::new();
+    }
+    vec![Effect::DeleteProject {
+        id: delete.project.id.0.to_string(),
+        delete_connections: delete.delete_connections,
+    }]
+}
+
+fn apply_loaded_project(
+    model: &mut Model,
+    project: dexo_app::Project,
+    documents: Vec<(String, String)>,
+    layout: Option<dexo_storage::WorkbenchLayout>,
+) {
+    model.project = project.name.clone();
+    model.project_id = project.id.0.to_string();
+    model.projects.touch_recent(&project.name);
+    model.projects.pending = None;
+    if documents.is_empty() {
+        model.documents = vec![crate::model::EditorDocument::scratch()];
+        model.active_document = 0;
+    } else {
+        model.documents = documents
+            .into_iter()
+            .map(|(id, content)| {
+                let mut document = crate::model::EditorDocument::with_text(&content);
+                document.id = id.clone();
+                document.title = id;
+                document
+            })
+            .collect();
+        model.active_document = 0;
+    }
+    apply_layout(model, layout);
+}
+
+fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if let Some(delete) = &mut model.projects.delete {
+        return match key.code {
+            KeyCode::Esc => {
+                model.projects.delete = None;
+                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                Vec::new()
+            }
+            KeyCode::Enter => update(model, Action::ConfirmProjectDelete),
+            KeyCode::Char('c') => {
+                delete.delete_connections = !delete.delete_connections;
+                Vec::new()
+            }
+            KeyCode::Backspace => {
+                delete.typed.pop();
+                Vec::new()
+            }
+            KeyCode::Char(ch) => {
+                delete.typed.push(ch);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
+    match model.projects.mode {
+        crate::screens::projects::ProjectsMode::Create
+        | crate::screens::projects::ProjectsMode::Rename => match key.code {
+            KeyCode::Esc => {
+                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                model.projects.name_input.clear();
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                let name = std::mem::take(&mut model.projects.name_input);
+                let create = model.projects.mode == crate::screens::projects::ProjectsMode::Create;
+                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                if create {
+                    update(model, Action::CreateProject { name })
+                } else {
+                    update(model, Action::RenameProject { name })
+                }
+            }
+            KeyCode::Backspace => {
+                model.projects.name_input.pop();
+                Vec::new()
+            }
+            KeyCode::Char(ch) => {
+                model.projects.name_input.push(ch);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        crate::screens::projects::ProjectsMode::Browse
+        | crate::screens::projects::ProjectsMode::DeleteConfirm => match key.code {
+            KeyCode::Esc => {
+                if model.projects.pending.is_some() {
+                    return update(model, Action::CancelProjectSwitch);
+                }
+                model.projects.open = false;
+                Vec::new()
+            }
+            KeyCode::Enter => {
+                let name = model
+                    .projects
+                    .selected()
+                    .map(|project| project.name.clone())
+                    .unwrap_or_default();
+                update(model, Action::SwitchProject { name })
+            }
+            KeyCode::Up => {
+                if model.projects.selected > 0 {
+                    model.projects.selected -= 1;
+                }
+                Vec::new()
+            }
+            KeyCode::Down => {
+                if model.projects.selected + 1 < model.projects.list.len() {
+                    model.projects.selected += 1;
+                }
+                Vec::new()
+            }
+            KeyCode::Char('n') => {
+                model.projects.mode = crate::screens::projects::ProjectsMode::Create;
+                model.projects.name_input.clear();
+                Vec::new()
+            }
+            KeyCode::Char('r') => {
+                model.projects.mode = crate::screens::projects::ProjectsMode::Rename;
+                model.projects.name_input = model
+                    .projects
+                    .selected()
+                    .map(|project| project.name.clone())
+                    .unwrap_or_default();
+                Vec::new()
+            }
+            KeyCode::Char('x') => update(model, Action::DeleteProject),
+            KeyCode::Char('y') if model.projects.pending.is_some() => {
+                update(model, Action::ConfirmSwitchDirty)
+            }
+            _ => Vec::new(),
+        },
+    }
+}
+
+fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.config_transfer.open = false;
+            Vec::new()
+        }
+        KeyCode::Enter => update(model, Action::ApplyConfigImport),
+        KeyCode::Char('r') => {
+            if let Some(preview) = &model.config_transfer.preview
+                && let Some(name) = preview.conflicts.first()
+            {
+                model.config_transfer.resolutions.insert(
+                    name.clone(),
+                    dexo_storage::ImportResolution::Rename(format!("{name}-2")),
+                );
+            }
+            Vec::new()
+        }
+        KeyCode::Char('p') => {
+            if let Some(preview) = &model.config_transfer.preview
+                && let Some(name) = preview.conflicts.first()
+            {
+                model
+                    .config_transfer
+                    .resolutions
+                    .insert(name.clone(), dexo_storage::ImportResolution::Replace);
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn palette_select(model: &mut Model) -> Vec<Effect> {

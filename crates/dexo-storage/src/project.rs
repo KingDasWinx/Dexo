@@ -10,6 +10,26 @@ impl<'a> ProjectRepository<'a> {
         Self { conn }
     }
 
+    pub fn create(&self, name: &str) -> anyhow::Result<Project> {
+        let name = name.trim();
+        if name.is_empty() {
+            anyhow::bail!("project name is required");
+        }
+        if self.get_by_name(name)?.is_some() {
+            anyhow::bail!("project '{name}' already exists");
+        }
+        let project = Project {
+            id: ProjectId(uuid::Uuid::new_v4()),
+            name: name.to_string(),
+            created_at: std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs().to_string())
+                .unwrap_or_else(|_| "0".into()),
+        };
+        self.save(&project)?;
+        Ok(project)
+    }
+
     pub fn save(&self, project: &Project) -> anyhow::Result<()> {
         self.conn.execute(
             "INSERT INTO projects (id, name, created_at) VALUES (?1, ?2, ?3)
@@ -93,9 +113,21 @@ impl<'a> ProjectRepository<'a> {
     pub fn preview_delete(&self, id: ProjectId) -> anyhow::Result<ProjectDeletePreview> {
         let pid = id.0.to_string();
         Ok(ProjectDeletePreview {
-            connections: count(self.conn, "SELECT COUNT(*) FROM connections WHERE project_id = ?1", &pid)?,
-            documents: count(self.conn, "SELECT COUNT(*) FROM documents WHERE project_id = ?1", &pid)?,
-            snippets: count(self.conn, "SELECT COUNT(*) FROM snippets WHERE project_id = ?1", &pid)?,
+            connections: count(
+                self.conn,
+                "SELECT COUNT(*) FROM connections WHERE project_id = ?1",
+                &pid,
+            )?,
+            documents: count(
+                self.conn,
+                "SELECT COUNT(*) FROM documents WHERE project_id = ?1",
+                &pid,
+            )?,
+            snippets: count(
+                self.conn,
+                "SELECT COUNT(*) FROM snippets WHERE project_id = ?1",
+                &pid,
+            )?,
             external_paths: {
                 let mut stmt = self.conn.prepare(
                     "SELECT path FROM documents WHERE project_id = ?1 AND path IS NOT NULL AND path <> ''",
