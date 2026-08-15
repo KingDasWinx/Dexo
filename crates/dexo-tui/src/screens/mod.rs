@@ -1,6 +1,7 @@
 pub mod admin;
 pub mod connection;
 pub mod data;
+pub mod editor;
 pub mod explain;
 pub mod explorer;
 pub mod mcp_audit;

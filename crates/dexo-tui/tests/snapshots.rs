@@ -5,7 +5,7 @@ use dexo_tui::screens::explorer::ExplorerState;
 use ratatui::layout::Rect;
 
 fn snapshot_model() -> Model {
-    Model {
+    let mut model = Model {
         project: "demo".into(),
         connection: ConnectionStatus {
             name: "local".into(),
@@ -13,10 +13,11 @@ fn snapshot_model() -> Model {
             environment: String::new(),
         },
         schema: "public".into(),
-        sql: "select 1".into(),
         explorer: ExplorerState::fixture(),
         ..Model::default()
-    }
+    };
+    model.set_sql("select 1");
+    model
 }
 
 #[test]

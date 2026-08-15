@@ -507,7 +507,7 @@ git commit -m "feat(tui): stream and cancel SQL scripts"
 - Modify: `crates/dexo-tui/src/widgets/editor.rs`
 - Test: `crates/dexo-tui/tests/editor_flow.rs`
 
-- [ ] **Step 1: Write keyboard editing tests**
+- [x] **Step 1: Write keyboard editing tests**
 
 ```rust
 #[test]
@@ -522,13 +522,13 @@ fn editor_types_unicode_moves_and_undoes() {
 
 Add tests for arrows, Home/End, word motion, Backspace/Delete, Shift selection, Ctrl+A, newline indentation, Tab insertion, redo, and cursor visibility after scrolling.
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test editor_flow editor_types_unicode_moves_and_undoes`
 
 Expected: FAIL because editor keys are ignored.
 
-- [ ] **Step 3: Introduce document state**
+- [x] **Step 3: Introduce document state**
 
 ```rust
 pub struct EditorDocument {
@@ -550,13 +550,13 @@ impl EditorDocument {
 
 Replace `Model.sql`, `cursor`, and `selection` with `documents: Vec<EditorDocument>` and `active_document: usize`. Provide accessors so script planning reads the active document.
 
-- [ ] **Step 4: Implement editor key commands**
+- [x] **Step 4: Implement editor key commands**
 
 Map printable characters, deletion, motion, selection, undo/redo, and newline indentation in `screens/editor.rs`. Group contiguous typing into one undo group, ending the group on motion, paste, execution, or focus change.
 
 Render line numbers, selection, cursor, current statement marker, horizontal/vertical viewport, and dirty tab marker. Use `Frame::set_cursor_position` only while editor focus is active.
 
-- [ ] **Step 5: Run snapshots and commit**
+- [x] **Step 5: Run snapshots and commit**
 
 Run: `cargo test -p dexo-tui --test editor_flow && cargo test -p dexo-tui --test snapshots`
 

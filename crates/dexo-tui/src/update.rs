@@ -179,6 +179,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
         }
         Action::Focus(target) => {
+            crate::screens::editor::end_typing(model);
             model.focus = match target {
                 FocusTarget::Explorer => Focus::Explorer,
                 FocusTarget::Editor => Focus::Editor,
@@ -245,8 +246,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ApplyRawDdl => {
-            if !model.sql.trim().is_empty() {
-                model.schema_editor.apply_raw(model.sql.clone());
+            let sql = model.active_document().text();
+            if !sql.trim().is_empty() {
+                model.schema_editor.apply_raw(sql);
             }
             Vec::new()
         }
@@ -592,6 +594,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             return Vec::new();
         }
     }
+    if model.tabs.active != 2 && crate::screens::editor::handle_key(model, key) {
+        return Vec::new();
+    }
     if key.code == KeyCode::Tab && model.tabs.active == 2 {
         model.schema_editor.focus_next();
     }
@@ -715,7 +720,8 @@ fn close_palette(model: &mut Model) {
 }
 
 fn start_query(model: &mut Model) -> Vec<Effect> {
-    if model.sql.trim().is_empty() {
+    crate::screens::editor::end_typing(model);
+    if model.active_document().text().trim().is_empty() {
         return Vec::new();
     }
     let statements = crate::screens::workbench::planned_statements(model);
@@ -732,11 +738,12 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
         .active_session
         .map(|id| id.0.to_string())
         .unwrap_or_default();
+    let document = model.active_document().id.clone();
     vec![Effect::StartScript(crate::action::ScriptRequest {
         key: crate::runtime::OperationKey::new(
             operation,
             session,
-            "scratch",
+            document,
             model.session_generation.max(1),
         ),
         statements,
@@ -791,7 +798,7 @@ fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool 
     } else {
         model.session_generation
     };
-    let document = "scratch";
+    let document = model.active_document().id.as_str();
     key.belongs_to(&session, document, generation)
 }
 

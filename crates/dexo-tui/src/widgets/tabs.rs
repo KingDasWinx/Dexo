@@ -8,6 +8,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let tabs = Tabs::new(model.tabs.titles.iter().map(String::as_str)).select(model.tabs.active);
+    let tabs = Tabs::new(model.tabs.titles.iter().enumerate().map(|(index, title)| {
+        if index == 0 && model.active_document().is_dirty() {
+            format!("{title}*")
+        } else {
+            title.clone()
+        }
+    }))
+    .select(model.tabs.active);
     frame.render_widget(tabs, area);
 }

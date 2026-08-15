@@ -35,7 +35,7 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             title: "Execute Query",
             keywords: &["run", "sql"],
             shortcut: Some("F5"),
-            disabled_reason: if model.sql.trim().is_empty() {
+            disabled_reason: if model.active_document().text().trim().is_empty() {
                 Some("editor is empty")
             } else {
                 None

@@ -4,8 +4,8 @@ expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
 ┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector─────────────────┐
-│No connection             │┌SQL───────────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
-│                          ││-- editor                                                                                             ││                          │
+│No connection             │┌SQL · scratch.sql─────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+│                          ││   1                                                                                                  ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │

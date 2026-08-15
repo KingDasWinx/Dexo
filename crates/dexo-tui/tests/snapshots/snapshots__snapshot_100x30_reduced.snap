@@ -4,8 +4,8 @@ expression: "render_to_string(&snapshot_model(), 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │┌SQL───────────────────────────────────────────────────────────────────┐
-│▾ local                   ││select 1                                                              │
+│[offline]                 │┌SQL · scratch.sql─────────────────────────────────────────────────────┐
+│▾ local                   ││   1▸select 1                                                         │
 │  ▸ public                ││                                                                      │
 │  ▸ mysql.users [restricte││                                                                      │
 │actions: properties DDL da││                                                                      │

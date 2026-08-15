@@ -4,8 +4,8 @@ expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │┌SQL───────────────────────────────────────────────────────────────────┐
-│filter:public kind:- fav:f││select 1                                                              │
+│[offline]                 │┌SQL · scratch.sql─────────────────────────────────────────────────────┐
+│filter:public kind:- fav:f││   1▸select 1                                                         │
 │  ▸ public                ││                                                                      │
 │actions: properties DDL da││                                                                      │
 │selected: local.public    ││                                                                      │

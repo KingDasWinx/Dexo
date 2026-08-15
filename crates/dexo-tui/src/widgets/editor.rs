@@ -1,24 +1,204 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
+use unicode_width::UnicodeWidthChar;
 
-use crate::model::Model;
+use crate::model::{Focus, Model};
+use crate::screens::editor::line_col_of;
+use crate::theme::Role;
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let body = if model.sql.is_empty() {
-        "-- editor".into()
+    let doc = model.active_document();
+    let title = if doc.is_dirty() {
+        format!("SQL · {}*", doc.title)
     } else {
-        model.sql.clone()
+        format!("SQL · {}", doc.title)
     };
     if area.width < 2 || area.height < 2 {
-        frame.render_widget(Paragraph::new(body), area);
+        frame.render_widget(Paragraph::new(doc.text()), area);
         return;
     }
-    frame.render_widget(
-        Paragraph::new(body).block(Block::bordered().title("SQL")),
-        area,
-    );
+    let block = Block::bordered().title(title);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+
+    let text = doc.text();
+    let lines: Vec<&str> = if text.is_empty() {
+        vec![""]
+    } else {
+        text.split('\n').collect()
+    };
+    let gutter = 5u16;
+    let text_width = inner.width.saturating_sub(gutter);
+    let sel = doc.selection();
+    let cursor = doc.cursor();
+    let stmt = current_statement_lines(&text, cursor);
+    let sel_style = model
+        .theme
+        .style(Role::Selection, model.capabilities)
+        .add_modifier(Modifier::REVERSED);
+    let marker_style = model.theme.style(Role::Focus, model.capabilities);
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+
+    let mut rendered = Vec::new();
+    let start = doc.viewport_line.min(lines.len().saturating_sub(1));
+    let end = (start + inner.height as usize).min(lines.len());
+    let mut char_at = char_index_at_line(&text, start);
+    for (row, line) in lines[start..end].iter().enumerate() {
+        let line_no = start + row + 1;
+        let marker = if stmt.contains(&(start + row)) {
+            "▸"
+        } else {
+            " "
+        };
+        let mut spans = vec![
+            Span::styled(format!("{line_no:>4}"), muted),
+            Span::styled(format!("{marker}"), marker_style),
+        ];
+        let visible = visible_slice(line, doc.viewport_column, text_width as usize);
+        let line_start = char_at;
+        let line_end = line_start + line.chars().count();
+        if let Some(range) = &sel {
+            spans.extend(selection_spans(
+                &visible.text,
+                line_start + visible.skip_chars,
+                range,
+                sel_style,
+            ));
+        } else {
+            spans.push(Span::raw(visible.text));
+        }
+        rendered.push(Line::from(spans));
+        char_at = line_end + 1;
+    }
+    frame.render_widget(Paragraph::new(rendered), inner);
+
+    if model.focus == Focus::Editor {
+        let (line, col) = line_col_of(&text, cursor);
+        if line >= start && line < end {
+            let line_text = lines.get(line).copied().unwrap_or("");
+            let x_off = display_width_range(line_text, doc.viewport_column, col);
+            let x = inner.x + gutter + x_off.min(text_width.saturating_sub(1) as usize) as u16;
+            let y = inner.y + (line - start) as u16;
+            if x < inner.x + inner.width && y < inner.y + inner.height {
+                frame.set_cursor_position(Position::new(x, y));
+            }
+        }
+    }
+}
+
+struct Visible {
+    text: String,
+    skip_chars: usize,
+}
+
+fn visible_slice(line: &str, skip_cols: usize, width: usize) -> Visible {
+    let mut cols = 0;
+    let mut skip_chars = 0;
+    let mut out = String::new();
+    for ch in line.chars() {
+        let w = UnicodeWidthChar::width(ch).unwrap_or(0);
+        if cols + w <= skip_cols {
+            cols += w;
+            skip_chars += 1;
+            continue;
+        }
+        if display_width(&out) + w > width {
+            break;
+        }
+        out.push(ch);
+        cols += w;
+    }
+    Visible {
+        text: out,
+        skip_chars,
+    }
+}
+
+fn selection_spans(
+    visible: &str,
+    line_char_start: usize,
+    range: &std::ops::Range<usize>,
+    sel_style: Style,
+) -> Vec<Span<'static>> {
+    let mut spans = Vec::new();
+    let mut buf = String::new();
+    let mut selected = false;
+    for (offset, ch) in visible.chars().enumerate() {
+        let index = line_char_start + offset;
+        let now = index >= range.start && index < range.end;
+        if now != selected && !buf.is_empty() {
+            spans.push(span_owned(std::mem::take(&mut buf), selected, sel_style));
+        }
+        selected = now;
+        buf.push(ch);
+    }
+    if !buf.is_empty() {
+        spans.push(span_owned(buf, selected, sel_style));
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    spans
+}
+
+fn span_owned(text: String, selected: bool, sel_style: Style) -> Span<'static> {
+    if selected {
+        Span::styled(text, sel_style)
+    } else {
+        Span::raw(text)
+    }
+}
+
+fn current_statement_lines(text: &str, cursor: usize) -> Vec<usize> {
+    let byte = text.chars().take(cursor).map(char::len_utf8).sum();
+    let Some(span) = dexo_sql::statement_at(text, byte) else {
+        return Vec::new();
+    };
+    let start = text[..span.byte_range.start].matches('\n').count();
+    let end = text[..span.byte_range.end.min(text.len())]
+        .matches('\n')
+        .count();
+    (start..=end).collect()
+}
+
+fn char_index_at_line(text: &str, line: usize) -> usize {
+    if line == 0 {
+        return 0;
+    }
+    let mut current = 0;
+    for (index, ch) in text.chars().enumerate() {
+        if ch == '\n' {
+            current += 1;
+            if current == line {
+                return index + 1;
+            }
+        }
+    }
+    text.chars().count()
+}
+
+fn display_width(text: &str) -> usize {
+    text.chars()
+        .map(|ch| UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum()
+}
+
+fn display_width_range(line: &str, from_col: usize, to_char: usize) -> usize {
+    let mut cols = 0;
+    for (index, ch) in line.chars().enumerate() {
+        if index >= to_char {
+            break;
+        }
+        cols += UnicodeWidthChar::width(ch).unwrap_or(0);
+    }
+    cols.saturating_sub(from_col)
 }

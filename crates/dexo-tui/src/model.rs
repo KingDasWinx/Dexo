@@ -1,6 +1,9 @@
+use std::ops::Range;
+
 use dexo_app::event::TaskId;
 use dexo_app::{ExecutionTarget, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
+use dexo_sql::SqlDocument;
 
 use crate::runtime::{OperationId, SessionId};
 
@@ -496,6 +499,85 @@ fn estimated_row_bytes(row: &[DbValue]) -> usize {
         .sum()
 }
 
+#[derive(Clone, Debug)]
+pub struct EditorDocument {
+    pub id: String,
+    pub title: String,
+    pub path: Option<std::path::PathBuf>,
+    pub sql: SqlDocument,
+    pub saved_revision: u64,
+    pub session: Option<SessionId>,
+    pub viewport_line: usize,
+    pub viewport_column: usize,
+    pub typing: bool,
+    pub anchor: Option<usize>,
+}
+
+impl PartialEq for EditorDocument {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.title == other.title
+            && self.path == other.path
+            && self.sql.text() == other.sql.text()
+            && self.sql.cursor() == other.sql.cursor()
+            && self.saved_revision == other.saved_revision
+            && self.session == other.session
+            && self.viewport_line == other.viewport_line
+            && self.viewport_column == other.viewport_column
+            && self.typing == other.typing
+            && self.anchor == other.anchor
+    }
+}
+
+impl EditorDocument {
+    pub fn scratch() -> Self {
+        Self {
+            id: "scratch".into(),
+            title: "scratch.sql".into(),
+            path: None,
+            sql: SqlDocument::new(""),
+            saved_revision: 0,
+            session: None,
+            viewport_line: 0,
+            viewport_column: 0,
+            typing: false,
+            anchor: None,
+        }
+    }
+
+    pub fn with_text(text: impl AsRef<str>) -> Self {
+        let sql = SqlDocument::new(text.as_ref());
+        let saved_revision = sql.revision();
+        Self {
+            sql,
+            saved_revision,
+            ..Self::scratch()
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.sql.revision() != self.saved_revision
+    }
+
+    pub fn text(&self) -> String {
+        self.sql.text()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.sql.cursor()
+    }
+
+    pub fn selection(&self) -> Option<Range<usize>> {
+        let anchor = self.anchor?;
+        let cursor = self.sql.cursor();
+        if anchor == cursor {
+            None
+        } else {
+            Some(anchor.min(cursor)..anchor.max(cursor))
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub focus: Focus,
@@ -508,9 +590,8 @@ pub struct Model {
     pub tabs: TabsState,
     pub palette: PaletteState,
     pub messages: Vec<String>,
-    pub sql: String,
-    pub cursor: usize,
-    pub selection: Option<std::ops::Range<usize>>,
+    pub documents: Vec<EditorDocument>,
+    pub active_document: usize,
     pub result_tabs: Vec<GridModel>,
     pub execution_target: ExecutionTarget,
     pub script_policy: ScriptPolicy,
@@ -579,9 +660,8 @@ impl Default for Model {
             tabs: TabsState::default(),
             palette: PaletteState::default(),
             messages: Vec::new(),
-            sql: String::new(),
-            cursor: 0,
-            selection: None,
+            documents: vec![EditorDocument::scratch()],
+            active_document: 0,
             result_tabs: Vec::new(),
             execution_target: ExecutionTarget::Document,
             script_policy: ScriptPolicy::StopOnError,
@@ -642,5 +722,18 @@ impl Model {
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
+    }
+
+    pub fn active_document(&self) -> &EditorDocument {
+        &self.documents[self.active_document.min(self.documents.len().saturating_sub(1))]
+    }
+
+    pub fn active_document_mut(&mut self) -> &mut EditorDocument {
+        let index = self.active_document.min(self.documents.len().saturating_sub(1));
+        &mut self.documents[index]
+    }
+
+    pub fn set_sql(&mut self, text: impl AsRef<str>) {
+        *self.active_document_mut() = EditorDocument::with_text(text);
     }
 }
