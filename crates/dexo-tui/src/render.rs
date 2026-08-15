@@ -106,6 +106,15 @@ pub fn render(frame: &mut Frame, model: &Model) {
             );
         }
     }
+    if model.connection_form.open {
+        let popup = centered(frame.area(), 64, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.connection_form.lines().join("\n"))
+                .block(Block::bordered().title("Add connection")),
+            popup,
+        );
+    }
     if model.settings.open {
         let popup = centered(frame.area(), 64, 12);
         frame.render_widget(Clear, popup);

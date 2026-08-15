@@ -10,7 +10,10 @@ repository.workspace = true
 crossterm.workspace = true
 dexo-app = { path = "../dexo-app" }
 dexo-driver-api = { path = "../dexo-driver-api" }
+dexo-secrets = { path = "../dexo-secrets" }
+dexo-storage = { path = "../dexo-storage" }
 ratatui.workspace = true
+secrecy.workspace = true
 serde.workspace = true
 tokio.workspace = true
 toml.workspace = true

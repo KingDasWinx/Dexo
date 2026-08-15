@@ -14,11 +14,26 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.apply_size(width, height);
             vec![Effect::PersistLayout]
         }
-        Action::ConnectionChanged { name, ready } => {
+        Action::ConnectionChanged {
+            name,
+            ready,
+            environment,
+        } => {
             model.connection.name = name;
             model.connection.ready = ready;
+            model.connection.environment = environment;
+            model.connection_form.close();
             Vec::new()
         }
+        Action::OpenConnectionForm => {
+            model.connection_form = crate::screens::connection::ConnectionForm::open();
+            Vec::new()
+        }
+        Action::ConnectionFormError { message } => {
+            model.connection_form.set_error(message);
+            Vec::new()
+        }
+        Action::SaveConnection => save_connection(model),
         Action::QueryMeta { task, columns } => {
             model.active_task = Some(task);
             model.results.set_columns(columns);
@@ -330,6 +345,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.palette.open {
         return handle_palette_key(model, key);
     }
+    if model.connection_form.open {
+        return handle_connection_form_key(model, key);
+    }
     if model.schema_editor.preview.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -535,6 +553,40 @@ fn handle_palette_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.connection_form.close();
+            Vec::new()
+        }
+        KeyCode::Enter => save_connection(model),
+        KeyCode::Tab | KeyCode::Down => {
+            model.connection_form.focus_next();
+            Vec::new()
+        }
+        KeyCode::BackTab | KeyCode::Up => {
+            model.connection_form.focus_prev();
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            model.connection_form.backspace();
+            Vec::new()
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            model.connection_form.type_char(ch);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn save_connection(model: &mut Model) -> Vec<Effect> {
+    match model.connection_form.submit() {
+        Some((input, password)) => vec![Effect::CreateConnection { input, password }],
+        None => Vec::new(),
+    }
+}
+
 fn open_palette(model: &mut Model) {
     model.palette.open = true;
     model.palette.query.clear();
@@ -709,7 +761,7 @@ mod tests {
     use dexo_driver_api::DbValue;
 
     use super::update;
-    use crate::action::Action;
+    use crate::action::{Action, Effect};
     use crate::model::{Focus, Model};
 
     #[test]
@@ -724,5 +776,43 @@ mod tests {
         );
         assert_eq!(model.focus, Focus::Editor);
         assert_eq!(model.results.row_count(), 1);
+    }
+
+    #[test]
+    fn save_connection_clears_password_and_emits_create() {
+        let mut model = Model::default();
+        update(&mut model, Action::OpenConnectionForm);
+        for (label, value) in [
+            ("name", "local-pg"),
+            ("driver", "postgres"),
+            ("host", "127.0.0.1"),
+            ("database", "dexo"),
+            ("username", "dexo"),
+            ("password", "SUPER_SECRET_SENTINEL"),
+        ] {
+            let field = model
+                .connection_form
+                .fields
+                .iter_mut()
+                .find(|field| field.label == label)
+                .unwrap();
+            field.value = value.into();
+        }
+        let effects = update(&mut model, Action::SaveConnection);
+        assert!(matches!(
+            &effects[..],
+            [Effect::CreateConnection { password, .. }] if password == "SUPER_SECRET_SENTINEL"
+        ));
+        assert!(
+            model
+                .connection_form
+                .fields
+                .iter()
+                .find(|field| field.label == "password")
+                .unwrap()
+                .value
+                .is_empty()
+        );
+        assert!(!format!("{:?}", model.connection_form).contains("SUPER_SECRET_SENTINEL"));
     }
 }

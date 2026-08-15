@@ -1,6 +1,6 @@
 use crossterm::event::{KeyEvent, MouseEvent};
-use dexo_app::ScriptPolicy;
 use dexo_app::event::TaskId;
+use dexo_app::{NewConnection, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, QueryRequest, TransactionState};
 
 #[derive(Clone, Debug, PartialEq)]
@@ -14,7 +14,13 @@ pub enum Action {
     ConnectionChanged {
         name: String,
         ready: bool,
+        environment: String,
     },
+    OpenConnectionForm,
+    ConnectionFormError {
+        message: String,
+    },
+    SaveConnection,
     QueryMeta {
         task: TaskId,
         columns: Vec<ColumnMeta>,
@@ -112,6 +118,10 @@ pub enum Effect {
     },
     CancelQuery(QueryId),
     PersistLayout,
+    CreateConnection {
+        input: NewConnection,
+        password: String,
+    },
     BeginTransaction,
     CommitTransaction,
     RollbackTransaction,

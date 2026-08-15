@@ -306,6 +306,14 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::ResultsTop,
         },
         PaletteEntry {
+            id: "connection.add",
+            title: "Add Connection",
+            keywords: &["database", "postgres", "mysql", "connect"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenConnectionForm,
+        },
+        PaletteEntry {
             id: "settings.open",
             title: "Open Settings",
             keywords: &["theme", "keymap", "mouse"],

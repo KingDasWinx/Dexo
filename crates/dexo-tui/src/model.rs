@@ -6,6 +6,7 @@ use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
+use crate::screens::connection::ConnectionForm;
 use crate::screens::data::DataScreen;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
@@ -524,6 +525,7 @@ pub struct Model {
     pub explain: ExplainScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
+    pub connection_form: ConnectionForm,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
@@ -590,6 +592,7 @@ impl Default for Model {
             explain: ExplainScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
+            connection_form: ConnectionForm::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
