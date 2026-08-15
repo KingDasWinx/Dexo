@@ -1,6 +1,6 @@
 # Dexo Sprint 18: Projects and Local State Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Make projects, documents, snippets, layouts, recents, history, and portable configuration durable and manageable from the TUI.
 
@@ -22,7 +22,7 @@ Requires Sprints 16–17 green.
 
 **Files:** storage migrations/repositories and `crates/dexo-storage/tests/migration.rs`.
 
-- [ ] **Step 1: Write the failing upgrade test**
+- [x] **Step 1: Write the failing upgrade test**
 
 ```rust
 #[test]
@@ -36,13 +36,13 @@ fn migration_9_scopes_snippets_history_and_recent_items() {
 }
 ```
 
-- [ ] **Step 2: Run and see version 8**
+- [x] **Step 2: Run and see version 8**
 
 Run: `cargo test -p dexo-storage --test migration migration_9_scopes_snippets_history_and_recent_items`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Add migration 9**
+- [x] **Step 3: Add migration 9**
 
 ```sql
 BEGIN;
@@ -69,7 +69,7 @@ COMMIT;
 
 Backfill legacy snippets/history into the persisted Default project.
 
-- [ ] **Step 4: Run all migration tests and commit**
+- [x] **Step 4: Run all migration tests and commit**
 
 Run: `cargo test -p dexo-storage --test migration --test schema_fixtures`
 
@@ -84,7 +84,7 @@ git commit -m "feat(storage): scope local workbench state by project"
 
 **Files:** `crates/dexo-storage/src/project.rs`, `document.rs`, `snippet.rs`, `history.rs`; tests `crates/dexo-storage/tests/project_repository.rs`, `workbench.rs`.
 
-- [ ] **Step 1: Add failing repository contracts**
+- [x] **Step 1: Add failing repository contracts**
 
 ```rust
 #[test]
@@ -100,17 +100,17 @@ fn project_resources_can_be_listed_moved_cleared_and_deleted() {
 }
 ```
 
-- [ ] **Step 2: Run and verify missing methods**
+- [x] **Step 2: Run and verify missing methods**
 
 Run: `cargo test -p dexo-storage --test project_repository project_resources_can_be_listed_moved_cleared_and_deleted`
 
 Expected: compile FAIL.
 
-- [ ] **Step 3: Implement exact repository methods**
+- [x] **Step 3: Implement exact repository methods**
 
 Add project `get_by_name`, `rename`, `delete`; document `get`, `list_for_project`, `move_to_project`, `delete`; snippet `list_for_project`, `rename`, `delete`; history `list_for_project`, `clear_for_project`, `clear_for_connection`; recents `touch`, `list`, `clear`. Use SQL transactions for project deletion previews/apply.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-storage --test project_repository --test workbench`
 
@@ -125,7 +125,7 @@ git commit -m "feat(storage): complete project resource repositories"
 
 **Files:** `crates/dexo-tui/src/runtime/project_manager.rs`, runtime/storage worker, `action.rs`, `model.rs`, `update.rs`, tests `projects_flow.rs`.
 
-- [ ] **Step 1: Write a failing switch-order test**
+- [x] **Step 1: Write a failing switch-order test**
 
 ```rust
 #[tokio::test]
@@ -138,13 +138,13 @@ async fn switching_flushes_old_project_before_loading_new_project() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test projects_flow switching_flushes_old_project_before_loading_new_project`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement the state machine**
+- [x] **Step 3: Implement the state machine**
 
 ```rust
 pub enum ProjectSwitchStage { ConfirmDirty, FlushDocuments, PersistLayout, CloseProjectSessions, LoadTarget, Complete }
@@ -152,7 +152,7 @@ pub enum ProjectSwitchStage { ConfirmDirty, FlushDocuments, PersistLayout, Close
 
 `SwitchProject` creates one operation and advances only on successful completion actions. Failure leaves the old project active. Active transactions require commit/rollback/cancel choice; never close silently.
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `cargo test -p dexo-tui --test projects_flow switch`
 
@@ -167,7 +167,7 @@ git commit -m "feat(tui): switch projects without losing state"
 
 **Files:** `screens/projects.rs`, TUI action/model/update/palette/render, tests `projects_flow.rs` and snapshots.
 
-- [ ] **Step 1: Add failing create/rename/delete UI tests**
+- [x] **Step 1: Add failing create/rename/delete UI tests**
 
 Test duplicate names, validation, resource counts, connection detach/delete choice, external file preservation, and recent-project ordering.
 
@@ -175,7 +175,7 @@ Run: `cargo test -p dexo-tui --test projects_flow project_crud`
 
 Expected: FAIL.
 
-- [ ] **Step 2: Add screen state**
+- [x] **Step 2: Add screen state**
 
 ```rust
 pub struct ProjectDeletePreview {
@@ -188,11 +188,11 @@ pub struct ProjectDeletePreview {
 }
 ```
 
-- [ ] **Step 3: Wire real effects and rendering**
+- [x] **Step 3: Wire real effects and rendering**
 
 Create/rename/delete/open actions emit storage effects. Delete never unlinks `external_paths`; it clears Dexo metadata/recovery only after typed project-name confirmation. Connections default to detach, with explicit delete/keychain decisions delegated to Sprint 17 handlers.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-tui --test projects_flow && cargo test -p dexo-tui --test snapshots`
 
@@ -207,7 +207,7 @@ git commit -m "feat(tui): manage projects and deletion impact"
 
 **Files:** storage `layout.rs`, runtime/storage worker, TUI model/layout/update, tests `projects_flow.rs`, `crates/dexo/tests/project_restart.rs`.
 
-- [ ] **Step 1: Write a restart test**
+- [x] **Step 1: Write a restart test**
 
 ```rust
 #[test]
@@ -219,17 +219,17 @@ fn restart_restores_project_documents_layout_and_active_items() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo --test project_restart restart_restores_project_documents_layout_and_active_items`
 
 Expected: FAIL because `PersistLayout` is ignored and tabs are not stored.
 
-- [ ] **Step 3: Version the persisted workspace**
+- [x] **Step 3: Version the persisted workspace**
 
 Extend `WorkbenchLayout` with document tab IDs, focused panel, active result/editor tabs, panes, and selected connection/profile IDs. Debounce resize persistence; flush immediately on project switch and shutdown. Clamp restored sizes to terminal dimensions.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-storage layout && cargo test -p dexo --test project_restart`
 
@@ -244,7 +244,7 @@ git commit -m "feat(tui): persist complete project workspace state"
 
 **Files:** `screens/config_transfer.rs`, storage `connection.rs`, runtime/storage worker, TUI action/model/update/palette/render, tests `projects_flow.rs`.
 
-- [ ] **Step 1: Write conflict and secret-ref tests**
+- [x] **Step 1: Write conflict and secret-ref tests**
 
 ```rust
 #[tokio::test]
@@ -256,17 +256,17 @@ async fn config_import_previews_conflicts_and_generates_fresh_secret_refs() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test projects_flow config_import_previews_conflicts_and_generates_fresh_secret_refs`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement preview/apply/export effects**
+- [x] **Step 3: Implement preview/apply/export effects**
 
 Export uses atomic file writing and contains projects, non-secret profiles, policy/groups, layouts optionally, snippets optionally, and no keychain IDs. Import requires per-name replace/rename/skip choices and lists every connection needing a secret prompt.
 
-- [ ] **Step 4: Test sentinels and commit**
+- [x] **Step 4: Test sentinels and commit**
 
 Run: `cargo test -p dexo --test config_roundtrip && cargo test -p dexo-tui --test projects_flow config`
 
@@ -297,7 +297,7 @@ Run: `$env:DEXO_DATA_HOME = (Join-Path $env:TEMP 'dexo-sprint18'); cargo run -p 
 
 Expected: create/open/rename/delete, restart restoration, recents clear, and config transfer operate without fixture data; no external `.sql` is deleted with a project.
 
-- [ ] **Step 3: Commit verified state**
+- [x] **Step 3: Commit verified state**
 
 ```powershell
 git add .
@@ -306,8 +306,8 @@ git commit -m "test(projects): verify durable local project state"
 
 ## Sprint 18 exit checklist
 
-- [ ] Project CRUD and switching are durable and transaction-safe.
-- [ ] Connections, docs, snippets, history, recents, and layout are project-scoped.
-- [ ] `PersistLayout` performs real storage I/O.
-- [ ] Portable config import/export is available in the TUI and secret-free.
-- [ ] Restart and crash recovery acceptance tests pass.
+- [x] Project CRUD and switching are durable and transaction-safe.
+- [x] Connections, docs, snippets, history, recents, and layout are project-scoped.
+- [x] `PersistLayout` performs real storage I/O.
+- [x] Portable config import/export is available in the TUI and secret-free.
+- [x] Restart and crash recovery acceptance tests pass.
