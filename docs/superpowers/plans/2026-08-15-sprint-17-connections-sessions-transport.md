@@ -202,7 +202,7 @@ git commit -m "feat(connect): define validated transport requests"
 
 **Files:** `crates/dexo-transport/src/forward.rs`, `lib.rs`, tests `crates/dexo-transport/tests/forward.rs`.
 
-- [ ] **Step 1: Write forwarding and shutdown tests**
+- [x] **Step 1: Write forwarding and shutdown tests**
 
 ```rust
 #[tokio::test]
@@ -217,13 +217,13 @@ async fn lease_forwards_multiple_connections_and_stops_on_drop() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-transport --test forward`
 
 Expected: FAIL because the lease is missing.
 
-- [ ] **Step 3: Implement bounded local forwarding**
+- [x] **Step 3: Implement bounded local forwarding**
 
 ```rust
 pub struct TransportLease {
@@ -240,7 +240,7 @@ async fn forward_one(mut local: tokio::net::TcpStream, mut remote: BoxStream) ->
 
 Bind `127.0.0.1:0`, cap concurrent forwarded sockets, and open each remote stream with `connect_proxy` or `open_ssh_tunnel`. Host-key-new returns a typed confirmation request; host-key-changed always fails.
 
-- [ ] **Step 4: Run all transport tests and commit**
+- [x] **Step 4: Run all transport tests and commit**
 
 Run: `cargo test -p dexo-transport --all-features`
 

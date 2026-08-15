@@ -1,4 +1,5 @@
 mod config;
+mod forward;
 mod host_key;
 mod proxy;
 mod ssh;
@@ -6,6 +7,7 @@ mod tcp;
 mod tls;
 
 pub use config::{ClientCertificate, ProxyConfig, TlsConfig, TlsMode, TransportError};
+pub use forward::TransportLease;
 pub use host_key::{HostKeyDecision, KnownHost, ssh_fingerprint, verify_host_key};
 pub use proxy::{ProxyCredentials, connect_proxy};
 pub use ssh::{SshAuth, SshTunnelRequest, open_ssh_tunnel};
