@@ -1,4 +1,20 @@
-use dexo_driver_api::DbValue;
+use dexo_driver_api::{ColumnId, DbValue};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EditableRow {
+    pub identity: Vec<(ColumnId, DbValue)>,
+    pub original: Vec<DbValue>,
+    pub current: Vec<DbValue>,
+    pub state: RowEditState,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RowEditState {
+    Clean,
+    Edited,
+    Inserted,
+    Deleted,
+}
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ColumnDef {

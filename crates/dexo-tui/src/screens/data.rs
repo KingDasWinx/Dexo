@@ -35,6 +35,8 @@ pub struct DataScreen {
     pub related_open: Vec<String>,
     pub related_fk: Option<ForeignKey>,
     pub related_row: Vec<(String, Option<DbValue>)>,
+    pub crumbs: Vec<(QualifiedName, Option<dexo_driver_api::Filter>, u64)>,
+    pub crumb_forward: Vec<(QualifiedName, Option<dexo_driver_api::Filter>, u64)>,
     pub page_offset: u64,
     pub page_limit: u32,
     pub has_more: bool,
@@ -61,6 +63,8 @@ impl Default for DataScreen {
             related_open: Vec::new(),
             related_fk: None,
             related_row: Vec::new(),
+            crumbs: Vec::new(),
+            crumb_forward: Vec::new(),
             page_offset: 0,
             page_limit: 100,
             has_more: false,
@@ -176,8 +180,25 @@ mod tests {
             model.data.review.as_ref().unwrap().status,
             ReviewStatus::Pending
         );
+        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
         update(&mut model, Action::ConfirmProduction);
-        update(&mut model, Action::ApplyChanges);
+        let effects = update(&mut model, Action::ApplyChanges);
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            crate::Effect::ApplyMutations { .. }
+        )));
+        assert_eq!(
+            model.data.review.as_ref().unwrap().status,
+            ReviewStatus::Pending
+        );
+        let generation = model.session_generation;
+        update(
+            &mut model,
+            Action::MutationsApplied {
+                generation,
+                session: uuid::Uuid::from_u128(1).to_string(),
+            },
+        );
         assert_eq!(
             model.data.review.as_ref().unwrap().status,
             ReviewStatus::Applied
