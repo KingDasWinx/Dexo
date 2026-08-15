@@ -3,7 +3,7 @@ use std::path::Path;
 use rusqlite::{Connection, OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 
-pub const LAYOUT_VERSION: u32 = 1;
+pub const LAYOUT_VERSION: u32 = 2;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct WorkbenchLayout {
@@ -17,6 +17,14 @@ pub struct WorkbenchLayout {
     pub focused_panel: String,
     pub active_tab: usize,
     pub tabs: Vec<String>,
+    #[serde(default)]
+    pub document_ids: Vec<String>,
+    #[serde(default)]
+    pub active_document_id: Option<String>,
+    #[serde(default)]
+    pub active_connection_id: Option<String>,
+    #[serde(default)]
+    pub active_result_tab: usize,
 }
 
 impl Default for WorkbenchLayout {
@@ -38,6 +46,10 @@ impl Default for WorkbenchLayout {
                 "Properties".into(),
                 "Explain".into(),
             ],
+            document_ids: Vec::new(),
+            active_document_id: None,
+            active_connection_id: None,
+            active_result_tab: 0,
         }
     }
 }
