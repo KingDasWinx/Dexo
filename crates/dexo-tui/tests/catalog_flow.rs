@@ -1,4 +1,4 @@
-use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+use dexo_driver_api::{CatalogList, CatalogObject, DbValue, ObjectId, ObjectKind, QualifiedName};
 use dexo_storage::{CatalogCache, Database};
 use dexo_tui::action::Action;
 use dexo_tui::model::Model;
@@ -305,15 +305,57 @@ fn offline_snapshot_rejects_incomplete_and_keeps_complete() {
 }
 
 #[test]
-fn open_object_data_is_disabled_until_sprint_20() {
-    let mut model = Model::default();
-    let _ = update(&mut model, Action::OpenObjectData);
+fn open_object_data_requests_a_table_page() {
+    let mut model = Model {
+        session_generation: 1,
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
+        ..Model::default()
+    };
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![object(
+            "table:orders",
+            ObjectKind::Table,
+            ("db", "public", "orders"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+    model.explorer.select(ObjectId::new("table:orders"));
+    let effects = update(&mut model, Action::OpenObjectData);
     assert!(
-        model
-            .messages
+        effects
             .iter()
-            .any(|message| message.contains("Sprint 20"))
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadTableData { .. }))
     );
+}
+
+#[test]
+fn data_page_fills_the_active_grid() {
+    let mut model = Model {
+        session_generation: 1,
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
+        ..Model::default()
+    };
+    let _ = update(
+        &mut model,
+        Action::DataPageLoaded {
+            generation: 1,
+            session: Uuid::from_u128(1).to_string(),
+            page: dexo_driver_api::DataPage {
+                columns: vec![dexo_driver_api::ColumnMeta {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                    nullable: false,
+                }],
+                rows: vec![vec![DbValue::I64(1)]],
+                offset: 0,
+                has_more: true,
+                estimated_total: None,
+            },
+        },
+    );
+    assert_eq!(model.results.row_count(), 1);
+    assert!(model.data.has_more);
 }
 
 #[test]

@@ -296,7 +296,7 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             title: "Open Object Data",
             keywords: &["rows", "table"],
             shortcut: None,
-            disabled_reason: Some("data tabs require Sprint 20"),
+            disabled_reason: None,
             action: || Action::OpenObjectData,
         },
         PaletteEntry {

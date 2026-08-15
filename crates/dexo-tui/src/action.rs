@@ -134,6 +134,20 @@ pub enum Action {
     OpenObjectInspector,
     OpenObjectDdl,
     OpenObjectData,
+    ChangeDataPage {
+        offset: u64,
+    },
+    ApplyRemoteSort,
+    ApplyRemoteFilter,
+    DataPageLoaded {
+        generation: u64,
+        session: String,
+        page: dexo_driver_api::DataPage,
+    },
+    DataPageFailed {
+        generation: u64,
+        message: String,
+    },
     GoToDefinition,
     InspectorLoaded {
         generation: u64,
@@ -458,6 +472,11 @@ pub enum Effect {
     },
     LoadObjectInspector {
         id: dexo_driver_api::ObjectId,
+        session: SessionId,
+        generation: u64,
+    },
+    LoadTableData {
+        request: dexo_driver_api::DataRequest,
         session: SessionId,
         generation: u64,
     },

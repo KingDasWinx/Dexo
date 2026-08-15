@@ -17,6 +17,7 @@ use crate::action::{
 pub mod catalog_manager;
 pub mod clipboard;
 pub mod connection_manager;
+pub mod data_manager;
 pub mod document_io;
 pub mod project_manager;
 pub mod query_runner;
@@ -250,6 +251,22 @@ impl WorkbenchRuntime {
                     catalog_manager::load_inspector(
                         Arc::clone(&active.session),
                         id,
+                        generation,
+                        session,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadTableData {
+                request,
+                session,
+                generation,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    data_manager::fetch_page(
+                        Arc::clone(&active.session),
+                        request,
                         generation,
                         session,
                         self.action_tx.clone(),

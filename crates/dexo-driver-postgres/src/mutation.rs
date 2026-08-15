@@ -140,7 +140,7 @@ fn render_fetch(request: &DataRequest) -> Result<(String, Binder), DriverError> 
     }
     sql.push_str(&format!(
         " LIMIT {} OFFSET {}",
-        binder.push(DbValue::I64(i64::from(request.page.limit))),
+        binder.push(DbValue::I64(i64::from(request.page.limit) + 1)),
         binder.push(DbValue::I64(request.page.offset as i64))
     ));
     Ok((sql, binder))
@@ -218,6 +218,7 @@ fn predicate(
 impl DataMutator for PostgresSession {
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError> {
         let _ = Page::new(request.page.offset, request.page.limit)?;
+        request.validate()?;
         let (sql, binder) = render_fetch(&request)?;
         let boxed = binder.boxed();
         let refs: Vec<&(dyn ToSql + Sync)> =
@@ -237,10 +238,12 @@ impl DataMutator for PostgresSession {
                     })
                     .collect()
             });
-        Ok(DataPage {
+        Ok(DataPage::from_fetched(
             columns,
-            rows: rows.iter().map(decode_row).collect(),
-        })
+            rows.iter().map(decode_row).collect(),
+            request.page.offset,
+            request.page.limit,
+        ))
     }
 
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError> {

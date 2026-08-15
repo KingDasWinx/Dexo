@@ -35,6 +35,13 @@ pub struct DataScreen {
     pub related_open: Vec<String>,
     pub related_fk: Option<ForeignKey>,
     pub related_row: Vec<(String, Option<DbValue>)>,
+    pub page_offset: u64,
+    pub page_limit: u32,
+    pub has_more: bool,
+    pub loading: bool,
+    pub filter: Option<dexo_driver_api::Filter>,
+    pub sort: Vec<dexo_driver_api::Sort>,
+    pub last_error: Option<String>,
 }
 
 impl Default for DataScreen {
@@ -54,6 +61,13 @@ impl Default for DataScreen {
             related_open: Vec::new(),
             related_fk: None,
             related_row: Vec::new(),
+            page_offset: 0,
+            page_limit: 100,
+            has_more: false,
+            loading: false,
+            filter: None,
+            sort: Vec::new(),
+            last_error: None,
         }
     }
 }

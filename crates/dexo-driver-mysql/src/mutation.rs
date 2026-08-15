@@ -117,7 +117,8 @@ fn render_fetch(request: &DataRequest) -> (String, Binder) {
     }
     sql.push_str(&format!(
         " LIMIT {} OFFSET {}",
-        request.page.limit, request.page.offset
+        request.page.limit.saturating_add(1),
+        request.page.offset
     ));
     (sql, binder)
 }
@@ -192,6 +193,7 @@ fn predicate(
 impl DataMutator for MysqlSession {
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError> {
         let _ = Page::new(request.page.offset, request.page.limit)?;
+        request.validate()?;
         let (sql, binder) = render_fetch(&request);
         let mut conn = self.conn.lock().await;
         let rows: Vec<mysql_async::Row> = conn
@@ -202,10 +204,12 @@ impl DataMutator for MysqlSession {
             .first()
             .map(|row| row.columns_ref().iter().map(column_meta).collect())
             .unwrap_or_default();
-        Ok(DataPage {
+        Ok(DataPage::from_fetched(
             columns,
-            rows: rows.iter().map(decode_row).collect(),
-        })
+            rows.iter().map(decode_row).collect(),
+            request.page.offset,
+            request.page.limit,
+        ))
     }
 
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError> {

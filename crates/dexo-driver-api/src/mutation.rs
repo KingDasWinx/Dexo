@@ -53,10 +53,52 @@ pub struct DataRequest {
     pub page: Page,
 }
 
+impl DataRequest {
+    pub fn validate(&self) -> Result<(), DriverError> {
+        for column in self
+            .columns
+            .iter()
+            .chain(self.sort.iter().map(|sort| &sort.column))
+        {
+            if column.0.is_empty() || column.0.contains('\0') {
+                return Err(DriverError::new(
+                    DriverErrorCategory::Configuration,
+                    "invalid column",
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DataPage {
     pub columns: Vec<ColumnMeta>,
     pub rows: Vec<Vec<DbValue>>,
+    pub offset: u64,
+    pub has_more: bool,
+    pub estimated_total: Option<u64>,
+}
+
+impl DataPage {
+    pub fn from_fetched(
+        columns: Vec<ColumnMeta>,
+        mut rows: Vec<Vec<DbValue>>,
+        offset: u64,
+        limit: u32,
+    ) -> Self {
+        let has_more = rows.len() > limit as usize;
+        if has_more {
+            rows.truncate(limit as usize);
+        }
+        Self {
+            columns,
+            rows,
+            offset,
+            has_more,
+            estimated_total: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

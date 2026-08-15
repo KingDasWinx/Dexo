@@ -393,8 +393,31 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.inspector.tab = crate::screens::object_inspector::InspectorTab::Ddl;
             effects
         }
-        Action::OpenObjectData => {
-            model.messages.push("data tabs require Sprint 20".into());
+        Action::OpenObjectData => open_object_data(model),
+        Action::ChangeDataPage { offset } => change_data_page(model, offset),
+        Action::ApplyRemoteSort | Action::ApplyRemoteFilter => reload_object_data(model),
+        Action::DataPageLoaded {
+            generation,
+            session,
+            page,
+        } => {
+            if catalog_generation_matches(model, &session, generation) {
+                model.data.apply_page(page.clone());
+                model.results.clear();
+                model.results.set_columns(page.columns);
+                model.results.append_rows(page.rows);
+            }
+            Vec::new()
+        }
+        Action::DataPageFailed {
+            generation,
+            message,
+        } => {
+            if generation == model.session_generation {
+                model.data.loading = false;
+                model.data.last_error = Some(message.clone());
+                model.messages.push(message);
+            }
             Vec::new()
         }
         Action::GoToDefinition => goto_definition(model),
@@ -1677,6 +1700,53 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     };
     model.explorer.expand_with(&id, operation);
     catalog_load_effect(model, Some(id), operation, false)
+}
+
+fn open_object_data(model: &mut Model) -> Vec<Effect> {
+    let Some(node) = model.explorer.selected_node() else {
+        return Vec::new();
+    };
+    if model.active_session.is_none() {
+        model
+            .messages
+            .push("connect a session to browse table data".into());
+        return Vec::new();
+    }
+    model.data.target = dexo_app::parse_qualified(&node.qualified);
+    model.data.loading = true;
+    model.data.last_error = None;
+    model.data.page_offset = 0;
+    reload_object_data(model)
+}
+
+fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
+    model.data.page_offset = offset;
+    model.data.loading = true;
+    reload_object_data(model)
+}
+
+fn reload_object_data(model: &mut Model) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    match crate::runtime::data_manager::table_request(
+        model.data.target.clone(),
+        Vec::new(),
+        model.data.filter.clone(),
+        model.data.sort.clone(),
+        model.data.page_offset,
+        model.data.page_limit,
+    ) {
+        Ok(request) => vec![Effect::LoadTableData {
+            request,
+            session,
+            generation: model.session_generation,
+        }],
+        Err(message) => {
+            model.messages.push(message);
+            Vec::new()
+        }
+    }
 }
 
 fn open_inspector(model: &mut Model) -> Vec<Effect> {

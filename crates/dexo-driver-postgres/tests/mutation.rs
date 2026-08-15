@@ -81,6 +81,8 @@ async fn postgres_paging_and_typed_filter() {
         .unwrap();
     assert_eq!(page.rows.len(), 2);
     assert_eq!(page.rows[0][0], DbValue::I64(3));
+    assert!(!page.has_more);
+    assert_eq!(page.offset, 0);
 }
 
 #[tokio::test]
