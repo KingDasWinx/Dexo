@@ -24,7 +24,8 @@ fn operation_key_rejects_a_stale_session_generation() {
 async fn storage_worker_creates_and_loads_the_default_project() {
     let dir = tempfile::tempdir().unwrap();
     let worker =
-        dexo_tui::runtime::storage_worker::StorageWorker::start(dir.path().join("dexo.db")).unwrap();
+        dexo_tui::runtime::storage_worker::StorageWorker::start(dir.path().join("dexo.db"))
+            .unwrap();
     let bootstrap = worker.bootstrap().await.unwrap();
     assert_eq!(bootstrap.active_project.name, "Default");
     assert!(bootstrap.connections.is_empty());
@@ -194,12 +195,7 @@ async fn collect_until_finished(actions: &mut tokio::sync::mpsc::Receiver<Action
     let mut received = Vec::new();
     let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(2);
     while tokio::time::Instant::now() < deadline {
-        match tokio::time::timeout(
-            std::time::Duration::from_millis(200),
-            actions.recv(),
-        )
-        .await
-        {
+        match tokio::time::timeout(std::time::Duration::from_millis(200), actions.recv()).await {
             Ok(Some(action)) => {
                 let done = matches!(
                     action,
@@ -252,8 +248,10 @@ async fn script_streams_two_real_tabs_and_cancel_reaches_session() {
 
 #[tokio::test]
 async fn stale_generation_is_ignored_by_the_reducer() {
-    let mut model = dexo_tui::Model::default();
-    model.session_generation = 4;
+    let mut model = dexo_tui::Model {
+        session_generation: 4,
+        ..dexo_tui::Model::default()
+    };
     let stale = OperationKey::new(OperationId::new(), "", "scratch", 3);
     dexo_tui::update(
         &mut model,

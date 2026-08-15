@@ -14,6 +14,7 @@ use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
 };
 
+pub mod document_io;
 pub mod query_runner;
 pub mod session_registry;
 pub mod storage_worker;
@@ -159,7 +160,9 @@ impl WorkbenchRuntime {
             crate::Effect::ClearHistory { connection_id } => {
                 self.clear_history(connection_id).await
             }
-            crate::Effect::PersistLayout => self.persist_layout().await,
+            crate::Effect::PersistLayout { project_id, layout } => {
+                self.persist_layout(project_id, layout).await
+            }
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
     }
@@ -199,7 +202,11 @@ impl WorkbenchRuntime {
         match self.open_session(&profile).await {
             Ok(session) => {
                 let id = self.sessions.insert(profile.name.clone(), session);
-                let generation = self.sessions.get(id).map(|active| active.generation).unwrap_or(1);
+                let generation = self
+                    .sessions
+                    .get(id)
+                    .map(|active| active.generation)
+                    .unwrap_or(1);
                 self.emit(Action::ConnectionChanged {
                     name: profile.name,
                     ready: true,
@@ -259,9 +266,7 @@ impl WorkbenchRuntime {
         query_runner::cancel_live(&self.query, &self.live, id).await;
         let _ = self
             .action_tx
-            .send(Action::OperationCancelled(OperationKey::new(
-                id, "", "", 0,
-            )))
+            .send(Action::OperationCancelled(OperationKey::new(id, "", "", 0)))
             .await;
     }
 
@@ -340,11 +345,81 @@ impl WorkbenchRuntime {
         }
     }
 
-    async fn load_document(&mut self, _request: DocumentIoRequest) {}
+    async fn load_document(&mut self, request: DocumentIoRequest) {
+        match tokio::fs::read_to_string(&request.path).await {
+            Ok(content) => {
+                self.emit(Action::DocumentLoaded {
+                    document: request.document,
+                    content,
+                })
+                .await;
+            }
+            Err(error) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", request.document, 0),
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
 
-    async fn save_document(&mut self, _request: DocumentIoRequest) {}
+    async fn save_document(&mut self, request: DocumentIoRequest) {
+        let result = if let Some(expected) = request.expected_fingerprint.as_deref() {
+            match document_io::fingerprint(&request.path).await {
+                Ok(disk) if disk.hash != expected => {
+                    self.emit(Action::DocumentConflict {
+                        path: request.path.display().to_string(),
+                    })
+                    .await;
+                    return;
+                }
+                Ok(_) => document_io::save_sql_atomic(&request.path, &request.content).await,
+                Err(error) => Err(error),
+            }
+        } else {
+            document_io::save_sql_atomic(&request.path, &request.content).await
+        };
+        match result {
+            Ok(()) => {
+                if let Some(storage) = &self.storage {
+                    let _ = storage.save_document(request);
+                }
+            }
+            Err(document_io::DocumentIoError::ExternalConflict { path, .. }) => {
+                self.emit(Action::DocumentConflict {
+                    path: path.display().to_string(),
+                })
+                .await;
+            }
+            Err(error) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
 
-    async fn checkpoint_recovery(&mut self, _request: RecoveryCheckpointRequest) {}
+    async fn checkpoint_recovery(&mut self, request: RecoveryCheckpointRequest) {
+        if let Some(storage) = &self.storage {
+            let _ = storage.checkpoint_recovery(request);
+        }
+    }
+
+    async fn persist_layout(&mut self, project_id: String, layout: dexo_storage::WorkbenchLayout) {
+        if let Some(storage) = &self.storage {
+            let _ = storage.persist_layout(project_id, layout);
+        }
+    }
+
+    async fn shutdown(&mut self) {
+        if let Some(storage) = &self.storage {
+            let _ = storage.mark_clean_shutdown();
+            storage.shutdown();
+        }
+    }
 
     async fn persist_history(&mut self, request: PersistHistoryRequest) {
         if let Some(storage) = &self.storage {
@@ -371,14 +446,6 @@ impl WorkbenchRuntime {
     async fn clear_history(&mut self, connection_id: String) {
         if let Some(storage) = &self.storage {
             let _ = storage.clear_history(connection_id);
-        }
-    }
-
-    async fn persist_layout(&mut self) {}
-
-    async fn shutdown(&mut self) {
-        if let Some(storage) = &self.storage {
-            storage.shutdown();
         }
     }
 

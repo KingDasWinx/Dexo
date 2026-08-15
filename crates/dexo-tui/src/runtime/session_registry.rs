@@ -102,7 +102,11 @@ impl SessionRegistry {
         self.refresh_state(id)
     }
 
-    pub async fn savepoint(&mut self, id: SessionId, name: &str) -> Result<TransactionState, String> {
+    pub async fn savepoint(
+        &mut self,
+        id: SessionId,
+        name: &str,
+    ) -> Result<TransactionState, String> {
         let session = self.session_arc(id)?;
         TransactionService::savepoint(session.as_ref(), name)
             .await

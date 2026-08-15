@@ -32,8 +32,7 @@ impl<'a> SnippetRepository<'a> {
             .conn
             .prepare("SELECT id, name, body FROM snippets ORDER BY name")?;
         let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
-        rows.collect::<Result<Vec<_>, _>>()
-            .map_err(Into::into)
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
     }
 
     pub fn delete(&self, id: &str) -> anyhow::Result<()> {

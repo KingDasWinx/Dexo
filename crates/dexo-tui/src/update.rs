@@ -12,7 +12,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::Mouse(_) => Vec::new(),
         Action::Resize { width, height } => {
             model.apply_size(width, height);
-            vec![Effect::PersistLayout]
+            vec![persist_layout_effect(model)]
         }
         Action::ConnectionChanged {
             name,
@@ -79,7 +79,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_operation = None;
             persist_history_effect(model)
         }
-        Action::CheckpointTick => Vec::new(),
+        Action::CheckpointTick => checkpoint_dirty(model),
         Action::TransactionChanged {
             session,
             generation,
@@ -180,6 +180,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::Focus(target) => {
             crate::screens::editor::end_typing(model);
+            let leaving_editor =
+                model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
             model.focus = match target {
                 FocusTarget::Explorer => Focus::Explorer,
                 FocusTarget::Editor => Focus::Editor,
@@ -187,7 +189,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 FocusTarget::Inspector => Focus::Inspector,
             };
             close_palette(model);
-            Vec::new()
+            if leaving_editor {
+                checkpoint_dirty(model)
+            } else {
+                Vec::new()
+            }
         }
         Action::ExplorerExpand => {
             if let Some(id) = model.explorer.selected.clone() {
@@ -426,6 +432,17 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.editor.snippets = snippets;
             Vec::new()
         }
+        Action::DocumentLoaded { document, content } => {
+            if let Some(doc) = model.documents.iter_mut().find(|item| item.id == document) {
+                *doc = crate::model::EditorDocument::with_text(content);
+                doc.id = document;
+            }
+            Vec::new()
+        }
+        Action::DocumentConflict { path } => {
+            model.messages.push(format!("file changed on disk: {path}"));
+            Vec::new()
+        }
         Action::ResultsUp => {
             model.results.scroll_rows(-1);
             Vec::new()
@@ -459,7 +476,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.results.scroll_rows(-offset);
             Vec::new()
         }
-        Action::Quit => vec![Effect::Quit],
+        Action::Quit => {
+            let mut effects = checkpoint_dirty(model);
+            effects.push(persist_layout_effect(model));
+            effects.push(Effect::Shutdown);
+            effects
+        }
     }
 }
 
@@ -754,6 +776,40 @@ fn close_palette(model: &mut Model) {
     }
 }
 
+fn persist_layout_effect(model: &Model) -> Effect {
+    Effect::PersistLayout {
+        project_id: model.project_id.clone(),
+        layout: dexo_storage::WorkbenchLayout {
+            version: dexo_storage::LAYOUT_VERSION,
+            explorer_visible: model.panes.explorer_visible,
+            inspector_visible: model.panes.inspector_visible,
+            results_visible: model.panes.results_visible,
+            explorer_width: model.panes.explorer_width,
+            inspector_width: model.panes.inspector_width,
+            results_height: model.panes.results_height,
+            focused_panel: format!("{:?}", model.focus).to_ascii_lowercase(),
+            active_tab: model.tabs.active,
+            tabs: model.tabs.titles.clone(),
+        },
+    }
+}
+
+fn checkpoint_dirty(model: &Model) -> Vec<Effect> {
+    model
+        .documents
+        .iter()
+        .filter(|document| document.is_dirty())
+        .map(|document| {
+            Effect::CheckpointRecovery(crate::action::RecoveryCheckpointRequest {
+                document: document.id.clone(),
+                project_id: model.project_id.clone(),
+                title: document.title.clone(),
+                content: document.text(),
+            })
+        })
+        .collect()
+}
+
 fn persist_history_effect(model: &Model) -> Vec<Effect> {
     let sql = model.active_document().text();
     if sql.trim().is_empty() {
@@ -765,14 +821,16 @@ fn persist_history_effect(model: &Model) -> Vec<Effect> {
     }
     .for_storage(model.editor.history_policy);
     // Sensitive parameter values are never stored; HistoryPolicy::SqlOnly is the default.
-    vec![Effect::PersistHistory(crate::action::PersistHistoryRequest {
-        connection_id: if model.connection.name.is_empty() {
-            None
-        } else {
-            Some(model.connection.name.clone())
+    vec![Effect::PersistHistory(
+        crate::action::PersistHistoryRequest {
+            connection_id: if model.connection.name.is_empty() {
+                None
+            } else {
+                Some(model.connection.name.clone())
+            },
+            sql: entry.sql,
         },
-        sql: entry.sql,
-    })]
+    )]
 }
 
 fn start_query(model: &mut Model) -> Vec<Effect> {
@@ -805,7 +863,8 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
         .map(|id| id.0.to_string())
         .unwrap_or_default();
     let document = model.active_document().id.clone();
-    vec![Effect::StartScript(crate::action::ScriptRequest {
+    let mut effects = checkpoint_dirty(model);
+    effects.push(Effect::StartScript(crate::action::ScriptRequest {
         key: crate::runtime::OperationKey::new(
             operation,
             session,
@@ -821,7 +880,8 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
             .map(|parameter| parameter.value.clone())
             .collect(),
         timeout: std::time::Duration::from_secs(30),
-    })]
+    }));
+    effects
 }
 
 fn cancel_query(model: &mut Model) -> Vec<Effect> {

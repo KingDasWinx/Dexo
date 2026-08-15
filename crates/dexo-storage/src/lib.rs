@@ -16,7 +16,7 @@ mod snippet;
 pub use catalog_cache::CatalogCache;
 pub use connection::{ConnectionRepository, ImportReport, export_portable, import_portable};
 pub use database::{AppPaths, Database};
-pub use document::{DocumentRepository, FileFingerprint, has_external_conflict};
+pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};
 pub use history::HistoryRepository;
 pub use layout::{LAYOUT_VERSION, LayoutRepository, Preferences, WorkbenchLayout};
 pub use mcp::SqliteGrantLedger;

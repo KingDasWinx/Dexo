@@ -40,9 +40,8 @@ impl<'a> HistoryRepository<'a> {
             let mut stmt = self.conn.prepare(
                 "SELECT id, sql FROM sql_history WHERE connection_id = ?1 ORDER BY created_at DESC",
             )?;
-            let rows = stmt.query_map(params![connection_id], |row| {
-                Ok((row.get(0)?, row.get(1)?))
-            })?;
+            let rows =
+                stmt.query_map(params![connection_id], |row| Ok((row.get(0)?, row.get(1)?)))?;
             rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
         } else {
             let mut stmt = self

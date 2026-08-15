@@ -52,12 +52,21 @@ pub struct RowBatch {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueryEvent {
-    ResultSetStarted { index: usize },
+    ResultSetStarted {
+        index: usize,
+    },
     Columns(Vec<ColumnMeta>),
     Rows(RowBatch),
-    Notice { message: String },
-    ResultSetFinished { index: usize, rows_affected: Option<u64> },
-    Finished { rows_affected: Option<u64> },
+    Notice {
+        message: String,
+    },
+    ResultSetFinished {
+        index: usize,
+        rows_affected: Option<u64>,
+    },
+    Finished {
+        rows_affected: Option<u64>,
+    },
 }
 
 #[derive(Clone, Debug, PartialEq)]

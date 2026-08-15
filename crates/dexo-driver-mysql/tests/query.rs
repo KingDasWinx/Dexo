@@ -231,18 +231,20 @@ async fn timeout_or_cancel_mysql_sleep() {
     let mut request = QueryRequest::read("SELECT SLEEP(30)", 1);
     request.timeout = std::time::Duration::from_millis(200);
     let events = collect_results(fixture.session.execute(request).await.unwrap()).await;
-    assert!(events.iter().any(|event| match event {
-        Err(error) => matches!(
-            error.category(),
-            dexo_driver_api::DriverErrorCategory::Timeout
-                | dexo_driver_api::DriverErrorCategory::Cancelled
-        ),
-        Ok(QueryEvent::Rows(batch)) => batch
-            .rows
-            .iter()
-            .flatten()
-            .any(|value| matches!(value, DbValue::I64(1) | DbValue::U64(1))),
-        Ok(_) => false,
+    assert!(events.iter().any(|event| {
+        match event {
+            Err(error) => matches!(
+                error.category(),
+                dexo_driver_api::DriverErrorCategory::Timeout
+                    | dexo_driver_api::DriverErrorCategory::Cancelled
+            ),
+            Ok(QueryEvent::Rows(batch)) => batch
+                .rows
+                .iter()
+                .flatten()
+                .any(|value| matches!(value, DbValue::I64(1) | DbValue::U64(1))),
+            Ok(_) => false,
+        }
     }));
 }
 

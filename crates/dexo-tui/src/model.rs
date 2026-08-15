@@ -728,11 +728,15 @@ impl Model {
     }
 
     pub fn active_document(&self) -> &EditorDocument {
-        &self.documents[self.active_document.min(self.documents.len().saturating_sub(1))]
+        &self.documents[self
+            .active_document
+            .min(self.documents.len().saturating_sub(1))]
     }
 
     pub fn active_document_mut(&mut self) -> &mut EditorDocument {
-        let index = self.active_document.min(self.documents.len().saturating_sub(1));
+        let index = self
+            .active_document
+            .min(self.documents.len().saturating_sub(1));
         &mut self.documents[index]
     }
 

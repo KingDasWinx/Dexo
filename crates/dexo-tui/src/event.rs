@@ -1,11 +1,11 @@
-use std::collections::VecDeque;
-use std::time::Duration;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use dexo_app::DriverRegistry;
 use dexo_storage::AppPaths;
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
+use std::collections::VecDeque;
+use std::time::Duration;
 
 use crate::action::{Action, Effect};
 use crate::model::Model;

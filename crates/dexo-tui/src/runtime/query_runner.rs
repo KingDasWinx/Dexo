@@ -25,9 +25,7 @@ pub async fn run_script(
     live: Arc<tokio::sync::Mutex<Option<LiveQuery>>>,
 ) {
     let key = request.key.clone();
-    let _ = action_tx
-        .send(Action::OperationStarted(key.clone()))
-        .await;
+    let _ = action_tx.send(Action::OperationStarted(key.clone())).await;
     let mut failed = false;
     for (index, sql) in request.statements.iter().enumerate() {
         if failed && request.policy == ScriptPolicy::StopOnError {

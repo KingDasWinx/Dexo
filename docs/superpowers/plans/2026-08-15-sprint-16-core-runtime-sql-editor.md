@@ -642,7 +642,7 @@ git commit -m "feat(tui): connect SQL intelligence and history"
 - Test: `crates/dexo-tui/tests/editor_flow.rs`
 - Create: `crates/dexo/tests/tui_query_live.rs`
 
-- [ ] **Step 1: Write failing atomic-save, conflict, and crash-recovery tests**
+- [x] **Step 1: Write failing atomic-save, conflict, and crash-recovery tests**
 
 ```rust
 #[tokio::test]
@@ -658,21 +658,21 @@ async fn save_is_atomic_and_external_change_requires_resolution() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test editor_flow save_is_atomic_and_external_change_requires_resolution`
 
 Expected: FAIL because document I/O is missing.
 
-- [ ] **Step 3: Implement atomic save and complete repository CRUD**
+- [x] **Step 3: Implement atomic save and complete repository CRUD**
 
 Write to a unique `.dexo-part-<uuid>` in the same directory, `sync_all`, then rename. On Windows, handle existing target with the safest replace supported by `std::fs`; never delete the original before the replacement is durable. Compute SHA-256 plus mtime fingerprint. Add `DocumentRepository::{get, list_for_project, delete}`.
 
-- [ ] **Step 4: Wire checkpoint ticks and clean shutdown**
+- [x] **Step 4: Wire checkpoint ticks and clean shutdown**
 
 Every dirty scratch is checkpointed after debounce and before execution/focus loss/shutdown. Startup loads `SessionRecoveryState` and emits a real recovery action. Clean shutdown is marked only after documents and layout flush. Parameter values and session handles are excluded.
 
-- [ ] **Step 5: Add ignored live TUI runtime acceptance tests**
+- [x] **Step 5: Add ignored live TUI runtime acceptance tests**
 
 The test must start both testcontainers, create profiles in a temporary `DEXO_DATA_HOME`, instantiate `WorkbenchRuntime`, connect, type/execute `select`, verify returned rows, begin/rollback a transaction, cancel sleep, save/reopen a scratch, and assert no sentinel appears in SQLite/logs.
 
@@ -701,11 +701,11 @@ git commit -m "feat(tui): persist SQL work and complete core runtime"
 
 ## Sprint 16 exit checklist
 
-- [ ] Typing, cursor, selection, undo/redo, highlight, completion, format, snippets, parameters, and history work in the TUI.
-- [ ] Create connection retains a live session.
+- [x] Typing, cursor, selection, undo/redo, highlight, completion, format, snippets, parameters, and history work in the TUI.
+- [x] Create connection retains a live session.
 - [ ] F5 streams real PostgreSQL/MySQL rows and notices into the correct result tabs.
-- [ ] Cancellation reaches the same transported session generation.
-- [ ] Begin/commit/rollback/savepoints reach the driver and status follows the response.
-- [ ] `.sql` files and scratches survive restart; conflicts never overwrite silently.
-- [ ] Runtime actions reject stale session/document generations.
+- [x] Cancellation reaches the same transported session generation.
+- [x] Begin/commit/rollback/savepoints reach the driver and status follows the response.
+- [x] `.sql` files and scratches survive restart; conflicts never overwrite silently.
+- [x] Runtime actions reject stale session/document generations.
 - [ ] The complete sprint gate is green.

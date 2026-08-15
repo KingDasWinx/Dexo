@@ -132,6 +132,13 @@ pub enum Action {
     ClearHistory,
     HistoryLoaded(Vec<String>),
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
+    DocumentLoaded {
+        document: String,
+        content: String,
+    },
+    DocumentConflict {
+        path: String,
+    },
     Quit,
 }
 
@@ -178,7 +185,10 @@ pub struct PersistHistoryRequest {
 pub enum Effect {
     StartScript(ScriptRequest),
     CancelOperation(OperationId),
-    PersistLayout,
+    PersistLayout {
+        project_id: String,
+        layout: dexo_storage::WorkbenchLayout,
+    },
     CreateConnection {
         input: NewConnection,
         password: String,

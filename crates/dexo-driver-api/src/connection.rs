@@ -1,11 +1,11 @@
 use secrecy::SecretString;
 
+use crate::query::SessionEventStream;
 use crate::{
     AdministrationProvider, BulkWriter, CapabilityState, CatalogReader, DataMutator, DdlExecutor,
     DriverError, ExplainProvider, QueryId, QueryRequest, QueryStream, SecurityAdmin,
     TransactionControl,
 };
-use crate::query::SessionEventStream;
 
 #[derive(Clone, Debug)]
 pub struct ConnectRequest {

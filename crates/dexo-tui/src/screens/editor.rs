@@ -117,7 +117,12 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
             .find(" from ")
             .map(|index| index + 6)
             .unwrap_or(byte_cursor);
-        model.editor.completions = complete(&sql, at.min(sql.len()), &model.editor.catalog, Dialect::Postgres);
+        model.editor.completions = complete(
+            &sql,
+            at.min(sql.len()),
+            &model.editor.catalog,
+            Dialect::Postgres,
+        );
         model.editor.completion_open = true;
     }
 }
@@ -449,9 +454,8 @@ fn line_col(text: &str, cursor: usize) -> (usize, usize) {
 
 fn cursor_at(text: &str, line: usize, col: usize) -> usize {
     let mut current_line = 0;
-    let mut index = 0;
     let mut line_start = 0;
-    for ch in text.chars() {
+    for (index, ch) in text.chars().enumerate() {
         if current_line == line && index - line_start >= col {
             return index;
         }
@@ -462,7 +466,6 @@ fn cursor_at(text: &str, line: usize, col: usize) -> usize {
             current_line += 1;
             line_start = index + 1;
         }
-        index += 1;
     }
     if current_line < line {
         return text.chars().count();

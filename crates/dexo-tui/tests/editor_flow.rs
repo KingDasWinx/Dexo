@@ -54,7 +54,13 @@ fn editor_highlights_formats_completes_and_prompts_for_parameters() {
 fn editor_formats_inserts_snippet_and_keeps_history_sql_only() {
     let mut model = model_with_sql("select 1");
     update(&mut model, Action::FormatSql);
-    assert!(model.active_document().text().to_ascii_lowercase().contains("select"));
+    assert!(
+        model
+            .active_document()
+            .text()
+            .to_ascii_lowercase()
+            .contains("select")
+    );
     model.editor.snippets.push(dexo_sql::Snippet {
         name: "sel".into(),
         body: "select ${1:*} from t".into(),
@@ -62,14 +68,17 @@ fn editor_formats_inserts_snippet_and_keeps_history_sql_only() {
     model.set_sql("");
     update(&mut model, Action::InsertSnippet);
     assert_eq!(model.active_document().text(), "select * from t");
-    let effects = update(&mut model, Action::ScriptFinished {
-        key: dexo_tui::runtime::OperationKey::new(
-            dexo_tui::runtime::OperationId::new(),
-            "",
-            "scratch",
-            1,
-        ),
-    });
+    let effects = update(
+        &mut model,
+        Action::ScriptFinished {
+            key: dexo_tui::runtime::OperationKey::new(
+                dexo_tui::runtime::OperationId::new(),
+                "",
+                "scratch",
+                1,
+            ),
+        },
+    );
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
@@ -105,7 +114,10 @@ fn editor_arrows_home_end_and_word_motion() {
         "select from users".chars().count()
     );
     update(&mut model, key_mod(KeyCode::Left, KeyModifiers::CONTROL));
-    assert_eq!(model.active_document().cursor(), "select from ".chars().count());
+    assert_eq!(
+        model.active_document().cursor(),
+        "select from ".chars().count()
+    );
     update(&mut model, key(KeyCode::Left));
     assert_eq!(
         model.active_document().cursor(),
@@ -167,4 +179,22 @@ fn editor_scrolls_cursor_into_view() {
     assert!(doc.viewport_line > 0, "viewport should follow cursor");
     assert!(line >= doc.viewport_line);
     assert!(line < doc.viewport_line + 12);
+}
+
+#[tokio::test]
+async fn save_is_atomic_and_external_change_requires_resolution() {
+    use dexo_tui::runtime::document_io::{
+        DocumentIoError, fingerprint, save_if_unchanged, save_sql_atomic,
+    };
+
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("query.sql");
+    save_sql_atomic(&path, "select 1").await.unwrap();
+    let first = fingerprint(&path).await.unwrap();
+    tokio::fs::write(&path, "select 2").await.unwrap();
+    let error = save_if_unchanged(&path, &first, "select 3")
+        .await
+        .unwrap_err();
+    assert!(matches!(error, DocumentIoError::ExternalConflict { .. }));
+    assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "select 2");
 }

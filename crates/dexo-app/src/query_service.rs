@@ -1,6 +1,8 @@
 use std::sync::Arc;
 
-use dexo_driver_api::{DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryRequest, Session};
+use dexo_driver_api::{
+    DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryRequest, Session,
+};
 use dexo_runtime::{RuntimeTaskId, TaskRegistry, bounded_events};
 use futures_util::StreamExt;
 use tokio::sync::mpsc::Receiver;
@@ -26,11 +28,7 @@ impl QueryService {
         &self.registry
     }
 
-    pub async fn start(
-        &self,
-        session: Arc<dyn Session>,
-        request: QueryRequest,
-    ) -> QueryTask {
+    pub async fn start(&self, session: Arc<dyn Session>, request: QueryRequest) -> QueryTask {
         let handle = self.registry.register();
         let (tx, rx) = bounded_events(2);
         let token = handle.token.clone();

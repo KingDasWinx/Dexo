@@ -61,7 +61,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         };
         let mut spans = vec![
             Span::styled(format!("{line_no:>4}"), muted),
-            Span::styled(format!("{marker}"), marker_style),
+            Span::styled(marker.to_string(), marker_style),
         ];
         let visible = visible_slice(line, doc.viewport_column, text_width as usize);
         let line_start = char_at;
