@@ -44,5 +44,6 @@ tree-sitter-sequel = "0.3.11"
 sha2 = "0.10"
 csv = "1.4.0"
 encoding_rs = "0.8.35"
+rpassword = "7.4"
 rmcp = { version = "3.1.2", default-features = false, features = ["server", "transport-io", "macros", "schemars"] }
 schemars = "1.2.2"

@@ -235,6 +235,38 @@ pub enum SessionsCommand {
 #[derive(Debug, Subcommand)]
 pub enum ConnectionsCommand {
     List,
+    Add {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        driver: String,
+        #[arg(long)]
+        host: String,
+        #[arg(long)]
+        port: Option<u16>,
+        #[arg(long)]
+        database: String,
+        #[arg(long)]
+        username: String,
+        #[arg(long, default_value = "local")]
+        environment: String,
+        #[arg(long)]
+        non_interactive: bool,
+        #[arg(long)]
+        password_stdin: bool,
+        #[arg(long)]
+        test: bool,
+        #[arg(long)]
+        no_test: bool,
+    },
+    SetSecret {
+        #[arg(long)]
+        name: String,
+        #[arg(long)]
+        non_interactive: bool,
+        #[arg(long)]
+        password_stdin: bool,
+    },
     Test {
         #[arg(long)]
         name: String,
