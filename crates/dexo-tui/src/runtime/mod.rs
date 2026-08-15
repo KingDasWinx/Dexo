@@ -14,6 +14,8 @@ use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
 };
 
+pub mod catalog_manager;
+pub mod clipboard;
 pub mod connection_manager;
 pub mod document_io;
 pub mod project_manager;
@@ -217,6 +219,85 @@ impl WorkbenchRuntime {
                 documents,
             } => self.flush_documents(project_id, documents).await,
             crate::Effect::CloseProjectSessions => self.close_project_sessions().await,
+            crate::Effect::LoadCatalogChildren {
+                parent,
+                operation,
+                session,
+                generation,
+                replace_roots,
+                include_system,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    catalog_manager::load_children(
+                        Arc::clone(&active.session),
+                        parent,
+                        operation,
+                        session,
+                        generation,
+                        replace_roots,
+                        include_system,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadObjectInspector {
+                id,
+                session,
+                generation,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    catalog_manager::load_inspector(
+                        Arc::clone(&active.session),
+                        id,
+                        generation,
+                        session,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::CopyToClipboard { text } => match clipboard::copy_text(text.clone()) {
+                Ok(()) => self.emit(Action::ClipboardWritten { text }).await,
+                Err(message) => self.emit(Action::ClipboardFailed { message }).await,
+            },
+            crate::Effect::CaptureCatalogSnapshot {
+                connection_id,
+                database_name,
+                session,
+                include_system,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    if let Ok(paths) = AppPaths::discover() {
+                        catalog_manager::capture_snapshot(
+                            Arc::clone(&active.session),
+                            connection_id,
+                            database_name,
+                            include_system,
+                            paths.database,
+                        )
+                        .await;
+                    }
+                }
+            }
+            crate::Effect::LoadOfflineCatalog {
+                connection_id,
+                database_name,
+                generation,
+            } => {
+                self.load_offline_catalog(connection_id, database_name, generation)
+                    .await
+            }
+            crate::Effect::LoadObjectUsage {
+                project_id,
+                connection_id,
+            } => self.load_object_usage(project_id, connection_id).await,
+            crate::Effect::PersistFavorite {
+                project_id,
+                connection_id,
+                object_id,
+                favorite,
+            } => self.persist_favorite(project_id, connection_id, object_id, favorite),
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
     }
@@ -851,6 +932,80 @@ impl WorkbenchRuntime {
             let _ = storage.mark_clean_shutdown();
             storage.shutdown();
         }
+    }
+
+    async fn load_offline_catalog(
+        &self,
+        connection_id: String,
+        database_name: String,
+        generation: u64,
+    ) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let cache = dexo_storage::CatalogCache::new(db.connection());
+        let created_at = cache
+            .latest_metadata(&connection_id, &database_name)
+            .ok()
+            .flatten()
+            .map(|meta| meta.created_at);
+        let Ok(objects) = cache.load_latest(&connection_id, &database_name) else {
+            return;
+        };
+        self.emit(Action::OfflineCatalogLoaded {
+            generation,
+            list: dexo_driver_api::CatalogList {
+                objects,
+                restrictions: vec![],
+            },
+            created_at,
+        })
+        .await;
+    }
+
+    async fn load_object_usage(&self, project_id: String, connection_id: String) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let Ok(rows) = dexo_storage::ObjectUsageRepository::new(db.connection())
+            .list_for_connection(&project_id, &connection_id)
+        else {
+            return;
+        };
+        let ids = rows
+            .into_iter()
+            .filter(|row| row.favorite)
+            .map(|row| row.object_id)
+            .collect();
+        self.emit(Action::ApplyFavorites { ids }).await;
+    }
+
+    fn persist_favorite(
+        &self,
+        project_id: String,
+        connection_id: String,
+        object_id: String,
+        favorite: bool,
+    ) {
+        // ponytail: second rusqlite handle; fold into StorageCommand if catalog writes contend.
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let _ = dexo_storage::ObjectUsageRepository::new(db.connection()).set_favorite(
+            &project_id,
+            &connection_id,
+            &object_id,
+            favorite,
+        );
     }
 
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {

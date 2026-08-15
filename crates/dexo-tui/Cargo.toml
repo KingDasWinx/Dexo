@@ -26,6 +26,7 @@ uuid.workspace = true
 sha2.workspace = true
 anyhow.workspace = true
 serde_json.workspace = true
+arboard.workspace = true
 
 [dev-dependencies]
 insta.workspace = true

@@ -225,6 +225,9 @@ fn context_line(model: &Model) -> String {
 }
 
 fn inspector_body(model: &Model) -> String {
+    if model.inspector.open {
+        return describe_object_inspector(&model.inspector);
+    }
     if let Some(view) = &model.data.viewer {
         return crate::widgets::viewer::describe(view);
     }
@@ -239,6 +242,58 @@ fn inspector_body(model: &Model) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+fn describe_object_inspector(
+    inspector: &crate::screens::object_inspector::ObjectInspector,
+) -> String {
+    let mut lines = Vec::new();
+    if inspector.qualified_name.is_empty() {
+        lines.push("loading…".into());
+    } else {
+        lines.push(inspector.qualified_name.clone());
+    }
+    if let Some(error) = &inspector.error {
+        lines.push(format!("error: {error}"));
+    }
+    for restriction in &inspector.restrictions {
+        lines.push(format!("restricted: {restriction}"));
+    }
+    if let Some(object) = &inspector.object {
+        lines.push(format!("kind: {}", object.kind.as_str()));
+    }
+    if let Some(ddl) = &inspector.ddl {
+        lines.push(ddl.clone());
+    }
+    if !inspector.dependencies.is_empty() {
+        lines.push(format!(
+            "deps: {}",
+            inspector
+                .dependencies
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !inspector.dependents.is_empty() {
+        lines.push(format!(
+            "dependents: {}",
+            inspector
+                .dependents
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !inspector.effective_privileges.is_empty() {
+        lines.push(format!(
+            "privileges: {}",
+            inspector.effective_privileges.join(", ")
+        ));
+    }
+    lines.join("\n")
 }
 
 fn render_bar(frame: &mut Frame, area: Rect, text: String) {

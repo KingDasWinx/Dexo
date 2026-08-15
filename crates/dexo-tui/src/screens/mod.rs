@@ -8,6 +8,7 @@ pub mod explain;
 pub mod explorer;
 pub mod mcp_audit;
 pub mod mcp_profiles;
+pub mod object_inspector;
 pub mod projects;
 pub mod recovery;
 pub mod schema_diff;
