@@ -71,7 +71,7 @@ git commit -m "feat(storage): persist catalog favorites and recency"
 
 **Files:** PostgreSQL/MySQL catalog modules and their Docker tests.
 
-- [ ] **Step 1: Add dependency graph contracts**
+- [x] **Step 1: Add dependency graph contracts**
 
 Create schema objects with a table, view, foreign key, trigger, and routine. Assert `dependencies` and `dependents` return stable `ObjectId`s. Run as a least-privilege user and assert a `CatalogRestriction` or permission error rather than an empty success.
 
@@ -79,15 +79,15 @@ Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql --test catalog -- 
 
 Expected: MySQL dependency cases FAIL because they return `Vec::new()`.
 
-- [ ] **Step 2: Implement MySQL relations**
+- [x] **Step 2: Implement MySQL relations**
 
 Query `information_schema.KEY_COLUMN_USAGE`, `VIEW_TABLE_USAGE`, `ROUTINES`, and trigger metadata, normalize IDs using the same constructors as `list_children`, and return restrictions when metadata access is denied.
 
-- [ ] **Step 3: Tighten capability reporting**
+- [x] **Step 3: Tighten capability reporting**
 
 If a server version or privilege set cannot implement a catalog operation, return `DriverError::unsupported`/restriction with the exact reason. Never interpret permission failure as “no children/dependencies.”
 
-- [ ] **Step 4: Run and commit**
+- [x] **Step 4: Run and commit**
 
 Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql --test catalog -- --ignored --nocapture`
 
