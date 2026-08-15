@@ -255,7 +255,7 @@ git commit -m "feat(transport): add owned proxy and ssh forwarding leases"
 
 **Files:** workspace/driver Cargo files, `crates/dexo-driver-postgres/src/tls.rs`, `factory.rs`, `session.rs`, `crates/dexo-driver-mysql/src/factory.rs`, `session.rs`, `crates/dexo/tests/transport_live.rs`.
 
-- [ ] **Step 1: Add ignored verified-TLS and routed-cancel tests**
+- [x] **Step 1: Add ignored verified-TLS and routed-cancel tests**
 
 Create cases for trusted CA, hostname mismatch, client certificate, proxy/SSH route, cancellation through a lease, and MySQL cancel after session generation changes.
 
@@ -263,7 +263,7 @@ Run: `cargo test -p dexo --test transport_live -- --ignored --nocapture`
 
 Expected: FAIL because factories force direct/no-TLS connections.
 
-- [ ] **Step 2: Implement PostgreSQL rustls connection and cancel connector**
+- [x] **Step 2: Implement PostgreSQL rustls connection and cancel connector**
 
 Build a `rustls::ClientConfig` from system roots plus optional CA/client identity. For routed connections, connect PostgreSQL to the lease endpoint while setting the TLS server name to the original host. Store the connector/route factory in `PostgresSession`; cancellation must use it rather than `NoTls`.
 
@@ -274,11 +274,17 @@ pub struct PostgresCancelContext {
 }
 ```
 
-- [ ] **Step 3: Implement MySQL `SslOpts` and routed killer connection**
+- [x] **Step 3: Implement MySQL `SslOpts` and routed killer connection**
 
 Map CA, client identity, verification flags, and original-host override into `mysql_async::SslOpts`. Build the main and killer `Opts` from the same effective endpoint/TLS configuration. Reject a cancel request whose generation differs from the active connection ID generation.
 
 - [ ] **Step 4: Run Docker tests and commit**
+
+Run: `cargo test -p dexo --test transport_live -- --ignored --nocapture`
+
+Expected: all PostgreSQL/MySQL TLS, route, and cancel cases PASS. **Not run: Docker daemon unavailable.**
+
+Code and `#[ignore]` tests are in place.
 
 Run: `cargo test -p dexo --test transport_live -- --ignored --nocapture`
 

@@ -14,6 +14,7 @@ use tokio_postgres::types::ToSql;
 use crate::decode::{column_meta, decode_row};
 use crate::error::map_error;
 use crate::factory::capabilities;
+use crate::tls::PostgresCancelContext;
 
 pub const ROW_BATCH_SIZE: usize = 256;
 
@@ -22,18 +23,24 @@ pub struct PostgresSession {
     capabilities: Vec<dexo_driver_api::CapabilityState>,
     tx_state: Mutex<TransactionState>,
     notices: tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<SessionEvent>>>,
+    cancel: PostgresCancelContext,
+    _lease: Option<dexo_transport::TransportLease>,
 }
 
 impl PostgresSession {
     pub(crate) fn new(
         client: tokio_postgres::Client,
         notices: mpsc::UnboundedReceiver<SessionEvent>,
+        cancel: PostgresCancelContext,
+        lease: Option<dexo_transport::TransportLease>,
     ) -> Self {
         Self {
             client: Arc::new(client),
             capabilities: capabilities(),
             tx_state: Mutex::new(TransactionState::Idle),
             notices: tokio::sync::Mutex::new(Some(notices)),
+            cancel,
+            _lease: lease,
         }
     }
 
@@ -79,11 +86,14 @@ impl Session for PostgresSession {
     }
 
     async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
-        self.client
-            .cancel_token()
-            .cancel_query(tokio_postgres::NoTls)
-            .await
-            .map_err(map_error)
+        let token = self.client.cancel_token();
+        match &self.cancel.tls {
+            Some(tls) => token.cancel_query(tls.clone()).await.map_err(map_error),
+            None => token
+                .cancel_query(tokio_postgres::NoTls)
+                .await
+                .map_err(map_error),
+        }
     }
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {

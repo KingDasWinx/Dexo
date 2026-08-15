@@ -13,6 +13,7 @@ pub use proxy::{ProxyCredentials, connect_proxy};
 pub use ssh::{SshAuth, SshTunnelRequest, open_ssh_tunnel};
 pub use tcp::connect_direct;
 pub use tls::connect_tls;
+pub use tls::rustls_client_config;
 
 pub trait AsyncStream: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
 impl<T> AsyncStream for T where T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send {}
