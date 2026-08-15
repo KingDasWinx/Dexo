@@ -45,14 +45,15 @@ impl ConnectionForm {
         set_field(
             &mut form.fields,
             "host",
-            profile.config.get("host").and_then(|v| v.as_str()).unwrap_or(""),
+            profile
+                .config
+                .get("host")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
         );
         if let Some(port) = profile.config.get("port") {
-            set_field(
-                &mut form.fields,
-                "port",
-                &port.to_string().trim_matches('"').to_string(),
-            );
+            let port = port.to_string();
+            set_field(&mut form.fields, "port", port.trim_matches('"'));
         }
         set_field(
             &mut form.fields,
@@ -294,7 +295,10 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
     let tls_mode = field(fields, "tls_mode");
     if !tls_mode.trim().is_empty() {
         let mut tls = serde_json::Map::new();
-        tls.insert("mode".into(), serde_json::Value::String(tls_mode.trim().into()));
+        tls.insert(
+            "mode".into(),
+            serde_json::Value::String(tls_mode.trim().into()),
+        );
         let ca = field(fields, "ca_file");
         if !ca.trim().is_empty() {
             tls.insert("ca_file".into(), serde_json::Value::String(ca));

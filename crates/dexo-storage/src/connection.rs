@@ -73,8 +73,8 @@ impl<'a> ConnectionRepository<'a> {
         profile.name = unique_copy_name(&profile.name, self)?;
         profile.secret_refs = profile
             .secret_refs
-            .iter()
-            .map(|(purpose, _)| (purpose.clone(), SecretRef::new(Uuid::new_v4().to_string())))
+            .keys()
+            .map(|purpose| (purpose.clone(), SecretRef::new(Uuid::new_v4().to_string())))
             .collect();
         if profile.secret_refs.is_empty() {
             profile.secret_refs.insert(

@@ -268,7 +268,7 @@ impl WorkbenchRuntime {
 
     async fn connect_profile(&mut self, profile: ConnectionProfile, token: u64) {
         match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
-            Err(action) => self.emit(action).await,
+            Err(action) => self.emit(*action).await,
             Ok(_) => match self.open_session(&profile).await {
                 Ok(session) => {
                     let id = self.sessions.insert(profile.name.clone(), session);
@@ -277,12 +277,10 @@ impl WorkbenchRuntime {
                         .get(id)
                         .map(|active| active.generation)
                         .unwrap_or(1);
-                    let read_only = dexo_app::ConnectionPolicy::resolve(
-                        &profile.environment,
-                        &profile.policy,
-                    )
-                    .map(|policy| policy.read_only)
-                    .unwrap_or(false);
+                    let read_only =
+                        dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
+                            .map(|policy| policy.read_only)
+                            .unwrap_or(false);
                     self.emit(Action::ConnectionChanged {
                         name: profile.name,
                         ready: true,
@@ -342,10 +340,8 @@ impl WorkbenchRuntime {
         }
         match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
             Ok(()) => {
-                self.emit(Action::ProfileDeleted {
-                    name: profile.name,
-                })
-                .await;
+                self.emit(Action::ProfileDeleted { name: profile.name })
+                    .await;
             }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }
@@ -399,12 +395,8 @@ impl WorkbenchRuntime {
             Ok(_) => (true, "ok".into()),
             Err(message) => (false, message),
         };
-        self.emit(Action::ConnectionTested {
-            name,
-            ok,
-            message,
-        })
-        .await;
+        self.emit(Action::ConnectionTested { name, ok, message })
+            .await;
     }
 
     async fn close_session(&mut self, session: SessionId) {

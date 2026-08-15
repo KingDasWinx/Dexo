@@ -13,7 +13,6 @@ use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::connections::ConnectionsScreen;
-use crate::screens::secret_prompt::SecretPrompt;
 use crate::screens::data::DataScreen;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
@@ -23,6 +22,7 @@ use crate::screens::mcp_profiles::McpProfilesScreen;
 use crate::screens::recovery::RecoveryScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
+use crate::screens::secret_prompt::SecretPrompt;
 use crate::screens::security::SecurityScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::transfer::TransferScreen;
@@ -37,7 +37,7 @@ pub enum Focus {
     Palette,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectionStatus {
     pub name: String,
     pub ready: bool,

@@ -18,7 +18,7 @@ pub struct SessionRow {
     pub transaction: TransactionState,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectionsScreen {
     pub open: bool,
     pub profiles: Vec<ConnectionRow>,
@@ -29,22 +29,6 @@ pub struct ConnectionsScreen {
     pub pending: Option<crate::runtime::OperationId>,
     pub pending_connect: Option<u64>,
     pub delete_target: Option<ConnectionProfile>,
-}
-
-impl Default for ConnectionsScreen {
-    fn default() -> Self {
-        Self {
-            open: false,
-            profiles: Vec::new(),
-            sessions: Vec::new(),
-            selected_profile: 0,
-            selected_session: None,
-            form: ConnectionForm::default(),
-            pending: None,
-            pending_connect: None,
-            delete_target: None,
-        }
-    }
 }
 
 impl ConnectionsScreen {
@@ -141,7 +125,10 @@ impl ConnectionsScreen {
         lines
     }
 
-    pub fn delete_decision(&self, decision: DeleteSecretDecision) -> Option<(ConnectionProfile, bool)> {
+    pub fn delete_decision(
+        &self,
+        decision: DeleteSecretDecision,
+    ) -> Option<(ConnectionProfile, bool)> {
         self.delete_target
             .clone()
             .map(|profile| (profile, decision == DeleteSecretDecision::DeleteSecrets))

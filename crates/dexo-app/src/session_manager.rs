@@ -170,7 +170,7 @@ mod tests {
                 ConnectRequest::new(
                     "127.0.0.1:1",
                     None,
-                    "u",
+                    "u".into(),
                     SecretString::from("x"),
                     false,
                 ),

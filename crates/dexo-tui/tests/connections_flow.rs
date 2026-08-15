@@ -58,7 +58,7 @@ fn custom_policy_profile() -> ConnectionProfile {
 #[test]
 fn locked_keychain_prompts_instead_of_silently_using_memory() {
     let profile = saved_profile();
-    let action = connect_with_store(&UnavailableSecretStore, &profile).unwrap_err();
+    let action = *connect_with_store(&UnavailableSecretStore, &profile).unwrap_err();
     assert!(matches!(
         action,
         Action::SecretRequired {
@@ -145,7 +145,11 @@ fn delete_prompts_keep_or_delete_secrets() {
     model.connections.load_profiles(vec![saved_profile()]);
     let _ = update(&mut model, Action::DeleteConnection);
     assert_eq!(
-        model.connections.delete_target.as_ref().map(|p| p.name.as_str()),
+        model
+            .connections
+            .delete_target
+            .as_ref()
+            .map(|p| p.name.as_str()),
         Some("prod")
     );
     let effects = update(
@@ -274,9 +278,14 @@ fn stale_connect_completion_is_ignored() {
 
 #[test]
 fn read_only_blocks_begin_transaction() {
-    let mut model = Model::default();
-    model.active_session = Some(SessionId(uuid::Uuid::nil()));
-    model.connection.read_only = true;
+    let mut model = Model {
+        active_session: Some(SessionId(uuid::Uuid::nil())),
+        connection: dexo_tui::model::ConnectionStatus {
+            read_only: true,
+            ..Default::default()
+        },
+        ..Model::default()
+    };
     let effects = update(&mut model, Action::BeginTransaction);
     assert!(effects.is_empty());
     assert!(model.messages.iter().any(|m| m.contains("read-only")));
@@ -285,7 +294,9 @@ fn read_only_blocks_begin_transaction() {
 #[test]
 fn custom_environment_policy_is_visible_on_the_row() {
     let mut model = Model::default();
-    model.connections.load_profiles(vec![custom_policy_profile()]);
+    model
+        .connections
+        .load_profiles(vec![custom_policy_profile()]);
     let lines = model.connections.lines().join("\n");
     assert!(lines.contains("pci-lab"));
     assert!(lines.contains(" ro"));

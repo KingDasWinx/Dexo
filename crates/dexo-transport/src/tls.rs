@@ -5,6 +5,8 @@ use rustls::{ClientConfig, RootCertStore};
 use rustls_platform_verifier::BuilderVerifierExt;
 use tokio_rustls::TlsConnector;
 
+#[cfg(feature = "dangerous-tls")]
+use crate::TlsMode;
 use crate::{BoxStream, ClientCertificate, TlsConfig, TransportError};
 
 pub fn rustls_client_config(

@@ -16,7 +16,7 @@ async fn postgres_and_mysql_connect_query_and_cancel_direct() {
         .connect(ConnectRequest::new(
             pair.postgres_endpoint().to_string(),
             Some("dexo".into()),
-            "dexo",
+            "dexo".into(),
             SecretString::from("dexo_test_only"),
             false,
         ))
@@ -27,7 +27,7 @@ async fn postgres_and_mysql_connect_query_and_cancel_direct() {
         .connect(ConnectRequest::new(
             pair.mysql_endpoint().to_string(),
             Some("dexo".into()),
-            "dexo",
+            "dexo".into(),
             SecretString::from("dexo_test_only"),
             false,
         ))
@@ -43,7 +43,7 @@ async fn verified_tls_and_hostname_mismatch_are_honored() {
     let mut request = ConnectRequest::new(
         pair.postgres_endpoint().to_string(),
         Some("dexo".into()),
-        "dexo",
+        "dexo".into(),
         SecretString::from("dexo_test_only"),
         false,
     );
@@ -76,7 +76,7 @@ async fn mysql_cancel_rejects_changed_generation() {
         .connect(ConnectRequest::new(
             pair.mysql_endpoint().to_string(),
             Some("dexo".into()),
-            "dexo",
+            "dexo".into(),
             SecretString::from("dexo_test_only"),
             false,
         ))
@@ -96,7 +96,7 @@ async fn routed_http_connect_request_is_validated_before_socket() {
     let mut request = ConnectRequest::new(
         "db.example.com:5432",
         Some("dexo".into()),
-        "dexo",
+        "dexo".into(),
         SecretString::from("dexo_test_only"),
         false,
     );

@@ -37,11 +37,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.session_generation = generation;
             model.connection_form.close();
             if let Some(id) = session {
-                model.connections.upsert_session(crate::screens::connections::SessionRow {
-                    id,
-                    connection: name,
-                    transaction: TransactionState::Idle,
-                });
+                model
+                    .connections
+                    .upsert_session(crate::screens::connections::SessionRow {
+                        id,
+                        connection: name,
+                        transaction: TransactionState::Idle,
+                    });
                 model.connections.selected_session = Some(id);
             }
             Vec::new()

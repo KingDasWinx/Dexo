@@ -75,7 +75,7 @@ impl ConnectRequest {
     pub fn new(
         endpoint: impl Into<String>,
         database: Option<String>,
-        username: impl Into<String>,
+        username: String,
         secret: SecretString,
         read_only: bool,
     ) -> Self {
@@ -86,7 +86,7 @@ impl ConnectRequest {
         Self {
             endpoint,
             database,
-            username: username.into(),
+            username,
             secret,
             read_only,
             transport,
