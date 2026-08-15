@@ -22,7 +22,7 @@ Requires Sprints 16–19 green.
 
 **Files:** `crates/dexo-tui/src/model.rs`, `widgets/grid.rs`, `screens/workbench.rs`, `action.rs`, `update.rs`, tests `data_flow.rs`.
 
-- [ ] **Step 1: Write a failing multi-result isolation test**
+- [x] **Step 1: Write a failing multi-result isolation test**
 
 ```rust
 #[test]

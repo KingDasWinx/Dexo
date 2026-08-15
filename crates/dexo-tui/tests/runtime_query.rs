@@ -257,6 +257,7 @@ async fn stale_generation_is_ignored_by_the_reducer() {
         &mut model,
         Action::QueryRows {
             key: stale,
+            index: 0,
             rows: vec![vec![DbValue::I64(1)]],
         },
     );

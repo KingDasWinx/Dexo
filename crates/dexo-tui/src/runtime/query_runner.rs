@@ -117,14 +117,17 @@ async fn forward_event(
         QueryEvent::ResultSetStarted { .. } => None,
         QueryEvent::Columns(columns) => Some(Action::QueryMeta {
             key: key.clone(),
+            index,
             columns,
         }),
         QueryEvent::Rows(batch) => Some(Action::QueryRows {
             key: key.clone(),
+            index,
             rows: batch.rows,
         }),
         QueryEvent::Notice { message } => Some(Action::QueryNotice {
             key: key.clone(),
+            index,
             message,
         }),
         QueryEvent::ResultSetFinished { rows_affected, .. } => {

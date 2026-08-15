@@ -65,14 +65,17 @@ pub enum Action {
     },
     QueryMeta {
         key: crate::runtime::OperationKey,
+        index: usize,
         columns: Vec<ColumnMeta>,
     },
     QueryRows {
         key: crate::runtime::OperationKey,
+        index: usize,
         rows: Vec<Vec<DbValue>>,
     },
     QueryNotice {
         key: crate::runtime::OperationKey,
+        index: usize,
         message: String,
     },
     QueryResultSetFinished {

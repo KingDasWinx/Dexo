@@ -35,6 +35,6 @@ mod tests {
         let mut model = Model::default();
         model.set_sql("select 1; select 2; select 3;");
         update(&mut model, Action::ExecuteQuery);
-        assert_eq!(model.result_tabs.len(), 3);
+        assert_eq!(model.results.tabs.len(), 3);
     }
 }

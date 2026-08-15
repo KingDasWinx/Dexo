@@ -3,7 +3,7 @@ use dexo_app::data::{inspect_value, related_filter};
 use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 
 use crate::action::{Action, Effect, FocusTarget};
-use crate::model::{Focus, GridModel, Model};
+use crate::model::{Focus, Model};
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
@@ -82,39 +82,53 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SaveConnection => save_connection(model),
         Action::QueryResultSetStarted { key, index } => {
             if operation_matches(model, &key) {
-                while model.result_tabs.len() <= index {
-                    model.result_tabs.push(GridModel::default());
-                }
-                model.result_tabs[index].clear();
-                model.results = GridModel::default();
+                ensure_result_tab(model, &key, index).grid.clear();
+                model.results.active = index;
             }
             Vec::new()
         }
-        Action::QueryMeta { key, columns } => {
+        Action::QueryMeta {
+            key,
+            index,
+            columns,
+        } => {
             if operation_matches(model, &key) {
-                model.results.set_columns(columns.clone());
-                if let Some(tab) = model.result_tabs.last_mut() {
-                    tab.set_columns(columns);
-                }
+                ensure_result_tab(model, &key, index)
+                    .grid
+                    .set_columns(columns);
             }
             Vec::new()
         }
-        Action::QueryRows { key, rows } => {
+        Action::QueryRows { key, index, rows } => {
             if operation_matches(model, &key) {
-                model.results.append_rows(rows.clone());
-                if let Some(tab) = model.result_tabs.last_mut() {
-                    tab.append_rows(rows);
-                }
+                ensure_result_tab(model, &key, index).grid.append_rows(rows);
             }
             Vec::new()
         }
-        Action::QueryNotice { key, message } => {
+        Action::QueryNotice {
+            key,
+            index,
+            message,
+        } => {
             if operation_matches(model, &key) {
+                if let Some(tab) = model.results.tabs.get_mut(index) {
+                    tab.notices.push(message.clone());
+                }
                 model.messages.push(message);
             }
             Vec::new()
         }
-        Action::QueryResultSetFinished { .. } => Vec::new(),
+        Action::QueryResultSetFinished {
+            key,
+            index,
+            rows_affected,
+        } => {
+            if let Some(tab) = result_tab_mut(model, &key, index) {
+                tab.rows_affected = rows_affected;
+                tab.status = crate::model::OperationStatus::Finished;
+            }
+            Vec::new()
+        }
         Action::ScriptFinished { .. } => {
             model.active_task = None;
             model.active_query = None;
@@ -718,15 +732,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ResultsPageUp => {
-            model
-                .results
-                .scroll_rows(-(model.results.viewport().height as i32));
+            let height = model.results.viewport().height as i32;
+            model.results.scroll_rows(-height);
             Vec::new()
         }
         Action::ResultsPageDown => {
-            model
-                .results
-                .scroll_rows(model.results.viewport().height as i32);
+            let height = model.results.viewport().height as i32;
+            model.results.scroll_rows(height);
             Vec::new()
         }
         Action::ResultsTop => {
@@ -1397,25 +1409,40 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
     if statements.is_empty() {
         return Vec::new();
     }
-    model.results.clear();
-    model.result_tabs = statements.iter().map(|_| GridModel::default()).collect();
-    let request = QueryRequest::read(statements[0].clone(), 10_000);
-    model.active_query = Some(request.id);
     let operation = crate::runtime::OperationId::new();
-    model.active_operation = Some(operation);
     let session = model
         .active_session
         .map(|id| id.0.to_string())
         .unwrap_or_default();
     let document = model.active_document().id.clone();
+    let key = crate::runtime::OperationKey::new(
+        operation,
+        session.clone(),
+        document.clone(),
+        model.session_generation.max(1),
+    );
+    model.results.tabs = statements
+        .iter()
+        .enumerate()
+        .map(|(index, _)| crate::model::ResultTab {
+            key: crate::model::ResultKey {
+                operation: key.clone(),
+                index,
+            },
+            title: format!("result {}", index + 1),
+            grid: crate::model::GridModel::default(),
+            status: crate::model::OperationStatus::Idle,
+            rows_affected: None,
+            notices: Vec::new(),
+        })
+        .collect();
+    model.results.active = 0;
+    let request = QueryRequest::read(statements[0].clone(), 10_000);
+    model.active_query = Some(request.id);
+    model.active_operation = Some(operation);
     let mut effects = checkpoint_dirty(model);
     effects.push(Effect::StartScript(crate::action::ScriptRequest {
-        key: crate::runtime::OperationKey::new(
-            operation,
-            session,
-            document,
-            model.session_generation.max(1),
-        ),
+        key,
         statements,
         policy: model.script_policy,
         parameters: model
@@ -1497,6 +1524,45 @@ fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>
     if let Some(name) = layout.active_connection_id {
         model.connection.name = name;
     }
+}
+
+fn ensure_result_tab<'a>(
+    model: &'a mut Model,
+    key: &crate::runtime::OperationKey,
+    index: usize,
+) -> &'a mut crate::model::ResultTab {
+    while model.results.tabs.len() <= index {
+        let next = model.results.tabs.len();
+        model.results.tabs.push(crate::model::ResultTab {
+            key: crate::model::ResultKey {
+                operation: key.clone(),
+                index: next,
+            },
+            title: format!("result {}", next + 1),
+            grid: crate::model::GridModel::default(),
+            status: crate::model::OperationStatus::Running,
+            rows_affected: None,
+            notices: Vec::new(),
+        });
+    }
+    let tab = &mut model.results.tabs[index];
+    tab.key = crate::model::ResultKey {
+        operation: key.clone(),
+        index,
+    };
+    tab.status = crate::model::OperationStatus::Running;
+    tab
+}
+
+fn result_tab_mut<'a>(
+    model: &'a mut Model,
+    key: &crate::runtime::OperationKey,
+    index: usize,
+) -> Option<&'a mut crate::model::ResultTab> {
+    if !operation_matches(model, key) {
+        return None;
+    }
+    model.results.tabs.get_mut(index)
 }
 
 fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool {
@@ -1731,7 +1797,22 @@ fn open_related(model: &mut Model) {
     let title = fk.referenced_table.display_unquoted();
     model.tabs.titles.push(title.clone());
     model.tabs.active = model.tabs.titles.len() - 1;
-    model.result_tabs.push(GridModel::default());
+    model.results.tabs.push(crate::model::ResultTab {
+        key: crate::model::ResultKey {
+            operation: crate::runtime::OperationKey::new(
+                crate::runtime::OperationId::new(),
+                String::new(),
+                String::new(),
+                model.session_generation,
+            ),
+            index: model.results.tabs.len(),
+        },
+        title: title.clone(),
+        grid: crate::model::GridModel::default(),
+        status: crate::model::OperationStatus::Idle,
+        rows_affected: None,
+        notices: Vec::new(),
+    });
     model.data.related_open.push(title);
 }
 
@@ -2043,6 +2124,7 @@ mod tests {
             &mut model,
             Action::QueryRows {
                 key,
+                index: 0,
                 rows: vec![vec![DbValue::I64(1)]],
             },
         );

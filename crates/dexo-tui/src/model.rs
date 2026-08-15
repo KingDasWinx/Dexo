@@ -5,7 +5,7 @@ use dexo_app::{ExecutionTarget, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
 use dexo_sql::SqlDocument;
 
-use crate::runtime::{OperationId, SessionId};
+use crate::runtime::{OperationId, OperationKey, SessionId};
 
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
@@ -185,6 +185,115 @@ pub struct GridModel {
     pub kind: GridSelection,
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OperationStatus {
+    #[default]
+    Idle,
+    Running,
+    Finished,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+#[allow(dead_code)] // ponytail: spool/remote variants fill in Task 5; isolation uses Inline via GridModel.
+pub enum GridCell {
+    Inline(DbValue),
+    Spool {
+        id: uuid::Uuid,
+        loaded: u64,
+        total: u64,
+    },
+    Remote {
+        object: String,
+        column: String,
+        total: u64,
+    },
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultKey {
+    pub operation: OperationKey,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultTab {
+    pub key: ResultKey,
+    pub title: String,
+    pub grid: GridModel,
+    pub status: OperationStatus,
+    pub rows_affected: Option<u64>,
+    pub notices: Vec<String>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResultsState {
+    pub tabs: Vec<ResultTab>,
+    pub active: usize,
+}
+
+impl ResultsState {
+    fn grid(&self) -> &GridModel {
+        self.tabs
+            .get(self.active)
+            .map(|tab| &tab.grid)
+            .unwrap_or(&EMPTY_GRID)
+    }
+
+    fn grid_mut(&mut self) -> &mut GridModel {
+        if self.tabs.is_empty() {
+            self.tabs.push(ResultTab {
+                key: ResultKey {
+                    operation: OperationKey::new(OperationId::new(), "", "", 0),
+                    index: 0,
+                },
+                title: "result".into(),
+                grid: GridModel::default(),
+                status: OperationStatus::Idle,
+                rows_affected: None,
+                notices: Vec::new(),
+            });
+            self.active = 0;
+        }
+        let index = self.active.min(self.tabs.len() - 1);
+        &mut self.tabs[index].grid
+    }
+}
+
+static EMPTY_GRID: GridModel = GridModel {
+    buffer: ResultBuffer {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        estimated_bytes: 0,
+        truncated: false,
+    },
+    viewport: GridViewport {
+        row_offset: 0,
+        column_offset: 0,
+        height: 20,
+        width: 80,
+    },
+    selection: None,
+    column_widths: Vec::new(),
+    kind: GridSelection::Cell { row: 0, col: 0 },
+    frozen_columns: 0,
+    hidden_columns: Vec::new(),
+};
+
+impl std::ops::Deref for ResultsState {
+    type Target = GridModel;
+
+    fn deref(&self) -> &GridModel {
+        self.grid()
+    }
+}
+
+impl std::ops::DerefMut for ResultsState {
+    fn deref_mut(&mut self) -> &mut GridModel {
+        self.grid_mut()
+    }
 }
 
 impl GridModel {
@@ -593,13 +702,12 @@ pub struct Model {
     pub layout_mode: LayoutMode,
     pub connection: ConnectionStatus,
     pub transaction: TransactionState,
-    pub results: GridModel,
+    pub results: ResultsState,
     pub tabs: TabsState,
     pub palette: PaletteState,
     pub messages: Vec<String>,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
-    pub result_tabs: Vec<GridModel>,
     pub execution_target: ExecutionTarget,
     pub script_policy: ScriptPolicy,
     pub active_task: Option<TaskId>,
@@ -673,13 +781,12 @@ impl Default for Model {
             animation: true,
             layout_dirty: false,
             transaction: TransactionState::Idle,
-            results: GridModel::default(),
+            results: ResultsState::default(),
             tabs: TabsState::default(),
             palette: PaletteState::default(),
             messages: Vec::new(),
             documents: vec![EditorDocument::scratch()],
             active_document: 0,
-            result_tabs: Vec::new(),
             execution_target: ExecutionTarget::Document,
             script_policy: ScriptPolicy::StopOnError,
             active_task: None,
