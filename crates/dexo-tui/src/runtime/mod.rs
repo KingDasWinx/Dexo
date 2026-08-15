@@ -155,6 +155,10 @@ impl WorkbenchRuntime {
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
             crate::Effect::CheckpointRecovery(request) => self.checkpoint_recovery(request).await,
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
+            crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
+            crate::Effect::ClearHistory { connection_id } => {
+                self.clear_history(connection_id).await
+            }
             crate::Effect::PersistLayout => self.persist_layout().await,
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
@@ -342,7 +346,33 @@ impl WorkbenchRuntime {
 
     async fn checkpoint_recovery(&mut self, _request: RecoveryCheckpointRequest) {}
 
-    async fn persist_history(&mut self, _request: PersistHistoryRequest) {}
+    async fn persist_history(&mut self, request: PersistHistoryRequest) {
+        if let Some(storage) = &self.storage {
+            let _ = storage.persist_history(request.connection_id, request.sql);
+        }
+    }
+
+    async fn load_history(&mut self, connection_id: Option<String>) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        match storage.list_history(connection_id).await {
+            Ok(entries) => self.emit(Action::HistoryLoaded(entries)).await,
+            Err(error) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", "", 0),
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn clear_history(&mut self, connection_id: String) {
+        if let Some(storage) = &self.storage {
+            let _ = storage.clear_history(connection_id);
+        }
+    }
 
     async fn persist_layout(&mut self) {}
 

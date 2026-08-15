@@ -15,6 +15,69 @@ fn ctrl(ch: char) -> Action {
     key_mod(KeyCode::Char(ch), KeyModifiers::CONTROL)
 }
 
+fn model_with_sql(sql: &str) -> Model {
+    let mut model = Model::default();
+    model.set_sql(sql);
+    model
+}
+
+#[test]
+fn editor_highlights_formats_completes_and_prompts_for_parameters() {
+    let mut model = model_with_sql("select * from users where id = :id");
+    update(&mut model, Action::RefreshSqlIntelligence);
+    assert!(
+        model
+            .editor
+            .highlights
+            .iter()
+            .any(|span| span.kind == dexo_sql::Highlight::Keyword)
+    );
+    assert_eq!(
+        model
+            .editor
+            .parameters
+            .iter()
+            .map(|parameter| parameter.name.as_str())
+            .collect::<Vec<_>>(),
+        ["id"]
+    );
+    assert!(
+        model
+            .editor
+            .completions
+            .iter()
+            .any(|item| item.label == "users")
+    );
+}
+
+#[test]
+fn editor_formats_inserts_snippet_and_keeps_history_sql_only() {
+    let mut model = model_with_sql("select 1");
+    update(&mut model, Action::FormatSql);
+    assert!(model.active_document().text().to_ascii_lowercase().contains("select"));
+    model.editor.snippets.push(dexo_sql::Snippet {
+        name: "sel".into(),
+        body: "select ${1:*} from t".into(),
+    });
+    model.set_sql("");
+    update(&mut model, Action::InsertSnippet);
+    assert_eq!(model.active_document().text(), "select * from t");
+    let effects = update(&mut model, Action::ScriptFinished {
+        key: dexo_tui::runtime::OperationKey::new(
+            dexo_tui::runtime::OperationId::new(),
+            "",
+            "scratch",
+            1,
+        ),
+    });
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::PersistHistory(request) if request.sql.contains("select") && !request.sql.contains("secret")
+        ))
+    );
+}
+
 fn send_text(model: &mut Model, text: &str) {
     for ch in text.chars() {
         update(model, key(KeyCode::Char(ch)));

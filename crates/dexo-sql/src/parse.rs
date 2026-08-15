@@ -93,6 +93,18 @@ impl ParserService {
         }
     }
 
+    pub fn parse_edited(&mut self, old: &str, new: &str) -> ParsedSql {
+        self.apply_edit(InputEdit {
+            start_byte: 0,
+            old_end_byte: old.len(),
+            new_end_byte: new.len(),
+            start_position: tree_sitter::Point::new(0, 0),
+            old_end_position: end_point(old),
+            new_end_position: end_point(new),
+        });
+        self.parse(new)
+    }
+
     fn analyze(&self, sql: &str, tree: &Tree) -> ParsedSql {
         let root = tree.root_node();
         let highlights = if let Some(query) = &self.query {
@@ -223,6 +235,18 @@ fn collect_errors(node: tree_sitter::Node, out: &mut Vec<LocalDiagnostic>) {
     for child in node.children(&mut cursor) {
         collect_errors(child, out);
     }
+}
+
+fn end_point(text: &str) -> tree_sitter::Point {
+    let mut row = 0;
+    let mut last = 0;
+    for (index, ch) in text.char_indices() {
+        if ch == '\n' {
+            row += 1;
+            last = index + 1;
+        }
+    }
+    tree_sitter::Point::new(row, text.len() - last)
 }
 
 #[cfg(test)]

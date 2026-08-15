@@ -26,4 +26,19 @@ impl<'a> SnippetRepository<'a> {
         let mut rows = stmt.query(params![id])?;
         Ok(rows.next()?.map(|row| row.get(0)).transpose()?)
     }
+
+    pub fn list(&self) -> anyhow::Result<Vec<(String, String, String)>> {
+        let mut stmt = self
+            .conn
+            .prepare("SELECT id, name, body FROM snippets ORDER BY name")?;
+        let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(Into::into)
+    }
+
+    pub fn delete(&self, id: &str) -> anyhow::Result<()> {
+        self.conn
+            .execute("DELETE FROM snippets WHERE id = ?1", params![id])?;
+        Ok(())
+    }
 }

@@ -1,6 +1,164 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use dexo_driver_api::DbValue;
+use dexo_sql::{
+    CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
+    complete, expand_placeholders, format_sql, named_parameters,
+};
 
 use crate::model::{EditorDocument, Model};
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ParameterValue {
+    pub name: String,
+    pub value: DbValue,
+    pub sensitive: bool,
+}
+
+pub struct EditorState {
+    parser: ParserService,
+    last_sql: String,
+    pub highlights: Vec<HighlightSpan>,
+    pub parameters: Vec<ParameterValue>,
+    pub completions: Vec<CompletionItem>,
+    pub format_preview: Option<String>,
+    pub completion_open: bool,
+    pub parameter_prompt: bool,
+    pub snippets: Vec<Snippet>,
+    pub history: Vec<String>,
+    pub history_policy: HistoryPolicy,
+    catalog: FakeCatalog,
+}
+
+impl std::fmt::Debug for EditorState {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EditorState")
+            .field("highlights", &self.highlights)
+            .field("parameters", &self.parameters)
+            .field("completions", &self.completions)
+            .finish_non_exhaustive()
+    }
+}
+
+impl Clone for EditorState {
+    fn clone(&self) -> Self {
+        Self {
+            parser: ParserService::postgres(),
+            last_sql: self.last_sql.clone(),
+            highlights: self.highlights.clone(),
+            parameters: self.parameters.clone(),
+            completions: self.completions.clone(),
+            format_preview: self.format_preview.clone(),
+            completion_open: self.completion_open,
+            parameter_prompt: self.parameter_prompt,
+            snippets: self.snippets.clone(),
+            history: self.history.clone(),
+            history_policy: self.history_policy,
+            catalog: self.catalog.clone(),
+        }
+    }
+}
+
+impl PartialEq for EditorState {
+    fn eq(&self, other: &Self) -> bool {
+        self.highlights == other.highlights
+            && self.parameters == other.parameters
+            && self.completions == other.completions
+            && self.format_preview == other.format_preview
+            && self.snippets == other.snippets
+            && self.history == other.history
+    }
+}
+
+impl EditorState {
+    pub fn reset_parse(&mut self) {
+        self.last_sql.clear();
+    }
+}
+
+impl Default for EditorState {
+    fn default() -> Self {
+        Self {
+            parser: ParserService::postgres(),
+            last_sql: String::new(),
+            highlights: Vec::new(),
+            parameters: Vec::new(),
+            completions: Vec::new(),
+            format_preview: None,
+            completion_open: false,
+            parameter_prompt: false,
+            snippets: Vec::new(),
+            history: Vec::new(),
+            history_policy: HistoryPolicy::SqlOnly,
+            catalog: FakeCatalog::table("public.users", ["id", "email"]),
+        }
+    }
+}
+
+pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
+    let sql = model.active_document().text();
+    let cursor = model.active_document().cursor();
+    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    let old = std::mem::take(&mut model.editor.last_sql);
+    let parsed = model.editor.parser.parse_edited(&old, &sql);
+    model.editor.last_sql = sql.clone();
+    model.editor.highlights = parsed.highlights;
+    model.editor.parameters = named_parameters(&sql)
+        .into_iter()
+        .map(|parameter| ParameterValue {
+            sensitive: is_sensitive_name(&parameter.name),
+            name: parameter.name,
+            value: DbValue::Null,
+        })
+        .collect();
+    if with_completion {
+        // ponytail: complete after FROM when present so table names survive a trailing :param token.
+        let at = sql
+            .to_ascii_lowercase()
+            .find(" from ")
+            .map(|index| index + 6)
+            .unwrap_or(byte_cursor);
+        model.editor.completions = complete(&sql, at.min(sql.len()), &model.editor.catalog, Dialect::Postgres);
+        model.editor.completion_open = true;
+    }
+}
+
+fn is_sensitive_name(name: &str) -> bool {
+    let lower = name.to_ascii_lowercase();
+    lower.contains("password") || lower.contains("secret") || lower.contains("token")
+}
+
+pub fn apply_format(model: &mut Model) {
+    let sql = model.active_document().text();
+    match format_sql(&sql, Dialect::Postgres) {
+        Ok(formatted) => {
+            model.editor.format_preview = Some(formatted.clone());
+            model.set_sql(&formatted);
+            refresh_intelligence(model, false);
+        }
+        Err(error) => model.messages.push(error.to_string()),
+    }
+}
+
+pub fn insert_active_snippet(model: &mut Model) {
+    let Some(snippet) = model.editor.snippets.first().cloned() else {
+        return;
+    };
+    insert_text(model, &expand_placeholders(&snippet.body));
+    refresh_intelligence(model, false);
+}
+
+pub fn accept_completion(model: &mut Model) {
+    let Some(item) = model.editor.completions.first().cloned() else {
+        return;
+    };
+    insert_text(model, &item.label);
+    model.editor.completion_open = false;
+    refresh_intelligence(model, false);
+}
+
+pub fn submit_parameters(model: &mut Model) {
+    model.editor.parameter_prompt = false;
+}
 
 pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     if model.focus != crate::model::Focus::Editor {
@@ -27,6 +185,10 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
         }
         KeyCode::Enter => {
             insert_newline(model);
+            true
+        }
+        KeyCode::Tab if model.editor.completion_open => {
+            accept_completion(model);
             true
         }
         KeyCode::Tab => {

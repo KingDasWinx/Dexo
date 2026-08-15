@@ -123,6 +123,15 @@ pub enum Action {
     ResultsPageUp,
     ResultsPageDown,
     ResultsTop,
+    RefreshSqlIntelligence,
+    FormatSql,
+    AcceptCompletion,
+    InsertSnippet,
+    SubmitParameters,
+    SearchHistory,
+    ClearHistory,
+    HistoryLoaded(Vec<String>),
+    SnippetsLoaded(Vec<dexo_sql::Snippet>),
     Quit,
 }
 
@@ -203,6 +212,12 @@ pub enum Effect {
     SaveDocument(DocumentIoRequest),
     CheckpointRecovery(RecoveryCheckpointRequest),
     PersistHistory(PersistHistoryRequest),
+    LoadHistory {
+        connection_id: Option<String>,
+    },
+    ClearHistory {
+        connection_id: String,
+    },
     Shutdown,
     Quit,
 }

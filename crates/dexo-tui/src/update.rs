@@ -77,7 +77,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
-            Vec::new()
+            persist_history_effect(model)
         }
         Action::CheckpointTick => Vec::new(),
         Action::TransactionChanged {
@@ -392,6 +392,40 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 .push("diagnostic preview ready; never uploaded".into());
             Vec::new()
         }
+        Action::RefreshSqlIntelligence => {
+            crate::screens::editor::refresh_intelligence(model, true);
+            Vec::new()
+        }
+        Action::FormatSql => {
+            crate::screens::editor::apply_format(model);
+            Vec::new()
+        }
+        Action::AcceptCompletion => {
+            crate::screens::editor::accept_completion(model);
+            Vec::new()
+        }
+        Action::InsertSnippet => {
+            crate::screens::editor::insert_active_snippet(model);
+            Vec::new()
+        }
+        Action::SubmitParameters => {
+            crate::screens::editor::submit_parameters(model);
+            start_query(model)
+        }
+        Action::SearchHistory => vec![Effect::LoadHistory {
+            connection_id: None,
+        }],
+        Action::ClearHistory => vec![Effect::ClearHistory {
+            connection_id: model.connection.name.clone(),
+        }],
+        Action::HistoryLoaded(entries) => {
+            model.editor.history = entries;
+            Vec::new()
+        }
+        Action::SnippetsLoaded(snippets) => {
+            model.editor.snippets = snippets;
+            Vec::new()
+        }
         Action::ResultsUp => {
             model.results.scroll_rows(-1);
             Vec::new()
@@ -595,6 +629,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
     }
     if model.tabs.active != 2 && crate::screens::editor::handle_key(model, key) {
+        crate::screens::editor::refresh_intelligence(model, false);
         return Vec::new();
     }
     if key.code == KeyCode::Tab && model.tabs.active == 2 {
@@ -719,9 +754,40 @@ fn close_palette(model: &mut Model) {
     }
 }
 
+fn persist_history_effect(model: &Model) -> Vec<Effect> {
+    let sql = model.active_document().text();
+    if sql.trim().is_empty() {
+        return Vec::new();
+    }
+    let entry = dexo_sql::HistoryEntry {
+        sql,
+        parameters: None,
+    }
+    .for_storage(model.editor.history_policy);
+    // Sensitive parameter values are never stored; HistoryPolicy::SqlOnly is the default.
+    vec![Effect::PersistHistory(crate::action::PersistHistoryRequest {
+        connection_id: if model.connection.name.is_empty() {
+            None
+        } else {
+            Some(model.connection.name.clone())
+        },
+        sql: entry.sql,
+    })]
+}
+
 fn start_query(model: &mut Model) -> Vec<Effect> {
     crate::screens::editor::end_typing(model);
     if model.active_document().text().trim().is_empty() {
+        return Vec::new();
+    }
+    if !model.editor.parameters.is_empty()
+        && model
+            .editor
+            .parameters
+            .iter()
+            .any(|parameter| matches!(parameter.value, DbValue::Null))
+    {
+        model.editor.parameter_prompt = true;
         return Vec::new();
     }
     let statements = crate::screens::workbench::planned_statements(model);
@@ -748,7 +814,12 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
         ),
         statements,
         policy: model.script_policy,
-        parameters: Vec::new(),
+        parameters: model
+            .editor
+            .parameters
+            .iter()
+            .map(|parameter| parameter.value.clone())
+            .collect(),
         timeout: std::time::Duration::from_secs(30),
     })]
 }

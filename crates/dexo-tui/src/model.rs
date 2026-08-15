@@ -13,6 +13,7 @@ use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::data::DataScreen;
+use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
 use crate::screens::mcp_audit::McpAuditScreen;
@@ -616,6 +617,7 @@ pub struct Model {
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
+    pub editor: EditorState,
     pub theme: Theme,
     pub capabilities: TerminalCapabilities,
     pub keymap: Keymap,
@@ -686,6 +688,7 @@ impl Default for Model {
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
+            editor: EditorState::default(),
         }
     }
 }
@@ -735,5 +738,6 @@ impl Model {
 
     pub fn set_sql(&mut self, text: impl AsRef<str>) {
         *self.active_document_mut() = EditorDocument::with_text(text);
+        self.editor.reset_parse();
     }
 }

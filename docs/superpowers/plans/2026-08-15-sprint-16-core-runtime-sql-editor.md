@@ -580,7 +580,7 @@ git commit -m "feat(tui): add a unicode safe SQL editor"
 - Modify: `crates/dexo-storage/src/snippet.rs`
 - Test: `crates/dexo-tui/tests/editor_flow.rs`
 
-- [ ] **Step 1: Write failing intelligence tests**
+- [x] **Step 1: Write failing intelligence tests**
 
 ```rust
 #[test]
@@ -593,13 +593,13 @@ fn editor_highlights_formats_completes_and_prompts_for_parameters() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test editor_flow editor_highlights_formats_completes_and_prompts_for_parameters`
 
 Expected: FAIL because parser state is not connected.
 
-- [ ] **Step 3: Add incremental parser and completion state**
+- [x] **Step 3: Add incremental parser and completion state**
 
 `EditorState` owns one `ParserService` per document dialect, the latest `ParsedSql`, completion popup, diagnostics, parameter form, and format preview. Reparse after edits using the old tree and `InputEdit`; debounce completion but not highlight.
 
@@ -613,11 +613,11 @@ pub struct ParameterValue {
 
 Sensitive parameter values never enter history or recovery.
 
-- [ ] **Step 4: Wire commands to real storage and query requests**
+- [x] **Step 4: Wire commands to real storage and query requests**
 
 Implement palette/keymap commands for completion accept, format preview/apply, snippet insert/manage, parameter submit, and history search/rerun. Add `HistoryRepository::{list, clear_for_connection}` and `SnippetRepository::{list, delete}`. Persist SQL only after query completion; apply `HistoryPolicy::SqlOnly` by default.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 Run: `cargo test -p dexo-sql -p dexo-storage -p dexo-tui --test editor_flow`
 

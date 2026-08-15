@@ -329,6 +329,8 @@ profile = "default"
 "ctrl+c" = "query.cancel"
 [editor]
 "ctrl+enter" = "query.execute"
+"ctrl+space" = "editor.complete"
+"ctrl+shift+i" = "editor.format"
 [explorer]
 "enter" = "explorer.expand"
 "c" = "explorer.copy_name"
@@ -349,6 +351,8 @@ profile = "vim"
 "f5" = "query.execute"
 [editor]
 "ctrl+enter" = "query.execute"
+"ctrl+space" = "editor.complete"
+"ctrl+shift+i" = "editor.format"
 [explorer]
 "enter" = "explorer.expand"
 "c" = "explorer.copy_name"
@@ -369,6 +373,8 @@ profile = "emacs"
 "ctrl+c ctrl+c" = "query.execute"
 [editor]
 "ctrl+enter" = "query.execute"
+"ctrl+space" = "editor.complete"
+"ctrl+shift+i" = "editor.format"
 [explorer]
 "enter" = "explorer.expand"
 "c" = "explorer.copy_name"
