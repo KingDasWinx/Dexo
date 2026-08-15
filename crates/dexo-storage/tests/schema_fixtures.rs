@@ -4,8 +4,8 @@ use std::path::PathBuf;
 use dexo_app::{ConnectionId, ConnectionProfile, Project, ProjectId, SecretRef};
 use dexo_storage::{
     ConnectionRepository, Database, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4,
-    MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, ProjectRepository,
-    export_portable, import_portable,
+    MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, MIGRATION_10,
+    ProjectRepository, export_portable, import_portable,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -26,6 +26,7 @@ fn stored_schema_fixtures_match_migrations() {
         ("schema-v7.sql", MIGRATION_7),
         ("schema-v8.sql", MIGRATION_8),
         ("schema-v9.sql", MIGRATION_9),
+        ("schema-v10.sql", MIGRATION_10),
     ];
     for (name, sql) in expected {
         let on_disk = fs::read_to_string(fixture(name)).unwrap();
@@ -66,7 +67,7 @@ fn export_import_survives_reopen() {
         exported = export_portable(db.connection()).unwrap();
     }
     let db = Database::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 9);
+    assert_eq!(db.schema_version().unwrap(), 10);
     let fresh = Database::open_in_memory().unwrap();
     let report = import_portable(fresh.connection(), &exported).unwrap();
     assert_eq!(report.connections_needing_secret, vec!["c"]);

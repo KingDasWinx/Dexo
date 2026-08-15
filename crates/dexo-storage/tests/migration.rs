@@ -1,9 +1,9 @@
-use dexo_storage::{ConnectionRepository, Database, apply_pending};
+use dexo_storage::{ConnectionRepository, Database, apply_pending, read_schema_version};
 
 #[test]
 fn fresh_database_reaches_schema_four() {
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 9);
+    assert_eq!(db.schema_version().unwrap(), 10);
 }
 
 #[test]
@@ -100,8 +100,16 @@ fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
 fn migration_9_scopes_snippets_history_and_recent_items() {
     let db = database_at_version(8);
     apply_pending(db.connection()).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 9);
+    assert_eq!(db.schema_version().unwrap(), 10);
     assert!(column_exists(db.connection(), "snippets", "project_id"));
     assert!(column_exists(db.connection(), "sql_history", "project_id"));
     assert!(table_exists(db.connection(), "recent_items"));
+}
+
+#[test]
+fn migration_10_adds_project_object_usage() {
+    let db = database_at_version(9);
+    apply_pending(db.connection()).unwrap();
+    assert!(table_exists(db.connection(), "object_usage"));
+    assert_eq!(read_schema_version(db.connection()), 10);
 }

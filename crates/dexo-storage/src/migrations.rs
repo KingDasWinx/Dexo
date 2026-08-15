@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 9;
+pub const LATEST_SCHEMA_VERSION: u32 = 10;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -214,6 +214,21 @@ INSERT INTO schema_migrations(version,applied_at) VALUES(9,datetime('now'));
 COMMIT;
 "#;
 
+pub const MIGRATION_10: &str = r#"
+BEGIN;
+CREATE TABLE object_usage(
+  project_id TEXT NOT NULL,
+  connection_id TEXT NOT NULL,
+  object_id TEXT NOT NULL,
+  favorite INTEGER NOT NULL DEFAULT 0,
+  opened_count INTEGER NOT NULL DEFAULT 0,
+  last_opened_at TEXT,
+  PRIMARY KEY(project_id,connection_id,object_id)
+);
+INSERT INTO schema_migrations(version,applied_at) VALUES(10,datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -253,6 +268,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             7 => MIGRATION_7,
             8 => MIGRATION_8,
             9 => MIGRATION_9,
+            10 => MIGRATION_10,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;
@@ -272,7 +288,7 @@ mod tests {
         conn.execute_batch(MIGRATION_1).unwrap();
         assert_eq!(read_schema_version(&conn), 1);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_history'",
@@ -291,7 +307,7 @@ mod tests {
         conn.execute_batch(MIGRATION_2).unwrap();
         assert_eq!(read_schema_version(&conn), 2);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_snapshots'",
@@ -311,7 +327,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_3).unwrap();
         assert_eq!(read_schema_version(&conn), 3);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_diff_snapshots'",
@@ -332,7 +348,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_4).unwrap();
         assert_eq!(read_schema_version(&conn), 4);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_profiles'",
@@ -354,7 +370,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_5).unwrap();
         assert_eq!(read_schema_version(&conn), 5);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_grants'",
@@ -377,7 +393,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_6).unwrap();
         assert_eq!(read_schema_version(&conn), 6);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",
@@ -401,7 +417,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_7).unwrap();
         assert_eq!(read_schema_version(&conn), 7);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 9);
+        assert_eq!(read_schema_version(&conn), 10);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='connection_secret_refs'",
@@ -413,8 +429,34 @@ mod tests {
     }
 
     #[test]
+    fn migrates_v9_to_v10() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(MIGRATION_1).unwrap();
+        conn.execute_batch(MIGRATION_2).unwrap();
+        conn.execute_batch(super::MIGRATION_3).unwrap();
+        conn.execute_batch(super::MIGRATION_4).unwrap();
+        conn.execute_batch(super::MIGRATION_5).unwrap();
+        conn.execute_batch(super::MIGRATION_6).unwrap();
+        conn.execute_batch(super::MIGRATION_7).unwrap();
+        conn.execute_batch(super::MIGRATION_8).unwrap();
+        conn.execute_batch(super::MIGRATION_9).unwrap();
+        assert_eq!(read_schema_version(&conn), 9);
+        apply_pending(&conn).unwrap();
+        assert_eq!(read_schema_version(&conn), 10);
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='object_usage'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "object_usage");
+    }
+
+    #[test]
     fn upgrades_each_released_schema_to_current() {
-        for version in 1..=8u32 {
+        for version in 1..=9u32 {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
             conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
             conn.execute_batch(MIGRATION_1).unwrap();
@@ -439,9 +481,12 @@ mod tests {
             if version >= 8 {
                 conn.execute_batch(super::MIGRATION_8).unwrap();
             }
+            if version >= 9 {
+                conn.execute_batch(super::MIGRATION_9).unwrap();
+            }
             assert_eq!(read_schema_version(&conn), version);
             apply_pending(&conn).unwrap();
-            assert_eq!(read_schema_version(&conn), 9);
+            assert_eq!(read_schema_version(&conn), 10);
         }
     }
 

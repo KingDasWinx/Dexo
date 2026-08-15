@@ -22,7 +22,7 @@ Requires Sprints 16–18 green.
 
 **Files:** `crates/dexo-storage/src/migrations.rs`, `catalog_cache.rs`, new `object_usage.rs`, `lib.rs`, migration/cache tests.
 
-- [ ] **Step 1: Add a failing migration-10 test**
+- [x] **Step 1: Add a failing migration-10 test**
 
 ```rust
 #[test]
@@ -34,13 +34,13 @@ fn migration_10_adds_project_object_usage() {
 }
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `cargo test -p dexo-storage --test migration migration_10_adds_project_object_usage`
 
 Expected: FAIL at version 9.
 
-- [ ] **Step 3: Add migration and repository**
+- [x] **Step 3: Add migration and repository**
 
 ```sql
 CREATE TABLE object_usage(
@@ -56,7 +56,7 @@ CREATE TABLE object_usage(
 
 Implement `set_favorite`, `touch`, `list_for_connection`, and cleanup on profile/project deletion. Add `CatalogCache::latest_metadata` and reject incomplete snapshots for offline use.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-storage catalog_cache object_usage`
 

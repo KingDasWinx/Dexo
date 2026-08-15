@@ -7,6 +7,7 @@ mod layout;
 mod mcp;
 mod mcp_profile;
 mod migrations;
+mod object_usage;
 mod project;
 mod recent;
 mod recovery;
@@ -14,7 +15,7 @@ mod schema_snapshot;
 mod session_recovery;
 mod snippet;
 
-pub use catalog_cache::CatalogCache;
+pub use catalog_cache::{CatalogCache, CatalogSnapshotMetadata};
 pub use connection::{
     ConnectionRepository, ImportPreview, ImportReport, ImportResolution, export_portable,
     import_portable, import_portable_resolved, preview_import,
@@ -27,8 +28,10 @@ pub use mcp::SqliteGrantLedger;
 pub use mcp_profile::McpProfileRepository;
 pub use migrations::{
     LATEST_SCHEMA_VERSION, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5,
-    MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, apply_pending,
+    MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, MIGRATION_10, apply_pending,
+    read_schema_version,
 };
+pub use object_usage::{ObjectUsage, ObjectUsageRepository};
 pub use project::{ProjectDeletePreview, ProjectRepository};
 pub use recent::RecentItemsRepository;
 pub use recovery::{RecoveryDocument, RecoveryRepository};

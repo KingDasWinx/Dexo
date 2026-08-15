@@ -132,10 +132,13 @@ impl<'a> ConnectionRepository<'a> {
     }
 
     pub fn delete(&self, id: ConnectionId) -> anyhow::Result<()> {
+        let cid = id.0.to_string();
         self.conn.execute(
-            "DELETE FROM connections WHERE id = ?1",
-            params![id.0.to_string()],
+            "DELETE FROM object_usage WHERE connection_id = ?1",
+            params![&cid],
         )?;
+        self.conn
+            .execute("DELETE FROM connections WHERE id = ?1", params![cid])?;
         Ok(())
     }
 

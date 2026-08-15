@@ -159,6 +159,10 @@ impl<'a> ProjectRepository<'a> {
                 params![&pid],
             )?;
             self.conn.execute(
+                "DELETE FROM object_usage WHERE project_id = ?1",
+                params![&pid],
+            )?;
+            self.conn.execute(
                 "DELETE FROM project_state WHERE project_id = ?1",
                 params![&pid],
             )?;
