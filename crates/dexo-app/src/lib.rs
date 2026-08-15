@@ -35,5 +35,6 @@ pub use error::{AppError, ErrorCategory};
 pub use project::{Project, ProjectId};
 pub use query_service::{QueryService, QueryTask, map_driver_error};
 pub use script::{ExecutionTarget, ScriptPolicy, statements_for};
+pub use search_service::{SearchHit, SearchService, UsageHint, search_with_usage};
 pub use session_manager::{SessionManager, SessionState};
 pub use transaction_service::TransactionService;

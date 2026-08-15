@@ -334,6 +334,8 @@ profile = "default"
 [explorer]
 "enter" = "explorer.expand"
 "c" = "explorer.copy_name"
+"r" = "explorer.refresh"
+"i" = "explorer.inspect"
 [results]
 "up" = "results.up"
 "down" = "results.down"
@@ -356,6 +358,8 @@ profile = "vim"
 [explorer]
 "enter" = "explorer.expand"
 "c" = "explorer.copy_name"
+"r" = "explorer.refresh"
+"i" = "explorer.inspect"
 [results]
 "k" = "results.up"
 "j" = "results.down"
@@ -378,6 +382,8 @@ profile = "emacs"
 [explorer]
 "enter" = "explorer.expand"
 "c" = "explorer.copy_name"
+"r" = "explorer.refresh"
+"i" = "explorer.inspect"
 [results]
 "ctrl+p" = "results.up"
 "ctrl+n" = "results.down"

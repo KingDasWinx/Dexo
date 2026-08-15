@@ -117,12 +117,18 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
             .find(" from ")
             .map(|index| index + 6)
             .unwrap_or(byte_cursor);
-        model.editor.completions = complete(
-            &sql,
-            at.min(sql.len()),
-            &model.editor.catalog,
-            Dialect::Postgres,
-        );
+        let objects = model.explorer.flatten();
+        model.editor.completions = if objects.is_empty() {
+            complete(
+                &sql,
+                at.min(sql.len()),
+                &model.editor.catalog,
+                Dialect::Postgres,
+            )
+        } else {
+            let snapshot = dexo_app::SnapshotCatalog::new(objects);
+            complete(&sql, at.min(sql.len()), &snapshot, Dialect::Postgres)
+        };
         model.editor.completion_open = true;
     }
 }

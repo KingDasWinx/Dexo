@@ -135,6 +135,44 @@ fn is_subsequence(haystack: &str, needle: &str) -> bool {
     needle.chars().all(|needed| chars.any(|ch| ch == needed))
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageHint {
+    pub object_id: String,
+    pub favorite: bool,
+    pub recency: u64,
+}
+
+pub fn search_with_usage(
+    objects: Vec<CatalogObject>,
+    usage: &[UsageHint],
+    restrictions: &[dexo_driver_api::CatalogRestriction],
+    query: &str,
+) -> Vec<SearchHit> {
+    let documents = objects
+        .into_iter()
+        .filter(|object| {
+            let name = object.qualified_name.object();
+            let qualified = object.qualified_name.display_unquoted();
+            !restrictions.iter().any(|restriction| {
+                restriction.capability == name
+                    || restriction.capability == qualified
+                    || restriction.capability == object.id.as_str()
+            })
+        })
+        .map(|object| {
+            let hint = usage
+                .iter()
+                .find(|hint| hint.object_id == object.id.as_str());
+            SearchDocument {
+                favorite: hint.map(|hint| hint.favorite).unwrap_or(false),
+                recency: hint.map(|hint| hint.recency).unwrap_or(0),
+                object,
+            }
+        })
+        .collect();
+    SearchService::new(documents).search(query)
+}
+
 pub fn generate_catalog(count: usize) -> Vec<CatalogObject> {
     (0..count)
         .map(|index| {
@@ -230,5 +268,39 @@ mod tests {
         assert_eq!(hits[0].object.qualified_name.object(), "needle");
         assert_eq!(hits[0].rank, 0);
         eprintln!("catalog_search_100k_ms={elapsed_ms}");
+    }
+
+    #[test]
+    fn search_ranks_favorite_then_recent_without_returning_denied_objects() {
+        let hits = super::search_with_usage(
+            vec![
+                object("orders", "public"),
+                object("order_items", "public"),
+                object("secret_orders", "private"),
+            ],
+            &[
+                super::UsageHint {
+                    object_id: "orders".into(),
+                    favorite: true,
+                    recency: 1,
+                },
+                super::UsageHint {
+                    object_id: "order_items".into(),
+                    favorite: false,
+                    recency: 9,
+                },
+            ],
+            &[dexo_driver_api::CatalogRestriction {
+                parent: None,
+                capability: "secret_orders".into(),
+                reason: "permission denied".into(),
+            }],
+            "ord",
+        );
+        assert_eq!(hits[0].object.qualified_name.object(), "orders");
+        assert!(
+            hits.iter()
+                .all(|hit| hit.object.qualified_name.object() != "secret_orders")
+        );
     }
 }
