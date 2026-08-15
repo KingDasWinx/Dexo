@@ -39,7 +39,7 @@ Modify:
 
 **Files:** `crates/dexo-driver-api/src/connection.rs`, both driver factories, `crates/dexo-app/src/driver_registry.rs`, tests in `crates/dexo-driver-api/tests/contracts.rs`.
 
-- [ ] **Step 1: Write the failing descriptor contract**
+- [x] **Step 1: Write the failing descriptor contract**
 
 ```rust
 #[test]
@@ -51,13 +51,13 @@ fn factories_describe_connection_defaults_without_tui_hardcoding() {
 }
 ```
 
-- [ ] **Step 2: Run it**
+- [x] **Step 2: Run it**
 
 Run: `cargo test -p dexo-driver-api --test contracts factories_describe_connection_defaults_without_tui_hardcoding`
 
 Expected: FAIL because `descriptor` does not exist.
 
-- [ ] **Step 3: Add and implement the descriptor**
+- [x] **Step 3: Add and implement the descriptor**
 
 ```rust
 #[derive(Clone, Debug, Eq, PartialEq)]

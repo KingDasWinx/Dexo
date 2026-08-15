@@ -27,4 +27,14 @@ impl DriverRegistry {
             )
         })
     }
+
+    pub fn descriptors(&self) -> Vec<dexo_driver_api::DriverDescriptor> {
+        let mut descriptors: Vec<_> = self
+            .factories
+            .values()
+            .map(|factory| factory.descriptor())
+            .collect();
+        descriptors.sort_by_key(|descriptor| descriptor.id);
+        descriptors
+    }
 }

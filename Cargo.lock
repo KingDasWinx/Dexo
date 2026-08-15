@@ -1490,6 +1490,7 @@ name = "dexo-driver-api"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "dexo-driver-postgres",
  "futures-core",
  "secrecy",
  "serde",

@@ -23,7 +23,9 @@ pub use catalog::{
     CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction, ObjectId,
     ObjectKind,
 };
-pub use connection::{ConnectRequest, ConnectionFactory, Session};
+pub use connection::{
+    ConnectRequest, ConnectionFactory, ConnectionOptions, DriverDescriptor, Session,
+};
 pub use ddl::{DdlExecutor, DdlOutcome, DdlPlan, DdlStatement, ObjectDdl, SecurityAdmin};
 pub use error::{DriverError, DriverErrorCategory};
 pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};

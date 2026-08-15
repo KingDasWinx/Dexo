@@ -15,8 +15,8 @@ pub struct MysqlFactory;
 
 #[async_trait::async_trait]
 impl ConnectionFactory for MysqlFactory {
-    fn driver_name(&self) -> &'static str {
-        "mysql"
+    fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
+        dexo_driver_api::DriverDescriptor::mysql()
     }
 
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {

@@ -11,8 +11,8 @@ pub struct PostgresFactory;
 
 #[async_trait::async_trait]
 impl ConnectionFactory for PostgresFactory {
-    fn driver_name(&self) -> &'static str {
-        "postgres"
+    fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
+        dexo_driver_api::DriverDescriptor::postgres()
     }
 
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {

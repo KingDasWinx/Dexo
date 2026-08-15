@@ -17,3 +17,4 @@ uuid.workspace = true
 
 [dev-dependencies]
 async-trait.workspace = true
+dexo-driver-postgres = { path = "../dexo-driver-postgres" }

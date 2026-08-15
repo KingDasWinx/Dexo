@@ -81,9 +81,10 @@ fn endpoint_from_config(config: &serde_json::Value, driver: &str) -> Result<Stri
                 .as_u64()
                 .or_else(|| value.as_str().and_then(|text| text.parse().ok()))
         })
-        .unwrap_or(match driver {
-            "mysql" => 3306,
-            _ => 5432,
+        .unwrap_or_else(|| {
+            dexo_driver_api::DriverDescriptor::for_id(driver)
+                .map(|descriptor| u64::from(descriptor.default_port))
+                .unwrap_or(5432)
         });
     if port == 0 || port > u64::from(u16::MAX) {
         return Err(AppError::new(

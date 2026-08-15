@@ -148,10 +148,9 @@ fn normalize_driver(driver: &str) -> Result<String, AppError> {
 }
 
 fn default_port(driver: &str) -> u16 {
-    match driver {
-        "mysql" => 3306,
-        _ => 5432,
-    }
+    dexo_driver_api::DriverDescriptor::for_id(driver)
+        .map(|descriptor| descriptor.default_port)
+        .unwrap_or(5432)
 }
 
 #[cfg(test)]

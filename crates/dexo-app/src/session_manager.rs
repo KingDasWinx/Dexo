@@ -118,8 +118,18 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ConnectionFactory for DisconnectAfterExecute {
-        fn driver_name(&self) -> &'static str {
-            "fake"
+        fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
+            dexo_driver_api::DriverDescriptor {
+                id: "fake",
+                display_name: "Fake",
+                default_port: 1,
+                options: dexo_driver_api::ConnectionOptions {
+                    tls: false,
+                    client_certificate: false,
+                    ssh: false,
+                    proxy: false,
+                },
+            }
         }
 
         async fn connect(&self, _: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {
