@@ -23,10 +23,31 @@ jobs:
           mkdir -p dist
           cp target/release/dexo dist/dexo-x86_64-unknown-linux-gnu || cp target/release/dexo.exe dist/ || true
           (cd dist && sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS)
-      - name: SBOM placeholder
+      - name: SBOM from lockfile
         run: |
-          echo '{"bomFormat":"CycloneDX","specVersion":"1.5","components":[]}' > dist/sbom.cdx.json
-          echo 'SPDXVersion: SPDX-2.3' > dist/sbom.spdx
+          cargo metadata --format-version 1 --offline > dist/cargo-metadata.json
+          python3 - <<'PY'
+          import json, hashlib, pathlib
+          meta = json.loads(pathlib.Path("dist/cargo-metadata.json").read_text())
+          components = []
+          for pkg in meta["packages"]:
+              components.append({
+                  "type": "library",
+                  "name": pkg["name"],
+                  "version": pkg["version"],
+                  "purl": f"pkg:cargo/{pkg['name']}@{pkg['version']}",
+              })
+          bom = {"bomFormat": "CycloneDX", "specVersion": "1.5", "components": components}
+          pathlib.Path("dist/sbom.cdx.json").write_text(json.dumps(bom, indent=2))
+          pathlib.Path("dist/sbom.spdx").write_text(
+              "SPDXVersion: SPDX-2.3\nDataLicense: CC0-1.0\nPackageName: dexo\n"
+              + "\n".join(f"PackageName: {c['name']}\nPackageVersion: {c['version']}" for c in components)
+          )
+          PY
+      - name: Smoke
+        run: |
+          ./target/release/dexo --version
+          ./target/release/dexo doctor --json
       - name: Upload
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

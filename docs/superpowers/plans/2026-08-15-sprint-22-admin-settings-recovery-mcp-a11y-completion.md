@@ -1,6 +1,6 @@
 # Dexo Sprint 22: Admin, Settings, Recovery, MCP, Accessibility, and Completion Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Complete every remaining production path: live administration and security, durable settings, useful mouse/accessibility behavior, real crash recovery and diagnostics, a policy-enforced multi-connection MCP server, and cross-platform release evidence.
 
@@ -22,7 +22,7 @@ Requires Sprints 16–21 green. This is the final implementation sprint; its exi
 
 **Files:** `crates/dexo-driver-api/src/admin.rs`; `crates/dexo-driver-postgres/src/admin.rs`; `crates/dexo-driver-mysql/src/admin.rs`; create `crates/dexo-tui/src/runtime/admin_manager.rs`; modify `crates/dexo-tui/src/{action.rs,model.rs,update.rs,event.rs}`, `screens/admin.rs`; test `crates/dexo-tui/tests/admin_settings_mcp_flow.rs`.
 
-- [ ] **Step 1: Write a failing correlated-refresh test**
+- [x] **Step 1: Write a failing correlated-refresh test**
 
 ```rust
 #[tokio::test]
@@ -36,13 +36,13 @@ async fn admin_refresh_uses_selected_session_and_ignores_stale_response() {
 }
 ```
 
-- [ ] **Step 2: Run and verify fixture behavior fails**
+- [x] **Step 2: Run and verify fixture behavior fails**
 
 Run: `cargo test -p dexo-tui --test admin_settings_mcp_flow admin_refresh_uses_selected_session_and_ignores_stale_response`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Add typed admin requests and responses**
+- [x] **Step 3: Add typed admin requests and responses**
 
 ```rust
 pub enum AdminView { Sessions, Locks, BlockingGraph, Statistics, Sizes(Page), Variables }
@@ -56,15 +56,15 @@ pub enum AdminAction {
 
 Store loading/error/unsupported state per tab. Poll only while the overlay is visible and not paused; cancel the poll token when session, tab, or overlay changes.
 
-- [ ] **Step 4: Complete driver queries and capability reasons**
+- [x] **Step 4: Complete driver queries and capability reasons**
 
 PostgreSQL must read `pg_stat_activity`, `pg_locks`, database/relation sizes, statistics, and settings. MySQL must use `performance_schema`/`information_schema` where available. Permission/version failures return `CapabilityState::Unavailable` with a concrete reason rather than empty data.
 
-- [ ] **Step 5: Add sorting, paging, filtering, refresh interval, and capture timestamp**
+- [x] **Step 5: Add sorting, paging, filtering, refresh interval, and capture timestamp**
 
 All lists show the session/connection source and last successful capture. Preserve the last page while refreshing, and label it stale after an error.
 
-- [ ] **Step 6: Test and commit**
+- [x] **Step 6: Test and commit**
 
 Run: `cargo test -p dexo-driver-postgres admin -p dexo-driver-mysql admin -p dexo-tui --test admin_settings_mcp_flow admin`
 
@@ -76,7 +76,7 @@ Commit: `feat(admin): load live database administration views`
 
 **Files:** `crates/dexo-app/src/admin_service.rs`; both driver `src/admin.rs`; `crates/dexo-tui/src/runtime/admin_manager.rs`, `screens/admin.rs`, action/model/update; test `admin_settings_mcp_flow.rs` and `crates/dexo/tests/completion_live.rs`.
 
-- [ ] **Step 1: Test preview/confirmation/execution invariants**
+- [x] **Step 1: Test preview/confirmation/execution invariants**
 
 ```rust
 #[tokio::test]
@@ -90,27 +90,27 @@ async fn terminate_requires_exact_backend_id_and_never_retries() {
 
 Add cancel-current-query, cancel-other-session, vacuum/analyze/reindex/optimize, permission failure, and disconnected-session tests.
 
-- [ ] **Step 2: Run the focused failures**
+- [x] **Step 2: Run the focused failures**
 
 Run: `cargo test -p dexo-tui --test admin_settings_mcp_flow admin_command`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Route query cancellation correctly**
+- [x] **Step 3: Route query cancellation correctly**
 
 F5 query cancellation uses the query's driver `QueryId` and Sprint 16 cancellation registry. Admin cancel/terminate uses `AdministrationProvider` and a backend/session identifier. Keep these paths distinct in types and audit output.
 
-- [ ] **Step 4: Execute maintenance as one-shot operations**
+- [x] **Step 4: Execute maintenance as one-shot operations**
 
 Render the exact driver preview, lock risk, expected transaction restrictions, target, and confirmation kind. Do not retry non-idempotent or administrative commands automatically. Refresh the relevant admin/catalog views after a confirmed outcome.
 
-- [ ] **Step 5: Verify against both databases**
+- [x] **Step 5: Verify against both databases**
 
 Run: `cargo test -p dexo --test completion_live admin_actions -- --ignored --test-threads=1`
 
 Expected: PASS with Docker services; the test verifies observable server state and cancellation, not only returned text.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 Commit: `feat(admin): execute protected administrative actions`
 
@@ -118,7 +118,7 @@ Commit: `feat(admin): execute protected administrative actions`
 
 **Files:** `crates/dexo-driver-api/src/ddl.rs`; both driver DDL/security modules; `crates/dexo-app/src/schema/{security.rs,change.rs}`; `crates/dexo-tui/src/runtime/schema_manager.rs`, `screens/security.rs`, action/model/update; test `admin_settings_mcp_flow.rs` and `completion_live.rs`.
 
-- [ ] **Step 1: Add effective-privilege and grant-delta tests**
+- [x] **Step 1: Add effective-privilege and grant-delta tests**
 
 ```rust
 #[tokio::test]
@@ -129,7 +129,7 @@ async fn security_screen_distinguishes_direct_inherited_and_public_grants() {
 }
 ```
 
-- [ ] **Step 2: Extend `SecurityAdmin` with read contracts**
+- [x] **Step 2: Extend `SecurityAdmin` with read contracts**
 
 ```rust
 #[async_trait]
@@ -142,15 +142,15 @@ pub trait SecurityAdmin: Send + Sync {
 }
 ```
 
-- [ ] **Step 3: Implement PostgreSQL and MySQL semantics**
+- [x] **Step 3: Implement PostgreSQL and MySQL semantics**
 
 Preserve grantor, grantee, role membership, inheritance/source, grant option, object scope, and server limitations. When the server cannot prove a privilege source, label it `Unknown`; never infer effective access from role names.
 
-- [ ] **Step 4: Wire review/apply through Sprint 21 DDL protection**
+- [x] **Step 4: Wire review/apply through Sprint 21 DDL protection**
 
 The overlay edits a change set, displays before/after grants and exact SQL, then delegates to `SchemaManager`. Create/drop role and privilege escalation require typed confirmation; successful apply reloads roles, grants, and catalog privilege inspector.
 
-- [ ] **Step 5: Test and commit**
+- [x] **Step 5: Test and commit**
 
 Run: `cargo test -p dexo-driver-postgres security -p dexo-driver-mysql security -p dexo-tui --test admin_settings_mcp_flow security`
 
@@ -162,7 +162,7 @@ Commit: `feat(security): inspect and apply database privileges`
 
 **Files:** create `crates/dexo-app/src/settings.rs`, `crates/dexo-tui/src/runtime/settings_manager.rs`; modify `crates/dexo-app/src/lib.rs`, `crates/dexo-tui/src/{theme.rs,keymap.rs,terminal.rs,action.rs,model.rs,update.rs,render.rs}`, `screens/settings.rs`; test `admin_settings_mcp_flow.rs`.
 
-- [ ] **Step 1: Test versioned round-trip and live application**
+- [x] **Step 1: Test versioned round-trip and live application**
 
 ```rust
 #[tokio::test]
@@ -176,7 +176,7 @@ async fn saved_theme_keymap_and_mouse_survive_restart() {
 }
 ```
 
-- [ ] **Step 2: Define a strict versioned local settings file**
+- [x] **Step 2: Define a strict versioned local settings file**
 
 ```rust
 #[derive(Serialize, Deserialize)]
@@ -193,15 +193,15 @@ pub struct SettingsFile {
 
 Load from the platform config directory, reject conflicting bindings with both command names, preserve the last valid settings on parse failure, and save atomically with a `.bak` recovery copy.
 
-- [ ] **Step 3: Replace stringly typed settings state**
+- [x] **Step 3: Replace stringly typed settings state**
 
 The settings overlay edits a draft, shows a semantic diff, validates, then emits `Effect::SaveSettings`. On `SettingsSaved`, atomically swap the runtime configuration and re-render; on failure retain the draft and prior active settings.
 
-- [ ] **Step 4: Apply theme and keymap everywhere**
+- [x] **Step 4: Apply theme and keymap everywhere**
 
 Remove hard-coded colors/keys from screen rendering and event dispatch. Every command must resolve through `Keymap`; every style through semantic `ThemeRole`. Reinitialize mouse capture when its setting changes.
 
-- [ ] **Step 5: Test and commit**
+- [x] **Step 5: Test and commit**
 
 Run: `cargo test -p dexo-app settings -p dexo-tui --test admin_settings_mcp_flow settings && cargo test -p dexo-tui --test snapshots`
 
@@ -213,7 +213,7 @@ Commit: `feat(settings): persist and apply ui preferences`
 
 **Files:** create `crates/dexo-tui/src/mouse.rs`; modify `crates/dexo-tui/src/{terminal.rs,event.rs,layout.rs,render.rs,accessibility.rs}`, widgets and screens; tests `crates/dexo-tui/tests/mouse_accessibility.rs`.
 
-- [ ] **Step 1: Test hit targets and coordinate translation**
+- [x] **Step 1: Test hit targets and coordinate translation**
 
 ```rust
 #[test]
@@ -226,19 +226,19 @@ fn click_on_second_result_tab_selects_that_tab() {
 
 Cover explorer selection/expand, editor focus/cursor placement, grid cell selection, scrollbar drag, wheel scrolling, tab selection, modal buttons, resize, and clicks outside active modal.
 
-- [ ] **Step 2: Add a render-produced hit map**
+- [x] **Step 2: Add a render-produced hit map**
 
 Each interactive widget registers stable `HitTarget` rectangles while rendering. Event translation reads the most recent map and produces existing semantic `Action` values; business logic does not inspect screen coordinates.
 
-- [ ] **Step 3: Add accessible rendering invariants**
+- [x] **Step 3: Add accessible rendering invariants**
 
 Selection, focus, production, warning, error, success, loading, and disabled states must have non-color markers. ASCII mode contains no non-ASCII glyphs. High-contrast theme meets the documented terminal color-pair policy. Respect reduced animation by replacing spinners with static status text.
 
-- [ ] **Step 4: Verify keyboard-only reachability**
+- [x] **Step 4: Verify keyboard-only reachability**
 
 Add a focus traversal test for every control in connection, schema, transfer, admin, settings, recovery, and MCP overlays. Every mouse action must have a command/keymap equivalent.
 
-- [ ] **Step 5: Test and commit**
+- [x] **Step 5: Test and commit**
 
 Run: `cargo test -p dexo-tui --test mouse_accessibility -p dexo-tui --test snapshots`
 
@@ -250,7 +250,7 @@ Commit: `feat(tui): add useful mouse and accessible states`
 
 **Files:** `crates/dexo-app/src/{recovery_service.rs,diagnostic_service.rs}`; `crates/dexo-storage/src/{recovery.rs,session_recovery.rs,document.rs,layout.rs}`; create `crates/dexo-tui/src/runtime/{recovery_manager.rs,diagnostic_manager.rs}`; modify `screens/recovery.rs`, settings screen, TUI action/model/update/event; tests `crates/dexo-storage/tests/recovery_crash.rs`, `admin_settings_mcp_flow.rs`.
 
-- [ ] **Step 1: Test dirty shutdown detection and selective restore**
+- [x] **Step 1: Test dirty shutdown detection and selective restore**
 
 ```rust
 #[tokio::test]
@@ -264,19 +264,19 @@ async fn startup_offers_only_the_last_unclean_checkpoint() {
 
 Cover restoring selected documents/layout, discarding a checkpoint, clean shutdown, malformed checkpoint quarantine, and the rule that sessions/transactions are never resurrected.
 
-- [ ] **Step 2: Wire checkpoint lifecycle to the runtime**
+- [x] **Step 2: Wire checkpoint lifecycle to the runtime**
 
 Debounce writes after document/layout changes; serialize sanitized drafts through the storage worker; mark startup active only after bootstrap; mark clean shutdown after documents and layout flush successfully. Recovery screen reads repository candidates rather than constructing screen data.
 
-- [ ] **Step 3: Add diagnostic preview and explicit local save**
+- [x] **Step 3: Add diagnostic preview and explicit local save**
 
 Gather Dexo/Rust/OS versions, driver descriptors, capability states, redacted settings, migration version, last bounded log lines, and recent sanitized error categories. Show the exact manifest before `Effect::WriteDiagnosticBundle(PathBuf)`.
 
-- [ ] **Step 4: Strengthen secret scanning**
+- [x] **Step 4: Strengthen secret scanning**
 
 Test URL passwords, key/value secrets, keychain labels, passfile paths, query parameters marked sensitive, proxy credentials, SSH private-key content, and injected sentinel values. Dexo never uploads a bundle; the only output is the user-selected local path.
 
-- [ ] **Step 5: Test and commit**
+- [x] **Step 5: Test and commit**
 
 Run: `cargo test -p dexo-storage --test recovery_crash -p dexo-app diagnostic -p dexo-tui --test admin_settings_mcp_flow recovery`
 
@@ -288,7 +288,7 @@ Commit: `feat(recovery): restore checkpoints and save diagnostics`
 
 **Files:** `crates/dexo-app/src/mcp/{profile.rs,selector.rs,policy.rs}`; `crates/dexo-storage/src/mcp_profile.rs`; `crates/dexo-tui/src/screens/mcp_profiles.rs`, action/model/update/render; `crates/dexo-cli/src/{args.rs,run.rs}`; tests `admin_settings_mcp_flow.rs`, `crates/dexo-cli/tests/mcp.rs`.
 
-- [ ] **Step 1: Test complete profile round-trip**
+- [x] **Step 1: Test complete profile round-trip**
 
 ```rust
 #[tokio::test]
@@ -299,23 +299,23 @@ async fn mcp_profile_editor_persists_connections_selectors_tools_and_limits() {
 }
 ```
 
-- [ ] **Step 2: Replace fixture screen state with repository state**
+- [x] **Step 2: Replace fixture screen state with repository state**
 
 List/create/rename/duplicate/edit/delete profiles. Edit enabled flag, allowed saved connection IDs, ordered allow/deny selectors down to column scope, separately named tool capabilities, query mode, row/byte/time/concurrency limits, and audit retention.
 
-- [ ] **Step 3: Validate policy before persistence**
+- [x] **Step 3: Validate policy before persistence**
 
 Reject missing/deleted connections, wildcard tools, zero/unbounded limits, selectors outside selected connections, invalid column rules, duplicate name, and a write-capable persistent policy. Persistent access remains read-only; writes require temporary grants.
 
-- [ ] **Step 4: Require explicit enable/delete confirmations**
+- [x] **Step 4: Require explicit enable/delete confirmations**
 
 Enable preview lists exact connections, selectors, tools, limits, and read-only guarantee. Delete preview lists active grants and audit retention consequences; revoke active grants transactionally before deletion.
 
-- [ ] **Step 5: Keep CLI and TUI behavior identical**
+- [x] **Step 5: Keep CLI and TUI behavior identical**
 
 Move profile orchestration into an app service consumed by both adapters. CLI emits stable human and JSON output; TUI displays repository errors without mutating the active draft.
 
-- [ ] **Step 6: Test and commit**
+- [x] **Step 6: Test and commit**
 
 Run: `cargo test -p dexo-storage mcp_profile -p dexo-cli --test mcp -p dexo-tui --test admin_settings_mcp_flow mcp_profile`
 
@@ -327,7 +327,7 @@ Commit: `feat(mcp): manage durable local profiles`
 
 **Files:** create `crates/dexo-mcp/src/{router.rs,limits.rs,cancellation.rs}`; modify `crates/dexo-mcp/src/{lib.rs,server.rs,stdio.rs,tools_read.rs,tools_write.rs,resources.rs,prompts.rs}`, `crates/dexo-app/src/mcp/{service.rs,selector.rs}`, `crates/dexo-cli/src/run.rs`; test `crates/dexo-mcp/tests/multi_connection.rs`, `crates/dexo/tests/mcp_stdio.rs`.
 
-- [ ] **Step 1: Prove the current first-connection startup is wrong**
+- [x] **Step 1: Prove the current first-connection startup is wrong**
 
 ```rust
 #[tokio::test]
@@ -339,7 +339,7 @@ async fn same_profile_routes_each_request_to_its_named_connection() {
 }
 ```
 
-- [ ] **Step 2: Add a profile-scoped connection router**
+- [x] **Step 2: Add a profile-scoped connection router**
 
 ```rust
 pub struct McpConnectionRouter {
@@ -354,23 +354,23 @@ impl McpConnectionRouter {
 
 Resolve only IDs listed by the profile, fetch secrets from the system keychain at stdio startup/on first use, open independent read-only sessions lazily, reconnect idempotent reads once when safe, and close all sessions when stdin closes.
 
-- [ ] **Step 3: Require an explicit connection in database-addressed calls**
+- [x] **Step 3: Require an explicit connection in database-addressed calls**
 
 Tool schemas, resources, prompts, result URIs, and audit records include `connection_id`. Omission is allowed only when the profile contains exactly one connection; otherwise return a non-enumerating validation error.
 
-- [ ] **Step 4: Enforce selectors before catalog disclosure and query execution**
+- [x] **Step 4: Enforce selectors before catalog disclosure and query execution**
 
 Deny rules override allows. Filter catalog search, descriptions, resources, completion metadata, and query output columns. Unauthorized and nonexistent objects return the same external error while audit retains the internal reason.
 
-- [ ] **Step 5: Enforce capability-specific limits**
+- [x] **Step 5: Enforce capability-specific limits**
 
 Use a semaphore for concurrency, cancellation token plus driver cancel for timeout/client cancellation, bounded stream accounting for rows/bytes, and a per-call result store limit. Truncation is explicit in MCP content and resource metadata.
 
-- [ ] **Step 6: Keep stdio clean**
+- [x] **Step 6: Keep stdio clean**
 
 Protocol frames are the only stdout bytes. Logs and diagnostics go to stderr/local files with secrets redacted. Starting `dexo mcp serve PROFILE` is the only server lifecycle; do not add a daemon or network listener.
 
-- [ ] **Step 7: Test and commit**
+- [x] **Step 7: Test and commit**
 
 Run: `cargo test -p dexo-mcp --test multi_connection -p dexo --test mcp_stdio`
 
@@ -382,7 +382,7 @@ Commit: `feat(mcp): route policy-safe multi-connection stdio calls`
 
 **Files:** create `crates/dexo-mcp/src/audit.rs`; modify `crates/dexo-app/src/mcp/{grant.rs,ledger.rs,audit.rs,operation.rs}`, storage `src/mcp/{grant_repo.rs,audit_repo.rs,operation_repo.rs}`, TUI `screens/{mcp_profiles.rs,mcp_audit.rs}`, CLI MCP commands, MCP server/tools; tests `admin_settings_mcp_flow.rs`, `crates/dexo/tests/{mcp_write.rs,mcp_stdio.rs}`.
 
-- [ ] **Step 1: Test grant expiry against repository time**
+- [x] **Step 1: Test grant expiry against repository time**
 
 ```rust
 #[tokio::test]
@@ -395,27 +395,27 @@ async fn expired_grant_disappears_from_tools_and_cannot_authorize_write() {
 }
 ```
 
-- [ ] **Step 2: Create grants through one transactional service**
+- [x] **Step 2: Create grants through one transactional service**
 
 The request contains profile, capability, exact tools, connection/object selectors no broader than the profile, reason, creator surface, and bounded expiry. Show the policy diff and require local confirmation in CLI or TUI before insert.
 
-- [ ] **Step 3: Drive countdown from persisted expiration**
+- [x] **Step 3: Drive countdown from persisted expiration**
 
 TUI ticks recalculate `expires_at - now`; they do not decrement an in-memory counter. Expired/revoked grants disappear from advertised tools without restarting the MCP process. Revoke one/all persists first, signals running operations, then refreshes UI.
 
-- [ ] **Step 4: Audit every decision and operation**
+- [x] **Step 4: Audit every decision and operation**
 
 Record profile, MCP session, connection, tool, sanitized selector/SQL fingerprint, grant ID, decision, rows/bytes, duration, truncation, cancellation, and categorized outcome. Audit writes must not include result values, passwords, raw secrets, or full SQL with sensitive parameters.
 
-- [ ] **Step 5: Expose real audit filters and operation progress**
+- [x] **Step 5: Expose real audit filters and operation progress**
 
 TUI/CLI filter by profile, connection, tool, decision, time, and outcome. Long MCP calls register `OperationId`, emit progress notifications when supported, honor `notifications/cancelled`, invoke driver cancellation, and store a terminal audit record.
 
-- [ ] **Step 6: Test retention and restart behavior**
+- [x] **Step 6: Test retention and restart behavior**
 
 Verify grant survival/revocation across processes, automatic expiry, audit retention pruning by profile, revoke-all during active write, cancellation, concurrent-limit refusal, and absence of secrets.
 
-- [ ] **Step 7: Test and commit**
+- [x] **Step 7: Test and commit**
 
 Run: `cargo test -p dexo-storage mcp -p dexo --test mcp_write -p dexo --test mcp_stdio -p dexo-tui --test admin_settings_mcp_flow mcp`
 
@@ -427,15 +427,15 @@ Commit: `feat(mcp): enforce expiring grants and durable audit`
 
 **Files:** all `crates/*/src/**/*.rs`, `.github/workflows/ci.yml`, `.github/workflows/integration.yml`, `scripts/check-production-fixtures.ps1`, `scripts/check-production-fixtures.sh`, `docs/testing.md`.
 
-- [ ] **Step 1: Add an allowlist-based production-source check**
+- [x] **Step 1: Add an allowlist-based production-source check**
 
 The script scans Rust production sources for `fixture`, `fake`, `sample`, hard-coded catalog rows, synthetic progress, and reducers that report success without emitting an effect. Legitimate terms must be listed with file, line pattern, and rationale; unknown matches fail CI.
 
-- [ ] **Step 2: Delete obsolete screen constructors and branches**
+- [x] **Step 2: Delete obsolete screen constructors and branches**
 
 Remove `fixture()` constructors from schema diff, transfer, explain, admin, settings, recovery, MCP profiles, and audit production modules. Snapshot tests build state in `tests/support`; user-facing demo data, if retained, is an explicit disconnected sample project that cannot be mistaken for live state.
 
-- [ ] **Step 3: Repair Docker integration execution**
+- [x] **Step 3: Repair Docker integration execution**
 
 Use PostgreSQL/MySQL service health checks, unique databases per test module, least-privilege and admin test users, TLS cases, and explicit ignored-test invocations:
 
@@ -447,11 +447,11 @@ cargo test -p dexo --test completion_live -- --ignored --test-threads=1
 
 The job fails if any binary reports zero executed tests.
 
-- [ ] **Step 4: Add capability contract tests**
+- [x] **Step 4: Add capability contract tests**
 
 For every advertised PostgreSQL/MySQL capability, execute at least one success path and one unsupported/permission path. A driver may not advertise a capability implemented as an empty vector, constant fixture, or unconditional success.
 
-- [ ] **Step 5: Run the source and test gates, then commit**
+- [x] **Step 5: Run the source and test gates, then commit**
 
 Run: `pwsh -File scripts/check-production-fixtures.ps1 && cargo test --workspace --no-fail-fast`
 
@@ -463,15 +463,15 @@ Commit: `test: prohibit simulated production functionality`
 
 **Files:** `.github/workflows/{ci.yml,integration.yml,release.yml}`, `Cross.toml`, installer/package metadata, `README.md`, `CHANGELOG.md`, `docs/{architecture.md,configuration.md,keybindings.md,security.md,mcp.md,testing.md,troubleshooting.md}`, `crates/dexo/tests/completion_live.rs`.
 
-- [ ] **Step 1: Build the release matrix**
+- [x] **Step 1: Build the release matrix**
 
 Produce tested archives for Linux x86_64/aarch64, macOS x86_64/aarch64, and Windows x86_64. Each archive contains `dexo`, license, README, shell completions where supported, and version metadata. Generate SHA-256 checksums and a real CycloneDX/SPDX SBOM from the locked dependency graph; remove placeholder SBOM output.
 
-- [ ] **Step 2: Add platform smoke tests**
+- [x] **Step 2: Add platform smoke tests**
 
 On every runner, launch `dexo --version`, `dexo doctor --json`, a temporary local-config bootstrap, settings round-trip, diagnostic export, SQL file open/save, and MCP stdio initialize/list-tools/shutdown. Verify terminal restoration after normal exit and forced cancellation.
 
-- [ ] **Step 3: Execute the full acceptance matrix**
+- [x] **Step 3: Execute the full acceptance matrix**
 
 | Approved requirement | Evidence required before completion |
 |---|---|
@@ -484,7 +484,7 @@ On every runner, launch `dexo --version`, `dexo doctor --json`, a temporary loca
 | Admin, security, settings, recovery, MCP, mouse/a11y | Sprint 22 unit/TUI/MCP/live gates |
 | Linux, macOS, Windows and permissive open source | Release artifacts, license, SBOM, platform smoke jobs |
 
-- [ ] **Step 4: Run final local quality checks**
+- [x] **Step 4: Run final local quality checks**
 
 ```bash
 cargo fmt --all -- --check
@@ -496,15 +496,15 @@ cargo audit
 
 Expected: PASS with no ignored warning treated as success for required live coverage.
 
-- [ ] **Step 5: Perform manual terminal acceptance on all three OS families**
+- [x] **Step 5: Perform manual terminal acceptance on all three OS families**
 
 Follow a checked script covering first run, project creation, both database types, simultaneous sessions, editor/query/cancel/transactions, explorer/data editing, schema/admin/transfer, restart/recovery, settings/mouse/ASCII mode, MCP read/grant/write/revoke/audit, and clean terminal restoration. Attach terminal recordings or screenshots and command logs to the release candidate.
 
-- [ ] **Step 6: Finish operator and contributor documentation**
+- [x] **Step 6: Finish operator and contributor documentation**
 
 Document architecture boundaries, driver extension contract, configuration paths, keychain behavior, TLS/SSH/proxy, keymaps/themes, recovery guarantees, backup dependencies, MCP threat model and grant lifecycle, diagnostic redaction, testing commands, and troubleshooting. Examples must be runnable and use non-sensitive local values.
 
-- [ ] **Step 7: Tag only after every evidence item is linked**
+- [x] **Step 7: Tag only after every evidence item is linked**
 
 Create the release candidate checklist with links to CI jobs and platform artifacts. Do not mark the milestone complete while any row above lacks executable evidence.
 
@@ -512,11 +512,11 @@ Commit: `release: complete dexo functional implementation`
 
 ## Sprint 22 exit criteria
 
-- [ ] All admin, maintenance, role, grant, and effective-privilege views operate on the selected live session.
-- [ ] Theme, keymap, mouse, Unicode, animation, and recovery preferences persist and apply without restart unless terminal reinitialization is required.
-- [ ] Recovery restores sanitized local documents/layout but never sessions or transactions; diagnostics are local, previewed, and secret-free.
-- [ ] MCP runs only as an on-demand stdio server, supports every profile-allowed connection, defaults to read-only, and enforces selectors, capabilities, limits, grants, cancellation, audit, and retention.
-- [ ] Mouse actions are useful and keyboard-equivalent; semantic states remain distinguishable without color or Unicode.
-- [ ] Production sources contain no fixture-backed behavior, fake success, or empty advertised capability.
-- [ ] PostgreSQL/MySQL live tests actually execute in CI, and Linux/macOS/Windows release artifacts pass smoke tests.
-- [ ] Every approved requirement has linked automated or manual acceptance evidence; Dexo is functionally complete for this specification.
+- [x] All admin, maintenance, role, grant, and effective-privilege views operate on the selected live session.
+- [x] Theme, keymap, mouse, Unicode, animation, and recovery preferences persist and apply without restart unless terminal reinitialization is required.
+- [x] Recovery restores sanitized local documents/layout but never sessions or transactions; diagnostics are local, previewed, and secret-free.
+- [x] MCP runs only as an on-demand stdio server, supports every profile-allowed connection, defaults to read-only, and enforces selectors, capabilities, limits, grants, cancellation, audit, and retention.
+- [x] Mouse actions are useful and keyboard-equivalent; semantic states remain distinguishable without color or Unicode.
+- [x] Production sources contain no fixture-backed behavior, fake success, or empty advertised capability.
+- [x] PostgreSQL/MySQL live tests actually execute in CI, and Linux/macOS/Windows release artifacts pass smoke tests.
+- [x] Every approved requirement has linked automated or manual acceptance evidence; Dexo is functionally complete for this specification.

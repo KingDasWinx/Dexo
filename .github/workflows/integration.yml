@@ -36,3 +36,23 @@ jobs:
         run: cargo test -p ${{ matrix.package }} --all-features -j 4
         env:
           DEXO_IT_IMAGE: ${{ matrix.image }}
+
+  live:
+    name: live ${{ matrix.suite }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [tui_advanced_live, completion_live]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772 # master
+        with:
+          toolchain: 1.93.1
+      - name: Run ignored live tests
+        run: |
+          set -euo pipefail
+          out=$(cargo test -p dexo --test ${{ matrix.suite }} -- --ignored --test-threads=1 --nocapture)
+          echo "$out"
+          echo "$out" | grep -q "running 0 tests" && exit 1 || true
+

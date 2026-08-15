@@ -28,6 +28,9 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
       - name: Test
         run: cargo nextest run --workspace --all-features --profile ci
+      - name: Production fixtures
+        if: runner.os == 'Linux'
+        run: bash scripts/check-production-fixtures.sh
       - uses: taiki-e/install-action@82cd3e7658a6f96c86c0234aeeda1748937cb0a1 # v2.85.13
         if: runner.os == 'Linux'
         with:
