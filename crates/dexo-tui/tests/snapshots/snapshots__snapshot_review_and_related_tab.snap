@@ -8,11 +8,11 @@ demo  local  public
 │▾ local                   ││   1▸select 1                                                         │
 │  ▸ public                ││                                                                      │
 │  ▸ mysql.use┌Review changes────────────────────────────────────────────────────────┐             │
-│actions: prop│target: demo.public.items                                             │             │
+│actions: prop│target: demo.public.users                                             │             │
 │selected: loc│ops: 1                                                                │             │
 │             │status: Pending                                                       │             │
 │             │ready                                                                 │             │
-│             │INSERT INTO demo.public.items (id) VALUES ($1)                        │             │
+│             │INSERT INTO demo.public.users (id) VALUES ($1)                        │             │
 │             │                                                                      │             │
 │             │                                                                      │             │
 │             │                                                                      │             │

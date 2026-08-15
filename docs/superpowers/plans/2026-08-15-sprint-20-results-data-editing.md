@@ -286,7 +286,7 @@ git commit -m "feat(data): navigate foreign keys through live data tabs"
 
 ### Task 8: Run the results/data sprint gate
 
-- [ ] **Step 1: Run gates**
+- [x] **Step 1: Run gates**
 
 ```powershell
 cargo fmt --all -- --check
@@ -299,13 +299,13 @@ cargo bench -p dexo-tui grid_viewport
 
 Expected: PASS and memory/viewport budgets hold.
 
-- [ ] **Step 2: Confirm fixture grid is not used in production**
+- [x] **Step 2: Confirm fixture grid is not used in production**
 
 Run: `rg -n "fixture_rows|model\.data\.clipboard\s*=" crates/dexo-tui/src`
 
 Expected: `fixture_rows` appears only under tests/benches; copy success is runtime-driven.
 
-- [ ] **Step 3: Commit verified state**
+- [x] **Step 3: Commit verified state**
 
 ```powershell
 git add .
@@ -314,9 +314,9 @@ git commit -m "test(data): verify live result and editing workflows"
 
 ## Sprint 20 exit checklist
 
-- [ ] Real rows fill independent result tabs.
-- [ ] Server paging/sort/filter is typed and safe.
-- [ ] Clipboard formats reach the OS.
-- [ ] Large/native/image values are bounded, inspectable, and cleanly disposed.
-- [ ] Change sets modify the database with conflict handling.
-- [ ] FK navigation issues a real query.
+- [x] Real rows fill independent result tabs.
+- [x] Server paging/sort/filter is typed and safe.
+- [x] Clipboard formats reach the OS.
+- [x] Large/native/image values are bounded, inspectable, and cleanly disposed.
+- [x] Change sets modify the database with conflict handling.
+- [x] FK navigation issues a real query.

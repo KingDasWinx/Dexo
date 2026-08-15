@@ -441,10 +441,9 @@ impl MysqlSession {
             .await?
         {
             Ok(constraints) => {
-                let mut fk_map: std::collections::BTreeMap<
-                    String,
-                    (Vec<String>, Vec<String>, Option<String>, Option<String>),
-                > = std::collections::BTreeMap::new();
+                type FkParts = (Vec<String>, Vec<String>, Option<String>, Option<String>);
+                let mut fk_map: std::collections::BTreeMap<String, FkParts> =
+                    std::collections::BTreeMap::new();
                 if let Ok(Ok(fks)) = self
                     .try_exec_rows::<mysql_async::Row>(
                         "SELECT CONSTRAINT_NAME, COLUMN_NAME, REFERENCED_TABLE_SCHEMA,
@@ -459,12 +458,10 @@ impl MysqlSession {
                 {
                     for row in fks {
                         let name = cell_string(&row, 0);
-                        let entry = fk_map.entry(name).or_insert((
-                            Vec::new(),
-                            Vec::new(),
-                            None,
-                            None,
-                        ));
+                        let entry =
+                            fk_map
+                                .entry(name)
+                                .or_insert((Vec::new(), Vec::new(), None, None));
                         entry.0.push(cell_string(&row, 1));
                         entry.1.push(cell_string(&row, 4));
                         entry.2 = Some(cell_string(&row, 2));

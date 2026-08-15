@@ -8,7 +8,8 @@ pub mod value;
 
 pub use apply::{mutations_for, preview_sql};
 pub use change_set::{
-    ChangeSet, ColumnDef, EditMode, EditableRow, PendingChange, RowEditState, RowIdentity, TableMeta,
+    ChangeSet, ColumnDef, EditMode, EditableRow, PendingChange, RowEditState, RowIdentity,
+    TableMeta,
 };
 pub use copy::{CopyFormat, SqlDialect, copy_selection};
 pub use filter::assert_typed_filter;

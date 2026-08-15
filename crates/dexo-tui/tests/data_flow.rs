@@ -112,10 +112,15 @@ fn clipboard_copy_emits_os_effect() {
         nullable: false,
     }]);
     model.results.append_rows(vec![vec![DbValue::I64(1)]]);
-    let effects = update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Csv));
-    assert!(effects
-        .iter()
-        .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. })));
+    let effects = update(
+        &mut model,
+        Action::CopyGrid(dexo_app::data::CopyFormat::Csv),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. }))
+    );
     assert!(model.data.clipboard.is_empty());
 }
 
@@ -129,7 +134,12 @@ fn clipboard_failure_is_not_success() {
         },
     );
     assert!(model.data.clipboard.is_empty());
-    assert!(model.messages.iter().any(|message| message.contains("denied")));
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.contains("denied"))
+    );
     update(
         &mut model,
         Action::ClipboardWritten {
@@ -175,11 +185,29 @@ fn clipboard_formats_cover_cell_row_column_and_range() {
         );
     }
     model.results.select_row(1);
-    assert!(!update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Csv)).is_empty());
+    assert!(
+        !update(
+            &mut model,
+            Action::CopyGrid(dexo_app::data::CopyFormat::Csv)
+        )
+        .is_empty()
+    );
     model.results.select_column(1);
-    assert!(!update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Tsv)).is_empty());
+    assert!(
+        !update(
+            &mut model,
+            Action::CopyGrid(dexo_app::data::CopyFormat::Tsv)
+        )
+        .is_empty()
+    );
     model.results.select_range((0, 0), (1, 1));
-    assert!(!update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Json)).is_empty());
+    assert!(
+        !update(
+            &mut model,
+            Action::CopyGrid(dexo_app::data::CopyFormat::Json)
+        )
+        .is_empty()
+    );
 }
 
 #[test]
@@ -204,13 +232,15 @@ fn foreign_key_null_disables_navigation() {
 #[test]
 fn arbitrary_select_rewrite_rejects_updates() {
     use dexo_driver_api::Page;
-    assert!(dexo_sql::derive_page(
-        "update users set name='x'",
-        &[],
-        &None,
-        Page::new(0, 10).unwrap()
-    )
-    .is_err());
+    assert!(
+        dexo_sql::derive_page(
+            "update users set name='x'",
+            &[],
+            &None,
+            Page::new(0, 10).unwrap()
+        )
+        .is_err()
+    );
 }
 
 #[test]
@@ -279,9 +309,11 @@ fn large_value_cancel_deletes_partial_files() {
 
 #[test]
 fn apply_changes_emits_mutations_and_conflict_keeps_edits() {
-    let mut model = Model::default();
-    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
-    model.session_generation = 1;
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
     model.data.table = dexo_app::data::TableMeta {
         columns: vec![dexo_app::data::ColumnDef {
             name: "id".into(),
@@ -298,9 +330,11 @@ fn apply_changes_emits_mutations_and_conflict_keeps_edits() {
         .insert(vec![("id".into(), DbValue::I64(1))]);
     update(&mut model, Action::OpenReview);
     let effects = update(&mut model, Action::ApplyChanges);
-    assert!(effects
-        .iter()
-        .any(|effect| matches!(effect, dexo_tui::Effect::ApplyMutations { .. })));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::ApplyMutations { .. }))
+    );
     update(
         &mut model,
         Action::MutationsFailed {
@@ -314,9 +348,11 @@ fn apply_changes_emits_mutations_and_conflict_keeps_edits() {
 
 #[test]
 fn foreign_key_composite_loads_destination() {
-    let mut model = Model::default();
-    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
-    model.session_generation = 1;
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
     model.data.related_fk = Some(dexo_app::data::ForeignKey {
         local: vec!["org_id".into(), "user_id".into()],
         referenced_table: dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "users"),

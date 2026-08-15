@@ -183,10 +183,11 @@ mod tests {
         model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
         update(&mut model, Action::ConfirmProduction);
         let effects = update(&mut model, Action::ApplyChanges);
-        assert!(effects.iter().any(|effect| matches!(
-            effect,
-            crate::Effect::ApplyMutations { .. }
-        )));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, crate::Effect::ApplyMutations { .. }))
+        );
         assert_eq!(
             model.data.review.as_ref().unwrap().status,
             ReviewStatus::Pending

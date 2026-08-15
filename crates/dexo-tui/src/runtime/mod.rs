@@ -17,11 +17,11 @@ use crate::action::{
 pub mod catalog_manager;
 pub mod clipboard;
 pub mod connection_manager;
-pub mod result_spool;
 pub mod data_manager;
 pub mod document_io;
 pub mod project_manager;
 pub mod query_runner;
+pub mod result_spool;
 pub mod session_registry;
 pub mod storage_worker;
 

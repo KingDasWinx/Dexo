@@ -101,8 +101,8 @@ pub fn filter_values(filter: &Filter) -> Vec<dexo_driver_api::DbValue> {
 #[cfg(test)]
 mod tests {
     use super::derive_page;
-    use dexo_driver_api::{ColumnId, Filter, Page, Sort};
     use dexo_driver_api::DbValue;
+    use dexo_driver_api::{ColumnId, Filter, Page, Sort};
 
     fn page() -> Page {
         Page::new(0, 50).unwrap()

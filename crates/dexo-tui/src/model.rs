@@ -656,13 +656,13 @@ fn bound_value(value: DbValue) -> (DbValue, Option<GridCell>) {
     let inline = dexo_app::data::value::INLINE_BYTES as usize;
     match value {
         DbValue::Bytes(bytes) if bytes.len() > inline => spool_or_prefix(bytes, inline),
-        DbValue::Text(text) if text.len() > inline => {
-            spool_or_prefix(text.into_bytes(), inline)
-        }
-        DbValue::Json(text) if text.len() > inline => {
-            spool_or_prefix(text.into_bytes(), inline)
-        }
-        DbValue::Native { bytes, text, type_name } if bytes.len() > inline => {
+        DbValue::Text(text) if text.len() > inline => spool_or_prefix(text.into_bytes(), inline),
+        DbValue::Json(text) if text.len() > inline => spool_or_prefix(text.into_bytes(), inline),
+        DbValue::Native {
+            bytes,
+            text,
+            type_name,
+        } if bytes.len() > inline => {
             let (shown, cell) = spool_or_prefix(bytes, inline);
             match shown {
                 DbValue::Bytes(prefix) => (

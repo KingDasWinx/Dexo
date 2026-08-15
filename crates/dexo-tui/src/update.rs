@@ -423,7 +423,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ValueFetched { generation, bytes } => {
             if generation == model.session_generation {
-                model.data.viewer = Some(crate::screens::value_viewer::view(&DbValue::Bytes(bytes)));
+                model.data.viewer =
+                    Some(crate::screens::value_viewer::view(&DbValue::Bytes(bytes)));
             }
             Vec::new()
         }
@@ -1798,11 +1799,7 @@ fn postgres_placeholders(sql: &str) -> String {
     out
 }
 
-fn start_derived_script(
-    model: &mut Model,
-    sql: String,
-    parameters: Vec<DbValue>,
-) -> Vec<Effect> {
+fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>) -> Vec<Effect> {
     let operation = crate::runtime::OperationId::new();
     let session = model
         .active_session
@@ -2023,9 +2020,9 @@ fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMet
         }
         for (col_idx, value) in row.iter().enumerate() {
             let total = match value {
-                DbValue::Native { type_name, text, .. } if type_name.starts_with("truncated") => {
-                    text.parse().unwrap_or(0)
-                }
+                DbValue::Native {
+                    type_name, text, ..
+                } if type_name.starts_with("truncated") => text.parse().unwrap_or(0),
                 _ => continue,
             };
             if total == 0 {
@@ -2116,11 +2113,15 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
         && review.production
         && !review.confirmed
     {
-        model.messages.push("type the target to confirm production apply".into());
+        model
+            .messages
+            .push("type the target to confirm production apply".into());
         return Vec::new();
     }
     let Some(session) = model.active_session else {
-        model.messages.push("connect a session to apply changes".into());
+        model
+            .messages
+            .push("connect a session to apply changes".into());
         return Vec::new();
     };
     match dexo_app::data::mutations_for(model.data.target.clone(), &model.data.changes) {

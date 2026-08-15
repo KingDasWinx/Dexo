@@ -176,7 +176,16 @@ async fn postgres_foreign_key_composite_and_simple() {
     drain(
         session
             .execute(dexo_driver_api::QueryRequest::write(
-                "INSERT INTO live_users VALUES (7, 3); INSERT INTO live_orders VALUES (7, 3)",
+                "INSERT INTO live_users VALUES (7, 3)",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "INSERT INTO live_orders VALUES (7, 3)",
             ))
             .await
             .unwrap(),
@@ -250,11 +259,8 @@ async fn mysql_foreign_key_simple() {
         referenced_table: QualifiedName::new(Some("dexo"), None::<String>, "live_users"),
         referenced: vec!["id".into()],
     };
-    let filter = dexo_app::data::related_filter(
-        &fk,
-        &[("user_id".into(), Some(DbValue::I64(9)))],
-    )
-    .unwrap();
+    let filter =
+        dexo_app::data::related_filter(&fk, &[("user_id".into(), Some(DbValue::I64(9)))]).unwrap();
     let page = session
         .data()
         .unwrap()
