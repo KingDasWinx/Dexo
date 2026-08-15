@@ -29,14 +29,26 @@ impl ConnectionFactory for PostgresFactory {
             config.options("-c default_transaction_read_only=on");
         }
         config.ssl_mode(tokio_postgres::config::SslMode::Disable);
-        let (client, connection) = config
+        let (client, mut connection) = config
             .connect(tokio_postgres::NoTls)
             .await
             .map_err(map_error)?;
+        let (notice_tx, notice_rx) = tokio::sync::mpsc::unbounded_channel();
         tokio::spawn(async move {
-            let _ = connection.await;
+            loop {
+                match std::future::poll_fn(|cx| connection.poll_message(cx)).await {
+                    Some(Ok(tokio_postgres::AsyncMessage::Notice(notice))) => {
+                        let _ = notice_tx.send(dexo_driver_api::SessionEvent::Notice {
+                            severity: Some(notice.severity().to_string()),
+                            message: notice.message().to_string(),
+                        });
+                    }
+                    Some(Ok(tokio_postgres::AsyncMessage::Notification(_))) | Some(Ok(_)) => {}
+                    Some(Err(_)) | None => break,
+                }
+            }
         });
-        Ok(Box::new(PostgresSession::new(client)))
+        Ok(Box::new(PostgresSession::new(client, notice_rx)))
     }
 }
 

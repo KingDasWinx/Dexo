@@ -6,6 +6,7 @@ mod error;
 mod explain;
 mod factory;
 mod mutation;
+mod params;
 mod session;
 
 pub use admin::preview_postgres;

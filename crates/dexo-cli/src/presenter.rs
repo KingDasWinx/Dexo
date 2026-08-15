@@ -22,7 +22,9 @@ pub fn present(
             QueryEvent::Columns(cols) => columns = cols.iter().map(|c| c.name.clone()).collect(),
             QueryEvent::Rows(batch) => rows.extend(batch.rows.iter().cloned()),
             QueryEvent::Notice { message } => writeln!(stderr, "{message}")?,
-            QueryEvent::Finished { .. } => {}
+            QueryEvent::Finished { .. }
+            | QueryEvent::ResultSetStarted { .. }
+            | QueryEvent::ResultSetFinished { .. } => {}
         }
     }
     match format {

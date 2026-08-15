@@ -121,6 +121,68 @@ async fn transaction_contract() {
     assert_eq!(count, Some(dexo_driver_api::DbValue::I64(0)));
 }
 
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn parameters_rows_affected_and_result_sets_are_observable() {
+    let fixture = connect_postgres_fixture().await;
+    drain(
+        fixture
+            .session
+            .execute(QueryRequest::write(
+                "create table if not exists dexo_params(value text)",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let mut request = QueryRequest::write("insert into dexo_params(value) values ($1)");
+    request.parameters = vec![dexo_driver_api::DbValue::Text("bound-value".into())];
+    let events = collect(fixture.session.execute(request).await.unwrap()).await;
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            QueryEvent::Finished {
+                rows_affected: Some(1),
+            }
+        )
+    }));
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn timeout_or_cancel_pg_sleep() {
+    let fixture = connect_postgres_fixture().await;
+    let mut request = QueryRequest::read("select pg_sleep(30)", 1);
+    request.timeout = std::time::Duration::from_millis(200);
+    let events = collect_results(fixture.session.execute(request).await.unwrap()).await;
+    assert!(events.iter().any(|event| match event {
+        Err(error) => matches!(
+            error.category(),
+            dexo_driver_api::DriverErrorCategory::Timeout
+                | dexo_driver_api::DriverErrorCategory::Cancelled
+        ),
+        Ok(_) => false,
+    }));
+}
+
+async fn collect(mut stream: dexo_driver_api::QueryStream) -> Vec<QueryEvent> {
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.unwrap());
+    }
+    events
+}
+
+async fn collect_results(
+    mut stream: dexo_driver_api::QueryStream,
+) -> Vec<Result<QueryEvent, dexo_driver_api::DriverError>> {
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    events
+}
+
 async fn drain(mut stream: dexo_driver_api::QueryStream) {
     while let Some(event) = stream.next().await {
         event.unwrap();

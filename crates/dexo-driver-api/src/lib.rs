@@ -31,7 +31,10 @@ pub use identifier::QualifiedName;
 pub use mutation::{
     ColumnId, DataMutator, DataPage, DataRequest, Filter, Mutation, MutationConflict, Page, Sort,
 };
-pub use query::{ColumnMeta, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch};
+pub use query::{
+    ColumnMeta, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch, SessionEvent,
+    SessionEventStream,
+};
 pub use schema_change::{
     AlterOp, ChangeRisk, ColumnSpec, ConstraintKind, ConstraintSpec, ForeignKeySpec, GeneratedSpec,
     GrantRecord, IdentitySpec, IndexDef, LockLevel, PartitionSpec, PolicyDef, PrivilegeDef,

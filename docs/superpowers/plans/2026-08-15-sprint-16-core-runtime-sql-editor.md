@@ -348,7 +348,7 @@ git commit -m "feat(tui): retain sessions and control transactions"
 - Test: `crates/dexo-driver-postgres/tests/query.rs`
 - Test: `crates/dexo-driver-mysql/tests/query.rs`
 
-- [ ] **Step 1: Add ignored failing contracts for parameters, affected rows, notices, timeout, and result sets**
+- [x] **Step 1: Add ignored failing contracts for parameters, affected rows, notices, timeout, and result sets**
 
 ```rust
 #[tokio::test]
@@ -370,7 +370,7 @@ Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql --test query param
 
 Expected: FAIL because parameters are ignored and affected rows are absent.
 
-- [ ] **Step 3: Extend the event contract without coupling driver-api to Tokio**
+- [x] **Step 3: Extend the event contract without coupling driver-api to Tokio**
 
 ```rust
 #[derive(Clone, Debug, PartialEq)]
@@ -393,7 +393,7 @@ pub type SessionEventStream = std::pin::Pin<Box<dyn futures_core::Stream<Item = 
 
 Add `fn events(&self) -> Option<SessionEventStream> { None }` to `Session`.
 
-- [ ] **Step 4: Bind parameters and emit accurate completion**
+- [x] **Step 4: Bind parameters and emit accurate completion**
 
 PostgreSQL: implement `PgParam` in `params.rs`, including an explicit all-types NULL implementation, build references matching `statement.params()`, use `query_raw`, then call `rows.rows_affected()` after exhaustion. MySQL: use `exec_iter(sql, mysql_async::Params::Positional(values))` when parameters are non-empty, iterate `QueryResult::iter()` result sets, and capture `affected_rows()` before advancing.
 

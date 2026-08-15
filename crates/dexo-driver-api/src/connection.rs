@@ -5,6 +5,7 @@ use crate::{
     DriverError, ExplainProvider, QueryId, QueryRequest, QueryStream, SecurityAdmin,
     TransactionControl,
 };
+use crate::query::SessionEventStream;
 
 #[derive(Clone, Debug)]
 pub struct ConnectRequest {
@@ -56,6 +57,10 @@ pub trait Session: Send + Sync {
     }
 
     fn admin(&self) -> Option<&dyn AdministrationProvider> {
+        None
+    }
+
+    fn events(&self) -> Option<SessionEventStream> {
         None
     }
 }

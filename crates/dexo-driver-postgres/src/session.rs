@@ -1,11 +1,14 @@
 use std::pin::pin;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use dexo_driver_api::{
-    ColumnMeta, DriverError, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch, Session,
-    TransactionControl, TransactionMode, TransactionState, validate_savepoint,
+    ColumnMeta, DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryRequest, QueryStream,
+    RowBatch, Session, SessionEvent, SessionEventStream, TransactionControl, TransactionMode,
+    TransactionState, validate_savepoint,
 };
 use futures_util::StreamExt;
+use tokio::sync::mpsc;
 use tokio_postgres::types::ToSql;
 
 use crate::decode::{column_meta, decode_row};
@@ -18,14 +21,19 @@ pub struct PostgresSession {
     pub(crate) client: Arc<tokio_postgres::Client>,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
     tx_state: Mutex<TransactionState>,
+    notices: tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<SessionEvent>>>,
 }
 
 impl PostgresSession {
-    pub(crate) fn new(client: tokio_postgres::Client) -> Self {
+    pub(crate) fn new(
+        client: tokio_postgres::Client,
+        notices: mpsc::UnboundedReceiver<SessionEvent>,
+    ) -> Self {
         Self {
             client: Arc::new(client),
             capabilities: capabilities(),
             tx_state: Mutex::new(TransactionState::Idle),
+            notices: tokio::sync::Mutex::new(Some(notices)),
         }
     }
 
@@ -45,72 +53,25 @@ impl Session for PostgresSession {
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         let row_limit = request.row_limit;
         let sql = request.sql;
+        let parameters = request.parameters;
+        let timeout = request.timeout;
         tokio::spawn(async move {
-            // ponytail: prepare+query_raw+consume stay on one task with Client; splitting query_raw
-            // across tasks makes PostgreSQL cancel packets miss the waiting RowStream.
-            let statement = match client.prepare(&sql).await {
-                Ok(statement) => statement,
-                Err(error) => {
-                    let _ = tx.send(Err(map_error(error))).await;
-                    return;
-                }
-            };
-            let columns: Vec<ColumnMeta> = statement.columns().iter().map(column_meta).collect();
-            let rows = match client
-                .query_raw(&statement, Vec::<&(dyn ToSql + Sync)>::new())
-                .await
-            {
-                Ok(rows) => rows,
-                Err(error) => {
-                    let _ = tx.send(Err(map_error(error))).await;
-                    return;
-                }
-            };
-            if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
+            let run = run_postgres_query(client, sql, parameters, row_limit, tx.clone());
+            if timeout == Duration::ZERO {
+                run.await;
                 return;
             }
-            let mut rows = pin!(rows);
-            let mut batch = Vec::new();
-            let mut emitted = 0_u64;
-            loop {
-                if row_limit > 0 && emitted >= row_limit {
-                    break;
-                }
-                match rows.next().await {
-                    Some(Ok(row)) => {
-                        batch.push(decode_row(&row));
-                        emitted += 1;
-                        if batch.len() >= ROW_BATCH_SIZE
-                            && tx
-                                .send(Ok(QueryEvent::Rows(RowBatch {
-                                    rows: std::mem::take(&mut batch),
-                                })))
-                                .await
-                                .is_err()
-                        {
-                            return;
-                        }
-                    }
-                    Some(Err(error)) => {
-                        let _ = tx.send(Err(map_error(error))).await;
-                        return;
-                    }
-                    None => break,
+            match tokio::time::timeout(timeout, run).await {
+                Ok(()) => {}
+                Err(_) => {
+                    let _ = tx
+                        .send(Err(DriverError::new(
+                            DriverErrorCategory::Timeout,
+                            "query timed out",
+                        )))
+                        .await;
                 }
             }
-            if !batch.is_empty()
-                && tx
-                    .send(Ok(QueryEvent::Rows(RowBatch { rows: batch })))
-                    .await
-                    .is_err()
-            {
-                return;
-            }
-            let _ = tx
-                .send(Ok(QueryEvent::Finished {
-                    rows_affected: None,
-                }))
-                .await;
         });
         Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
             rx.recv().await.map(|item| (item, rx))
@@ -160,6 +121,101 @@ impl Session for PostgresSession {
     fn admin(&self) -> Option<&dyn dexo_driver_api::AdministrationProvider> {
         Some(self)
     }
+
+    fn events(&self) -> Option<SessionEventStream> {
+        let mut slot = self.notices.try_lock().ok()?;
+        let rx = slot.take()?;
+        Some(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
+            rx.recv().await.map(|item| (item, rx))
+        })))
+    }
+}
+
+async fn run_postgres_query(
+    client: Arc<tokio_postgres::Client>,
+    sql: String,
+    parameters: Vec<dexo_driver_api::DbValue>,
+    row_limit: u64,
+    tx: tokio::sync::mpsc::Sender<Result<QueryEvent, DriverError>>,
+) {
+    let statement = match client.prepare(&sql).await {
+        Ok(statement) => statement,
+        Err(error) => {
+            let _ = tx.send(Err(map_error(error))).await;
+            return;
+        }
+    };
+    let params = match crate::params::bind(&statement, &parameters) {
+        Ok(params) => params,
+        Err(error) => {
+            let _ = tx.send(Err(error)).await;
+            return;
+        }
+    };
+    let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|value| value as _).collect();
+    let columns: Vec<ColumnMeta> = statement.columns().iter().map(column_meta).collect();
+    let rows = match client.query_raw(&statement, refs).await {
+        Ok(rows) => rows,
+        Err(error) => {
+            let _ = tx.send(Err(map_error(error))).await;
+            return;
+        }
+    };
+    if tx
+        .send(Ok(QueryEvent::ResultSetStarted { index: 0 }))
+        .await
+        .is_err()
+    {
+        return;
+    }
+    if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
+        return;
+    }
+    let mut rows = pin!(rows);
+    let mut batch = Vec::new();
+    let mut emitted = 0_u64;
+    loop {
+        if row_limit > 0 && emitted >= row_limit {
+            break;
+        }
+        match rows.next().await {
+            Some(Ok(row)) => {
+                batch.push(decode_row(&row));
+                emitted += 1;
+                if batch.len() >= ROW_BATCH_SIZE
+                    && tx
+                        .send(Ok(QueryEvent::Rows(RowBatch {
+                            rows: std::mem::take(&mut batch),
+                        })))
+                        .await
+                        .is_err()
+                {
+                    return;
+                }
+            }
+            Some(Err(error)) => {
+                let _ = tx.send(Err(map_error(error))).await;
+                return;
+            }
+            None => break,
+        }
+    }
+    if !batch.is_empty()
+        && tx
+            .send(Ok(QueryEvent::Rows(RowBatch { rows: batch })))
+            .await
+            .is_err()
+    {
+        return;
+    }
+    let rows_affected = rows.rows_affected();
+    let _ = tx
+        .send(Ok(QueryEvent::ResultSetFinished {
+            index: 0,
+            rows_affected,
+        }))
+        .await;
+    let _ = tx.send(Ok(QueryEvent::Finished { rows_affected })).await;
 }
 
 #[async_trait::async_trait]

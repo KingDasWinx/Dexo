@@ -1518,6 +1518,7 @@ name = "dexo-driver-postgres"
 version = "1.0.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "dexo-app",
  "dexo-driver-api",
  "dexo-test-support",
@@ -1625,6 +1626,8 @@ dependencies = [
 name = "dexo-tui"
 version = "1.0.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
  "crossterm",
  "dexo-app",
  "dexo-driver-api",
@@ -1635,6 +1638,7 @@ dependencies = [
  "ratatui",
  "secrecy",
  "serde",
+ "tempfile",
  "thiserror 2.0.20",
  "tokio",
  "toml",
