@@ -67,7 +67,7 @@ fn export_import_survives_reopen() {
         exported = export_portable(db.connection()).unwrap();
     }
     let db = Database::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 10);
+    assert_eq!(db.schema_version().unwrap(), 11);
     let fresh = Database::open_in_memory().unwrap();
     let report = import_portable(fresh.connection(), &exported).unwrap();
     assert_eq!(report.connections_needing_secret, vec!["c"]);

@@ -38,6 +38,8 @@ async-trait.workspace = true
 futures-util = "0.3"
 uuid.workspace = true
 serde_json.workspace = true
+tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
+dexo-driver-api = { path = "../dexo-driver-api" }
 
 [[bench]]
 name = "first_frame"

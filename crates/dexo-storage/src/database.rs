@@ -121,7 +121,7 @@ mod tests {
                 .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 10);
+        assert_eq!(db.schema_version().unwrap(), 11);
         assert!(backup_path(&path).exists());
     }
 

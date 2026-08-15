@@ -7,6 +7,7 @@ pub mod data_browser;
 pub mod editor;
 pub mod explain;
 pub mod explorer;
+pub mod file_picker;
 pub mod mcp_audit;
 pub mod mcp_profiles;
 pub mod object_inspector;

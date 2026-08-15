@@ -18,6 +18,7 @@ pub mod schema_diff;
 pub mod script;
 pub mod search_service;
 pub mod session_manager;
+pub mod settings;
 pub mod transaction_service;
 pub mod transfer;
 

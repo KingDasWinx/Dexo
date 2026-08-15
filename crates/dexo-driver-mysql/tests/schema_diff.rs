@@ -3,8 +3,8 @@ use dexo_app::schema_diff::{
 };
 use dexo_driver_api::{
     AlterOp, CatalogListOptions, CatalogObject, ColumnSpec, ConnectRequest, ConnectionFactory,
-    DdlPlan, IndexDef, ObjectId, ObjectKind, PrivilegeDef, QualifiedName, SchemaChange, Session,
-    TableDef, TableShape, ViewDef,
+    DdlPlan, ObjectId, ObjectKind, PrivilegeDef, QualifiedName, SchemaChange, Session, TableDef,
+    TableShape,
 };
 use dexo_driver_mysql::{MysqlFactory, plan_ddl, render_ddl};
 use dexo_test_support::DatabasePair;

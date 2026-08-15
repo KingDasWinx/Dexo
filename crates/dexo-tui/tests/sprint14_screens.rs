@@ -8,6 +8,7 @@ use dexo_tui::update::update;
 fn snapshot_settings_full_and_compact() {
     let mut model = Model::default();
     update(&mut model, Action::OpenSettings);
+    model.settings = dexo_tui::screens::settings::SettingsScreen::fixture();
     insta::assert_snapshot!("settings_full", render_to_string(&model, 160, 50));
     insta::assert_snapshot!("settings_compact", render_to_string(&model, 60, 20));
 }
@@ -16,6 +17,7 @@ fn snapshot_settings_full_and_compact() {
 fn snapshot_recovery_full_and_compact() {
     let mut model = Model::default();
     update(&mut model, Action::OpenRecovery);
+    model.recovery = dexo_tui::screens::recovery::RecoveryScreen::fixture();
     assert!(model.recovery.lines().join("\n").contains("unknown"));
     assert!(!model.recovery.lines().join("\n").contains("active"));
     insta::assert_snapshot!("recovery_full", render_to_string(&model, 160, 50));
@@ -26,7 +28,9 @@ fn snapshot_recovery_full_and_compact() {
 fn snapshot_mcp_audit_and_revoke() {
     let mut model = Model::default();
     update(&mut model, Action::OpenMcpProfiles);
+    model.mcp_profiles = dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture();
     update(&mut model, Action::OpenMcpAudit);
+    model.mcp_audit = dexo_tui::screens::mcp_audit::McpAuditScreen::fixture();
     insta::assert_snapshot!("mcp_audit_full", render_to_string(&model, 160, 50));
     update(&mut model, Action::RevokeAllMcpGrants);
     update(&mut model, Action::RevokeAllMcpGrants);

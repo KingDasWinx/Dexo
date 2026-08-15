@@ -14,16 +14,24 @@ use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
 };
 
+pub mod admin_manager;
 pub mod catalog_manager;
 pub mod clipboard;
 pub mod connection_manager;
 pub mod data_manager;
+pub mod diagnostic_manager;
 pub mod document_io;
+pub mod explain_manager;
+pub mod native_tool_manager;
 pub mod project_manager;
 pub mod query_runner;
+pub mod recovery_manager;
 pub mod result_spool;
+pub mod schema_manager;
 pub mod session_registry;
+pub mod settings_manager;
 pub mod storage_worker;
+pub mod transfer_manager;
 
 pub use session_registry::SessionId;
 use session_registry::SessionRegistry;

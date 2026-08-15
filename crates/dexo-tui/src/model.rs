@@ -308,7 +308,7 @@ impl std::ops::DerefMut for ResultsState {
 }
 
 impl GridModel {
-    pub fn fixture_rows(count: usize) -> Self {
+    pub fn sample_rows(count: usize) -> Self {
         let mut buffer = ResultBuffer {
             columns: vec![ColumnMeta {
                 name: "n".into(),

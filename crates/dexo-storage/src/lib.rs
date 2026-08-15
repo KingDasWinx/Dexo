@@ -2,6 +2,7 @@ mod catalog_cache;
 mod connection;
 mod database;
 mod document;
+mod explain_plan;
 mod history;
 mod layout;
 mod mcp;
@@ -22,13 +23,14 @@ pub use connection::{
 };
 pub use database::{AppPaths, Database};
 pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};
+pub use explain_plan::{ExplainPlanRepository, SavedExplainPlan};
 pub use history::HistoryRepository;
 pub use layout::{LAYOUT_VERSION, LayoutRepository, Preferences, WorkbenchLayout};
 pub use mcp::SqliteGrantLedger;
 pub use mcp_profile::McpProfileRepository;
 pub use migrations::{
     LATEST_SCHEMA_VERSION, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5,
-    MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, MIGRATION_10, apply_pending,
+    MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, MIGRATION_10, MIGRATION_11, apply_pending,
     read_schema_version,
 };
 pub use object_usage::{ObjectUsage, ObjectUsageRepository};

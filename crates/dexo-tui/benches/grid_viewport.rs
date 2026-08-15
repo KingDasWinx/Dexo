@@ -7,7 +7,7 @@ use dexo_tui::render::render_to_string;
 
 fn main() {
     let mut model = Model::default();
-    *model.results = GridModel::fixture_rows(1_000);
+    *model.results = GridModel::sample_rows(1_000);
     let mut samples = Vec::new();
     for _ in 0..20 {
         let started = Instant::now();

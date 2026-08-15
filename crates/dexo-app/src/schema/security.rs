@@ -7,6 +7,12 @@ pub enum Confirmation {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ConfirmationAnswer {
+    None,
+    Text(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PolicyDecision {
     pub allowed: bool,
     pub confirmation: Confirmation,

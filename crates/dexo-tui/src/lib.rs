@@ -6,6 +6,7 @@ pub mod keymap;
 pub mod layout;
 pub mod modals;
 pub mod model;
+pub mod mouse;
 pub mod palette;
 pub mod render;
 pub mod runtime;

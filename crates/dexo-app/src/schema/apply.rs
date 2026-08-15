@@ -1,5 +1,5 @@
 use dexo_driver_api::{
-    DdlExecutor, DdlOutcome, DdlPlan, DriverErrorCategory, QualifiedName, SchemaChange,
+    DdlExecutor, DdlOutcome, DdlPlan, DriverErrorCategory, ObjectId, QualifiedName, SchemaChange,
 };
 
 use crate::error::{AppError, ErrorCategory};
@@ -53,6 +53,18 @@ pub enum CacheAction {
     Keep,
     InvalidateSubtree,
     MarkUncertain,
+}
+
+impl CacheAction {
+    pub fn is_uncertain(self) -> bool {
+        matches!(self, Self::MarkUncertain)
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum CatalogScope {
+    Table(ObjectId),
+    Connection,
 }
 
 pub fn invalidate_after_ddl(outcome: DdlOutcome, _target: &QualifiedName) -> CacheAction {

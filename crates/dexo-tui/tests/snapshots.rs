@@ -166,6 +166,7 @@ fn snapshot_schema_diff_filters_risk_and_script() {
 
     let mut model = snapshot_model();
     update(&mut model, Action::OpenSchemaDiff);
+    model.schema_diff = dexo_tui::screens::schema_diff::SchemaDiffScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     update(&mut model, Action::SchemaDiffToggleRemoved);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
@@ -179,10 +180,11 @@ fn snapshot_transfer_preview_progress_rejects() {
 
     let mut model = snapshot_model();
     update(&mut model, Action::OpenTransfer);
+    model.transfer = TransferScreen::sample_preview();
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
-    model.transfer = TransferScreen::fixture_progress();
+    model.transfer = TransferScreen::sample_progress();
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
-    model.transfer = TransferScreen::fixture_rejects();
+    model.transfer = TransferScreen::sample_rejects();
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }
 
@@ -193,6 +195,7 @@ fn snapshot_explain_tree_table_summary() {
 
     let mut model = snapshot_model();
     update(&mut model, Action::OpenExplain);
+    model.explain = dexo_tui::screens::explain::ExplainScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     update(&mut model, Action::ExplainViewTable);
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
@@ -207,6 +210,7 @@ fn snapshot_admin_sessions_pause_and_preview() {
 
     let mut model = snapshot_model();
     update(&mut model, Action::OpenAdmin);
+    model.admin = dexo_tui::screens::admin::AdminScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     update(&mut model, Action::AdminPause);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
@@ -219,6 +223,7 @@ fn snapshot_mcp_profiles_preview_and_confirm() {
 
     let mut model = snapshot_model();
     update(&mut model, Action::OpenMcpProfiles);
+    model.mcp_profiles = dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     update(&mut model, Action::ConfirmMcpEnable);
     update(&mut model, Action::RevokeAllMcpGrants);

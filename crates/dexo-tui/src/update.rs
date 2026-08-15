@@ -578,7 +578,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenSchemaDiff => {
-            model.schema_diff = crate::screens::schema_diff::SchemaDiffScreen::fixture();
+            model.schema_diff.open = true;
             Vec::new()
         }
         Action::SchemaDiffToggleAdded => {
@@ -602,22 +602,21 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenTransfer => {
-            model.transfer = crate::screens::transfer::TransferScreen::fixture_preview();
+            model.transfer.open = true;
             Vec::new()
         }
         Action::OpenBackup => {
-            model.transfer = crate::screens::transfer::TransferScreen::fixture_progress();
+            model.transfer.open = true;
             model.transfer.mode = "backup";
             Vec::new()
         }
         Action::OpenRestore => {
-            model.transfer = crate::screens::transfer::TransferScreen::fixture_rejects();
+            model.transfer.open = true;
             model.transfer.mode = "restore";
             Vec::new()
         }
         Action::OpenExplain => {
             model.tabs.active = 4;
-            model.explain = crate::screens::explain::ExplainScreen::fixture();
             Vec::new()
         }
         Action::ExplainViewTree => {
@@ -637,7 +636,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenAdmin => {
-            model.admin = crate::screens::admin::AdminScreen::fixture();
+            model.admin.open = true;
             Vec::new()
         }
         Action::AdminPause => {
@@ -659,7 +658,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenMcpProfiles => {
-            model.mcp_profiles = crate::screens::mcp_profiles::McpProfilesScreen::fixture();
+            model.mcp_profiles.open = true;
             Vec::new()
         }
         Action::ConfirmMcpEnable => {
@@ -672,7 +671,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenSettings => {
-            model.settings = crate::screens::settings::SettingsScreen::fixture();
+            model.settings.open = true;
             Vec::new()
         }
         Action::ConfirmResetSettings => {
@@ -684,7 +683,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenRecovery => {
-            model.recovery = crate::screens::recovery::RecoveryScreen::fixture();
+            model.recovery.open = true;
             Vec::new()
         }
         Action::ConfirmRecover => {
@@ -700,7 +699,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenMcpAudit => {
-            model.mcp_audit = crate::screens::mcp_audit::McpAuditScreen::fixture();
+            model.mcp_audit.open = true;
             Vec::new()
         }
         Action::OpenDiagnostics => {

@@ -104,7 +104,7 @@ mod tests {
     use super::McpProfilesScreen;
 
     #[test]
-    fn fixture_starts_disabled_until_confirmed() {
+    fn sample_starts_disabled_until_confirmed() {
         let mut screen = McpProfilesScreen::fixture();
         assert!(!screen.enabled);
         screen.confirm_enable();

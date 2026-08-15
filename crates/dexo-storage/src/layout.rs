@@ -255,7 +255,7 @@ mod tests {
         conn.execute_batch(crate::migrations::MIGRATION_6).unwrap();
         assert_eq!(migrations::read_schema_version(&conn), 6);
         migrations::apply_pending(&conn).unwrap();
-        assert_eq!(migrations::read_schema_version(&conn), 10);
+        assert_eq!(migrations::read_schema_version(&conn), 11);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",

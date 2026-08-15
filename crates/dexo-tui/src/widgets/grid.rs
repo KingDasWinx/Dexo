@@ -105,7 +105,7 @@ mod tests {
 
     #[test]
     fn renders_only_visible_rows() {
-        let grid = GridModel::fixture_rows(100_000).with_viewport(50_000, 20);
+        let grid = GridModel::sample_rows(100_000).with_viewport(50_000, 20);
         let rendered = grid.visible_rows();
         assert_eq!(rendered.len(), 20);
         assert_eq!(rendered[0].source_index, 50_000);
@@ -113,7 +113,7 @@ mod tests {
 
     #[test]
     fn viewport_smoke_100k_rows() {
-        let grid = GridModel::fixture_rows(100_000).with_viewport(99_980, 20);
+        let grid = GridModel::sample_rows(100_000).with_viewport(99_980, 20);
         let rendered = grid.visible_rows();
         assert_eq!(rendered.len(), 20);
         assert_eq!(rendered[0].source_index, 99_980);
@@ -134,7 +134,7 @@ mod tests {
         use crate::model::GridSelection;
         use dexo_app::data::{CopyFormat, SqlDialect};
 
-        let mut grid = GridModel::fixture_rows(4);
+        let mut grid = GridModel::sample_rows(4);
         grid.select_cell(2, 0);
         assert!(matches!(grid.kind, GridSelection::Cell { row: 2, col: 0 }));
         let text = grid.copy(CopyFormat::Text, SqlDialect::Postgres).unwrap();
