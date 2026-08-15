@@ -108,3 +108,48 @@ fn connection_crud_duplicate_group_and_project_list() {
     let listed = connections.list_for_project(project.id.0).unwrap();
     assert_eq!(listed.len(), 2);
 }
+
+fn parse_project(id: String) -> dexo_app::ProjectId {
+    dexo_app::ProjectId(uuid::Uuid::parse_str(&id).unwrap())
+}
+
+fn seed_two_projects(db: &dexo_storage::Database) -> (String, String) {
+    let a = uuid::Uuid::new_v4();
+    let b = uuid::Uuid::new_v4();
+    let projects = dexo_storage::ProjectRepository::new(db.connection());
+    projects
+        .save(&dexo_app::Project {
+            id: dexo_app::ProjectId(a),
+            name: "Project A".into(),
+            created_at: "now".into(),
+        })
+        .unwrap();
+    projects
+        .save(&dexo_app::Project {
+            id: dexo_app::ProjectId(b),
+            name: "Project B".into(),
+            created_at: "now".into(),
+        })
+        .unwrap();
+    (a.to_string(), b.to_string())
+}
+
+#[test]
+fn project_resources_can_be_listed_moved_cleared_and_deleted() {
+    let db = dexo_storage::Database::open_in_memory().unwrap();
+    let (a, b) = seed_two_projects(&db);
+    let docs = dexo_storage::DocumentRepository::new(db.connection());
+    docs.save("d1", Some(&a), "scratch", "select 1", None, None)
+        .unwrap();
+    docs.move_to_project("d1", &b).unwrap();
+    assert_eq!(docs.list_for_project(&b).unwrap().len(), 1);
+    dexo_storage::ProjectRepository::new(db.connection())
+        .delete(parse_project(a.clone()))
+        .unwrap();
+    assert!(
+        dexo_storage::ProjectRepository::new(db.connection())
+            .get(parse_project(a))
+            .unwrap()
+            .is_none()
+    );
+}

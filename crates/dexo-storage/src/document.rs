@@ -77,6 +77,17 @@ impl<'a> DocumentRepository<'a> {
             .execute("DELETE FROM documents WHERE id = ?1", params![id])?;
         Ok(())
     }
+
+    pub fn move_to_project(&self, id: &str, project_id: &str) -> anyhow::Result<()> {
+        let changed = self.conn.execute(
+            "UPDATE documents SET project_id = ?1 WHERE id = ?2",
+            params![project_id, id],
+        )?;
+        if changed == 0 {
+            anyhow::bail!("unknown document {id}");
+        }
+        Ok(())
+    }
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
