@@ -3,7 +3,7 @@ use dexo_storage::{ConnectionRepository, Database, apply_pending};
 #[test]
 fn fresh_database_reaches_schema_four() {
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 8);
+    assert_eq!(db.schema_version().unwrap(), 9);
 }
 
 #[test]
@@ -75,4 +75,33 @@ fn migration_8_moves_the_legacy_password_ref_and_preserves_profiles() {
             .unwrap()
             .is_some()
     );
+}
+
+fn column_exists(conn: &rusqlite::Connection, table: &str, column: &str) -> bool {
+    let mut stmt = conn
+        .prepare(&format!("PRAGMA table_info({table})"))
+        .unwrap();
+    stmt.query_map([], |row| row.get::<_, String>(1))
+        .unwrap()
+        .any(|name| name.unwrap() == column)
+}
+
+fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
+    conn.query_row(
+        "SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?1",
+        rusqlite::params![table],
+        |row| row.get::<_, i64>(0),
+    )
+    .unwrap()
+        > 0
+}
+
+#[test]
+fn migration_9_scopes_snippets_history_and_recent_items() {
+    let db = database_at_version(8);
+    apply_pending(db.connection()).unwrap();
+    assert_eq!(db.schema_version().unwrap(), 9);
+    assert!(column_exists(db.connection(), "snippets", "project_id"));
+    assert!(column_exists(db.connection(), "sql_history", "project_id"));
+    assert!(table_exists(db.connection(), "recent_items"));
 }
