@@ -21,9 +21,11 @@ futures-util = "0.3"
 thiserror.workspace = true
 unicode-width.workspace = true
 uuid.workspace = true
+anyhow.workspace = true
 
 [dev-dependencies]
 insta.workspace = true
+tempfile.workspace = true
 
 [[bench]]
 name = "first_frame"

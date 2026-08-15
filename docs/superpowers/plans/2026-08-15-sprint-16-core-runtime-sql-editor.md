@@ -167,7 +167,7 @@ git commit -m "feat(tui): define correlated runtime effects"
 - Modify: `crates/dexo-tui/src/event.rs`
 - Test: `crates/dexo-tui/tests/runtime_query.rs`
 
-- [ ] **Step 1: Write the failing worker round-trip test**
+- [x] **Step 1: Write the failing worker round-trip test**
 
 ```rust
 #[tokio::test]
@@ -182,13 +182,13 @@ async fn storage_worker_creates_and_loads_the_default_project() {
 }
 ```
 
-- [ ] **Step 2: Verify the test fails**
+- [x] **Step 2: Verify the test fails**
 
 Run: `cargo test -p dexo-tui --test runtime_query storage_worker_creates_and_loads_the_default_project`
 
 Expected: FAIL because `StorageWorker` is missing.
 
-- [ ] **Step 3: Implement a single-owner worker with typed commands**
+- [x] **Step 3: Implement a single-owner worker with typed commands**
 
 ```rust
 pub enum StorageCommand {
@@ -228,11 +228,11 @@ impl StorageWorker {
 
 `bootstrap_state()` must create one persisted `Project { name: "Default" }` only when the table is empty, then load profiles, recovery state, and layout for its UUID.
 
-- [ ] **Step 4: Replace `Model::default()`-only startup**
+- [x] **Step 4: Replace `Model::default()`-only startup**
 
 Construct the worker and runtime before entering raw mode where possible. Send `Action::Bootstrapped` into `update()` before the first interactive frame. If bootstrap fails, restore the terminal and return `TuiError`; do not continue with an in-memory fake state.
 
-- [ ] **Step 5: Run, inspect, and commit**
+- [x] **Step 5: Run, inspect, and commit**
 
 Run: `cargo test -p dexo-tui --test runtime_query storage_worker_creates_and_loads_the_default_project`
 

@@ -6,6 +6,7 @@ use crate::action::{
 use crate::Action;
 
 pub mod session_registry;
+pub mod storage_worker;
 
 pub use session_registry::SessionId;
 
@@ -52,17 +53,22 @@ impl OperationKey {
     }
 }
 
+use crate::runtime::storage_worker::StorageWorker;
+
 #[allow(dead_code)]
 pub struct WorkbenchRuntime {
     action_tx: tokio::sync::mpsc::Sender<Action>,
+    storage: Option<StorageWorker>,
 }
 
 impl WorkbenchRuntime {
-    pub fn new(action_tx: tokio::sync::mpsc::Sender<Action>) -> Self {
-        Self { action_tx }
+    pub fn new(action_tx: tokio::sync::mpsc::Sender<Action>, storage: StorageWorker) -> Self {
+        Self {
+            action_tx,
+            storage: Some(storage),
+        }
     }
 
-    #[allow(dead_code)]
     pub async fn dispatch(&mut self, effect: crate::Effect) {
         match effect {
             crate::Effect::CreateConnection { input, password } => {
@@ -120,7 +126,11 @@ impl WorkbenchRuntime {
 
     async fn persist_layout(&mut self) {}
 
-    async fn shutdown(&mut self) {}
+    async fn shutdown(&mut self) {
+        if let Some(storage) = &self.storage {
+            storage.shutdown();
+        }
+    }
 
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {
         &self.action_tx

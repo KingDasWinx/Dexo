@@ -72,6 +72,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_query = None;
             Vec::new()
         }
+        Action::Bootstrapped(state) => {
+            apply_bootstrap(model, state);
+            Vec::new()
+        }
         Action::OpenPalette => {
             open_palette(model);
             Vec::new()
@@ -682,6 +686,33 @@ fn cancel_query(model: &mut Model) -> Vec<Effect> {
         .map(Effect::CancelOperation)
         .into_iter()
         .collect()
+}
+
+fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::BootstrapState) {
+    model.project = state.active_project.name;
+    model.project_id = state.active_project.id.0.to_string();
+    if let Some(layout) = state.layout {
+        model.panes.explorer_visible = layout.explorer_visible;
+        model.panes.inspector_visible = layout.inspector_visible;
+        model.panes.results_visible = layout.results_visible;
+        model.panes.explorer_width = layout.explorer_width;
+        model.panes.inspector_width = layout.inspector_width;
+        model.panes.results_height = layout.results_height;
+        model.tabs.active = layout.active_tab;
+        if !layout.tabs.is_empty() {
+            model.tabs.titles = layout.tabs;
+        }
+    }
+    if state.recovery.needs_recovery() {
+        model.recovery.open = true;
+        model.recovery.transaction = state.recovery.transaction;
+        model.recovery.documents = state
+            .recovery
+            .documents
+            .into_iter()
+            .map(|document| document.title)
+            .collect();
+    }
 }
 
 fn inspect_selected(model: &mut Model) {

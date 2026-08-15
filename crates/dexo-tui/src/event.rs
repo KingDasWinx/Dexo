@@ -9,6 +9,8 @@ use secrecy::SecretString;
 
 use crate::action::{Action, Effect};
 use crate::model::Model;
+use crate::runtime::storage_worker::StorageWorker;
+use crate::runtime::WorkbenchRuntime;
 use crate::terminal::{CrosstermTerminal, TerminalGuard, TuiError};
 
 pub fn action_from_event(event: Event) -> Option<Action> {
@@ -25,16 +27,31 @@ pub fn run(registry: DriverRegistry) -> Result<(), TuiError> {
     tokio::runtime::Runtime::new()?.block_on(run_async(registry))
 }
 
+fn map_tui(error: impl std::fmt::Display) -> TuiError {
+    std::io::Error::other(error.to_string()).into()
+}
+
 async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
+    let paths = AppPaths::discover().map_err(map_tui)?;
+    let worker = StorageWorker::start(paths.database).map_err(map_tui)?;
+    let bootstrap = worker.bootstrap().await.map_err(map_tui)?;
+    let (action_tx, _action_rx) = tokio::sync::mpsc::channel(32);
+    let mut runtime = WorkbenchRuntime::new(action_tx, worker);
     let mut guard = TerminalGuard::start(CrosstermTerminal)?;
-    let result = run_loop(registry).await;
+    let result = run_loop(registry, bootstrap, &mut runtime).await;
+    let _ = runtime.dispatch(Effect::Shutdown).await;
     guard.restore();
     result
 }
 
-async fn run_loop(registry: DriverRegistry) -> Result<(), TuiError> {
+async fn run_loop(
+    registry: DriverRegistry,
+    bootstrap: crate::runtime::storage_worker::BootstrapState,
+    runtime: &mut WorkbenchRuntime,
+) -> Result<(), TuiError> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
+    let _ = crate::update::update(&mut model, Action::Bootstrapped(bootstrap));
     let mut events = EventStream::new();
     let secrets = SessionSecrets::default();
     loop {
@@ -47,7 +64,8 @@ async fn run_loop(registry: DriverRegistry) -> Result<(), TuiError> {
         };
         let effects = crate::update::update(&mut model, action);
         for effect in effects {
-            if matches!(effect, Effect::Quit) {
+            if matches!(effect, Effect::Quit | Effect::Shutdown) {
+                runtime.dispatch(Effect::Shutdown).await;
                 return Ok(());
             }
             if let Some(follow_up) = apply_effect(&registry, &secrets, effect).await {

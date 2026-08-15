@@ -46,6 +46,7 @@ pub enum Action {
         message: String,
     },
     OperationCancelled(OperationKey),
+    Bootstrapped(crate::runtime::storage_worker::BootstrapState),
     OpenPalette,
     ClosePalette,
     PaletteQuery(String),
