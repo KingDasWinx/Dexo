@@ -10,6 +10,7 @@ repository.workspace = true
 async-trait.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
 dexo-runtime = { path = "../dexo-runtime" }
+dexo-secrets = { path = "../dexo-secrets" }
 dexo-sql = { path = "../dexo-sql" }
 futures-util = "0.3"
 secrecy.workspace = true

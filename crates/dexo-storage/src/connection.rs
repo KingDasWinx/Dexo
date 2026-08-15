@@ -1,4 +1,6 @@
-use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+use dexo_app::{
+    AppError, ConnectionId, ConnectionProfile, ConnectionProfiles, ErrorCategory, SecretRef,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
 
@@ -83,6 +85,18 @@ impl<'a> ConnectionRepository<'a> {
         )?;
         let rows = stmt.query_map([], row_to_profile)?;
         rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+}
+
+impl ConnectionProfiles for ConnectionRepository<'_> {
+    fn get_by_name(&self, name: &str) -> Result<Option<ConnectionProfile>, AppError> {
+        ConnectionRepository::get_by_name(self, name)
+            .map_err(|error| AppError::new(ErrorCategory::Storage, error.to_string()))
+    }
+
+    fn save(&self, profile: &ConnectionProfile) -> Result<(), AppError> {
+        ConnectionRepository::save(self, profile)
+            .map_err(|error| AppError::new(ErrorCategory::Storage, error.to_string()))
     }
 }
 

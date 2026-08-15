@@ -5,7 +5,7 @@ use dexo_driver_api::ConnectionFactory;
 
 use crate::error::{AppError, ErrorCategory};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DriverRegistry {
     factories: HashMap<&'static str, Arc<dyn ConnectionFactory>>,
 }

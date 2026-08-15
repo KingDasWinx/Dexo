@@ -2,6 +2,7 @@ pub mod admin_service;
 pub mod catalog_service;
 pub mod connection_policy;
 pub mod connection_profile;
+pub mod connection_service;
 pub mod data;
 pub mod diagnostic_service;
 pub mod driver_registry;
@@ -23,6 +24,10 @@ pub mod transfer;
 pub use catalog_service::{CatalogService, SnapshotCatalog, parse_qualified};
 pub use connection_policy::{ConnectionPolicy, Environment};
 pub use connection_profile::{ConnectionId, ConnectionProfile, SecretRef};
+pub use connection_service::{
+    ConnectionProfiles, NewConnection, SecretPersist, create as create_connection,
+    set_secret as set_connection_secret,
+};
 pub use driver_registry::DriverRegistry;
 pub use error::{AppError, ErrorCategory};
 pub use project::{Project, ProjectId};
