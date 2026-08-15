@@ -20,6 +20,7 @@ use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
 use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
+use crate::screens::object_inspector::ObjectInspector;
 use crate::screens::projects::ProjectsScreen;
 use crate::screens::recovery::RecoveryScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
@@ -611,6 +612,7 @@ pub struct Model {
     pub project_id: String,
     pub schema: String,
     pub explorer: ExplorerState,
+    pub inspector: ObjectInspector,
     pub data: DataScreen,
     pub schema_editor: SchemaEditor,
     pub schema_diff: SchemaDiffScreen,
@@ -690,6 +692,7 @@ impl Default for Model {
             project_id: String::new(),
             schema: String::new(),
             explorer: ExplorerState::default(),
+            inspector: ObjectInspector::default(),
             data: DataScreen::default(),
             schema_editor: SchemaEditor::default(),
             schema_diff: SchemaDiffScreen::default(),

@@ -48,6 +48,27 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     });
                 model.connections.selected_session = Some(id);
             }
+            model.explorer.clear();
+            if ready {
+                if let Some(session) = session {
+                    let operation = crate::runtime::OperationId::new();
+                    return vec![Effect::LoadCatalogChildren {
+                        parent: None,
+                        operation,
+                        session,
+                        generation,
+                        replace_roots: true,
+                        include_system: model.explorer.include_system,
+                    }];
+                }
+            } else {
+                model.explorer.offline = true;
+                return vec![Effect::LoadOfflineCatalog {
+                    connection_id: model.connection.name.clone(),
+                    database_name: catalog_database(model),
+                    generation,
+                }];
+            }
             Vec::new()
         }
         Action::OpenConnectionForm => {
@@ -313,16 +334,135 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
-        Action::ExplorerExpand => {
-            if let Some(id) = model.explorer.selected.clone() {
-                let _ = model.explorer.expand(&id);
+        Action::ExplorerExpand => expand_selected_catalog(model),
+        Action::RefreshCatalogNode => refresh_catalog(model, false),
+        Action::RefreshCatalogSubtree | Action::RefreshCatalogAll => refresh_catalog(model, true),
+        Action::CatalogLoaded {
+            session,
+            generation,
+            parent,
+            list,
+            replace_roots,
+            ..
+        } => {
+            if !catalog_generation_matches(model, &session, generation) {
+                return Vec::new();
+            }
+            let capture = replace_roots || parent.is_none();
+            if capture {
+                model.explorer.replace_roots(list);
+            } else if let Some(parent) = parent {
+                model.explorer.apply_children(&parent, list);
+            }
+            catalog_followup_effects(model, capture)
+        }
+        Action::CatalogFailed {
+            session,
+            generation,
+            parent,
+            message,
+            retryable,
+            ..
+        } => {
+            if catalog_generation_matches(model, &session, generation) {
+                if let Some(parent) = parent {
+                    model.explorer.set_error(&parent, message, retryable);
+                } else {
+                    model.messages.push(message);
+                }
             }
             Vec::new()
         }
-        Action::ExplorerCopyName => {
-            model.explorer.copy_selected_name();
+        Action::OpenObjectInspector => open_inspector(model),
+        Action::OpenObjectDdl => {
+            let effects = open_inspector(model);
+            model.inspector.tab = crate::screens::object_inspector::InspectorTab::Ddl;
+            effects
+        }
+        Action::OpenObjectData => {
+            model.messages.push("data tabs require Sprint 20".into());
             Vec::new()
         }
+        Action::GoToDefinition => goto_definition(model),
+        Action::InspectorLoaded {
+            generation,
+            session,
+            qualified_name,
+            object,
+            ddl,
+            dependencies,
+            dependents,
+            effective_privileges,
+            restrictions,
+        } => {
+            if catalog_generation_matches(model, &session, generation) {
+                model.inspector.open = true;
+                model.inspector.qualified_name = qualified_name;
+                model.inspector.object = object;
+                model.inspector.ddl = ddl;
+                model.inspector.dependencies = dependencies;
+                model.inspector.dependents = dependents;
+                model.inspector.effective_privileges = effective_privileges;
+                model.inspector.restrictions = restrictions;
+                model.inspector.error = None;
+            }
+            Vec::new()
+        }
+        Action::InspectorFailed {
+            generation,
+            message,
+        } => {
+            if generation == model.session_generation {
+                model.inspector.error = Some(message);
+            }
+            Vec::new()
+        }
+        Action::ClipboardWritten { text } => {
+            model.explorer.copied = Some(text);
+            Vec::new()
+        }
+        Action::ClipboardFailed { message } => {
+            model.messages.push(message);
+            Vec::new()
+        }
+        Action::OfflineCatalogLoaded {
+            generation,
+            list,
+            created_at,
+        } => {
+            if generation == model.session_generation {
+                model.explorer.replace_roots(list);
+                model.explorer.offline = true;
+                model.explorer.stale = true;
+                if let Some(created_at) = created_at {
+                    model
+                        .messages
+                        .push(format!("offline catalog from {created_at}"));
+                }
+                return catalog_followup_effects(model, false);
+            }
+            Vec::new()
+        }
+        Action::ApplyFavorites { ids } => {
+            model.explorer.apply_favorites(&ids);
+            Vec::new()
+        }
+        Action::ToggleFavorite => toggle_favorite(model),
+        Action::ToggleFavoritesOnly => {
+            model.explorer.favorites_only = !model.explorer.favorites_only;
+            Vec::new()
+        }
+        Action::ToggleSystemObjects => {
+            model.explorer.include_system = !model.explorer.include_system;
+            if model.explorer.include_system && model.connection.ready {
+                refresh_catalog(model, true)
+            } else {
+                Vec::new()
+            }
+        }
+        Action::CopySimpleName => copy_selected(model, false),
+        Action::CopyQualifiedName | Action::ExplorerCopyName => copy_selected(model, true),
+        Action::CopyDdl => copy_ddl(model),
         Action::CopyGrid(format) => {
             if let Ok(text) = model.results.copy(format, model.data.dialect) {
                 model.data.clipboard = text;
@@ -1371,6 +1511,196 @@ fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool 
     };
     let document = model.active_document().id.as_str();
     key.belongs_to(&session, document, generation)
+}
+
+fn catalog_generation_matches(model: &Model, session: &str, generation: u64) -> bool {
+    let current = model
+        .active_session
+        .map(|id| id.0.to_string())
+        .unwrap_or_default();
+    session == current && generation == model.session_generation
+}
+
+fn catalog_database(model: &Model) -> String {
+    if model.schema.is_empty() {
+        model.connection.name.clone()
+    } else {
+        model.schema.clone()
+    }
+}
+
+fn catalog_followup_effects(model: &Model, capture: bool) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    if capture {
+        if let Some(session) = model.active_session {
+            effects.push(Effect::CaptureCatalogSnapshot {
+                connection_id: model.connection.name.clone(),
+                database_name: catalog_database(model),
+                session,
+                include_system: model.explorer.include_system,
+            });
+        }
+    }
+    if !model.project_id.is_empty() && !model.connection.name.is_empty() {
+        effects.push(Effect::LoadObjectUsage {
+            project_id: model.project_id.clone(),
+            connection_id: model.connection.name.clone(),
+        });
+    }
+    effects
+}
+
+fn toggle_favorite(model: &mut Model) -> Vec<Effect> {
+    let Some(id) = model.explorer.selected.clone() else {
+        return Vec::new();
+    };
+    model.explorer.toggle_favorite(&id);
+    let favorite = model
+        .explorer
+        .selected_node()
+        .map(|node| node.favorite)
+        .unwrap_or(false);
+    if model.project_id.is_empty() || model.connection.name.is_empty() {
+        return Vec::new();
+    }
+    vec![Effect::PersistFavorite {
+        project_id: model.project_id.clone(),
+        connection_id: model.connection.name.clone(),
+        object_id: id.as_str().to_string(),
+        favorite,
+    }]
+}
+
+fn catalog_load_effect(
+    model: &Model,
+    parent: Option<dexo_driver_api::ObjectId>,
+    operation: crate::runtime::OperationId,
+    replace_roots: bool,
+) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    vec![Effect::LoadCatalogChildren {
+        parent,
+        operation,
+        session,
+        generation: model.session_generation,
+        replace_roots,
+        include_system: model.explorer.include_system,
+    }]
+}
+
+fn expand_selected_catalog(model: &mut Model) -> Vec<Effect> {
+    let Some(id) = model.explorer.selected.clone() else {
+        return Vec::new();
+    };
+    let operation = crate::runtime::OperationId::new();
+    if model.explorer.expand_with(&id, operation) {
+        catalog_load_effect(model, Some(id), operation, false)
+    } else {
+        Vec::new()
+    }
+}
+
+fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
+    let operation = crate::runtime::OperationId::new();
+    if all || model.explorer.selected.is_none() {
+        model.explorer.clear();
+        return catalog_load_effect(model, None, operation, true);
+    }
+    let Some(id) = model.explorer.selected.clone() else {
+        return Vec::new();
+    };
+    model.explorer.expand_with(&id, operation);
+    catalog_load_effect(model, Some(id), operation, false)
+}
+
+fn open_inspector(model: &mut Model) -> Vec<Effect> {
+    let Some(node) = model.explorer.selected_node() else {
+        return Vec::new();
+    };
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    model.inspector =
+        crate::screens::object_inspector::ObjectInspector::open_loading(&node.qualified);
+    vec![Effect::LoadObjectInspector {
+        id: node.id.clone(),
+        session,
+        generation: model.session_generation,
+    }]
+}
+
+fn goto_definition(model: &mut Model) -> Vec<Effect> {
+    let sql = model.active_document().text();
+    let cursor = model.active_document().cursor();
+    let catalog = dexo_app::SnapshotCatalog::new(flatten_explorer(&model.explorer));
+    let Some(target) = dexo_sql::definition_at(&sql, cursor, &catalog) else {
+        model.messages.push("no definition at cursor".into());
+        return Vec::new();
+    };
+    let wanted = target.display_unquoted();
+    if let Some(id) = find_qualified(&model.explorer, &wanted) {
+        model.explorer.select(id.clone());
+        let operation = crate::runtime::OperationId::new();
+        if model.explorer.expand_with(&id, operation) {
+            return catalog_load_effect(model, Some(id), operation, false);
+        }
+    }
+    Vec::new()
+}
+
+fn flatten_explorer(
+    explorer: &crate::screens::explorer::ExplorerState,
+) -> Vec<dexo_driver_api::CatalogObject> {
+    explorer.flatten()
+}
+
+fn find_qualified(
+    explorer: &crate::screens::explorer::ExplorerState,
+    qualified: &str,
+) -> Option<dexo_driver_api::ObjectId> {
+    fn walk(
+        nodes: &[crate::screens::explorer::ExplorerNode],
+        qualified: &str,
+    ) -> Option<dexo_driver_api::ObjectId> {
+        for node in nodes {
+            if node.qualified == qualified
+                || qualified.starts_with(&format!("{}.", node.qualified))
+                || node.qualified.ends_with(&format!(".{qualified}"))
+                || qualified.ends_with(&format!(".{}", node.label))
+            {
+                return Some(node.id.clone());
+            }
+            if let Some(found) = walk(&node.children, qualified) {
+                return Some(found);
+            }
+        }
+        None
+    }
+    walk(&explorer.roots, qualified)
+}
+
+fn copy_selected(model: &mut Model, qualified: bool) -> Vec<Effect> {
+    let Some(node) = model.explorer.selected_node() else {
+        return Vec::new();
+    };
+    let text = if qualified {
+        node.qualified.clone()
+    } else {
+        node.label.clone()
+    };
+    vec![Effect::CopyToClipboard { text }]
+}
+
+fn copy_ddl(model: &mut Model) -> Vec<Effect> {
+    match &model.inspector.ddl {
+        Some(sql) => vec![Effect::CopyToClipboard { text: sql.clone() }],
+        None => {
+            model.messages.push("DDL is not loaded".into());
+            Vec::new()
+        }
+    }
 }
 
 fn inspect_selected(model: &mut Model) {

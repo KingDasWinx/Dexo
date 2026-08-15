@@ -1,12 +1,15 @@
 use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind};
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+use crate::runtime::OperationId;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub enum NodeState {
-    Unloaded,
-    Loading,
-    Loaded,
+    Collapsed,
+    Loading(OperationId),
+    Expanded,
+    Error { message: String, retryable: bool },
+    Stale,
     Restricted,
-    Error,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -66,9 +69,13 @@ impl ExplorerNode {
             kind: object.kind,
             qualified: object.qualified_name.display_unquoted(),
             schema: object.qualified_name.schema().map(str::to_string),
-            state: NodeState::Unloaded,
+            state: NodeState::Collapsed,
             expanded: false,
-            favorite: false,
+            favorite: object
+                .attributes
+                .get("favorite")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
             children: Vec::new(),
             restriction: None,
             error: None,
@@ -88,6 +95,8 @@ pub struct ExplorerState {
     pub search: String,
     pub last_load: Option<ObjectId>,
     pub copied: Option<String>,
+    pub include_system: bool,
+    pub stale: bool,
 }
 
 impl ExplorerState {
@@ -98,7 +107,7 @@ impl ExplorerState {
             kind: ObjectKind::Schema,
             qualified: "local.public".into(),
             schema: Some("public".into()),
-            state: NodeState::Unloaded,
+            state: NodeState::Collapsed,
             expanded: false,
             favorite: false,
             children: Vec::new(),
@@ -111,7 +120,7 @@ impl ExplorerState {
             kind: ObjectKind::Catalog,
             qualified: "local".into(),
             schema: None,
-            state: NodeState::Loaded,
+            state: NodeState::Expanded,
             expanded: true,
             favorite: false,
             children: vec![schema],
@@ -139,13 +148,49 @@ impl ExplorerState {
         }
     }
 
+    pub fn nodes(&self) -> &[ExplorerNode] {
+        &self.roots
+    }
+
+    pub fn clear(&mut self) {
+        self.roots.clear();
+        self.selected = None;
+        self.last_load = None;
+        self.stale = false;
+    }
+
+    pub fn mark_stale(&mut self) {
+        self.stale = true;
+        Self::mark_stale_in(&mut self.roots);
+    }
+
+    fn mark_stale_in(nodes: &mut [ExplorerNode]) {
+        for node in nodes {
+            if matches!(node.state, NodeState::Expanded | NodeState::Collapsed) {
+                node.state = NodeState::Stale;
+            }
+            Self::mark_stale_in(&mut node.children);
+        }
+    }
+
     pub fn expand(&mut self, id: &ObjectId) -> bool {
-        Self::expand_in(&mut self.roots, id, &mut self.last_load, &mut self.selected)
+        self.expand_with(id, OperationId::new())
+    }
+
+    pub fn expand_with(&mut self, id: &ObjectId, operation: OperationId) -> bool {
+        Self::expand_in(
+            &mut self.roots,
+            id,
+            operation,
+            &mut self.last_load,
+            &mut self.selected,
+        )
     }
 
     fn expand_in(
         nodes: &mut [ExplorerNode],
         id: &ObjectId,
+        operation: OperationId,
         last_load: &mut Option<ObjectId>,
         selected: &mut Option<ObjectId>,
     ) -> bool {
@@ -153,14 +198,22 @@ impl ExplorerState {
             if node.id == *id {
                 node.expanded = true;
                 *selected = Some(id.clone());
-                if node.state == NodeState::Unloaded {
-                    node.state = NodeState::Loading;
+                if matches!(
+                    node.state,
+                    NodeState::Collapsed
+                        | NodeState::Stale
+                        | NodeState::Error {
+                            retryable: true,
+                            ..
+                        }
+                ) {
+                    node.state = NodeState::Loading(operation);
                     *last_load = Some(id.clone());
                     return true;
                 }
                 return false;
             }
-            if Self::expand_in(&mut node.children, id, last_load, selected) {
+            if Self::expand_in(&mut node.children, id, operation, last_load, selected) {
                 return true;
             }
         }
@@ -169,6 +222,33 @@ impl ExplorerState {
 
     pub fn apply_children(&mut self, parent: &ObjectId, page: CatalogList) {
         Self::apply_in(&mut self.roots, parent, page);
+    }
+
+    pub fn replace_roots(&mut self, page: CatalogList) {
+        self.roots = page
+            .objects
+            .into_iter()
+            .map(ExplorerNode::from_object)
+            .collect();
+        for restriction in page.restrictions {
+            self.roots.push(restriction_node(restriction));
+        }
+        self.stale = false;
+        self.offline = false;
+    }
+
+    pub fn set_error(&mut self, id: &ObjectId, message: String, retryable: bool) {
+        Self::set_error_in(&mut self.roots, id, message, retryable);
+    }
+
+    fn set_error_in(nodes: &mut [ExplorerNode], id: &ObjectId, message: String, retryable: bool) {
+        for node in nodes {
+            if node.id == *id {
+                node.state = NodeState::Error { message, retryable };
+                return;
+            }
+            Self::set_error_in(&mut node.children, id, message.clone(), retryable);
+        }
     }
 
     fn apply_in(nodes: &mut [ExplorerNode], parent: &ObjectId, page: CatalogList) {
@@ -180,19 +260,7 @@ impl ExplorerState {
                     .map(ExplorerNode::from_object)
                     .collect();
                 for restriction in page.restrictions {
-                    node.children.push(ExplorerNode {
-                        id: ObjectId::new(format!("restricted:{}", restriction.capability)),
-                        label: restriction.capability,
-                        kind: ObjectKind::DriverSpecific("restricted".into()),
-                        qualified: String::new(),
-                        schema: None,
-                        state: NodeState::Restricted,
-                        expanded: false,
-                        favorite: false,
-                        children: Vec::new(),
-                        restriction: Some(restriction.reason),
-                        error: None,
-                    });
+                    node.children.push(restriction_node(restriction));
                 }
                 node.state = if node
                     .children
@@ -205,8 +273,9 @@ impl ExplorerState {
                 {
                     NodeState::Restricted
                 } else {
-                    NodeState::Loaded
+                    NodeState::Expanded
                 };
+                node.expanded = true;
                 return;
             }
             Self::apply_in(&mut node.children, parent, page.clone());
@@ -234,6 +303,9 @@ impl ExplorerState {
         if self.favorites_only && !node.favorite {
             return false;
         }
+        if !self.include_system && is_system_node(node) {
+            return false;
+        }
         if let Some(kind) = &self.filter_kind
             && node.kind.as_str() != kind
         {
@@ -252,7 +324,52 @@ impl ExplorerState {
         {
             return false;
         }
+        if !self.search.is_empty()
+            && !node
+                .label
+                .to_ascii_lowercase()
+                .contains(&self.search.to_ascii_lowercase())
+            && !node
+                .qualified
+                .to_ascii_lowercase()
+                .contains(&self.search.to_ascii_lowercase())
+        {
+            return false;
+        }
         true
+    }
+
+    pub fn flatten(&self) -> Vec<CatalogObject> {
+        let mut out = Vec::new();
+        fn walk(nodes: &[ExplorerNode], out: &mut Vec<CatalogObject>) {
+            for node in nodes {
+                let mut object = CatalogObject::new(
+                    node.id.clone(),
+                    node.kind.clone(),
+                    dexo_app::parse_qualified(&node.qualified),
+                    None,
+                );
+                if node.favorite {
+                    object
+                        .attributes
+                        .insert("favorite".into(), serde_json::json!(true));
+                }
+                out.push(object);
+                walk(&node.children, out);
+            }
+        }
+        walk(&self.roots, &mut out);
+        out
+    }
+
+    pub fn apply_favorites(&mut self, ids: &[String]) {
+        fn walk(nodes: &mut [ExplorerNode], ids: &[String]) {
+            for node in nodes {
+                node.favorite = ids.iter().any(|id| id == node.id.as_str());
+                walk(&mut node.children, ids);
+            }
+        }
+        walk(&mut self.roots, ids);
     }
 
     pub fn toggle_favorite(&mut self, id: &ObjectId) {
@@ -303,6 +420,32 @@ impl ExplorerState {
     }
 }
 
+fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> ExplorerNode {
+    ExplorerNode {
+        id: ObjectId::new(format!("restricted:{}", restriction.capability)),
+        label: restriction.capability,
+        kind: ObjectKind::DriverSpecific("restricted".into()),
+        qualified: String::new(),
+        schema: None,
+        state: NodeState::Restricted,
+        expanded: false,
+        favorite: false,
+        children: Vec::new(),
+        restriction: Some(restriction.reason),
+        error: None,
+    }
+}
+
+fn is_system_node(node: &ExplorerNode) -> bool {
+    let name = node.label.as_str();
+    name == "pg_catalog"
+        || name == "information_schema"
+        || name == "mysql"
+        || name == "performance_schema"
+        || name == "sys"
+        || name.starts_with("pg_")
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ExplorerAction, ExplorerState, NodeState};
@@ -318,7 +461,7 @@ mod tests {
             .iter()
             .find(|node| node.label == "public")
             .unwrap();
-        assert_eq!(schema.state, NodeState::Loading);
+        assert!(matches!(schema.state, NodeState::Loading(_)));
         explorer.apply_children(
             &ObjectId::new("schema:public"),
             CatalogList {
