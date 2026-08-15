@@ -11,6 +11,7 @@ fn snapshot_model() -> Model {
             name: "local".into(),
             ready: true,
             environment: String::new(),
+            read_only: false,
         },
         schema: "public".into(),
         explorer: ExplorerState::fixture(),

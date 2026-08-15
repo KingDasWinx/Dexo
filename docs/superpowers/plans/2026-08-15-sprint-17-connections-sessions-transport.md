@@ -299,7 +299,7 @@ git commit -m "feat(drivers): connect through verified transports"
 
 **Files:** `crates/dexo-tui/src/screens/secret_prompt.rs`, `runtime/connection_manager.rs`, `screens/connection.rs`, `model.rs`, `update.rs`, tests `connections_flow.rs`.
 
-- [ ] **Step 1: Write locked-keychain and removal-choice tests**
+- [x] **Step 1: Write locked-keychain and removal-choice tests**
 
 ```rust
 #[tokio::test]
@@ -310,13 +310,13 @@ async fn locked_keychain_prompts_instead_of_silently_using_memory() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test connections_flow locked_keychain_prompts_instead_of_silently_using_memory`
 
 Expected: FAIL because `SessionSecrets::put` silently falls back.
 
-- [ ] **Step 3: Implement a redacted prompt and explicit persistence choice**
+- [x] **Step 3: Implement a redacted prompt and explicit persistence choice**
 
 ```rust
 pub enum SecretChoice { SessionOnly(secrecy::SecretString), SaveToKeychain(secrecy::SecretString), Cancel }
@@ -330,7 +330,7 @@ impl std::fmt::Debug for SecretBuffer {
 
 Remove silent memory fallback. Delete shows `KeepSecrets`/`DeleteSecrets`; keychain deletion failure leaves the profile intact until the user chooses profile-only removal.
 
-- [ ] **Step 4: Run sentinel tests and commit**
+- [x] **Step 4: Run sentinel tests and commit**
 
 Run: `cargo test -p dexo-secrets -p dexo-tui --test connections_flow && cargo test -p dexo-storage --test sentinel`
 
@@ -345,7 +345,7 @@ git commit -m "feat(tui): prompt explicitly for unavailable secrets"
 
 **Files:** `crates/dexo-tui/src/screens/connections.rs`, `action.rs`, `model.rs`, `update.rs`, `palette.rs`, `render.rs`, `runtime/connection_manager.rs`, tests `connections_flow.rs`.
 
-- [ ] **Step 1: Write reducer/runtime acceptance tests**
+- [x] **Step 1: Write reducer/runtime acceptance tests**
 
 Test startup listing, connect/switch, edit, duplicate, test without save, delete, group move, custom environment policy, two sessions for one profile, session close, read-only enforcement, safe reconnect, and stale connect completion.
 
@@ -353,7 +353,7 @@ Run: `cargo test -p dexo-tui --test connections_flow`
 
 Expected: new cases FAIL.
 
-- [ ] **Step 2: Add browser state and effects**
+- [x] **Step 2: Add browser state and effects**
 
 ```rust
 pub struct ConnectionsScreen {
@@ -369,11 +369,11 @@ pub struct ConnectionsScreen {
 
 All CRUD/test/connect commands emit effects. Only `ProfilesLoaded`, `ConnectionTested`, `ProfileSaved`, `ProfileDeleted`, `SessionConnected`, `SessionClosed`, or typed failure actions alter visible outcome.
 
-- [ ] **Step 3: Render and apply capabilities**
+- [x] **Step 3: Render and apply capabilities**
 
 Show group tree, project/environment markers, route/TLS/read-only indicators, session count, transaction state, and disabled reasons. The form shows only descriptor-supported options and validates before dispatch.
 
-- [ ] **Step 4: Run snapshots and commit**
+- [x] **Step 4: Run snapshots and commit**
 
 Run: `cargo test -p dexo-tui --test connections_flow && cargo test -p dexo-tui --test snapshots`
 

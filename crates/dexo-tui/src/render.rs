@@ -106,6 +106,24 @@ pub fn render(frame: &mut Frame, model: &Model) {
             );
         }
     }
+    if model.connections.open {
+        let popup = centered(frame.area(), 72, 18);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.connections.lines().join("\n"))
+                .block(Block::bordered().title("Connections")),
+            popup,
+        );
+    }
+    if model.secret_prompt.open {
+        let popup = centered(frame.area(), 56, 8);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.secret_prompt.lines().join("\n"))
+                .block(Block::bordered().title("Secret")),
+            popup,
+        );
+    }
     if model.connection_form.open {
         let popup = centered(frame.area(), 64, 16);
         frame.render_widget(Clear, popup);
