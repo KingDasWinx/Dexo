@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use secrecy::SecretString;
 
 struct Fixture {
-    _pair: DatabasePair,
+    pair: DatabasePair,
     session: Box<dyn Session>,
 }
 
@@ -38,6 +38,12 @@ async fn connect_seeded() -> Fixture {
   qty dexo_catalog.posint
 ) PARTITION BY RANGE (id)",
         "CREATE TABLE dexo_catalog.orders_p0 PARTITION OF dexo_catalog.orders FOR VALUES FROM (0) TO (1000)",
+        "CREATE TABLE dexo_catalog.customers (id int PRIMARY KEY)",
+        "CREATE TABLE dexo_catalog.order_items (
+  id int PRIMARY KEY,
+  customer_id int REFERENCES dexo_catalog.customers(id)
+)",
+        "CREATE VIEW dexo_catalog.orders_v AS SELECT id FROM dexo_catalog.orders",
         "CREATE MATERIALIZED VIEW dexo_catalog.orders_mv AS SELECT id FROM dexo_catalog.orders",
         "CREATE EXTENSION IF NOT EXISTS postgres_fdw",
         "CREATE PUBLICATION dexo_catalog_pub FOR TABLE dexo_catalog.orders",
@@ -48,6 +54,9 @@ async fn connect_seeded() -> Fixture {
         "ALTER TABLE dexo_catalog.orders ENABLE ROW LEVEL SECURITY",
         "CREATE POLICY orders_all ON dexo_catalog.orders USING (true)",
         "GRANT SELECT ON dexo_catalog.orders TO PUBLIC",
+        "CREATE USER catalog_restricted PASSWORD 'dexo_test_only'",
+        "REVOKE ALL ON SCHEMA dexo_catalog FROM catalog_restricted",
+        "REVOKE ALL ON SCHEMA public FROM catalog_restricted",
     ];
     for statement in statements {
         drain(
@@ -58,10 +67,7 @@ async fn connect_seeded() -> Fixture {
         )
         .await;
     }
-    Fixture {
-        _pair: pair,
-        session,
-    }
+    Fixture { pair, session }
 }
 
 fn has_kind_named(
@@ -180,7 +186,9 @@ async fn postgres_catalog_contract() {
     let table = schema_children
         .objects
         .iter()
-        .find(|object| object.kind == ObjectKind::Table)
+        .find(|object| {
+            object.kind == ObjectKind::Table && object.qualified_name.object() == "orders"
+        })
         .unwrap();
     assert!(
         table
@@ -224,4 +232,61 @@ async fn postgres_catalog_contract() {
     assert!(ddl.sql.to_ascii_uppercase().contains("CREATE TABLE"));
     let deps = catalog.dependents(&table.id).await.unwrap();
     assert!(!deps.is_empty());
+
+    let customers = schema_children
+        .objects
+        .iter()
+        .find(|object| object.qualified_name.object() == "customers")
+        .expect("customers table");
+    let items = schema_children
+        .objects
+        .iter()
+        .find(|object| object.qualified_name.object() == "order_items")
+        .expect("order_items table");
+    let view = schema_children
+        .objects
+        .iter()
+        .find(|object| {
+            object.kind == ObjectKind::View && object.qualified_name.object() == "orders_v"
+        })
+        .expect("orders_v view");
+    let item_deps = catalog.dependencies(&items.id).await.unwrap();
+    assert!(
+        item_deps.iter().any(|id| id == &customers.id),
+        "order_items should depend on customers, got {item_deps:?}"
+    );
+    let customer_dependents = catalog.dependents(&customers.id).await.unwrap();
+    assert!(
+        customer_dependents.iter().any(|id| id == &items.id),
+        "customers should have order_items as dependent, got {customer_dependents:?}"
+    );
+    let view_deps = catalog.dependencies(&view.id).await.unwrap();
+    assert!(
+        view_deps.iter().any(|id| id == &table.id),
+        "orders_v should depend on orders, got {view_deps:?}"
+    );
+
+    let restricted = PostgresFactory
+        .connect(ConnectRequest::new(
+            fixture.pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "catalog_restricted".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let restricted_catalog = restricted.catalog().expect("catalog capability");
+    let restricted_children = restricted_catalog
+        .list_children(Some(&schema.id), &CatalogListOptions::default())
+        .await
+        .unwrap();
+    assert!(
+        !restricted_children.restrictions.is_empty(),
+        "least-privilege user must see a catalog restriction, not an empty success"
+    );
+    assert!(
+        restricted_children.objects.is_empty(),
+        "denied schema must not look like an empty catalog"
+    );
 }
