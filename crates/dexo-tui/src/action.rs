@@ -17,6 +17,8 @@ pub enum Action {
         name: String,
         ready: bool,
         environment: String,
+        session: Option<crate::runtime::SessionId>,
+        generation: u64,
     },
     OpenConnectionForm,
     ConnectionFormError {
@@ -39,7 +41,11 @@ pub enum Action {
         task: TaskId,
         rows_affected: Option<u64>,
     },
-    TransactionChanged(TransactionState),
+    TransactionChanged {
+        session: crate::runtime::SessionId,
+        generation: u64,
+        state: TransactionState,
+    },
     OperationStarted(OperationKey),
     OperationFailed {
         key: OperationKey,
@@ -53,6 +59,8 @@ pub enum Action {
     PaletteSelect,
     ExecuteQuery,
     CancelQuery,
+    BeginTransaction,
+    Savepoint,
     CommitTransaction,
     RollbackTransaction,
     Focus(FocusTarget),

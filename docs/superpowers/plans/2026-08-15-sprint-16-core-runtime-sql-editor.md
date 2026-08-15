@@ -252,7 +252,7 @@ git commit -m "feat(tui): bootstrap through local storage worker"
 - Modify: `crates/dexo-tui/src/update.rs`
 - Test: `crates/dexo-tui/tests/runtime_query.rs`
 
-- [ ] **Step 1: Write failing lifecycle tests with a fake session**
+- [x] **Step 1: Write failing lifecycle tests with a fake session**
 
 ```rust
 #[tokio::test]
@@ -274,13 +274,13 @@ async fn reconnect_is_refused_for_unknown_transaction() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test runtime_query connected_session_survives_and_commit_reaches_the_driver`
 
 Expected: FAIL because `SessionRegistry` is missing.
 
-- [ ] **Step 3: Implement the registry and convert driver boxes to `Arc`**
+- [x] **Step 3: Implement the registry and convert driver boxes to `Arc`**
 
 ```rust
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -320,11 +320,11 @@ impl SessionRegistry {
 
 Implement begin/commit/rollback/savepoint methods by calling `TransactionService` and updating state only after the driver result. Convert `Box<dyn Session>` with `Arc::<dyn Session>::from(boxed)`.
 
-- [ ] **Step 4: Wire transaction effects and status actions**
+- [x] **Step 4: Wire transaction effects and status actions**
 
 `Action::TransactionChanged` must include `SessionId` and generation. `update()` changes the active document state only when IDs match. Add palette actions for begin and savepoint; commit/rollback remain disabled unless the driver-reported state permits them.
 
-- [ ] **Step 5: Run and commit**
+- [x] **Step 5: Run and commit**
 
 Run: `cargo test -p dexo-tui --test runtime_query session -- --nocapture`
 

@@ -1,16 +1,15 @@
+use std::collections::VecDeque;
 use crossterm::event::{Event, EventStream, KeyEventKind};
-use dexo_app::{DriverRegistry, SecretPersist, create_connection, map_driver_error};
-use dexo_secrets::{KeyringSecretStore, MemorySecretStore, SecretError, SecretStore};
-use dexo_storage::{AppPaths, ConnectionRepository, Database};
+use dexo_app::DriverRegistry;
+use dexo_storage::AppPaths;
 use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
-use secrecy::SecretString;
 
 use crate::action::{Action, Effect};
 use crate::model::Model;
-use crate::runtime::storage_worker::StorageWorker;
 use crate::runtime::WorkbenchRuntime;
+use crate::runtime::storage_worker::StorageWorker;
 use crate::terminal::{CrosstermTerminal, TerminalGuard, TuiError};
 
 pub fn action_from_event(event: Event) -> Option<Action> {
@@ -35,25 +34,24 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     let paths = AppPaths::discover().map_err(map_tui)?;
     let worker = StorageWorker::start(paths.database).map_err(map_tui)?;
     let bootstrap = worker.bootstrap().await.map_err(map_tui)?;
-    let (action_tx, _action_rx) = tokio::sync::mpsc::channel(32);
-    let mut runtime = WorkbenchRuntime::new(action_tx, worker);
+    let (action_tx, action_rx) = tokio::sync::mpsc::channel(32);
+    let mut runtime = WorkbenchRuntime::new(action_tx, worker, registry);
     let mut guard = TerminalGuard::start(CrosstermTerminal)?;
-    let result = run_loop(registry, bootstrap, &mut runtime).await;
-    let _ = runtime.dispatch(Effect::Shutdown).await;
+    let result = run_loop(bootstrap, &mut runtime, action_rx).await;
+    runtime.dispatch(Effect::Shutdown).await;
     guard.restore();
     result
 }
 
 async fn run_loop(
-    registry: DriverRegistry,
     bootstrap: crate::runtime::storage_worker::BootstrapState,
     runtime: &mut WorkbenchRuntime,
+    mut action_rx: tokio::sync::mpsc::Receiver<Action>,
 ) -> Result<(), TuiError> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
     let _ = crate::update::update(&mut model, Action::Bootstrapped(bootstrap));
     let mut events = EventStream::new();
-    let secrets = SessionSecrets::default();
     loop {
         terminal.draw(|frame| crate::render::render(frame, &model))?;
         let Some(event) = events.next().await else {
@@ -63,111 +61,29 @@ async fn run_loop(
             continue;
         };
         let effects = crate::update::update(&mut model, action);
-        for effect in effects {
-            if matches!(effect, Effect::Quit | Effect::Shutdown) {
-                runtime.dispatch(Effect::Shutdown).await;
-                return Ok(());
-            }
-            if let Some(follow_up) = apply_effect(&registry, &secrets, effect).await {
-                let _ = crate::update::update(&mut model, follow_up);
-            }
+        if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+            return Ok(());
         }
     }
     Ok(())
 }
 
-async fn apply_effect(
-    registry: &DriverRegistry,
-    secrets: &SessionSecrets,
-    effect: Effect,
-) -> Option<Action> {
-    match effect {
-        Effect::CreateConnection { input, password } => {
-            match save_and_connect(registry, secrets, input, &password).await {
-                Ok(action) => Some(action),
-                Err(message) => Some(Action::ConnectionFormError { message }),
-            }
+async fn dispatch_effects(
+    runtime: &mut WorkbenchRuntime,
+    action_rx: &mut tokio::sync::mpsc::Receiver<Action>,
+    model: &mut Model,
+    mut effects: Vec<Effect>,
+) -> bool {
+    let mut pending: VecDeque<Effect> = effects.drain(..).collect();
+    while let Some(effect) = pending.pop_front() {
+        if matches!(effect, Effect::Quit | Effect::Shutdown) {
+            runtime.dispatch(Effect::Shutdown).await;
+            return true;
         }
-        // ponytail: query/tx still need a live session handle; connect only flips status for now
-        _ => None,
-    }
-}
-
-async fn save_and_connect(
-    registry: &DriverRegistry,
-    secrets: &SessionSecrets,
-    input: dexo_app::NewConnection,
-    password: &str,
-) -> Result<Action, String> {
-    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
-    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
-    let repo = ConnectionRepository::new(db.connection());
-    let (profile, persist) =
-        create_connection(input, password, secrets, &repo).map_err(|error| error.to_string())?;
-    if persist == SecretPersist::SessionOnly {
-        secrets
-            .memory
-            .put(profile.secret_ref.as_str(), password)
-            .map_err(|error| error.to_string())?;
-    }
-    connect_session(registry, secrets, &profile).await?;
-    Ok(Action::ConnectionChanged {
-        name: profile.name,
-        ready: true,
-        environment: profile.environment,
-    })
-}
-
-async fn connect_session(
-    registry: &DriverRegistry,
-    secrets: &SessionSecrets,
-    profile: &dexo_app::ConnectionProfile,
-) -> Result<(), String> {
-    let secret = secrets
-        .get(profile.secret_ref.as_str())
-        .map_err(|error| error.to_string())?
-        .ok_or_else(|| "secret is missing for this connection".to_string())?;
-    let factory = registry
-        .get(&profile.driver)
-        .map_err(|error| error.to_string())?;
-    let (connect, _) = profile
-        .connect_request(secret)
-        .map_err(|error| error.to_string())?;
-    factory
-        .connect(connect)
-        .await
-        .map_err(map_driver_error)
-        .map_err(|error| error.to_string())?;
-    Ok(())
-}
-
-#[derive(Default)]
-struct SessionSecrets {
-    keyring: KeyringSecretStore,
-    memory: MemorySecretStore,
-}
-
-impl SecretStore for SessionSecrets {
-    fn put(&self, key: &str, value: &str) -> Result<(), SecretError> {
-        match self.keyring.put(key, value) {
-            Ok(()) => {
-                let _ = self.memory.put(key, value);
-                Ok(())
-            }
-            Err(SecretError::Unavailable) => self.memory.put(key, value),
-            Err(error) => Err(error),
+        runtime.dispatch(effect).await;
+        while let Ok(action) = action_rx.try_recv() {
+            pending.extend(crate::update::update(model, action));
         }
     }
-
-    fn get(&self, key: &str) -> Result<Option<SecretString>, SecretError> {
-        if let Ok(Some(secret)) = self.memory.get(key) {
-            return Ok(Some(secret));
-        }
-        self.keyring.get(key)
-    }
-
-    fn delete(&self, key: &str) -> Result<(), SecretError> {
-        let _ = self.memory.delete(key);
-        self.keyring.delete(key)
-    }
+    false
 }

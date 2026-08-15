@@ -18,10 +18,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             name,
             ready,
             environment,
+            session,
+            generation,
         } => {
             model.connection.name = name;
             model.connection.ready = ready;
             model.connection.environment = environment;
+            model.active_session = session;
+            model.session_generation = generation;
             model.connection_form.close();
             Vec::new()
         }
@@ -53,8 +57,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_operation = None;
             Vec::new()
         }
-        Action::TransactionChanged(state) => {
-            model.transaction = state;
+        Action::TransactionChanged {
+            session,
+            generation,
+            state,
+        } => {
+            if model.active_session == Some(session) && model.session_generation == generation {
+                model.transaction = state;
+            }
             Vec::new()
         }
         Action::OperationStarted(key) => {
@@ -93,6 +103,34 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::PaletteSelect => palette_select(model),
         Action::ExecuteQuery => start_query(model),
         Action::CancelQuery => cancel_query(model),
+        Action::BeginTransaction => {
+            if model.transaction == TransactionState::Idle {
+                if let Some(session) = model.active_session {
+                    vec![Effect::BeginTransaction {
+                        session,
+                        mode: dexo_driver_api::TransactionMode::ReadWrite,
+                    }]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+        Action::Savepoint => {
+            if model.transaction == TransactionState::Active {
+                if let Some(session) = model.active_session {
+                    vec![Effect::Savepoint {
+                        session,
+                        name: "sp1".into(),
+                    }]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
         Action::CommitTransaction => {
             if model.transaction == TransactionState::Active {
                 if let Some(session) = model.active_session {
@@ -672,7 +710,12 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
         .map(|id| id.0.to_string())
         .unwrap_or_default();
     vec![Effect::StartScript(crate::action::ScriptRequest {
-        key: crate::runtime::OperationKey::new(operation, session, "scratch", 1),
+        key: crate::runtime::OperationKey::new(
+            operation,
+            session,
+            "scratch",
+            model.session_generation.max(1),
+        ),
         statements,
         policy: model.script_policy,
         parameters: Vec::new(),

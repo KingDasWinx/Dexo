@@ -1,14 +1,24 @@
+use std::sync::Arc;
+
+use dexo_app::{
+    ConnectionProfile, DriverRegistry, NewConnection, SecretPersist, create_connection,
+    map_driver_error,
+};
+use dexo_secrets::{KeyringSecretStore, MemorySecretStore, SecretError, SecretStore};
+use dexo_storage::{AppPaths, ConnectionRepository, Database};
+use secrecy::SecretString;
 use uuid::Uuid;
 
 use crate::action::{
-    DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
+    Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
 };
-use crate::Action;
 
 pub mod session_registry;
 pub mod storage_worker;
 
 pub use session_registry::SessionId;
+use session_registry::SessionRegistry;
+use storage_worker::StorageWorker;
 
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub struct OperationId(pub Uuid);
@@ -53,20 +63,66 @@ impl OperationKey {
     }
 }
 
-use crate::runtime::storage_worker::StorageWorker;
+#[derive(Default)]
+pub(crate) struct SessionSecrets {
+    keyring: KeyringSecretStore,
+    memory: MemorySecretStore,
+}
 
-#[allow(dead_code)]
+impl SecretStore for SessionSecrets {
+    fn put(&self, key: &str, value: &str) -> Result<(), SecretError> {
+        match self.keyring.put(key, value) {
+            Ok(()) => {
+                let _ = self.memory.put(key, value);
+                Ok(())
+            }
+            Err(SecretError::Unavailable) => self.memory.put(key, value),
+            Err(error) => Err(error),
+        }
+    }
+
+    fn get(&self, key: &str) -> Result<Option<SecretString>, SecretError> {
+        if let Ok(Some(secret)) = self.memory.get(key) {
+            return Ok(Some(secret));
+        }
+        self.keyring.get(key)
+    }
+
+    fn delete(&self, key: &str) -> Result<(), SecretError> {
+        let _ = self.memory.delete(key);
+        self.keyring.delete(key)
+    }
+}
+
 pub struct WorkbenchRuntime {
     action_tx: tokio::sync::mpsc::Sender<Action>,
     storage: Option<StorageWorker>,
+    sessions: SessionRegistry,
+    drivers: DriverRegistry,
+    secrets: SessionSecrets,
 }
 
 impl WorkbenchRuntime {
-    pub fn new(action_tx: tokio::sync::mpsc::Sender<Action>, storage: StorageWorker) -> Self {
+    pub fn new(
+        action_tx: tokio::sync::mpsc::Sender<Action>,
+        storage: StorageWorker,
+        drivers: DriverRegistry,
+    ) -> Self {
         Self {
             action_tx,
             storage: Some(storage),
+            sessions: SessionRegistry::default(),
+            drivers,
+            secrets: SessionSecrets::default(),
         }
+    }
+
+    pub fn sessions(&self) -> &SessionRegistry {
+        &self.sessions
+    }
+
+    pub fn sessions_mut(&mut self) -> &mut SessionRegistry {
+        &mut self.sessions
     }
 
     pub async fn dispatch(&mut self, effect: crate::Effect) {
@@ -96,25 +152,141 @@ impl WorkbenchRuntime {
         }
     }
 
-    async fn create_connection(&mut self, _input: dexo_app::NewConnection, _password: String) {}
+    async fn emit(&self, action: Action) {
+        let _ = self.action_tx.send(action).await;
+    }
 
-    async fn connect_profile(&mut self, _profile: dexo_app::ConnectionProfile) {}
+    async fn create_connection(&mut self, input: NewConnection, password: String) {
+        match self.save_profile(input, &password) {
+            Ok(profile) => self.connect_profile(profile).await,
+            Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+        }
+    }
+
+    fn save_profile(
+        &self,
+        input: NewConnection,
+        password: &str,
+    ) -> Result<ConnectionProfile, String> {
+        // ponytail: second rusqlite handle beside the storage worker; fold into StorageCommand when writes contend.
+        let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+        let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+        let repo = ConnectionRepository::new(db.connection());
+        let (profile, persist) = create_connection(input, password, &self.secrets, &repo)
+            .map_err(|error| error.to_string())?;
+        if persist == SecretPersist::SessionOnly {
+            self.secrets
+                .memory
+                .put(profile.secret_ref.as_str(), password)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(profile)
+    }
+
+    async fn connect_profile(&mut self, profile: ConnectionProfile) {
+        match self.open_session(&profile).await {
+            Ok(session) => {
+                let id = self.sessions.insert(profile.name.clone(), session);
+                let generation = self.sessions.get(id).map(|active| active.generation).unwrap_or(1);
+                self.emit(Action::ConnectionChanged {
+                    name: profile.name,
+                    ready: true,
+                    environment: profile.environment,
+                    session: Some(id),
+                    generation,
+                })
+                .await;
+            }
+            Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+        }
+    }
+
+    async fn open_session(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<Arc<dyn dexo_driver_api::Session>, String> {
+        let secret = self
+            .secrets
+            .get(profile.secret_ref.as_str())
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "secret is missing for this connection".to_string())?;
+        let factory = self
+            .drivers
+            .get(&profile.driver)
+            .map_err(|error| error.to_string())?;
+        let (connect, _) = profile
+            .connect_request(secret)
+            .map_err(|error| error.to_string())?;
+        let boxed = factory
+            .connect(connect)
+            .await
+            .map_err(map_driver_error)
+            .map_err(|error| error.to_string())?;
+        Ok(Arc::from(boxed))
+    }
 
     fn start_script(&mut self, _request: ScriptRequest) {}
 
     async fn cancel_operation(&mut self, _id: OperationId) {}
 
-    async fn begin(&mut self, _session: SessionId, _mode: dexo_driver_api::TransactionMode) {}
+    async fn begin(&mut self, session: SessionId, mode: dexo_driver_api::TransactionMode) {
+        let result = self.sessions.begin(session, mode).await;
+        self.tx_result(session, result).await;
+    }
 
-    async fn commit(&mut self, _session: SessionId) {}
+    async fn commit(&mut self, session: SessionId) {
+        let result = self.sessions.commit(session).await;
+        self.tx_result(session, result).await;
+    }
 
-    async fn rollback(&mut self, _session: SessionId) {}
+    async fn rollback(&mut self, session: SessionId) {
+        let result = self.sessions.rollback(session).await;
+        self.tx_result(session, result).await;
+    }
 
-    async fn savepoint(&mut self, _session: SessionId, _name: String) {}
+    async fn savepoint(&mut self, session: SessionId, name: String) {
+        let result = self.sessions.savepoint(session, &name).await;
+        self.tx_result(session, result).await;
+    }
 
-    async fn rollback_to(&mut self, _session: SessionId, _name: String) {}
+    async fn rollback_to(&mut self, session: SessionId, name: String) {
+        let result = self.sessions.rollback_to(session, &name).await;
+        self.tx_result(session, result).await;
+    }
 
-    async fn release_savepoint(&mut self, _session: SessionId, _name: String) {}
+    async fn release_savepoint(&mut self, session: SessionId, name: String) {
+        let result = self.sessions.release_savepoint(session, &name).await;
+        self.tx_result(session, result).await;
+    }
+
+    async fn tx_result(
+        &self,
+        session: SessionId,
+        result: Result<dexo_driver_api::TransactionState, String>,
+    ) {
+        match result {
+            Ok(state) => {
+                let generation = self
+                    .sessions
+                    .get(session)
+                    .map(|active| active.generation)
+                    .unwrap_or(0);
+                self.emit(Action::TransactionChanged {
+                    session,
+                    generation,
+                    state,
+                })
+                .await;
+            }
+            Err(message) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), session.0.to_string(), "", 0),
+                    message,
+                })
+                .await;
+            }
+        }
+    }
 
     async fn load_document(&mut self, _request: DocumentIoRequest) {}
 

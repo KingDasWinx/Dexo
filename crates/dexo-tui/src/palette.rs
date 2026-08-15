@@ -55,6 +55,32 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::CancelQuery,
         },
         PaletteEntry {
+            id: "transaction.begin",
+            title: "Begin Transaction",
+            keywords: &["tx", "begin", "start"],
+            shortcut: None,
+            disabled_reason: if model.active_session.is_some()
+                && model.transaction == TransactionState::Idle
+            {
+                None
+            } else {
+                Some("session is not idle")
+            },
+            action: || Action::BeginTransaction,
+        },
+        PaletteEntry {
+            id: "transaction.savepoint",
+            title: "Create Savepoint",
+            keywords: &["tx", "savepoint"],
+            shortcut: None,
+            disabled_reason: if model.transaction == TransactionState::Active {
+                None
+            } else {
+                Some("no active transaction")
+            },
+            action: || Action::Savepoint,
+        },
+        PaletteEntry {
             id: "transaction.commit",
             title: "Commit Transaction",
             keywords: &["tx", "commit"],
