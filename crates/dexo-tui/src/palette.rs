@@ -379,6 +379,30 @@ pub fn action_by_id(id: &str) -> Option<Action> {
         .map(|entry| (entry.action)())
 }
 
+/// Popup list rows for a terminal height. Matches `render_palette` (height clamp 5..=12, minus border+query).
+pub fn popup_list_rows(term_height: u16) -> usize {
+    term_height.clamp(5, 12).saturating_sub(3) as usize
+}
+
+/// Keep `selected` inside `[offset, offset + rows)`. Same rule as ratatui `ListState`.
+pub fn scroll_to_selection(selected: usize, offset: usize, count: usize, rows: usize) -> usize {
+    if count == 0 || rows == 0 {
+        return 0;
+    }
+    let selected = selected.min(count - 1);
+    let max_offset = count.saturating_sub(rows);
+    if selected < offset {
+        selected
+    } else if selected >= offset.saturating_add(rows) {
+        selected
+            .saturating_add(1)
+            .saturating_sub(rows)
+            .min(max_offset)
+    } else {
+        offset.min(max_offset)
+    }
+}
+
 pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a PaletteEntry> {
     if query.is_empty() {
         return entries.iter().collect();
@@ -423,7 +447,7 @@ fn is_subsequence(text: &str, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_entries, palette_entries};
+    use super::{filter_entries, palette_entries, popup_list_rows, scroll_to_selection};
     use crate::model::Model;
     use dexo_driver_api::TransactionState;
 
@@ -449,6 +473,37 @@ mod tests {
         let entries = palette_entries(&Model::default());
         let filtered = filter_entries(&entries, "pal");
         assert_eq!(filtered[0].id, "palette.open");
+    }
+
+    #[test]
+    fn scroll_keeps_selection_in_window() {
+        assert_eq!(scroll_to_selection(0, 0, 20, 9), 0);
+        assert_eq!(scroll_to_selection(8, 0, 20, 9), 0);
+        assert_eq!(scroll_to_selection(9, 0, 20, 9), 1);
+        assert_eq!(scroll_to_selection(8, 1, 20, 9), 1);
+        assert_eq!(scroll_to_selection(0, 1, 20, 9), 0);
+        assert_eq!(scroll_to_selection(19, 1, 20, 9), 11);
+
+        let mut model = Model::default();
+        model.palette.open = true;
+        let entries = palette_entries(&model);
+        model.palette.selected = entries.len() - 1;
+        model.palette.offset = scroll_to_selection(
+            model.palette.selected,
+            0,
+            entries.len(),
+            popup_list_rows(model.height),
+        );
+        let view = crate::render::render_to_string(&model, 80, 24);
+        let last = entries.last().unwrap().title;
+        assert!(
+            view.contains(last),
+            "selected command `{last}` should stay visible after scroll"
+        );
+        assert!(
+            !view.contains(entries[0].title),
+            "first command should scroll off when selection is at the end"
+        );
     }
 
     #[test]

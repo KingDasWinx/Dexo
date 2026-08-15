@@ -40,6 +40,7 @@ pub struct PaletteState {
     pub open: bool,
     pub query: String,
     pub selected: usize,
+    pub offset: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]

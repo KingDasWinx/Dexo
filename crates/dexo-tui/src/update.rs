@@ -52,6 +52,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::PaletteQuery(query) => {
             model.palette.query = query;
             model.palette.selected = 0;
+            model.palette.offset = 0;
             Vec::new()
         }
         Action::PaletteSelect => palette_select(model),
@@ -511,28 +512,23 @@ fn handle_palette_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Enter => palette_select(model),
         KeyCode::Up => {
-            model.palette.selected = model.palette.selected.saturating_sub(1);
+            move_palette_selection(model, -1);
             Vec::new()
         }
         KeyCode::Down => {
-            let count = crate::palette::filter_entries(
-                &crate::palette::palette_entries(model),
-                &model.palette.query,
-            )
-            .len();
-            if count > 0 {
-                model.palette.selected = (model.palette.selected + 1).min(count - 1);
-            }
+            move_palette_selection(model, 1);
             Vec::new()
         }
         KeyCode::Backspace => {
             model.palette.query.pop();
             model.palette.selected = 0;
+            model.palette.offset = 0;
             Vec::new()
         }
         KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
             model.palette.query.push(ch);
             model.palette.selected = 0;
+            model.palette.offset = 0;
             Vec::new()
         }
         _ => Vec::new(),
@@ -543,7 +539,29 @@ fn open_palette(model: &mut Model) {
     model.palette.open = true;
     model.palette.query.clear();
     model.palette.selected = 0;
+    model.palette.offset = 0;
     model.focus = Focus::Palette;
+}
+
+fn move_palette_selection(model: &mut Model, delta: isize) {
+    let count = crate::palette::filter_entries(
+        &crate::palette::palette_entries(model),
+        &model.palette.query,
+    )
+    .len();
+    if count == 0 {
+        model.palette.selected = 0;
+        model.palette.offset = 0;
+        return;
+    }
+    let selected = (model.palette.selected as isize + delta).clamp(0, count as isize - 1) as usize;
+    model.palette.selected = selected;
+    model.palette.offset = crate::palette::scroll_to_selection(
+        selected,
+        model.palette.offset,
+        count,
+        crate::palette::popup_list_rows(model.height),
+    );
 }
 
 fn close_palette(model: &mut Model) {

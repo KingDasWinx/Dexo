@@ -4,7 +4,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
-use crate::palette::{filter_entries, palette_entries};
+use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let plan = LayoutPlan::for_area_with(frame.area(), Some(&model.panes));
@@ -231,11 +231,14 @@ fn render_palette(frame: &mut Frame, model: &Model) {
     let entries = palette_entries(model);
     let visible = filter_entries(&entries, &model.palette.query);
     let mut lines = vec![format!("> {}", model.palette.query)];
-    for (index, entry) in visible
-        .iter()
-        .take(height.saturating_sub(3) as usize)
-        .enumerate()
-    {
+    let rows = height.saturating_sub(3) as usize;
+    let offset = scroll_to_selection(
+        model.palette.selected,
+        model.palette.offset,
+        visible.len(),
+        rows,
+    );
+    for (index, entry) in visible.iter().enumerate().skip(offset).take(rows) {
         let marker = if index == model.palette.selected {
             ">"
         } else {
