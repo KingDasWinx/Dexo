@@ -1,8 +1,57 @@
+use dexo_driver_api::{ObjectId, ObjectKind};
 use dexo_tui::layout::{LayoutMode, LayoutPlan};
 use dexo_tui::model::{ConnectionStatus, Model};
 use dexo_tui::render::render_to_string;
-use dexo_tui::screens::explorer::ExplorerState;
+use dexo_tui::screens::explorer::{ExplorerNode, ExplorerState, NodeState};
 use ratatui::layout::Rect;
+
+fn explorer_fixture() -> ExplorerState {
+    let schema = ExplorerNode {
+        id: ObjectId::new("schema:public"),
+        label: "public".into(),
+        kind: ObjectKind::Schema,
+        qualified: "local.public".into(),
+        schema: Some("public".into()),
+        state: NodeState::Collapsed,
+        expanded: false,
+        favorite: false,
+        children: Vec::new(),
+        restriction: None,
+        error: None,
+    };
+    let mut root = ExplorerNode {
+        id: ObjectId::new("catalog:local"),
+        label: "local".into(),
+        kind: ObjectKind::Catalog,
+        qualified: "local".into(),
+        schema: None,
+        state: NodeState::Expanded,
+        expanded: true,
+        favorite: false,
+        children: vec![schema],
+        restriction: None,
+        error: None,
+    };
+    root.children.push(ExplorerNode {
+        id: ObjectId::new("restricted:users"),
+        label: "mysql.users".into(),
+        kind: ObjectKind::User,
+        qualified: "local.mysql.users".into(),
+        schema: None,
+        state: NodeState::Restricted,
+        expanded: false,
+        favorite: false,
+        children: Vec::new(),
+        restriction: Some("permission denied".into()),
+        error: None,
+    });
+    ExplorerState {
+        roots: vec![root],
+        selected: Some(ObjectId::new("schema:public")),
+        offline: true,
+        ..ExplorerState::default()
+    }
+}
 
 fn snapshot_model() -> Model {
     let mut model = Model {
@@ -14,7 +63,7 @@ fn snapshot_model() -> Model {
             read_only: false,
         },
         schema: "public".into(),
-        explorer: ExplorerState::fixture(),
+        explorer: explorer_fixture(),
         ..Model::default()
     };
     model.set_sql("select 1");

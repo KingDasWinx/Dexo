@@ -197,9 +197,11 @@ async fn expanding_loads_only_selected_subtree_and_ignores_old_refresh() {
 
 #[tokio::test]
 async fn inspector_loads_properties_ddl_dependencies_and_privileges() {
-    let mut model = Model::default();
-    model.session_generation = 1;
-    model.active_session = Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1)));
+    let mut model = Model {
+        session_generation: 1,
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
+        ..Model::default()
+    };
     let _ = update(
         &mut model,
         Action::InspectorLoaded {
@@ -316,11 +318,13 @@ fn open_object_data_is_disabled_until_sprint_20() {
 
 #[test]
 fn replace_roots_requests_snapshot_capture() {
-    let mut model = Model::default();
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
     model.connection.ready = true;
     model.connection.name = "local".into();
-    model.active_session = Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1)));
-    model.session_generation = 1;
     let effects = update(
         &mut model,
         Action::CatalogLoaded {

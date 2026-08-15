@@ -6,6 +6,7 @@ use dexo_driver_api::{CatalogListOptions, ObjectId, Session};
 use crate::action::Action;
 use crate::runtime::{OperationId, SessionId};
 
+#[allow(clippy::too_many_arguments)] // ponytail: unpack at the call site; a request struct can wait.
 pub async fn load_children(
     session: Arc<dyn Session>,
     parent: Option<ObjectId>,

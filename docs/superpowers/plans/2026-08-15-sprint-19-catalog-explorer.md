@@ -1,6 +1,6 @@
 # Dexo Sprint 19: Live Catalog Explorer Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [x]`) syntax for tracking.
 
 **Goal:** Replace the explorer fixture with a lazy, searchable, cached PostgreSQL/MySQL catalog that opens real inspectors and supports offline work.
 
@@ -102,7 +102,7 @@ git commit -m "feat(catalog): expose real dependencies and restrictions"
 
 **Files:** `runtime/catalog_manager.rs`, TUI explorer/action/model/update/object_tree, tests `catalog_flow.rs`.
 
-- [ ] **Step 1: Write lazy loading, retry, and stale-generation tests**
+- [x] **Step 1: Write lazy loading, retry, and stale-generation tests**
 
 ```rust
 #[tokio::test]
@@ -117,13 +117,13 @@ async fn expanding_loads_only_selected_subtree_and_ignores_old_refresh() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test catalog_flow expanding_loads_only_selected_subtree_and_ignores_old_refresh`
 
 Expected: FAIL because `ExplorerExpand` only toggles local state.
 
-- [ ] **Step 3: Add real effects and node states**
+- [x] **Step 3: Add real effects and node states**
 
 ```rust
 pub enum NodeState { Collapsed, Loading(OperationId), Expanded, Error { message: String, retryable: bool }, Stale }
@@ -131,7 +131,7 @@ pub enum NodeState { Collapsed, Loading(OperationId), Expanded, Error { message:
 
 `ExpandCatalogNode`, `RefreshCatalogNode`, `RefreshCatalogSubtree`, and `RefreshCatalogAll` call `CatalogService`; completions include session/catalog generation. Replace roots on full refresh and children only on node refresh.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-tui --test catalog_flow lazy refresh`
 
@@ -146,7 +146,7 @@ git commit -m "feat(tui): load and refresh catalog nodes lazily"
 
 **Files:** app search/catalog service, runtime/storage worker/catalog manager, TUI explorer/editor/palette, tests.
 
-- [ ] **Step 1: Write a failing project-aware search test**
+- [x] **Step 1: Write a failing project-aware search test**
 
 ```rust
 #[test]
@@ -157,17 +157,17 @@ fn search_ranks_favorite_then_recent_without_returning_denied_objects() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-app search_ranks_favorite_then_recent_without_returning_denied_objects`
 
 Expected: FAIL because usage/restrictions are not composed.
 
-- [ ] **Step 3: Compose the index**
+- [x] **Step 3: Compose the index**
 
 Build `SearchDocument` from live/offline objects plus `ObjectUsage`; exclude restricted objects before indexing. Explorer filters include text, kind, schema, system objects, favorites only, and offline/stale. Feed the same snapshot into `SnapshotCatalog` for editor completion.
 
-- [ ] **Step 4: Test performance and commit**
+- [x] **Step 4: Test performance and commit**
 
 Run: `cargo test -p dexo-app search && cargo bench -p dexo-app catalog_search`
 
@@ -182,7 +182,7 @@ git commit -m "feat(catalog): connect search favorites and completion"
 
 **Files:** `screens/object_inspector.rs`, `runtime/catalog_manager.rs`, `runtime/clipboard.rs`, Cargo dependency, TUI widgets/update/palette, tests.
 
-- [ ] **Step 1: Write inspector and clipboard tests**
+- [x] **Step 1: Write inspector and clipboard tests**
 
 ```rust
 #[tokio::test]
@@ -195,13 +195,13 @@ async fn inspector_loads_properties_ddl_dependencies_and_privileges() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test catalog_flow inspector_loads_properties_ddl_dependencies_and_privileges`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement inspector loading and clipboard adapter**
+- [x] **Step 3: Implement inspector loading and clipboard adapter**
 
 Call `CatalogService::{object,ddl}`, reader dependencies/dependents, and `SecurityAdmin::effective_privileges`. Render each partial result or typed restriction independently.
 
@@ -214,7 +214,7 @@ pub fn copy_text(text: String) -> Result<(), String> {
 
 Copy simple name, qualified name, and DDL only reports success after `arboard` returns `Ok`.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-tui --test catalog_flow inspector clipboard`
 
@@ -229,7 +229,7 @@ git commit -m "feat(tui): inspect and copy live catalog objects"
 
 **Files:** `dexo-sql` navigation module, TUI editor/explorer/actions, tests.
 
-- [ ] **Step 1: Write a token-resolution test**
+- [x] **Step 1: Write a token-resolution test**
 
 ```rust
 #[test]
@@ -239,17 +239,17 @@ fn goto_definition_resolves_qualified_and_aliased_names() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-sql goto_definition_resolves_qualified_and_aliased_names`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement navigation and effects**
+- [x] **Step 3: Implement navigation and effects**
 
 Resolve the cursor token using parsed aliases and catalog names. `GoToDefinition` selects/reveals the object, loading missing ancestors. `OpenObjectData` emits the data-load effect defined for Sprint 20; until Sprint 20 begins it may be disabled with the explicit reason `data tabs require Sprint 20`, never return fixture rows. `OpenObjectDdl` opens the real inspector DDL immediately.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-sql -p dexo-tui --test catalog_flow goto`
 
@@ -264,7 +264,7 @@ git commit -m "feat(editor): navigate SQL tokens to catalog objects"
 
 **Files:** runtime/catalog manager/storage worker, storage cache, explorer/model/render, live tests.
 
-- [ ] **Step 1: Write online-capture/offline-reopen tests**
+- [x] **Step 1: Write online-capture/offline-reopen tests**
 
 Capture a complete live tree, close the session, reopen the project, assert the same visible object IDs/DDL/search completion, and mark the timestamp/stale status. Interrupt capture and assert the old complete snapshot remains active.
 
@@ -272,17 +272,17 @@ Run: `cargo test -p dexo-tui --test catalog_flow offline_snapshot`
 
 Expected: FAIL.
 
-- [ ] **Step 2: Implement atomic snapshot capture**
+- [x] **Step 2: Implement atomic snapshot capture**
 
 Walk children with bounded concurrency, collect restrictions, write `complete=0`, insert objects transactionally, then set `complete=1`. Cancellation deletes the incomplete snapshot. Startup chooses live catalog when connected and latest complete cache otherwise.
 
-- [ ] **Step 3: Add live acceptance tests**
+- [x] **Step 3: Add live acceptance tests**
 
 Run: `cargo test -p dexo --test tui_catalog_live -- --ignored --nocapture`
 
 Expected: PostgreSQL/MySQL tree, refresh, inspector, dependencies, privileges, and offline reopen PASS.
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```powershell
 git add crates/dexo-tui/src/runtime crates/dexo-tui/src/screens/explorer.rs crates/dexo-tui/src/model.rs crates/dexo-tui/src/render.rs crates/dexo-storage/src/catalog_cache.rs crates/dexo-tui/tests/catalog_flow.rs crates/dexo/tests/tui_catalog_live.rs
@@ -291,7 +291,7 @@ git commit -m "feat(catalog): persist and reopen offline snapshots"
 
 ### Task 8: Run the catalog sprint gate
 
-- [ ] **Step 1: Run all gates**
+- [x] **Step 1: Run all gates**
 
 ```powershell
 cargo fmt --all -- --check
@@ -303,13 +303,13 @@ cargo test -p dexo --test tui_catalog_live -- --ignored --nocapture
 
 Expected: PASS.
 
-- [ ] **Step 2: Confirm no production explorer fixture path**
+- [x] **Step 2: Confirm no production explorer fixture path**
 
 Run: `rg -n "ExplorerState::fixture|fixture\(" crates/dexo-tui/src`
 
 Expected: no explorer production call; fixture builders may remain under `#[cfg(test)]` only.
 
-- [ ] **Step 3: Commit gate state**
+- [x] **Step 3: Commit gate state**
 
 ```powershell
 git add .
@@ -318,7 +318,7 @@ git commit -m "test(catalog): verify live and offline explorer"
 
 ## Sprint 19 exit checklist
 
-- [ ] Tree, refresh, filters, search, favorites, inspectors, DDL, dependencies, privileges, copy, and go-to-definition are real.
-- [ ] Offline snapshots are complete, atomic, searchable, and visibly stale.
-- [ ] Permission restrictions never masquerade as empty results.
-- [ ] PostgreSQL/MySQL catalog acceptance tests pass.
+- [x] Tree, refresh, filters, search, favorites, inspectors, DDL, dependencies, privileges, copy, and go-to-definition are real.
+- [x] Offline snapshots are complete, atomic, searchable, and visibly stale.
+- [x] Permission restrictions never masquerade as empty results.
+- [x] PostgreSQL/MySQL catalog acceptance tests pass.

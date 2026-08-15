@@ -267,17 +267,17 @@ impl WorkbenchRuntime {
                 session,
                 include_system,
             } => {
-                if let Some(active) = self.sessions.get(session) {
-                    if let Ok(paths) = AppPaths::discover() {
-                        catalog_manager::capture_snapshot(
-                            Arc::clone(&active.session),
-                            connection_id,
-                            database_name,
-                            include_system,
-                            paths.database,
-                        )
-                        .await;
-                    }
+                if let Some(active) = self.sessions.get(session)
+                    && let Ok(paths) = AppPaths::discover()
+                {
+                    catalog_manager::capture_snapshot(
+                        Arc::clone(&active.session),
+                        connection_id,
+                        database_name,
+                        include_system,
+                        paths.database,
+                    )
+                    .await;
                 }
             }
             crate::Effect::LoadOfflineCatalog {

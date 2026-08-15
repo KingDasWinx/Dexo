@@ -59,15 +59,13 @@ async fn live_catalog_round_trip(
             if let Ok(list) = catalog
                 .list_children(Some(&root.id), &CatalogListOptions::default())
                 .await
-            {
-                if let Some(object) = list
+                && let Some(object) = list
                     .objects
                     .into_iter()
                     .find(|object| object.qualified_name.object() == schema)
-                {
-                    found = Some(object);
-                    break;
-                }
+            {
+                found = Some(object);
+                break;
             }
         }
         found.expect("schema")

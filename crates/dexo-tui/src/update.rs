@@ -1531,15 +1531,13 @@ fn catalog_database(model: &Model) -> String {
 
 fn catalog_followup_effects(model: &Model, capture: bool) -> Vec<Effect> {
     let mut effects = Vec::new();
-    if capture {
-        if let Some(session) = model.active_session {
-            effects.push(Effect::CaptureCatalogSnapshot {
-                connection_id: model.connection.name.clone(),
-                database_name: catalog_database(model),
-                session,
-                include_system: model.explorer.include_system,
-            });
-        }
+    if capture && let Some(session) = model.active_session {
+        effects.push(Effect::CaptureCatalogSnapshot {
+            connection_id: model.connection.name.clone(),
+            database_name: catalog_database(model),
+            session,
+            include_system: model.explorer.include_system,
+        });
     }
     if !model.project_id.is_empty() && !model.connection.name.is_empty() {
         effects.push(Effect::LoadObjectUsage {

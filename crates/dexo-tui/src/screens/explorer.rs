@@ -100,6 +100,7 @@ pub struct ExplorerState {
 }
 
 impl ExplorerState {
+    #[cfg(test)]
     pub fn fixture() -> Self {
         let schema = ExplorerNode {
             id: ObjectId::new("schema:public"),
