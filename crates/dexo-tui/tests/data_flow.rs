@@ -31,21 +31,15 @@ fn model_with_two_running_results() -> Model {
     };
     let key = op_key();
     model.results.tabs = vec![
-        ResultTab {
-            key: result_key(0),
-            title: "r0".into(),
-            grid: dexo_tui::GridModel::default(),
-            status: OperationStatus::Running,
-            rows_affected: None,
-            notices: Vec::new(),
+        {
+            let mut tab = ResultTab::new(result_key(0), "r0");
+            tab.status = OperationStatus::Running;
+            tab
         },
-        ResultTab {
-            key: result_key(1),
-            title: "r1".into(),
-            grid: dexo_tui::GridModel::default(),
-            status: OperationStatus::Running,
-            rows_affected: None,
-            notices: Vec::new(),
+        {
+            let mut tab = ResultTab::new(result_key(1), "r1");
+            tab.status = OperationStatus::Running;
+            tab
         },
     ];
     model.active_operation = Some(key.operation);
@@ -107,4 +101,80 @@ fn paging_applies_only_matching_generation() {
     );
     assert_eq!(model.results.row_count(), 1);
     assert_eq!(model.data.page_offset, 100);
+}
+
+#[test]
+fn clipboard_copy_emits_os_effect() {
+    let mut model = Model::default();
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int".into(),
+        nullable: false,
+    }]);
+    model.results.append_rows(vec![vec![DbValue::I64(1)]]);
+    let effects = update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Csv));
+    assert!(effects
+        .iter()
+        .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. })));
+}
+
+#[test]
+fn foreign_key_null_disables_navigation() {
+    let mut model = Model::default();
+    model.data.related_fk = Some(dexo_app::data::ForeignKey {
+        local: vec!["user_id".into()],
+        referenced_table: dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "users"),
+        referenced: vec!["id".into()],
+    });
+    model.data.related_row = vec![("user_id".into(), None)];
+    let effects = update(&mut model, Action::OpenRelated);
+    assert!(effects.is_empty());
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.contains("null"))
+    );
+}
+
+#[test]
+fn arbitrary_select_rewrite_rejects_updates() {
+    use dexo_driver_api::Page;
+    assert!(dexo_sql::derive_page(
+        "update users set name='x'",
+        &[],
+        &None,
+        Page::new(0, 10).unwrap()
+    )
+    .is_err());
+}
+
+#[test]
+fn arbitrary_select_marks_unsupported_tabs_local_only() {
+    let mut model = Model::default();
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("update users set name='x'".into());
+    model.results.tabs = vec![tab];
+    let effects = update(&mut model, Action::ApplyRemoteSort);
+    assert!(effects.is_empty());
+    assert!(
+        model.results.tabs[0]
+            .local_only
+            .as_ref()
+            .is_some_and(|reason| reason.contains("read-only"))
+    );
+}
+
+#[test]
+fn arbitrary_select_emits_derived_script() {
+    let mut model = Model::default();
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id,name from users".into());
+    model.results.tabs = vec![tab];
+    let effects = update(&mut model, Action::ApplyRemoteSort);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        dexo_tui::Effect::StartScript(request) if request.statements[0].contains("_dexo_derived")
+    )));
+    assert!(model.results.tabs[0].local_only.is_none());
 }

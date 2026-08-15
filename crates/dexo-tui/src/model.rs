@@ -226,6 +226,23 @@ pub struct ResultTab {
     pub status: OperationStatus,
     pub rows_affected: Option<u64>,
     pub notices: Vec<String>,
+    pub source_sql: Option<String>,
+    pub local_only: Option<String>,
+}
+
+impl ResultTab {
+    pub fn new(key: ResultKey, title: impl Into<String>) -> Self {
+        Self {
+            key,
+            title: title.into(),
+            grid: GridModel::default(),
+            status: OperationStatus::Idle,
+            rows_affected: None,
+            notices: Vec::new(),
+            source_sql: None,
+            local_only: None,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -244,17 +261,13 @@ impl ResultsState {
 
     fn grid_mut(&mut self) -> &mut GridModel {
         if self.tabs.is_empty() {
-            self.tabs.push(ResultTab {
-                key: ResultKey {
+            self.tabs.push(ResultTab::new(
+                ResultKey {
                     operation: OperationKey::new(OperationId::new(), "", "", 0),
                     index: 0,
                 },
-                title: "result".into(),
-                grid: GridModel::default(),
-                status: OperationStatus::Idle,
-                rows_affected: None,
-                notices: Vec::new(),
-            });
+                "result",
+            ));
             self.active = 0;
         }
         let index = self.active.min(self.tabs.len() - 1);

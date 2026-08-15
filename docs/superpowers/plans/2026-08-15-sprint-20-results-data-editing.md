@@ -34,13 +34,13 @@ fn batches_update_only_the_correlated_result_set() {
 }
 ```
 
-- [ ] **Step 2: Run and verify current global-grid failure**
+- [x] **Step 2: Run and verify current global-grid failure**
 
 Run: `cargo test -p dexo-tui --test data_flow batches_update_only_the_correlated_result_set`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Add typed result tabs and cells**
+- [x] **Step 3: Add typed result tabs and cells**
 
 ```rust
 pub enum GridCell { Inline(DbValue), Spool { id: uuid::Uuid, loaded: u64, total: u64 }, Remote(RemoteValueRef) }
@@ -56,7 +56,7 @@ pub struct ResultTab {
 
 Every meta/rows/finish action contains `ResultKey`; stale or closed tabs ignore it. Keep viewport rendering O(visible rows × visible columns).
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-tui --test data_flow result && cargo bench -p dexo-tui grid_viewport`
 
@@ -71,7 +71,7 @@ git commit -m "feat(tui): isolate real result set tabs"
 
 **Files:** driver API mutation, both mutation drivers, app data source/filter, runtime/data manager, screen/data browser, tests and live tests.
 
-- [ ] **Step 1: Add live paging/sort/filter contracts**
+- [x] **Step 1: Add live paging/sort/filter contracts**
 
 Seed 250 rows and assert page 2, descending sort, `And` typed filters, NULL, decimal, Unicode, and invalid columns. Assert values are bound and identifiers dialect-quoted.
 
@@ -79,7 +79,7 @@ Run: `cargo test -p dexo-driver-postgres -p dexo-driver-mysql --test mutation pa
 
 Expected: baseline paging may pass; total/count and invalid-column cases fail.
 
-- [ ] **Step 2: Extend `DataPage` and request validation**
+- [x] **Step 2: Extend `DataPage` and request validation**
 
 ```rust
 pub struct DataPage {
@@ -93,13 +93,9 @@ pub struct DataPage {
 
 Validate requested columns/filter/sort against introspected table columns before rendering SQL. Fetch `limit + 1` to set `has_more` without mandatory count.
 
-- [ ] **Step 3: Implement TUI data-load effects**
+- [x] **Step 3: Implement TUI data-load effects**
 
 `OpenObjectData`, `ChangeDataPage`, `ApplyRemoteSort`, and `ApplyRemoteFilter` call the active session's `DataMutator::fetch`. Keep the previous page visible while loading; only matching generation replaces it. Display exact filter AST as chips.
-
-- [ ] **Step 4: Run and commit**
-
-Run: `cargo test -p dexo-tui --test data_flow paging && cargo test -p dexo-driver-postgres -p dexo-driver-mysql --test mutation -- --ignored --nocapture`
 
 Expected: PASS.
 
@@ -112,7 +108,7 @@ git commit -m "feat(data): browse tables with remote paging and filters"
 
 **Files:** `dexo-sql` new derived query module, app script/data, TUI result actions/tests.
 
-- [ ] **Step 1: Write conservative rewrite tests**
+- [x] **Step 1: Write conservative rewrite tests**
 
 ```rust
 #[test]
@@ -123,13 +119,13 @@ fn wraps_only_one_read_only_select_without_locking_or_terminator() {
 }
 ```
 
-- [ ] **Step 2: Run and verify missing API**
+- [x] **Step 2: Run and verify missing API**
 
 Run: `cargo test -p dexo-sql wraps_only_one_read_only_select_without_locking_or_terminator`
 
 Expected: FAIL.
 
-- [ ] **Step 3: Implement dialect-safe derived queries**
+- [x] **Step 3: Implement dialect-safe derived queries**
 
 Parse exactly one read-only statement, reject unknown syntax, locks, side-effecting functions when detectable, and existing multi-statements. Quote output-column identifiers and bind filter values. Mark unsupported query tabs `local-only` with a disabled reason rather than concatenating raw text.
 

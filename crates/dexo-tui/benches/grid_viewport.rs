@@ -6,10 +6,8 @@ use dexo_tui::model::{GridModel, Model};
 use dexo_tui::render::render_to_string;
 
 fn main() {
-    let model = Model {
-        results: GridModel::fixture_rows(1_000),
-        ..Model::default()
-    };
+    let mut model = Model::default();
+    *model.results = GridModel::fixture_rows(1_000);
     let mut samples = Vec::new();
     for _ in 0..20 {
         let started = Instant::now();

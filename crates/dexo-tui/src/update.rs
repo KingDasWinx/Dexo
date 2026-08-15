@@ -395,7 +395,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenObjectData => open_object_data(model),
         Action::ChangeDataPage { offset } => change_data_page(model, offset),
-        Action::ApplyRemoteSort | Action::ApplyRemoteFilter => reload_object_data(model),
+        Action::ApplyRemoteSort | Action::ApplyRemoteFilter => apply_remote_query(model),
         Action::DataPageLoaded {
             generation,
             session,
@@ -416,6 +416,26 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if generation == model.session_generation {
                 model.data.loading = false;
                 model.data.last_error = Some(message.clone());
+                model.messages.push(message);
+            }
+            Vec::new()
+        }
+        Action::MutationsApplied {
+            generation,
+            session,
+        } => {
+            if catalog_generation_matches(model, &session, generation) {
+                model.data.apply();
+                return reload_object_data(model);
+            }
+            Vec::new()
+        }
+        Action::MutationsFailed {
+            generation,
+            message,
+        } => {
+            if generation == model.session_generation {
+                model.data.fail_apply();
                 model.messages.push(message);
             }
             Vec::new()
@@ -455,7 +475,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ClipboardWritten { text } => {
-            model.explorer.copied = Some(text);
+            model.explorer.copied = Some(text.clone());
+            model.data.clipboard = text;
             Vec::new()
         }
         Action::ClipboardFailed { message } => {
@@ -500,12 +521,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::CopySimpleName => copy_selected(model, false),
         Action::CopyQualifiedName | Action::ExplorerCopyName => copy_selected(model, true),
         Action::CopyDdl => copy_ddl(model),
-        Action::CopyGrid(format) => {
-            if let Ok(text) = model.results.copy(format, model.data.dialect) {
-                model.data.clipboard = text;
-            }
-            Vec::new()
-        }
+        Action::CopyGrid(format) => copy_grid(model, format),
         Action::OpenReview => {
             model.data.open_review();
             Vec::new()
@@ -514,10 +530,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.data.confirm_production();
             Vec::new()
         }
-        Action::ApplyChanges => {
-            model.data.apply();
-            Vec::new()
-        }
+        Action::ApplyChanges => apply_changes(model),
         Action::FailApply => {
             model.data.fail_apply();
             Vec::new()
@@ -530,10 +543,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             inspect_selected(model);
             Vec::new()
         }
-        Action::OpenRelated => {
-            open_related(model);
-            Vec::new()
-        }
+        Action::OpenRelated => open_related(model),
         Action::OpenDdlPreview => {
             open_ddl_preview(model);
             Vec::new()
@@ -1447,16 +1457,16 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
     model.results.tabs = statements
         .iter()
         .enumerate()
-        .map(|(index, _)| crate::model::ResultTab {
-            key: crate::model::ResultKey {
-                operation: key.clone(),
-                index,
-            },
-            title: format!("result {}", index + 1),
-            grid: crate::model::GridModel::default(),
-            status: crate::model::OperationStatus::Idle,
-            rows_affected: None,
-            notices: Vec::new(),
+        .map(|(index, sql)| {
+            let mut tab = crate::model::ResultTab::new(
+                crate::model::ResultKey {
+                    operation: key.clone(),
+                    index,
+                },
+                format!("result {}", index + 1),
+            );
+            tab.source_sql = Some(sql.clone());
+            tab
         })
         .collect();
     model.results.active = 0;
@@ -1556,17 +1566,15 @@ fn ensure_result_tab<'a>(
 ) -> &'a mut crate::model::ResultTab {
     while model.results.tabs.len() <= index {
         let next = model.results.tabs.len();
-        model.results.tabs.push(crate::model::ResultTab {
-            key: crate::model::ResultKey {
+        let mut tab = crate::model::ResultTab::new(
+            crate::model::ResultKey {
                 operation: key.clone(),
                 index: next,
             },
-            title: format!("result {}", next + 1),
-            grid: crate::model::GridModel::default(),
-            status: crate::model::OperationStatus::Running,
-            rows_affected: None,
-            notices: Vec::new(),
-        });
+            format!("result {}", next + 1),
+        );
+        tab.status = crate::model::OperationStatus::Running;
+        model.results.tabs.push(tab);
     }
     let tab = &mut model.results.tabs[index];
     tab.key = crate::model::ResultKey {
@@ -1725,6 +1733,109 @@ fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
     reload_object_data(model)
 }
 
+fn apply_remote_query(model: &mut Model) -> Vec<Effect> {
+    let source = model
+        .results
+        .tabs
+        .get(model.results.active)
+        .and_then(|tab| tab.source_sql.clone());
+    match source {
+        Some(sql) => rerun_derived(model, sql),
+        None => reload_object_data(model),
+    }
+}
+
+fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
+    let page = match dexo_driver_api::Page::new(model.data.page_offset, model.data.page_limit) {
+        Ok(page) => page,
+        Err(error) => {
+            model.messages.push(error.to_string());
+            return Vec::new();
+        }
+    };
+    match dexo_sql::derive_page(&sql, &model.data.sort, &model.data.filter, page) {
+        Ok(derived) => {
+            if let Some(tab) = model.results.tabs.get_mut(model.results.active) {
+                tab.local_only = None;
+            }
+            let mut parameters = Vec::new();
+            if let Some(filter) = &model.data.filter {
+                parameters = dexo_sql::filter_values(filter);
+            }
+            let derived = match model.data.dialect {
+                dexo_app::data::SqlDialect::Postgres => postgres_placeholders(&derived),
+                dexo_app::data::SqlDialect::Mysql => derived,
+            };
+            start_derived_script(model, derived, parameters)
+        }
+        Err(reason) => {
+            if let Some(tab) = model.results.tabs.get_mut(model.results.active) {
+                tab.local_only = Some(reason.clone());
+            }
+            model.messages.push(format!("local-only: {reason}"));
+            Vec::new()
+        }
+    }
+}
+
+fn postgres_placeholders(sql: &str) -> String {
+    // ponytail: rewrite `?` left-to-right; ceiling: `?` inside string literals.
+    let mut n = 0;
+    let mut out = String::with_capacity(sql.len());
+    for ch in sql.chars() {
+        if ch == '?' {
+            n += 1;
+            out.push_str(&format!("${n}"));
+        } else {
+            out.push(ch);
+        }
+    }
+    out
+}
+
+fn start_derived_script(
+    model: &mut Model,
+    sql: String,
+    parameters: Vec<DbValue>,
+) -> Vec<Effect> {
+    let operation = crate::runtime::OperationId::new();
+    let session = model
+        .active_session
+        .map(|id| id.0.to_string())
+        .unwrap_or_default();
+    let document = model.active_document().id.clone();
+    let key = crate::runtime::OperationKey::new(
+        operation,
+        session,
+        document,
+        model.session_generation.max(1),
+    );
+    let source_sql = model
+        .results
+        .tabs
+        .get(model.results.active)
+        .and_then(|tab| tab.source_sql.clone());
+    let mut tab = crate::model::ResultTab::new(
+        crate::model::ResultKey {
+            operation: key.clone(),
+            index: 0,
+        },
+        "result 1",
+    );
+    tab.source_sql = source_sql;
+    tab.status = crate::model::OperationStatus::Running;
+    model.results.tabs = vec![tab];
+    model.results.active = 0;
+    model.active_operation = Some(operation);
+    vec![Effect::StartScript(crate::action::ScriptRequest {
+        key,
+        statements: vec![sql],
+        policy: model.script_policy,
+        parameters,
+        timeout: std::time::Duration::from_secs(30),
+    })]
+}
+
 fn reload_object_data(model: &mut Model) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
@@ -1857,33 +1968,71 @@ fn inspect_selected(model: &mut Model) {
     model.data.viewer = Some(inspect_value(value, loaded, loaded));
 }
 
-fn open_related(model: &mut Model) {
+fn open_related(model: &mut Model) -> Vec<Effect> {
     let Some(fk) = model.data.related_fk.clone() else {
-        return;
+        return Vec::new();
     };
-    if related_filter(&fk, &model.data.related_row).is_none() {
-        return;
-    }
+    let Some(filter) = related_filter(&fk, &model.data.related_row) else {
+        model
+            .messages
+            .push("foreign key is null; navigation disabled".into());
+        return Vec::new();
+    };
     let title = fk.referenced_table.display_unquoted();
     model.tabs.titles.push(title.clone());
     model.tabs.active = model.tabs.titles.len() - 1;
-    model.results.tabs.push(crate::model::ResultTab {
-        key: crate::model::ResultKey {
-            operation: crate::runtime::OperationKey::new(
-                crate::runtime::OperationId::new(),
-                String::new(),
-                String::new(),
-                model.session_generation,
-            ),
-            index: model.results.tabs.len(),
-        },
-        title: title.clone(),
-        grid: crate::model::GridModel::default(),
-        status: crate::model::OperationStatus::Idle,
-        rows_affected: None,
-        notices: Vec::new(),
-    });
+    model.data.target = fk.referenced_table.clone();
+    model.data.filter = Some(filter);
     model.data.related_open.push(title);
+    model.data.page_offset = 0;
+    model.data.loading = true;
+    reload_object_data(model)
+}
+
+fn copy_grid(model: &mut Model, format: dexo_app::data::CopyFormat) -> Vec<Effect> {
+    match model.results.copy(format, model.data.dialect) {
+        Ok(text) if text.len() > 8 * 1024 * 1024 => {
+            model
+                .messages
+                .push("selection too large for clipboard; export to a file".into());
+            Vec::new()
+        }
+        Ok(text) => vec![Effect::CopyToClipboard { text }],
+        Err(message) => {
+            model.messages.push(message);
+            Vec::new()
+        }
+    }
+}
+
+fn apply_changes(model: &mut Model) -> Vec<Effect> {
+    if model.connection.read_only {
+        model.messages.push("connection is read-only".into());
+        return Vec::new();
+    }
+    if let Some(review) = &model.data.review
+        && review.production
+        && !review.confirmed
+    {
+        model.messages.push("type the target to confirm production apply".into());
+        return Vec::new();
+    }
+    let Some(session) = model.active_session else {
+        model.messages.push("connect a session to apply changes".into());
+        return Vec::new();
+    };
+    match dexo_app::data::mutations_for(model.data.target.clone(), &model.data.changes) {
+        Ok(mutations) if mutations.is_empty() => Vec::new(),
+        Ok(mutations) => vec![Effect::ApplyMutations {
+            mutations,
+            session,
+            generation: model.session_generation,
+        }],
+        Err(error) => {
+            model.messages.push(error.to_string());
+            Vec::new()
+        }
+    }
 }
 
 fn open_ddl_preview(model: &mut Model) {
