@@ -50,10 +50,26 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::QueryFinished { .. } => {
             model.active_task = None;
             model.active_query = None;
+            model.active_operation = None;
             Vec::new()
         }
         Action::TransactionChanged(state) => {
             model.transaction = state;
+            Vec::new()
+        }
+        Action::OperationStarted(key) => {
+            model.active_operation = Some(key.operation);
+            Vec::new()
+        }
+        Action::OperationFailed { message, .. } => {
+            model.active_operation = None;
+            model.active_query = None;
+            model.messages.push(message);
+            Vec::new()
+        }
+        Action::OperationCancelled(_) => {
+            model.active_operation = None;
+            model.active_query = None;
             Vec::new()
         }
         Action::OpenPalette => {
@@ -75,7 +91,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::CancelQuery => cancel_query(model),
         Action::CommitTransaction => {
             if model.transaction == TransactionState::Active {
-                vec![Effect::CommitTransaction]
+                if let Some(session) = model.active_session {
+                    vec![Effect::CommitTransaction { session }]
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             }
@@ -84,7 +104,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if model.transaction == TransactionState::Active
                 || model.transaction == TransactionState::Failed
             {
-                vec![Effect::RollbackTransaction]
+                if let Some(session) = model.active_session {
+                    vec![Effect::RollbackTransaction { session }]
+                } else {
+                    Vec::new()
+                }
             } else {
                 Vec::new()
             }
@@ -637,16 +661,25 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
     model.result_tabs = statements.iter().map(|_| GridModel::default()).collect();
     let request = QueryRequest::read(statements[0].clone(), 10_000);
     model.active_query = Some(request.id);
-    vec![Effect::StartScript {
+    let operation = crate::runtime::OperationId::new();
+    model.active_operation = Some(operation);
+    let session = model
+        .active_session
+        .map(|id| id.0.to_string())
+        .unwrap_or_default();
+    vec![Effect::StartScript(crate::action::ScriptRequest {
+        key: crate::runtime::OperationKey::new(operation, session, "scratch", 1),
         statements,
         policy: model.script_policy,
-    }]
+        parameters: Vec::new(),
+        timeout: std::time::Duration::from_secs(30),
+    })]
 }
 
 fn cancel_query(model: &mut Model) -> Vec<Effect> {
     model
-        .active_query
-        .map(Effect::CancelQuery)
+        .active_operation
+        .map(Effect::CancelOperation)
         .into_iter()
         .collect()
 }

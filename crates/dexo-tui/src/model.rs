@@ -2,6 +2,8 @@ use dexo_app::event::TaskId;
 use dexo_app::{ExecutionTarget, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
 
+use crate::runtime::{OperationId, SessionId};
+
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
@@ -514,6 +516,8 @@ pub struct Model {
     pub script_policy: ScriptPolicy,
     pub active_task: Option<TaskId>,
     pub active_query: Option<QueryId>,
+    pub active_operation: Option<OperationId>,
+    pub active_session: Option<SessionId>,
     pub project: String,
     pub schema: String,
     pub explorer: ExplorerState,
@@ -581,6 +585,8 @@ impl Default for Model {
             script_policy: ScriptPolicy::StopOnError,
             active_task: None,
             active_query: None,
+            active_operation: None,
+            active_session: None,
             project: "default".into(),
             schema: String::new(),
             explorer: ExplorerState::default(),

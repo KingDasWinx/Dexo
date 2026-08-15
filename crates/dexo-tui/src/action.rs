@@ -1,7 +1,9 @@
 use crossterm::event::{KeyEvent, MouseEvent};
 use dexo_app::event::TaskId;
-use dexo_app::{NewConnection, ScriptPolicy};
-use dexo_driver_api::{ColumnMeta, DbValue, QueryId, QueryRequest, TransactionState};
+use dexo_app::{ConnectionProfile, NewConnection, ScriptPolicy};
+use dexo_driver_api::{ColumnMeta, DbValue, TransactionMode, TransactionState};
+
+use crate::runtime::{OperationId, OperationKey, SessionId};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -38,6 +40,12 @@ pub enum Action {
         rows_affected: Option<u64>,
     },
     TransactionChanged(TransactionState),
+    OperationStarted(OperationKey),
+    OperationFailed {
+        key: OperationKey,
+        message: String,
+    },
+    OperationCancelled(OperationKey),
     OpenPalette,
     ClosePalette,
     PaletteQuery(String),
@@ -110,20 +118,74 @@ pub enum FocusTarget {
 }
 
 #[derive(Clone, Debug)]
+pub struct ScriptRequest {
+    pub key: OperationKey,
+    pub statements: Vec<String>,
+    pub policy: ScriptPolicy,
+    pub parameters: Vec<DbValue>,
+    pub timeout: std::time::Duration,
+}
+
+#[derive(Clone, Debug)]
+pub struct DocumentIoRequest {
+    pub document: String,
+    pub path: std::path::PathBuf,
+    pub content: String,
+    pub expected_fingerprint: Option<String>,
+}
+
+#[derive(Clone, Debug)]
+pub struct RecoveryCheckpointRequest {
+    pub document: String,
+    pub project_id: String,
+    pub title: String,
+    pub content: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct PersistHistoryRequest {
+    pub connection_id: Option<String>,
+    pub sql: String,
+}
+
+#[derive(Clone, Debug)]
 pub enum Effect {
-    StartQuery(QueryRequest),
-    StartScript {
-        statements: Vec<String>,
-        policy: ScriptPolicy,
-    },
-    CancelQuery(QueryId),
+    StartScript(ScriptRequest),
+    CancelOperation(OperationId),
     PersistLayout,
     CreateConnection {
         input: NewConnection,
         password: String,
     },
-    BeginTransaction,
-    CommitTransaction,
-    RollbackTransaction,
+    ConnectProfile {
+        profile: ConnectionProfile,
+    },
+    BeginTransaction {
+        session: SessionId,
+        mode: TransactionMode,
+    },
+    CommitTransaction {
+        session: SessionId,
+    },
+    RollbackTransaction {
+        session: SessionId,
+    },
+    Savepoint {
+        session: SessionId,
+        name: String,
+    },
+    RollbackToSavepoint {
+        session: SessionId,
+        name: String,
+    },
+    ReleaseSavepoint {
+        session: SessionId,
+        name: String,
+    },
+    LoadDocument(DocumentIoRequest),
+    SaveDocument(DocumentIoRequest),
+    CheckpointRecovery(RecoveryCheckpointRequest),
+    PersistHistory(PersistHistoryRequest),
+    Shutdown,
     Quit,
 }

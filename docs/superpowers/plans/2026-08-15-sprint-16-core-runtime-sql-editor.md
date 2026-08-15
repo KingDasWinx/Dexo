@@ -60,7 +60,7 @@ Do not implement the full connection browser, TLS/SSH/proxy form, projects UI, c
 - Modify: `crates/dexo-tui/src/lib.rs`
 - Test: `crates/dexo-tui/tests/runtime_query.rs`
 
-- [ ] **Step 1: Write the failing operation-correlation test**
+- [x] **Step 1: Write the failing operation-correlation test**
 
 ```rust
 use dexo_tui::runtime::{OperationId, OperationKey};
@@ -74,13 +74,13 @@ fn operation_key_rejects_a_stale_session_generation() {
 }
 ```
 
-- [ ] **Step 2: Run the test and verify the missing runtime API**
+- [x] **Step 2: Run the test and verify the missing runtime API**
 
 Run: `cargo test -p dexo-tui --test runtime_query operation_key_rejects_a_stale_session_generation`
 
 Expected: FAIL with unresolved import `dexo_tui::runtime`.
 
-- [ ] **Step 3: Add operation types and typed completion actions**
+- [x] **Step 3: Add operation types and typed completion actions**
 
 ```rust
 // crates/dexo-tui/src/runtime/mod.rs
@@ -114,7 +114,7 @@ impl OperationKey {
 
 Add `Action::{OperationStarted, OperationFailed, OperationCancelled}` carrying `OperationKey`; add `Effect::{ConnectProfile, StartScript, CancelOperation, BeginTransaction, CommitTransaction, RollbackTransaction, Savepoint, RollbackToSavepoint, ReleaseSavepoint, LoadDocument, SaveDocument, CheckpointRecovery, PersistHistory, Shutdown}`. Remove `StartQuery` if no reducer can emit it. Keep `CreateConnection` until Sprint 17 replaces the form.
 
-- [ ] **Step 4: Make dispatch exhaustive and keep I/O out of the reducer**
+- [x] **Step 4: Make dispatch exhaustive and keep I/O out of the reducer**
 
 ```rust
 pub struct WorkbenchRuntime {
@@ -148,7 +148,7 @@ impl WorkbenchRuntime {
 
 Every called method must be defined in this sprint; methods that delegate to later domains must not be added yet.
 
-- [ ] **Step 5: Run tests and commit**
+- [x] **Step 5: Run tests and commit**
 
 Run: `cargo test -p dexo-tui --test runtime_query operation_key_rejects_a_stale_session_generation`
 
