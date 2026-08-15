@@ -1,4 +1,5 @@
 use std::collections::VecDeque;
+use std::time::Duration;
 use crossterm::event::{Event, EventStream, KeyEventKind};
 use dexo_app::DriverRegistry;
 use dexo_storage::AppPaths;
@@ -52,17 +53,32 @@ async fn run_loop(
     let mut model = Model::default();
     let _ = crate::update::update(&mut model, Action::Bootstrapped(bootstrap));
     let mut events = EventStream::new();
+    let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
+    checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         terminal.draw(|frame| crate::render::render(frame, &model))?;
-        let Some(event) = events.next().await else {
-            break;
-        };
-        let Some(action) = action_from_event(event?) else {
-            continue;
-        };
-        let effects = crate::update::update(&mut model, action);
-        if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
-            return Ok(());
+        tokio::select! {
+            terminal_event = events.next() => {
+                let Some(event) = terminal_event else { break };
+                let Some(action) = action_from_event(event?) else { continue };
+                let effects = crate::update::update(&mut model, action);
+                if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+                    return Ok(());
+                }
+            }
+            runtime_action = action_rx.recv() => {
+                let Some(action) = runtime_action else { break };
+                let effects = crate::update::update(&mut model, action);
+                if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+                    return Ok(());
+                }
+            }
+            _ = checkpoint.tick() => {
+                let effects = crate::update::update(&mut model, Action::CheckpointTick);
+                if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+                    return Ok(());
+                }
+            }
         }
     }
     Ok(())

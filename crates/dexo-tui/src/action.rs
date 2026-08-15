@@ -1,5 +1,4 @@
 use crossterm::event::{KeyEvent, MouseEvent};
-use dexo_app::event::TaskId;
 use dexo_app::{ConnectionProfile, NewConnection, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, TransactionMode, TransactionState};
 
@@ -25,22 +24,31 @@ pub enum Action {
         message: String,
     },
     SaveConnection,
+    QueryResultSetStarted {
+        key: crate::runtime::OperationKey,
+        index: usize,
+    },
     QueryMeta {
-        task: TaskId,
+        key: crate::runtime::OperationKey,
         columns: Vec<ColumnMeta>,
     },
     QueryRows {
-        task: TaskId,
+        key: crate::runtime::OperationKey,
         rows: Vec<Vec<DbValue>>,
     },
-    QueryMessage {
-        task: TaskId,
+    QueryNotice {
+        key: crate::runtime::OperationKey,
         message: String,
     },
-    QueryFinished {
-        task: TaskId,
+    QueryResultSetFinished {
+        key: crate::runtime::OperationKey,
+        index: usize,
         rows_affected: Option<u64>,
     },
+    ScriptFinished {
+        key: crate::runtime::OperationKey,
+    },
+    CheckpointTick,
     TransactionChanged {
         session: crate::runtime::SessionId,
         generation: u64,

@@ -31,7 +31,7 @@ pub use connection_service::{
 pub use driver_registry::DriverRegistry;
 pub use error::{AppError, ErrorCategory};
 pub use project::{Project, ProjectId};
-pub use query_service::{QueryService, map_driver_error};
+pub use query_service::{QueryService, QueryTask, map_driver_error};
 pub use script::{ExecutionTarget, ScriptPolicy, statements_for};
 pub use session_manager::{SessionManager, SessionState};
 pub use transaction_service::TransactionService;

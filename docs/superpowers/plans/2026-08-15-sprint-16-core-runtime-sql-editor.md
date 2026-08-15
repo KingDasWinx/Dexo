@@ -429,7 +429,7 @@ git commit -m "feat(drivers): complete query event and parameter contracts"
 - Modify: `crates/dexo-tui/src/update.rs`
 - Test: `crates/dexo-tui/tests/runtime_query.rs`
 
-- [ ] **Step 1: Write failing streaming and stale-event tests**
+- [x] **Step 1: Write failing streaming and stale-event tests**
 
 ```rust
 #[tokio::test]
@@ -444,13 +444,13 @@ async fn script_streams_two_real_tabs_and_cancel_reaches_session() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-tui --test runtime_query script_streams_two_real_tabs_and_cancel_reaches_session`
 
 Expected: FAIL because no query runner exists.
 
-- [ ] **Step 3: Return a cancellable task handle from the app service**
+- [x] **Step 3: Return a cancellable task handle from the app service**
 
 ```rust
 pub struct QueryTask {
@@ -462,13 +462,13 @@ pub struct QueryTask {
 
 `QueryService::start()` returns `QueryTask`. `TaskRegistry::cancel()` cancels the token; runner cancellation also calls `Session::cancel(query)` and waits for a terminal event.
 
-- [ ] **Step 4: Implement script execution and bounded action delivery**
+- [x] **Step 4: Implement script execution and bounded action delivery**
 
 For each statement, classify with `dexo_sql::statement_effect`, construct `QueryRequest::read` or `write`, bind the parameter values, and wrap the full stream in `tokio::time::timeout`. Emit `QueryResultSetStarted`, meta, row batches, notices, result-set finished, and script finished actions containing the same `OperationKey`.
 
 Use `ScriptPolicy::StopOnError` to stop only after the failing statement action has been delivered. Never replay a mutating statement after network failure.
 
-- [ ] **Step 5: Replace the event loop with `tokio::select!`**
+- [x] **Step 5: Replace the event loop with `tokio::select!`**
 
 ```rust
 loop {
@@ -486,7 +486,7 @@ loop {
 
 `dispatch_effects` calls `runtime.dispatch` without awaiting long-running query tasks.
 
-- [ ] **Step 6: Run and commit**
+- [x] **Step 6: Run and commit**
 
 Run: `cargo test -p dexo-tui --test runtime_query`
 

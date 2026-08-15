@@ -38,25 +38,48 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SaveConnection => save_connection(model),
-        Action::QueryMeta { task, columns } => {
-            model.active_task = Some(task);
-            model.results.set_columns(columns);
+        Action::QueryResultSetStarted { key, index } => {
+            if operation_matches(model, &key) {
+                while model.result_tabs.len() <= index {
+                    model.result_tabs.push(GridModel::default());
+                }
+                model.result_tabs[index].clear();
+                model.results = GridModel::default();
+            }
             Vec::new()
         }
-        Action::QueryRows { rows, .. } => {
-            model.results.append_rows(rows);
+        Action::QueryMeta { key, columns } => {
+            if operation_matches(model, &key) {
+                model.results.set_columns(columns.clone());
+                if let Some(tab) = model.result_tabs.last_mut() {
+                    tab.set_columns(columns);
+                }
+            }
             Vec::new()
         }
-        Action::QueryMessage { message, .. } => {
-            model.messages.push(message);
+        Action::QueryRows { key, rows } => {
+            if operation_matches(model, &key) {
+                model.results.append_rows(rows.clone());
+                if let Some(tab) = model.result_tabs.last_mut() {
+                    tab.append_rows(rows);
+                }
+            }
             Vec::new()
         }
-        Action::QueryFinished { .. } => {
+        Action::QueryNotice { key, message } => {
+            if operation_matches(model, &key) {
+                model.messages.push(message);
+            }
+            Vec::new()
+        }
+        Action::QueryResultSetFinished { .. } => Vec::new(),
+        Action::ScriptFinished { .. } => {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
             Vec::new()
         }
+        Action::CheckpointTick => Vec::new(),
         Action::TransactionChanged {
             session,
             generation,
@@ -758,6 +781,20 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     }
 }
 
+fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool {
+    let session = model
+        .active_session
+        .map(|id| id.0.to_string())
+        .unwrap_or_default();
+    let generation = if model.session_generation == 0 {
+        key.generation
+    } else {
+        model.session_generation
+    };
+    let document = "scratch";
+    key.belongs_to(&session, document, generation)
+}
+
 fn inspect_selected(model: &mut Model) {
     let Some((row, col)) = model.results.selection() else {
         return;
@@ -864,20 +901,21 @@ fn palette_select(model: &mut Model) -> Vec<Effect> {
 
 #[cfg(test)]
 mod tests {
-    use dexo_app::event::TaskId;
     use dexo_driver_api::DbValue;
 
     use super::update;
     use crate::action::{Action, Effect};
     use crate::model::{Focus, Model};
+    use crate::runtime::{OperationId, OperationKey};
 
     #[test]
     fn query_events_do_not_change_editor_focus() {
         let mut model = Model::fixture(Focus::Editor);
+        let key = OperationKey::new(OperationId::new(), "", "scratch", 1);
         update(
             &mut model,
             Action::QueryRows {
-                task: TaskId(uuid::Uuid::nil()),
+                key,
                 rows: vec![vec![DbValue::I64(1)]],
             },
         );

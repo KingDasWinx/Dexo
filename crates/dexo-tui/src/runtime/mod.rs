@@ -1,9 +1,10 @@
 use std::sync::Arc;
 
 use dexo_app::{
-    ConnectionProfile, DriverRegistry, NewConnection, SecretPersist, create_connection,
-    map_driver_error,
+    ConnectionProfile, DriverRegistry, NewConnection, QueryService, SecretPersist,
+    create_connection, map_driver_error,
 };
+use dexo_runtime::TaskRegistry;
 use dexo_secrets::{KeyringSecretStore, MemorySecretStore, SecretError, SecretStore};
 use dexo_storage::{AppPaths, ConnectionRepository, Database};
 use secrecy::SecretString;
@@ -13,6 +14,7 @@ use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
 };
 
+pub mod query_runner;
 pub mod session_registry;
 pub mod storage_worker;
 
@@ -100,6 +102,8 @@ pub struct WorkbenchRuntime {
     sessions: SessionRegistry,
     drivers: DriverRegistry,
     secrets: SessionSecrets,
+    query: QueryService,
+    live: Arc<tokio::sync::Mutex<Option<query_runner::LiveQuery>>>,
 }
 
 impl WorkbenchRuntime {
@@ -114,6 +118,8 @@ impl WorkbenchRuntime {
             sessions: SessionRegistry::default(),
             drivers,
             secrets: SessionSecrets::default(),
+            query: QueryService::new(Arc::new(TaskRegistry::default())),
+            live: Arc::new(tokio::sync::Mutex::new(None)),
         }
     }
 
@@ -131,7 +137,9 @@ impl WorkbenchRuntime {
                 self.create_connection(input, password).await
             }
             crate::Effect::ConnectProfile { profile } => self.connect_profile(profile).await,
-            crate::Effect::StartScript(request) => self.start_script(request),
+            crate::Effect::StartScript(request) => {
+                let _ = self.start_script(request).await;
+            }
             crate::Effect::CancelOperation(id) => self.cancel_operation(id).await,
             crate::Effect::BeginTransaction { session, mode } => self.begin(session, mode).await,
             crate::Effect::CommitTransaction { session } => self.commit(session).await,
@@ -225,9 +233,49 @@ impl WorkbenchRuntime {
         Ok(Arc::from(boxed))
     }
 
-    fn start_script(&mut self, _request: ScriptRequest) {}
+    pub async fn start_script(&mut self, request: ScriptRequest) -> anyhow::Result<()> {
+        let Some(session) = self.session_for_key(&request.key) else {
+            self.emit(Action::OperationFailed {
+                key: request.key,
+                message: "session is closed".into(),
+            })
+            .await;
+            anyhow::bail!("session is closed");
+        };
+        let query = QueryService::new(Arc::clone(self.query.registry()));
+        let action_tx = self.action_tx.clone();
+        let live = Arc::clone(&self.live);
+        tokio::spawn(async move {
+            query_runner::run_script(query, session, request, action_tx, live).await;
+        });
+        Ok(())
+    }
 
-    async fn cancel_operation(&mut self, _id: OperationId) {}
+    pub async fn cancel(&mut self, id: OperationId) {
+        query_runner::cancel_live(&self.query, &self.live, id).await;
+        let _ = self
+            .action_tx
+            .send(Action::OperationCancelled(OperationKey::new(
+                id, "", "", 0,
+            )))
+            .await;
+    }
+
+    async fn cancel_operation(&mut self, id: OperationId) {
+        self.cancel(id).await;
+    }
+
+    fn session_for_key(&self, key: &OperationKey) -> Option<Arc<dyn dexo_driver_api::Session>> {
+        if let Ok(uuid) = Uuid::parse_str(&key.session) {
+            return self
+                .sessions
+                .get(SessionId(uuid))
+                .map(|active| Arc::clone(&active.session));
+        }
+        self.sessions
+            .find_by_connection(&key.session)
+            .map(|active| Arc::clone(&active.session))
+    }
 
     async fn begin(&mut self, session: SessionId, mode: dexo_driver_api::TransactionMode) {
         let result = self.sessions.begin(session, mode).await;

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
-use dexo_driver_api::{DriverError, DriverErrorCategory, QueryEvent, QueryRequest, Session};
-use dexo_runtime::{TaskRegistry, bounded_events};
+use dexo_driver_api::{DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryRequest, Session};
+use dexo_runtime::{RuntimeTaskId, TaskRegistry, bounded_events};
 use futures_util::StreamExt;
 use tokio::sync::mpsc::Receiver;
 
@@ -11,16 +11,26 @@ pub struct QueryService {
     registry: Arc<TaskRegistry>,
 }
 
+pub struct QueryTask {
+    pub task: RuntimeTaskId,
+    pub query: QueryId,
+    pub events: Receiver<Result<QueryEvent, DriverError>>,
+}
+
 impl QueryService {
     pub fn new(registry: Arc<TaskRegistry>) -> Self {
         Self { registry }
+    }
+
+    pub fn registry(&self) -> &Arc<TaskRegistry> {
+        &self.registry
     }
 
     pub async fn start(
         &self,
         session: Arc<dyn Session>,
         request: QueryRequest,
-    ) -> Receiver<Result<QueryEvent, DriverError>> {
+    ) -> QueryTask {
         let handle = self.registry.register();
         let (tx, rx) = bounded_events(2);
         let token = handle.token.clone();
@@ -56,7 +66,11 @@ impl QueryService {
             }
             registry.finish(task_id);
         });
-        rx
+        QueryTask {
+            task: task_id,
+            query: query_id,
+            events: rx,
+        }
     }
 
     pub async fn collect(
@@ -64,9 +78,9 @@ impl QueryService {
         session: Arc<dyn Session>,
         request: QueryRequest,
     ) -> Result<Vec<QueryEvent>, AppError> {
-        let mut rx = self.start(session, request).await;
+        let mut task = self.start(session, request).await;
         let mut events = Vec::new();
-        while let Some(item) = rx.recv().await {
+        while let Some(item) = task.events.recv().await {
             events.push(item.map_err(map_driver_error)?);
         }
         Ok(events)

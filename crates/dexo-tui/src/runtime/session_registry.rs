@@ -45,6 +45,12 @@ impl SessionRegistry {
         self.sessions.get(&id)
     }
 
+    pub fn find_by_connection(&self, connection: &str) -> Option<&ActiveSession> {
+        self.sessions
+            .values()
+            .find(|active| active.connection == connection)
+    }
+
     pub fn set_transaction(
         &mut self,
         id: SessionId,
