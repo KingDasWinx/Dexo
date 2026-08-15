@@ -1,10 +1,17 @@
+use std::collections::{BTreeMap, HashMap};
+
 use dexo_app::{
-    AppError, ConnectionId, ConnectionProfile, ConnectionProfiles, ErrorCategory, SecretRef,
+    AppError, ConnectionId, ConnectionPolicyOverrides, ConnectionProfile, ConnectionProfiles,
+    ErrorCategory, PURPOSE_DATABASE_PASSWORD, SecretRef,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use serde_json::Value;
+use uuid::Uuid;
 
 const SECRET_CONFIG_KEYS: &[&str] = &["password", "secret", "pass", "token", "api_key"];
+
+const PROFILE_COLUMNS: &str =
+    "id, project_id, name, driver, environment, config_json, secret_ref, group_path, policy_json";
 
 pub struct ConnectionRepository<'a> {
     conn: &'a Connection,
@@ -16,21 +23,25 @@ impl<'a> ConnectionRepository<'a> {
     }
 
     pub fn save(&self, profile: &ConnectionProfile) -> anyhow::Result<()> {
-        if profile.secret_ref.as_str().is_empty() {
-            anyhow::bail!("secret_ref must not be empty");
-        }
+        let refs = persist_secret_refs(profile)?;
+        let password_ref = refs
+            .get(PURPOSE_DATABASE_PASSWORD)
+            .ok_or_else(|| anyhow::anyhow!("secret_ref must not be empty"))?;
         let config = strip_secret_keys(&profile.config);
         let project_id = profile.project_id.map(|id| id.to_string());
+        let policy_json = serde_json::to_string(&profile.policy)?;
         self.conn.execute(
-            "INSERT INTO connections (id, project_id, name, driver, environment, config_json, secret_ref)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+            "INSERT INTO connections (id, project_id, name, driver, environment, config_json, secret_ref, group_path, policy_json)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
              ON CONFLICT(id) DO UPDATE SET
                project_id = excluded.project_id,
                name = excluded.name,
                driver = excluded.driver,
                environment = excluded.environment,
                config_json = excluded.config_json,
-               secret_ref = excluded.secret_ref",
+               secret_ref = excluded.secret_ref,
+               group_path = excluded.group_path,
+               policy_json = excluded.policy_json",
             params![
                 profile.id.0.to_string(),
                 project_id,
@@ -38,36 +49,86 @@ impl<'a> ConnectionRepository<'a> {
                 profile.driver,
                 profile.environment,
                 config.to_string(),
-                profile.secret_ref.as_str(),
+                password_ref.as_str(),
+                profile.group_path,
+                policy_json,
             ],
         )?;
+        self.replace_secret_refs(profile.id, &refs)?;
         Ok(())
     }
 
+    pub fn update(&self, profile: &ConnectionProfile) -> anyhow::Result<()> {
+        if self.get(profile.id)?.is_none() {
+            anyhow::bail!("unknown connection {}", profile.id.0);
+        }
+        self.save(profile)
+    }
+
+    pub fn duplicate(&self, id: ConnectionId) -> anyhow::Result<ConnectionProfile> {
+        let mut profile = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("unknown connection {}", id.0))?;
+        profile.id = ConnectionId(Uuid::new_v4());
+        profile.name = unique_copy_name(&profile.name, self)?;
+        profile.secret_refs = profile
+            .secret_refs
+            .iter()
+            .map(|(purpose, _)| (purpose.clone(), SecretRef::new(Uuid::new_v4().to_string())))
+            .collect();
+        if profile.secret_refs.is_empty() {
+            profile.secret_refs.insert(
+                PURPOSE_DATABASE_PASSWORD.to_string(),
+                SecretRef::new(Uuid::new_v4().to_string()),
+            );
+        }
+        profile.secret_ref = profile
+            .secret_refs
+            .get(PURPOSE_DATABASE_PASSWORD)
+            .cloned()
+            .unwrap_or_else(|| SecretRef::new(Uuid::new_v4().to_string()));
+        self.save(&profile)?;
+        Ok(profile)
+    }
+
+    pub fn move_group(&self, id: ConnectionId, group_path: Option<&str>) -> anyhow::Result<()> {
+        let mut profile = self
+            .get(id)?
+            .ok_or_else(|| anyhow::anyhow!("unknown connection {}", id.0))?;
+        profile.group_path = group_path
+            .map(str::trim)
+            .filter(|path| !path.is_empty())
+            .map(str::to_string);
+        self.save(&profile)
+    }
+
     pub fn get_by_name(&self, name: &str) -> anyhow::Result<Option<ConnectionProfile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, name, driver, environment, config_json, secret_ref
-             FROM connections WHERE name = ?1",
-        )?;
-        let rows = stmt
+        let mut stmt = self.conn.prepare(&format!(
+            "SELECT {PROFILE_COLUMNS} FROM connections WHERE name = ?1"
+        ))?;
+        let mut rows = stmt
             .query_map(params![name], row_to_profile)?
             .collect::<Result<Vec<_>, _>>()?;
         if rows.len() > 1 {
             anyhow::bail!("multiple connections named '{name}'");
         }
+        self.attach_secret_refs(&mut rows)?;
         Ok(rows.into_iter().next())
     }
 
     pub fn get(&self, id: ConnectionId) -> anyhow::Result<Option<ConnectionProfile>> {
-        self.conn
+        let mut rows = self
+            .conn
             .query_row(
-                "SELECT id, project_id, name, driver, environment, config_json, secret_ref
-                 FROM connections WHERE id = ?1",
+                &format!("SELECT {PROFILE_COLUMNS} FROM connections WHERE id = ?1"),
                 params![id.0.to_string()],
                 row_to_profile,
             )
-            .optional()
-            .map_err(Into::into)
+            .optional()?
+            .into_iter()
+            .collect::<Vec<_>>();
+        self.attach_secret_refs(&mut rows)?;
+        Ok(rows.into_iter().next())
     }
 
     pub fn delete(&self, id: ConnectionId) -> anyhow::Result<()> {
@@ -79,12 +140,90 @@ impl<'a> ConnectionRepository<'a> {
     }
 
     pub fn list(&self) -> anyhow::Result<Vec<ConnectionProfile>> {
-        let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, name, driver, environment, config_json, secret_ref
-             FROM connections ORDER BY name",
+        self.list_filtered(None)
+    }
+
+    pub fn list_for_project(&self, project_id: Uuid) -> anyhow::Result<Vec<ConnectionProfile>> {
+        self.list_filtered(Some(project_id))
+    }
+
+    fn list_filtered(&self, project_id: Option<Uuid>) -> anyhow::Result<Vec<ConnectionProfile>> {
+        let sql = match project_id {
+            Some(_) => format!(
+                "SELECT {PROFILE_COLUMNS} FROM connections WHERE project_id = ?1 ORDER BY group_path, name"
+            ),
+            None => format!("SELECT {PROFILE_COLUMNS} FROM connections ORDER BY group_path, name"),
+        };
+        let mut stmt = self.conn.prepare(&sql)?;
+        let mut rows = match project_id {
+            Some(id) => stmt
+                .query_map(params![id.to_string()], row_to_profile)?
+                .collect::<Result<Vec<_>, _>>()?,
+            None => stmt
+                .query_map([], row_to_profile)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        self.attach_secret_refs(&mut rows)?;
+        Ok(rows)
+    }
+
+    fn replace_secret_refs(
+        &self,
+        id: ConnectionId,
+        refs: &BTreeMap<String, SecretRef>,
+    ) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM connection_secret_refs WHERE connection_id = ?1",
+            params![id.0.to_string()],
         )?;
-        let rows = stmt.query_map([], row_to_profile)?;
-        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+        for (purpose, secret_ref) in refs {
+            self.conn.execute(
+                "INSERT INTO connection_secret_refs(connection_id, purpose, secret_ref)
+                 VALUES (?1, ?2, ?3)",
+                params![id.0.to_string(), purpose, secret_ref.as_str()],
+            )?;
+        }
+        Ok(())
+    }
+
+    fn attach_secret_refs(&self, profiles: &mut [ConnectionProfile]) -> anyhow::Result<()> {
+        if profiles.is_empty() {
+            return Ok(());
+        }
+        // ponytail: load every secret-ref row then join in memory. Ceiling: all local profiles.
+        // Filter with WHERE connection_id IN (...) if this store ever holds thousands of connections.
+        let mut stmt = self
+            .conn
+            .prepare("SELECT connection_id, purpose, secret_ref FROM connection_secret_refs")?;
+        let mut by_id: HashMap<String, BTreeMap<String, SecretRef>> = HashMap::new();
+        let rows = stmt.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?;
+        for row in rows {
+            let (connection_id, purpose, secret_ref) = row?;
+            by_id
+                .entry(connection_id)
+                .or_default()
+                .insert(purpose, SecretRef::new(secret_ref));
+        }
+        for profile in profiles {
+            if let Some(refs) = by_id.remove(&profile.id.0.to_string()) {
+                if let Some(password) = refs.get(PURPOSE_DATABASE_PASSWORD) {
+                    profile.secret_ref = password.clone();
+                }
+                profile.secret_refs = refs;
+            } else if !profile.secret_ref.as_str().is_empty() {
+                profile.secret_refs.insert(
+                    PURPOSE_DATABASE_PASSWORD.to_string(),
+                    profile.secret_ref.clone(),
+                );
+            }
+        }
+        Ok(())
     }
 }
 
@@ -100,11 +239,51 @@ impl ConnectionProfiles for ConnectionRepository<'_> {
     }
 }
 
+fn persist_secret_refs(profile: &ConnectionProfile) -> anyhow::Result<BTreeMap<String, SecretRef>> {
+    let mut refs = profile.secret_refs.clone();
+    if !profile.secret_ref.as_str().is_empty() {
+        refs.entry(PURPOSE_DATABASE_PASSWORD.to_string())
+            .or_insert_with(|| profile.secret_ref.clone());
+    }
+    if refs
+        .get(PURPOSE_DATABASE_PASSWORD)
+        .map(|value| value.as_str().is_empty())
+        .unwrap_or(true)
+    {
+        anyhow::bail!("secret_ref must not be empty");
+    }
+    for (purpose, secret_ref) in &refs {
+        if purpose.trim().is_empty() || secret_ref.as_str().is_empty() {
+            anyhow::bail!("secret purpose and ref must not be empty");
+        }
+    }
+    Ok(refs)
+}
+
+fn unique_copy_name(name: &str, repo: &ConnectionRepository<'_>) -> anyhow::Result<String> {
+    let candidate = format!("{name} (copy)");
+    if repo.get_by_name(&candidate)?.is_none() {
+        return Ok(candidate);
+    }
+    for n in 2..1000 {
+        let candidate = format!("{name} (copy {n})");
+        if repo.get_by_name(&candidate)?.is_none() {
+            return Ok(candidate);
+        }
+    }
+    anyhow::bail!("too many copies of '{name}'")
+}
+
 fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionProfile> {
     let id: String = row.get(0)?;
     let project_id: Option<String> = row.get(1)?;
     let config_json: String = row.get(5)?;
     let secret_ref: String = row.get(6)?;
+    let group_path: Option<String> = row.get(7)?;
+    let policy_json: String = row.get(8)?;
+    let policy: ConnectionPolicyOverrides = serde_json::from_str(&policy_json).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
+    })?;
     Ok(ConnectionProfile {
         id: ConnectionId(parse_uuid(&id)?),
         project_id: project_id.as_deref().map(parse_uuid).transpose()?,
@@ -114,7 +293,10 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<ConnectionProfile
         config: serde_json::from_str(&config_json).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(5, rusqlite::types::Type::Text, Box::new(e))
         })?,
+        group_path,
+        policy,
         secret_ref: SecretRef::new(secret_ref),
+        secret_refs: BTreeMap::new(),
     })
 }
 
@@ -158,6 +340,10 @@ struct PortableConnection {
     driver: String,
     environment: String,
     config_json: String,
+    #[serde(default)]
+    group_path: Option<String>,
+    #[serde(default)]
+    policy_json: String,
     secret_ref: String,
 }
 
@@ -186,6 +372,8 @@ pub fn export_portable(conn: &Connection) -> anyhow::Result<String> {
             driver: c.driver,
             environment: c.environment,
             config_json: strip_secret_keys(&c.config).to_string(),
+            group_path: c.group_path,
+            policy_json: serde_json::to_string(&c.policy).unwrap_or_else(|_| "{}".into()),
             secret_ref: String::new(),
         })
         .collect();
@@ -213,19 +401,25 @@ pub fn import_portable(conn: &Connection, toml_text: &str) -> anyhow::Result<Imp
     let mut connections_needing_secret = Vec::new();
     for item in portable.connections {
         let config: Value = serde_json::from_str(&item.config_json)?;
-        let profile = ConnectionProfile {
-            id: ConnectionId(parse_uuid_anyhow(&item.id)?),
-            project_id: item
-                .project_id
+        let policy = if item.policy_json.trim().is_empty() {
+            ConnectionPolicyOverrides::default()
+        } else {
+            serde_json::from_str(&item.policy_json)?
+        };
+        let mut profile = ConnectionProfile::new(
+            ConnectionId(parse_uuid_anyhow(&item.id)?),
+            item.project_id
                 .as_deref()
                 .map(parse_uuid_anyhow)
                 .transpose()?,
-            name: item.name.clone(),
-            driver: item.driver,
-            environment: item.environment,
+            item.name.clone(),
+            item.driver,
+            item.environment,
             config,
-            secret_ref: SecretRef::new(uuid::Uuid::new_v4().to_string()),
-        };
+            SecretRef::new(uuid::Uuid::new_v4().to_string()),
+        );
+        profile.group_path = item.group_path;
+        profile.policy = policy;
         connections.save(&profile)?;
         connections_needing_secret.push(item.name);
     }

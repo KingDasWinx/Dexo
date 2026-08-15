@@ -23,7 +23,7 @@ pub use mcp::SqliteGrantLedger;
 pub use mcp_profile::McpProfileRepository;
 pub use migrations::{
     LATEST_SCHEMA_VERSION, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5,
-    MIGRATION_6, MIGRATION_7,
+    MIGRATION_6, MIGRATION_7, MIGRATION_8, apply_pending,
 };
 pub use project::ProjectRepository;
 pub use recovery::{RecoveryDocument, RecoveryRepository};

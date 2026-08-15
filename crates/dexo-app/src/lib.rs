@@ -22,11 +22,13 @@ pub mod transaction_service;
 pub mod transfer;
 
 pub use catalog_service::{CatalogService, SnapshotCatalog, parse_qualified};
-pub use connection_policy::{ConnectionPolicy, Environment};
-pub use connection_profile::{ConnectionId, ConnectionProfile, SecretRef};
+pub use connection_policy::{ConnectionPolicy, ConnectionPolicyOverrides, Environment};
+pub use connection_profile::{
+    ConnectionId, ConnectionProfile, PURPOSE_DATABASE_PASSWORD, SecretRef,
+};
 pub use connection_service::{
     ConnectionProfiles, NewConnection, SecretPersist, create as create_connection,
-    set_secret as set_connection_secret,
+    set_secret as set_connection_secret, test_input as test_connection_input,
 };
 pub use driver_registry::DriverRegistry;
 pub use error::{AppError, ErrorCategory};

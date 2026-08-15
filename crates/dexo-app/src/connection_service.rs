@@ -50,6 +50,10 @@ pub fn create(
     Ok((profile, persist))
 }
 
+pub fn test_input(input: NewConnection) -> Result<ConnectionProfile, AppError> {
+    build_profile(input)
+}
+
 pub fn set_secret(
     name: &str,
     password: &str,
@@ -90,20 +94,20 @@ fn build_profile(input: NewConnection) -> Result<ConnectionProfile, AppError> {
     } else {
         input.environment.trim().to_ascii_lowercase()
     };
-    Ok(ConnectionProfile {
-        id: ConnectionId(Uuid::new_v4()),
-        project_id: None,
+    Ok(ConnectionProfile::new(
+        ConnectionId(Uuid::new_v4()),
+        None,
         name,
         driver,
         environment,
-        config: serde_json::json!({
+        serde_json::json!({
             "host": host,
             "port": port,
             "database": database,
             "username": username,
         }),
-        secret_ref: SecretRef::new(Uuid::new_v4().to_string()),
-    })
+        SecretRef::new(Uuid::new_v4().to_string()),
+    ))
 }
 
 fn put_secret(
@@ -160,7 +164,7 @@ mod tests {
     use dexo_secrets::{MemorySecretStore, SecretStore};
     use secrecy::ExposeSecret;
 
-    use super::{ConnectionProfiles, NewConnection, SecretPersist, create, set_secret};
+    use super::{ConnectionProfiles, NewConnection, SecretPersist, create, set_secret, test_input};
     use crate::connection_profile::ConnectionProfile;
     use crate::error::{AppError, ErrorCategory};
 
@@ -251,5 +255,17 @@ mod tests {
             "new-secret"
         );
         assert!(!format!("{profile:?}").contains("new-secret"));
+    }
+
+    #[test]
+    fn test_input_does_not_save() {
+        let repo = MemoryRepo::default();
+        let profile = test_input(input()).unwrap();
+        assert_eq!(profile.name, "local-pg");
+        assert!(
+            ConnectionProfiles::get_by_name(&repo, "local-pg")
+                .unwrap()
+                .is_none()
+        );
     }
 }

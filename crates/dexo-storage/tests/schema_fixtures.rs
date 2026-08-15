@@ -4,7 +4,8 @@ use std::path::PathBuf;
 use dexo_app::{ConnectionId, ConnectionProfile, Project, ProjectId, SecretRef};
 use dexo_storage::{
     ConnectionRepository, Database, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4,
-    MIGRATION_5, MIGRATION_6, MIGRATION_7, ProjectRepository, export_portable, import_portable,
+    MIGRATION_5, MIGRATION_6, MIGRATION_7, MIGRATION_8, ProjectRepository, export_portable,
+    import_portable,
 };
 
 fn fixture(name: &str) -> PathBuf {
@@ -23,6 +24,7 @@ fn stored_schema_fixtures_match_migrations() {
         ("schema-v5.sql", MIGRATION_5),
         ("schema-v6.sql", MIGRATION_6),
         ("schema-v7.sql", MIGRATION_7),
+        ("schema-v8.sql", MIGRATION_8),
     ];
     for (name, sql) in expected {
         let on_disk = fs::read_to_string(fixture(name)).unwrap();
@@ -50,20 +52,20 @@ fn export_import_survives_reopen() {
             })
             .unwrap();
         ConnectionRepository::new(db.connection())
-            .save(&ConnectionProfile {
-                id: ConnectionId(uuid::Uuid::new_v4()),
-                project_id: Some(pid),
-                name: "c".into(),
-                driver: "postgres".into(),
-                environment: "local".into(),
-                config: serde_json::json!({"host": "localhost", "port": 5432}),
-                secret_ref: SecretRef::new("ref-1".into()),
-            })
+            .save(&ConnectionProfile::new(
+                ConnectionId(uuid::Uuid::new_v4()),
+                Some(pid),
+                "c",
+                "postgres",
+                "local",
+                serde_json::json!({"host": "localhost", "port": 5432}),
+                SecretRef::new("ref-1".into()),
+            ))
             .unwrap();
         exported = export_portable(db.connection()).unwrap();
     }
     let db = Database::open(&path).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 7);
+    assert_eq!(db.schema_version().unwrap(), 8);
     let fresh = Database::open_in_memory().unwrap();
     let report = import_portable(fresh.connection(), &exported).unwrap();
     assert_eq!(report.connections_needing_secret, vec!["c"]);

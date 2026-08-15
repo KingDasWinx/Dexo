@@ -79,7 +79,7 @@ pub trait ConnectionFactory: Send + Sync {
 
 Derive the connection form driver selector and defaults from `DriverRegistry::descriptors()`; remove TUI `match` statements selecting 5432/3306.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-driver-api -p dexo-app -p dexo-driver-postgres -p dexo-driver-mysql`
 
@@ -94,7 +94,7 @@ git commit -m "feat(drivers): expose modular connection descriptors"
 
 **Files:** `crates/dexo-storage/src/migrations.rs`, `connection.rs`, `crates/dexo-app/src/connection_profile.rs`, `connection_policy.rs`, tests in `crates/dexo-storage/tests/migration.rs` and `project_repository.rs`.
 
-- [ ] **Step 1: Add a migration-8 test**
+- [x] **Step 1: Add a migration-8 test**
 
 ```rust
 #[test]
@@ -109,13 +109,13 @@ fn migration_8_moves_the_legacy_password_ref_and_preserves_profiles() {
 }
 ```
 
-- [ ] **Step 2: Run and confirm failure**
+- [x] **Step 2: Run and confirm failure**
 
 Run: `cargo test -p dexo-storage --test migration migration_8_moves_the_legacy_password_ref_and_preserves_profiles`
 
 Expected: FAIL at schema version 7.
 
-- [ ] **Step 3: Add migration 8 and canonical policy types**
+- [x] **Step 3: Add migration 8 and canonical policy types**
 
 ```sql
 BEGIN;
@@ -136,7 +136,7 @@ COMMIT;
 
 Add `ConnectionPolicyOverrides` with explicit read-only, destructive confirmation, verified TLS, row limit, and timeout fields. Custom environment labels must resolve defaults only through persisted policy, not `Environment::parse` fallback.
 
-- [ ] **Step 4: Add repository CRUD and commit**
+- [x] **Step 4: Add repository CRUD and commit**
 
 Implement `update`, `duplicate` (new UUID and new secret refs), `test_input` without save, `delete`, `list_for_project`, and group moves. Export config without any secret refs; import generates fresh refs.
 

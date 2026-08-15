@@ -14,20 +14,20 @@ async fn jsonl_query_keeps_diagnostics_off_stdout() {
     let db = Database::open(&paths.database).unwrap();
     let (host, port) = pair.postgres_endpoint().rsplit_once(':').unwrap();
     let secret_ref = uuid::Uuid::new_v4().to_string();
-    let profile = ConnectionProfile {
-        id: ConnectionId(uuid::Uuid::new_v4()),
-        project_id: None,
-        name: "fixture".into(),
-        driver: "postgres".into(),
-        environment: "local".into(),
-        config: serde_json::json!({
+    let profile = ConnectionProfile::new(
+        ConnectionId(uuid::Uuid::new_v4()),
+        None,
+        "fixture",
+        "postgres",
+        "local",
+        serde_json::json!({
             "host": host,
             "port": port.parse::<u16>().unwrap(),
             "database": "dexo",
             "username": "dexo"
         }),
-        secret_ref: SecretRef::new(secret_ref.clone()),
-    };
+        SecretRef::new(secret_ref.clone()),
+    );
     ConnectionRepository::new(db.connection())
         .save(&profile)
         .unwrap();

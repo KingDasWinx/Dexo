@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 7;
+pub const LATEST_SCHEMA_VERSION: u32 = 8;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -168,6 +168,23 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(7, datetime('now'));
 COMMIT;
 "#;
 
+pub const MIGRATION_8: &str = r#"
+BEGIN;
+ALTER TABLE connections ADD COLUMN group_path TEXT;
+ALTER TABLE connections ADD COLUMN policy_json TEXT NOT NULL DEFAULT '{}';
+CREATE TABLE connection_secret_refs(
+  connection_id TEXT NOT NULL,
+  purpose TEXT NOT NULL,
+  secret_ref TEXT NOT NULL,
+  PRIMARY KEY(connection_id, purpose),
+  FOREIGN KEY(connection_id) REFERENCES connections(id) ON DELETE CASCADE
+);
+INSERT INTO connection_secret_refs(connection_id,purpose,secret_ref)
+  SELECT id,'database_password',secret_ref FROM connections;
+INSERT INTO schema_migrations(version,applied_at) VALUES(8,datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -180,38 +197,36 @@ pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
 }
 
 pub fn apply_pending(conn: &rusqlite::Connection) -> anyhow::Result<()> {
+    apply_up_to(conn, LATEST_SCHEMA_VERSION)
+}
+
+pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<()> {
+    if target > LATEST_SCHEMA_VERSION {
+        anyhow::bail!(
+            "unsupported local schema version {target} (latest is {LATEST_SCHEMA_VERSION})"
+        );
+    }
     let mut current = read_schema_version(conn);
     if current > LATEST_SCHEMA_VERSION {
         anyhow::bail!(
             "unsupported local schema version {current} (latest is {LATEST_SCHEMA_VERSION})"
         );
     }
-    if current < 1 {
-        conn.execute_batch(MIGRATION_1)?;
-        current = 1;
-    }
-    if current < 2 {
-        conn.execute_batch(MIGRATION_2)?;
-        current = 2;
-    }
-    if current < 3 {
-        conn.execute_batch(MIGRATION_3)?;
-        current = 3;
-    }
-    if current < 4 {
-        conn.execute_batch(MIGRATION_4)?;
-        current = 4;
-    }
-    if current < 5 {
-        conn.execute_batch(MIGRATION_5)?;
-        current = 5;
-    }
-    if current < 6 {
-        conn.execute_batch(MIGRATION_6)?;
-        current = 6;
-    }
-    if current < 7 {
-        conn.execute_batch(MIGRATION_7)?;
+    while current < target {
+        let next = current + 1;
+        let sql = match next {
+            1 => MIGRATION_1,
+            2 => MIGRATION_2,
+            3 => MIGRATION_3,
+            4 => MIGRATION_4,
+            5 => MIGRATION_5,
+            6 => MIGRATION_6,
+            7 => MIGRATION_7,
+            8 => MIGRATION_8,
+            other => anyhow::bail!("missing migration {other}"),
+        };
+        conn.execute_batch(sql)?;
+        current = next;
     }
     Ok(())
 }
@@ -227,7 +242,7 @@ mod tests {
         conn.execute_batch(MIGRATION_1).unwrap();
         assert_eq!(read_schema_version(&conn), 1);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 7);
+        assert_eq!(read_schema_version(&conn), 8);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_history'",
@@ -246,7 +261,7 @@ mod tests {
         conn.execute_batch(MIGRATION_2).unwrap();
         assert_eq!(read_schema_version(&conn), 2);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 7);
+        assert_eq!(read_schema_version(&conn), 8);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_snapshots'",
@@ -266,7 +281,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_3).unwrap();
         assert_eq!(read_schema_version(&conn), 3);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 7);
+        assert_eq!(read_schema_version(&conn), 8);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_diff_snapshots'",
@@ -287,7 +302,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_4).unwrap();
         assert_eq!(read_schema_version(&conn), 4);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 7);
+        assert_eq!(read_schema_version(&conn), 8);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_profiles'",
@@ -309,7 +324,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_5).unwrap();
         assert_eq!(read_schema_version(&conn), 5);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 7);
+        assert_eq!(read_schema_version(&conn), 8);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_grants'",
@@ -332,7 +347,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_6).unwrap();
         assert_eq!(read_schema_version(&conn), 6);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 7);
+        assert_eq!(read_schema_version(&conn), 8);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",
@@ -344,8 +359,32 @@ mod tests {
     }
 
     #[test]
+    fn migrates_v7_to_v8() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        conn.execute_batch(MIGRATION_1).unwrap();
+        conn.execute_batch(MIGRATION_2).unwrap();
+        conn.execute_batch(super::MIGRATION_3).unwrap();
+        conn.execute_batch(super::MIGRATION_4).unwrap();
+        conn.execute_batch(super::MIGRATION_5).unwrap();
+        conn.execute_batch(super::MIGRATION_6).unwrap();
+        conn.execute_batch(super::MIGRATION_7).unwrap();
+        assert_eq!(read_schema_version(&conn), 7);
+        apply_pending(&conn).unwrap();
+        assert_eq!(read_schema_version(&conn), 8);
+        let name: String = conn
+            .query_row(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='connection_secret_refs'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(name, "connection_secret_refs");
+    }
+
+    #[test]
     fn upgrades_each_released_schema_to_current() {
-        for version in 1..=6u32 {
+        for version in 1..=7u32 {
             let conn = rusqlite::Connection::open_in_memory().unwrap();
             conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
             conn.execute_batch(MIGRATION_1).unwrap();
@@ -364,9 +403,12 @@ mod tests {
             if version >= 6 {
                 conn.execute_batch(super::MIGRATION_6).unwrap();
             }
+            if version >= 7 {
+                conn.execute_batch(super::MIGRATION_7).unwrap();
+            }
             assert_eq!(read_schema_version(&conn), version);
             apply_pending(&conn).unwrap();
-            assert_eq!(read_schema_version(&conn), 7);
+            assert_eq!(read_schema_version(&conn), 8);
         }
     }
 
