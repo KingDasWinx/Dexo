@@ -1,6 +1,7 @@
 use secrecy::SecretString;
 
 use crate::query::SessionEventStream;
+use crate::transport::{ConnectionSecrets, TransportRequest};
 use crate::{
     AdministrationProvider, BulkWriter, CapabilityState, CatalogReader, DataMutator, DdlExecutor,
     DriverError, ExplainProvider, QueryId, QueryRequest, QueryStream, SecurityAdmin,
@@ -66,6 +67,32 @@ pub struct ConnectRequest {
     pub username: String,
     pub secret: SecretString,
     pub read_only: bool,
+    pub transport: TransportRequest,
+    pub secrets: ConnectionSecrets,
+}
+
+impl ConnectRequest {
+    pub fn new(
+        endpoint: impl Into<String>,
+        database: Option<String>,
+        username: impl Into<String>,
+        secret: SecretString,
+        read_only: bool,
+    ) -> Self {
+        let endpoint = endpoint.into();
+        let transport = TransportRequest::from_endpoint(&endpoint)
+            .unwrap_or_else(|_| TransportRequest::direct(endpoint.clone(), 1));
+        let secrets = ConnectionSecrets::database_password(secret.clone());
+        Self {
+            endpoint,
+            database,
+            username: username.into(),
+            secret,
+            read_only,
+            transport,
+            secrets,
+        }
+    }
 }
 
 #[async_trait::async_trait]

@@ -52,13 +52,13 @@ fn postgres_script_golden_drop_and_create() {
 async fn postgres_forward_script_reaches_empty_diff() {
     let pair = DatabasePair::start().await.unwrap();
     let session = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: pair.postgres_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     apply_sql(session.as_ref(), "CREATE SCHEMA dexo_mig", true).await;
@@ -135,7 +135,10 @@ async fn apply_sql(session: &dyn Session, sql: &str, transactional: bool) {
         .lines()
         .filter(|line| !line.trim().starts_with("--"))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(
+            "
+",
+        );
     for statement in body
         .split(';')
         .map(str::trim)

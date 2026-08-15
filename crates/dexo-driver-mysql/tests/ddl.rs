@@ -17,13 +17,13 @@ async fn connect_root() -> Fixture {
     let pair = DatabasePair::start().await.unwrap();
     let endpoint = pair.mysql_endpoint().to_string();
     let session = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: endpoint.clone(),
-            database: Some("dexo".into()),
-            username: "root".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            endpoint.clone(),
+            Some("dexo".into()),
+            "root".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     Fixture {
@@ -320,13 +320,13 @@ async fn mysql_least_privilege_grant_revoke() {
         DdlOutcome::Committed
     );
     let limited = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: fixture.endpoint.clone(),
-            database: Some("dexo".into()),
-            username: "dexo_lp_role".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            fixture.endpoint.clone(),
+            Some("dexo".into()),
+            "dexo_lp_role".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     drain(limited.as_ref(), "SELECT * FROM dexo.lp_allowed")

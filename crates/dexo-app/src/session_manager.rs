@@ -167,13 +167,13 @@ mod tests {
         (
             SessionManager::new(
                 Arc::new(driver),
-                ConnectRequest {
-                    endpoint: "127.0.0.1:1".into(),
-                    database: None,
-                    username: "u".into(),
-                    secret: SecretString::from("x"),
-                    read_only: false,
-                },
+                ConnectRequest::new(
+                    "127.0.0.1:1",
+                    None,
+                    "u",
+                    SecretString::from("x"),
+                    false,
+                ),
             ),
             executions,
         )

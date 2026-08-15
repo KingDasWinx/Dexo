@@ -12,6 +12,7 @@ mod schema_change;
 mod support;
 mod transaction;
 mod transfer;
+mod transport;
 mod value;
 
 pub use admin::{
@@ -46,4 +47,8 @@ pub use schema_change::{
 pub use support::{MatrixStatus, mysql_matrix_status, postgres_matrix_status};
 pub use transaction::{TransactionControl, TransactionMode, TransactionState, validate_savepoint};
 pub use transfer::BulkWriter;
+pub use transport::{
+    ConnectionSecrets, ProxyMode, RouteRequest, SshRequest, TlsMode, TlsRequest, TransportRequest,
+    split_endpoint,
+};
 pub use value::DbValue;

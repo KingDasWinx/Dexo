@@ -18,13 +18,13 @@ async fn drain(mut stream: dexo_driver_api::QueryStream) {
 async fn connect_seeded() -> Fixture {
     let pair = DatabasePair::start().await.unwrap();
     let root = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "root".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "root".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     let statements = [
@@ -57,13 +57,13 @@ async fn connect_seeded() -> Fixture {
         drain(stream).await;
     }
     let session = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     Fixture {

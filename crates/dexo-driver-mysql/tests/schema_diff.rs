@@ -46,13 +46,13 @@ fn mysql_script_golden_drop_and_create() {
 async fn mysql_forward_script_reaches_empty_diff() {
     let pair = DatabasePair::start().await.unwrap();
     let session = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "root".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "root".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     let from = list_tables(session.as_ref(), "dexo").await;
@@ -110,7 +110,10 @@ async fn apply_sql(session: &dyn Session, sql: &str) {
         .lines()
         .filter(|line| !line.trim().starts_with("--"))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(
+            "
+",
+        );
     for statement in body
         .split(';')
         .map(str::trim)

@@ -153,7 +153,7 @@ git commit -m "feat(storage): persist connection groups policies and secret purp
 
 **Files:** `crates/dexo-driver-api/src/transport.rs`, `connection.rs`, `lib.rs`, `crates/dexo-app/src/connection_profile.rs`, tests in `crates/dexo-app/src/connection_profile.rs`.
 
-- [ ] **Step 1: Write invalid/insecure transport tests**
+- [x] **Step 1: Write invalid/insecure transport tests**
 
 ```rust
 #[test]
@@ -164,13 +164,13 @@ fn production_profile_rejects_unverified_tls_and_invalid_proxy() {
 }
 ```
 
-- [ ] **Step 2: Run and verify failure**
+- [x] **Step 2: Run and verify failure**
 
 Run: `cargo test -p dexo-app production_profile_rejects_unverified_tls_and_invalid_proxy`
 
 Expected: FAIL because transport config is ignored.
 
-- [ ] **Step 3: Add serializable non-secret request types**
+- [x] **Step 3: Add serializable non-secret request types**
 
 ```rust
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -187,7 +187,7 @@ pub enum RouteRequest { Direct, Socks5 { host: String, port: u16 }, HttpConnect 
 
 `ConnectRequest` carries `transport` plus a redacted `ConnectionSecrets` map keyed by purpose. Validate paths, ports, TLS modes, hostnames, read-only policy, and required secret purposes before opening a socket.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-driver-api -p dexo-app transport`
 
