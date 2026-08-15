@@ -129,7 +129,7 @@ Expected: FAIL.
 
 Parse exactly one read-only statement, reject unknown syntax, locks, side-effecting functions when detectable, and existing multi-statements. Quote output-column identifiers and bind filter values. Mark unsupported query tabs `local-only` with a disabled reason rather than concatenating raw text.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-sql derived && cargo test -p dexo-tui --test data_flow arbitrary_select`
 
@@ -144,7 +144,7 @@ git commit -m "feat(results): rerun validated select results remotely"
 
 **Files:** app copy module, TUI grid/data manager/clipboard, tests.
 
-- [ ] **Step 1: Add format and clipboard-result tests**
+- [x] **Step 1: Add format and clipboard-result tests**
 
 Test cell/row/column/range for CSV, TSV, JSON, Markdown, SQL; distinguish NULL, empty text, empty bytes; assert clipboard failure yields `OperationFailed` and success follows adapter confirmation.
 
@@ -152,7 +152,7 @@ Run: `cargo test -p dexo-tui --test data_flow clipboard`
 
 Expected: FAIL because copy only writes `model.data.clipboard`.
 
-- [ ] **Step 2: Complete serializers**
+- [x] **Step 2: Complete serializers**
 
 ```rust
 pub enum CopyFormat { Csv, Tsv, Json, Markdown, SqlInsert }
@@ -160,11 +160,11 @@ pub enum CopyFormat { Csv, Tsv, Json, Markdown, SqlInsert }
 
 SQL export requires a selected target table and uses dialect quoting/placeholders rendered to literals only for clipboard output. Cap clipboard bytes; larger selections offer file export.
 
-- [ ] **Step 3: Dispatch clipboard I/O**
+- [x] **Step 3: Dispatch clipboard I/O**
 
 Move `arboard::Clipboard::set_text` to a blocking runtime task. Update toast/status only from `ClipboardWritten`/`OperationFailed`.
 
-- [ ] **Step 4: Test and commit**
+- [x] **Step 4: Test and commit**
 
 Run: `cargo test -p dexo-app data::copy && cargo test -p dexo-tui --test data_flow clipboard`
 

@@ -116,6 +116,70 @@ fn clipboard_copy_emits_os_effect() {
     assert!(effects
         .iter()
         .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. })));
+    assert!(model.data.clipboard.is_empty());
+}
+
+#[test]
+fn clipboard_failure_is_not_success() {
+    let mut model = Model::default();
+    update(
+        &mut model,
+        Action::ClipboardFailed {
+            message: "denied".into(),
+        },
+    );
+    assert!(model.data.clipboard.is_empty());
+    assert!(model.messages.iter().any(|message| message.contains("denied")));
+    update(
+        &mut model,
+        Action::ClipboardWritten {
+            text: "id\n1\n".into(),
+        },
+    );
+    assert_eq!(model.data.clipboard, "id\n1\n");
+}
+
+#[test]
+fn clipboard_formats_cover_cell_row_column_and_range() {
+    let mut model = Model::default();
+    model.results.set_columns(vec![
+        dexo_driver_api::ColumnMeta {
+            name: "id".into(),
+            type_name: "int".into(),
+            nullable: false,
+        },
+        dexo_driver_api::ColumnMeta {
+            name: "n".into(),
+            type_name: "text".into(),
+            nullable: true,
+        },
+    ]);
+    model.results.append_rows(vec![
+        vec![DbValue::I64(1), DbValue::Null],
+        vec![DbValue::I64(2), DbValue::Text(String::new())],
+    ]);
+    model.results.select_cell(0, 0);
+    for format in [
+        dexo_app::data::CopyFormat::Csv,
+        dexo_app::data::CopyFormat::Tsv,
+        dexo_app::data::CopyFormat::Json,
+        dexo_app::data::CopyFormat::Markdown,
+        dexo_app::data::CopyFormat::Sql,
+    ] {
+        let effects = update(&mut model, Action::CopyGrid(format));
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. })),
+            "{format:?}"
+        );
+    }
+    model.results.select_row(1);
+    assert!(!update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Csv)).is_empty());
+    model.results.select_column(1);
+    assert!(!update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Tsv)).is_empty());
+    model.results.select_range((0, 0), (1, 1));
+    assert!(!update(&mut model, Action::CopyGrid(dexo_app::data::CopyFormat::Json)).is_empty());
 }
 
 #[test]
