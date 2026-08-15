@@ -14,6 +14,7 @@ use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
 };
 
+pub mod connection_manager;
 pub mod document_io;
 pub mod query_runner;
 pub mod session_registry;
@@ -66,22 +67,33 @@ impl OperationKey {
     }
 }
 
-#[derive(Default)]
 pub(crate) struct SessionSecrets {
-    keyring: KeyringSecretStore,
+    keyring: Box<dyn SecretStore>,
     memory: MemorySecretStore,
+}
+
+impl Default for SessionSecrets {
+    fn default() -> Self {
+        Self {
+            keyring: Box::new(KeyringSecretStore),
+            memory: MemorySecretStore::default(),
+        }
+    }
+}
+
+impl SessionSecrets {
+    pub fn put_memory(&self, key: &str, value: &str) -> Result<(), SecretError> {
+        self.memory.put(key, value)
+    }
+
+    pub fn put_keychain(&self, key: &str, value: &str) -> Result<(), SecretError> {
+        self.keyring.put(key, value)
+    }
 }
 
 impl SecretStore for SessionSecrets {
     fn put(&self, key: &str, value: &str) -> Result<(), SecretError> {
-        match self.keyring.put(key, value) {
-            Ok(()) => {
-                let _ = self.memory.put(key, value);
-                Ok(())
-            }
-            Err(SecretError::Unavailable) => self.memory.put(key, value),
-            Err(error) => Err(error),
-        }
+        self.keyring.put(key, value)
     }
 
     fn get(&self, key: &str) -> Result<Option<SecretString>, SecretError> {
@@ -137,7 +149,28 @@ impl WorkbenchRuntime {
             crate::Effect::CreateConnection { input, password } => {
                 self.create_connection(input, password).await
             }
-            crate::Effect::ConnectProfile { profile } => self.connect_profile(profile).await,
+            crate::Effect::ConnectProfile { profile, token } => {
+                self.connect_profile(profile, token).await
+            }
+            crate::Effect::SubmitSecret {
+                kind,
+                profile,
+                secret,
+            } => self.submit_secret(kind, profile, secret).await,
+            crate::Effect::DuplicateProfile { id } => self.duplicate_profile(id).await,
+            crate::Effect::TestConnection { input, password } => {
+                self.test_input(input, password).await
+            }
+            crate::Effect::TestSavedProfile { profile } => self.test_saved(profile).await,
+            crate::Effect::SaveProfile { profile } => self.save_existing(profile).await,
+            crate::Effect::DeleteProfile {
+                profile,
+                delete_secrets,
+            } => self.delete_profile(profile, delete_secrets).await,
+            crate::Effect::MoveProfileGroup { id, group_path } => {
+                self.move_group(id, group_path).await
+            }
+            crate::Effect::CloseSession { session } => self.close_session(session).await,
             crate::Effect::StartScript(request) => {
                 let _ = self.start_script(request).await;
             }
@@ -173,7 +206,18 @@ impl WorkbenchRuntime {
 
     async fn create_connection(&mut self, input: NewConnection, password: String) {
         match self.save_profile(input, &password) {
-            Ok(profile) => self.connect_profile(profile).await,
+            Ok((profile, SecretPersist::Stored)) => {
+                self.emit(Action::ProfileSaved(profile.clone())).await;
+                self.connect_profile(profile, 0).await;
+            }
+            Ok((profile, SecretPersist::SessionOnly)) => {
+                self.emit(Action::SecretRequired {
+                    purpose: crate::screens::secret_prompt::SecretPurpose::DatabasePassword,
+                    profile,
+                    buffer: crate::screens::secret_prompt::SecretBuffer::new(password),
+                })
+                .await;
+            }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }
     }
@@ -182,42 +226,200 @@ impl WorkbenchRuntime {
         &self,
         input: NewConnection,
         password: &str,
-    ) -> Result<ConnectionProfile, String> {
+    ) -> Result<(ConnectionProfile, SecretPersist), String> {
         // ponytail: second rusqlite handle beside the storage worker; fold into StorageCommand when writes contend.
-        let paths = AppPaths::discover().map_err(|error| error.to_string())?;
-        let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
-        let repo = ConnectionRepository::new(db.connection());
-        let (profile, persist) = create_connection(input, password, &self.secrets, &repo)
-            .map_err(|error| error.to_string())?;
-        if persist == SecretPersist::SessionOnly {
-            self.secrets
-                .memory
-                .put(profile.secret_ref.as_str(), password)
-                .map_err(|error| error.to_string())?;
-        }
-        Ok(profile)
+        self.with_repo(|repo| {
+            create_connection(input, password, &self.secrets, repo)
+                .map_err(|error| error.to_string())
+        })
     }
 
-    async fn connect_profile(&mut self, profile: ConnectionProfile) {
-        match self.open_session(&profile).await {
-            Ok(session) => {
-                let id = self.sessions.insert(profile.name.clone(), session);
-                let generation = self
-                    .sessions
-                    .get(id)
-                    .map(|active| active.generation)
-                    .unwrap_or(1);
-                self.emit(Action::ConnectionChanged {
+    async fn submit_secret(
+        &mut self,
+        kind: crate::screens::secret_prompt::SecretChoiceKind,
+        profile: ConnectionProfile,
+        secret: crate::screens::secret_prompt::SecretBuffer,
+    ) {
+        use crate::screens::secret_prompt::SecretChoiceKind;
+        let key = profile.secret_ref.as_str();
+        let result = match kind {
+            SecretChoiceKind::Cancel => return,
+            SecretChoiceKind::SessionOnly => self.secrets.put_memory(key, secret.expose()),
+            SecretChoiceKind::SaveToKeychain => self.secrets.put_keychain(key, secret.expose()),
+        };
+        match result {
+            Ok(()) => self.connect_profile(profile, 0).await,
+            Err(SecretError::Unavailable) => {
+                self.emit(Action::SecretRequired {
+                    purpose: crate::screens::secret_prompt::SecretPurpose::DatabasePassword,
+                    profile,
+                    buffer: secret,
+                })
+                .await;
+            }
+            Err(error) => {
+                self.emit(Action::ConnectionFormError {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn connect_profile(&mut self, profile: ConnectionProfile, token: u64) {
+        match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
+            Err(action) => self.emit(action).await,
+            Ok(_) => match self.open_session(&profile).await {
+                Ok(session) => {
+                    let id = self.sessions.insert(profile.name.clone(), session);
+                    let generation = self
+                        .sessions
+                        .get(id)
+                        .map(|active| active.generation)
+                        .unwrap_or(1);
+                    let read_only = dexo_app::ConnectionPolicy::resolve(
+                        &profile.environment,
+                        &profile.policy,
+                    )
+                    .map(|policy| policy.read_only)
+                    .unwrap_or(false);
+                    self.emit(Action::ConnectionChanged {
+                        name: profile.name,
+                        ready: true,
+                        environment: profile.environment,
+                        session: Some(id),
+                        generation,
+                        token,
+                        read_only,
+                    })
+                    .await;
+                }
+                Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+            },
+        }
+    }
+
+    async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId) {
+        match self.with_repo(|repo| repo.duplicate(id).map_err(|error| error.to_string())) {
+            Ok(profile) => self.emit(Action::ProfileSaved(profile)).await,
+            Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+        }
+    }
+
+    async fn save_existing(&mut self, profile: ConnectionProfile) {
+        match self.with_repo(|repo| repo.update(&profile).map_err(|error| error.to_string())) {
+            Ok(()) => self.emit(Action::ProfileSaved(profile)).await,
+            Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+        }
+    }
+
+    async fn move_group(&mut self, id: dexo_app::ConnectionId, group_path: Option<String>) {
+        match self.with_repo(|repo| {
+            repo.move_group(id, group_path.as_deref())
+                .map_err(|error| error.to_string())?;
+            repo.list().map_err(|error| error.to_string())
+        }) {
+            Ok(profiles) => self.emit(Action::ProfilesLoaded(profiles)).await,
+            Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+        }
+    }
+
+    async fn delete_profile(&mut self, profile: ConnectionProfile, delete_secrets: bool) {
+        if delete_secrets {
+            match self.secrets.delete(profile.secret_ref.as_str()) {
+                Ok(()) => {}
+                Err(SecretError::Unavailable) | Err(SecretError::Internal) => {
+                    self.emit(Action::ConnectionFormError {
+                        message: format!(
+                            "keychain delete failed for {}; choose keep secrets to remove the profile only",
+                            profile.name
+                        ),
+                    })
+                    .await;
+                    return;
+                }
+            }
+        }
+        match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
+            Ok(()) => {
+                self.emit(Action::ProfileDeleted {
                     name: profile.name,
-                    ready: true,
-                    environment: profile.environment,
-                    session: Some(id),
-                    generation,
                 })
                 .await;
             }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }
+    }
+
+    async fn test_input(&mut self, input: NewConnection, password: String) {
+        match dexo_app::test_connection_input(input) {
+            Ok(profile) => {
+                if let Err(error) = self
+                    .secrets
+                    .put_memory(profile.secret_ref.as_str(), &password)
+                {
+                    self.emit(Action::ConnectionFormError {
+                        message: error.to_string(),
+                    })
+                    .await;
+                    return;
+                }
+                let name = profile.name.clone();
+                match self.open_session(&profile).await {
+                    Ok(_) => {
+                        self.emit(Action::ConnectionTested {
+                            name,
+                            ok: true,
+                            message: "ok".into(),
+                        })
+                        .await;
+                    }
+                    Err(message) => {
+                        self.emit(Action::ConnectionTested {
+                            name,
+                            ok: false,
+                            message,
+                        })
+                        .await;
+                    }
+                }
+            }
+            Err(error) => {
+                self.emit(Action::ConnectionFormError {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn test_saved(&mut self, profile: ConnectionProfile) {
+        let name = profile.name.clone();
+        let (ok, message) = match self.open_session(&profile).await {
+            Ok(_) => (true, "ok".into()),
+            Err(message) => (false, message),
+        };
+        self.emit(Action::ConnectionTested {
+            name,
+            ok,
+            message,
+        })
+        .await;
+    }
+
+    async fn close_session(&mut self, session: SessionId) {
+        self.sessions.remove(session);
+        self.emit(Action::SessionClosed { session }).await;
+    }
+
+    fn with_repo<T>(
+        &self,
+        f: impl FnOnce(&ConnectionRepository<'_>) -> Result<T, String>,
+    ) -> Result<T, String> {
+        // ponytail: second rusqlite handle beside the storage worker; fold into StorageCommand when writes contend.
+        let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+        let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+        f(&ConnectionRepository::new(db.connection()))
     }
 
     async fn open_session(

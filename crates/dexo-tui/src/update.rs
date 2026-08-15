@@ -20,13 +20,30 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             environment,
             session,
             generation,
+            token,
+            read_only,
         } => {
-            model.connection.name = name;
+            if let Some(pending) = model.connections.pending_connect {
+                if token != pending {
+                    return Vec::new();
+                }
+                model.connections.pending_connect = None;
+            }
+            model.connection.name = name.clone();
             model.connection.ready = ready;
             model.connection.environment = environment;
+            model.connection.read_only = read_only;
             model.active_session = session;
             model.session_generation = generation;
             model.connection_form.close();
+            if let Some(id) = session {
+                model.connections.upsert_session(crate::screens::connections::SessionRow {
+                    id,
+                    connection: name,
+                    transaction: TransactionState::Idle,
+                });
+                model.connections.selected_session = Some(id);
+            }
             Vec::new()
         }
         Action::OpenConnectionForm => {
@@ -109,6 +126,99 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             apply_bootstrap(model, state);
             Vec::new()
         }
+        Action::SecretRequired {
+            purpose,
+            profile,
+            buffer,
+        } => {
+            model.secret_prompt =
+                crate::screens::secret_prompt::SecretPrompt::open_for(purpose, profile, buffer);
+            Vec::new()
+        }
+        Action::SubmitSecret { kind } => submit_secret(model, kind),
+        Action::ConfirmDeleteProfile { decision } => confirm_delete(model, decision),
+        Action::OpenConnections => {
+            model.connections.open = true;
+            Vec::new()
+        }
+        Action::ConnectSelected => connect_selected(model),
+        Action::DuplicateConnection => model
+            .connections
+            .selected()
+            .map(|profile| Effect::DuplicateProfile { id: profile.id })
+            .into_iter()
+            .collect(),
+        Action::TestConnection => test_connection(model),
+        Action::DeleteConnection => {
+            model.connections.delete_target = model.connections.selected().cloned();
+            Vec::new()
+        }
+        Action::MoveConnectionGroup { group } => model
+            .connections
+            .selected()
+            .map(|profile| Effect::MoveProfileGroup {
+                id: profile.id,
+                group_path: if group.is_empty() { None } else { Some(group) },
+            })
+            .into_iter()
+            .collect(),
+        Action::CloseSelectedSession => model
+            .connections
+            .selected_session
+            .or(model.active_session)
+            .map(|session| Effect::CloseSession { session })
+            .into_iter()
+            .collect(),
+        Action::ProfilesLoaded(profiles) => {
+            model.connections.load_profiles(profiles);
+            Vec::new()
+        }
+        Action::ProfileSaved(profile) => {
+            model.connections.load_profiles(
+                model
+                    .connections
+                    .profiles
+                    .iter()
+                    .map(|row| row.profile.clone())
+                    .chain(std::iter::once(profile.clone()))
+                    .fold(Vec::new(), |mut acc, item| {
+                        if let Some(existing) = acc.iter_mut().find(|p| p.id == item.id) {
+                            *existing = item;
+                        } else {
+                            acc.push(item);
+                        }
+                        acc
+                    }),
+            );
+            model.messages.push(format!("saved {}", profile.name));
+            Vec::new()
+        }
+        Action::ProfileDeleted { name } => {
+            model
+                .connections
+                .profiles
+                .retain(|row| row.profile.name != name);
+            model.messages.push(format!("deleted {name}"));
+            Vec::new()
+        }
+        Action::ConnectionTested { name, ok, message } => {
+            model.messages.push(if ok {
+                format!("{name} ok")
+            } else {
+                format!("{name}: {message}")
+            });
+            Vec::new()
+        }
+        Action::SessionClosed { session } => {
+            model.connections.remove_session(session);
+            if model.active_session == Some(session) {
+                model.active_session = model.connections.selected_session;
+                if model.active_session.is_none() {
+                    model.connection.ready = false;
+                }
+            }
+            Vec::new()
+        }
         Action::OpenPalette => {
             open_palette(model);
             Vec::new()
@@ -127,6 +237,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ExecuteQuery => start_query(model),
         Action::CancelQuery => cancel_query(model),
         Action::BeginTransaction => {
+            if model.connection.read_only {
+                model.messages.push("connection is read-only".into());
+                return Vec::new();
+            }
             if model.transaction == TransactionState::Idle {
                 if let Some(session) = model.active_session {
                     vec![Effect::BeginTransaction {
@@ -492,6 +606,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.palette.open {
         return handle_palette_key(model, key);
     }
+    if model.secret_prompt.open {
+        return handle_secret_prompt_key(model, key);
+    }
+    if model.connections.open && !model.connection_form.open {
+        return handle_connections_key(model, key);
+    }
     if model.connection_form.open {
         return handle_connection_form_key(model, key);
     }
@@ -731,9 +851,168 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+fn handle_secret_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => update(
+            model,
+            Action::SubmitSecret {
+                kind: crate::screens::secret_prompt::SecretChoiceKind::Cancel,
+            },
+        ),
+        KeyCode::Char('s') => update(
+            model,
+            Action::SubmitSecret {
+                kind: crate::screens::secret_prompt::SecretChoiceKind::SessionOnly,
+            },
+        ),
+        KeyCode::Char('k') => update(
+            model,
+            Action::SubmitSecret {
+                kind: crate::screens::secret_prompt::SecretChoiceKind::SaveToKeychain,
+            },
+        ),
+        _ => Vec::new(),
+    }
+}
+
+fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if model.connections.delete_target.is_some() {
+        return match key.code {
+            KeyCode::Esc => {
+                model.connections.delete_target = None;
+                Vec::new()
+            }
+            KeyCode::Char('k') => update(
+                model,
+                Action::ConfirmDeleteProfile {
+                    decision: crate::screens::secret_prompt::DeleteSecretDecision::KeepSecrets,
+                },
+            ),
+            KeyCode::Char('d') => update(
+                model,
+                Action::ConfirmDeleteProfile {
+                    decision: crate::screens::secret_prompt::DeleteSecretDecision::DeleteSecrets,
+                },
+            ),
+            _ => Vec::new(),
+        };
+    }
+    match key.code {
+        KeyCode::Esc => {
+            model.connections.open = false;
+            Vec::new()
+        }
+        KeyCode::Enter => connect_selected(model),
+        KeyCode::Up => {
+            if model.connections.selected_profile > 0 {
+                model.connections.selected_profile -= 1;
+            }
+            Vec::new()
+        }
+        KeyCode::Down => {
+            if model.connections.selected_profile + 1 < model.connections.profiles.len() {
+                model.connections.selected_profile += 1;
+            }
+            Vec::new()
+        }
+        KeyCode::Char('n') => update(model, Action::OpenConnectionForm),
+        KeyCode::Char('e') => {
+            if let Some(profile) = model.connections.selected().cloned() {
+                model.connection_form =
+                    crate::screens::connection::ConnectionForm::open_edit(&profile);
+            }
+            Vec::new()
+        }
+        KeyCode::Char('d') => update(model, Action::DuplicateConnection),
+        KeyCode::Char('t') => update(model, Action::TestConnection),
+        KeyCode::Char('x') => update(model, Action::DeleteConnection),
+        KeyCode::Char('c') => update(model, Action::CloseSelectedSession),
+        _ => Vec::new(),
+    }
+}
+
+fn submit_secret(
+    model: &mut Model,
+    kind: crate::screens::secret_prompt::SecretChoiceKind,
+) -> Vec<Effect> {
+    let profile = model.secret_prompt.profile.clone();
+    let secret = model.secret_prompt.buffer.clone();
+    model.secret_prompt.close();
+    match (kind, profile) {
+        (crate::screens::secret_prompt::SecretChoiceKind::Cancel, _) => Vec::new(),
+        (_, None) => Vec::new(),
+        (kind, Some(profile)) => vec![Effect::SubmitSecret {
+            kind,
+            profile,
+            secret,
+        }],
+    }
+}
+
+fn confirm_delete(
+    model: &mut Model,
+    decision: crate::screens::secret_prompt::DeleteSecretDecision,
+) -> Vec<Effect> {
+    let Some((profile, delete_secrets)) = model.connections.delete_decision(decision) else {
+        return Vec::new();
+    };
+    model.connections.delete_target = None;
+    vec![Effect::DeleteProfile {
+        profile,
+        delete_secrets,
+    }]
+}
+
+fn connect_selected(model: &mut Model) -> Vec<Effect> {
+    let Some(profile) = model.connections.selected().cloned() else {
+        return Vec::new();
+    };
+    model.connect_token = model.connect_token.saturating_add(1);
+    model.connections.pending_connect = Some(model.connect_token);
+    vec![Effect::ConnectProfile {
+        profile,
+        token: model.connect_token,
+    }]
+}
+
+fn test_connection(model: &mut Model) -> Vec<Effect> {
+    if model.connection_form.open {
+        return match model.connection_form.submit() {
+            Some((input, password)) => vec![Effect::TestConnection { input, password }],
+            None => Vec::new(),
+        };
+    }
+    model
+        .connections
+        .selected()
+        .cloned()
+        .map(|profile| Effect::TestSavedProfile { profile })
+        .into_iter()
+        .collect()
+}
+
 fn save_connection(model: &mut Model) -> Vec<Effect> {
     match model.connection_form.submit() {
-        Some((input, password)) => vec![Effect::CreateConnection { input, password }],
+        Some((input, password)) => {
+            if let Some(original) = model.connection_form.editing.clone() {
+                match dexo_app::test_connection_input(input) {
+                    Ok(mut profile) => {
+                        profile.id = original.id;
+                        profile.secret_ref = original.secret_ref;
+                        profile.secret_refs = original.secret_refs;
+                        profile.project_id = original.project_id;
+                        model.connection_form.close();
+                        vec![Effect::SaveProfile { profile }]
+                    }
+                    Err(error) => {
+                        model.connection_form.set_error(error.to_string());
+                        Vec::new()
+                    }
+                }
+            } else {
+                vec![Effect::CreateConnection { input, password }]
+            }
+        }
         None => Vec::new(),
     }
 }
@@ -917,6 +1196,7 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
             .map(|document| document.title)
             .collect();
     }
+    model.connections.load_profiles(state.connections);
 }
 
 fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool {

@@ -1,5 +1,6 @@
 pub mod admin;
 pub mod connection;
+pub mod connections;
 pub mod data;
 pub mod editor;
 pub mod explain;
@@ -9,6 +10,7 @@ pub mod mcp_profiles;
 pub mod recovery;
 pub mod schema_diff;
 pub mod schema_editor;
+pub mod secret_prompt;
 pub mod security;
 pub mod settings;
 pub mod transfer;

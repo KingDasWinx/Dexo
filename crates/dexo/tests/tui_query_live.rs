@@ -42,6 +42,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
                 database: "dexo".into(),
                 username: "dexo".into(),
                 environment: "local".into(),
+                ..NewConnection::default()
             },
             password: TEST_PASSWORD.into(),
         })

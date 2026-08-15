@@ -12,6 +12,8 @@ use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
 use crate::screens::connection::ConnectionForm;
+use crate::screens::connections::ConnectionsScreen;
+use crate::screens::secret_prompt::SecretPrompt;
 use crate::screens::data::DataScreen;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
@@ -40,6 +42,7 @@ pub struct ConnectionStatus {
     pub name: String,
     pub ready: bool,
     pub environment: String,
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -601,6 +604,7 @@ pub struct Model {
     pub active_operation: Option<OperationId>,
     pub active_session: Option<SessionId>,
     pub session_generation: u64,
+    pub connect_token: u64,
     pub project: String,
     pub project_id: String,
     pub schema: String,
@@ -614,6 +618,8 @@ pub struct Model {
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
     pub connection_form: ConnectionForm,
+    pub connections: ConnectionsScreen,
+    pub secret_prompt: SecretPrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
@@ -638,6 +644,7 @@ impl Default for Model {
                 name: String::new(),
                 ready: false,
                 environment: String::new(),
+                read_only: false,
             },
             theme: crate::theme::builtin_dark(),
             capabilities: TerminalCapabilities {
@@ -672,6 +679,7 @@ impl Default for Model {
             active_operation: None,
             active_session: None,
             session_generation: 0,
+            connect_token: 0,
             project: "default".into(),
             project_id: String::new(),
             schema: String::new(),
@@ -685,6 +693,8 @@ impl Default for Model {
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
             connection_form: ConnectionForm::default(),
+            connections: ConnectionsScreen::default(),
+            secret_prompt: SecretPrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),

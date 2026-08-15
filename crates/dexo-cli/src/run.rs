@@ -381,6 +381,7 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
                     database,
                     username,
                     environment,
+                    ..NewConnection::default()
                 },
                 &password,
                 &KeyringSecretStore,

@@ -41,6 +41,10 @@ impl SessionRegistry {
         id
     }
 
+    pub fn remove(&mut self, id: SessionId) -> Option<ActiveSession> {
+        self.sessions.remove(&id)
+    }
+
     pub fn get(&self, id: SessionId) -> Option<&ActiveSession> {
         self.sessions.get(&id)
     }
@@ -156,5 +160,19 @@ impl SessionRegistry {
             .unwrap_or(TransactionState::Idle);
         active.transaction = state;
         Ok(state)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{SessionId, SessionRegistry};
+
+    #[test]
+    fn can_reconnect_rejects_unknown_session() {
+        let registry = SessionRegistry::default();
+        let error = registry
+            .can_reconnect(SessionId(uuid::Uuid::nil()), true)
+            .unwrap_err();
+        assert!(error.contains("closed"));
     }
 }

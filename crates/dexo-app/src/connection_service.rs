@@ -13,6 +13,26 @@ pub struct NewConnection {
     pub database: String,
     pub username: String,
     pub environment: String,
+    pub extra_config: serde_json::Value,
+    pub policy: crate::connection_policy::ConnectionPolicyOverrides,
+    pub group_path: Option<String>,
+}
+
+impl Default for NewConnection {
+    fn default() -> Self {
+        Self {
+            name: String::new(),
+            driver: String::new(),
+            host: String::new(),
+            port: None,
+            database: String::new(),
+            username: String::new(),
+            environment: "local".into(),
+            extra_config: serde_json::json!({}),
+            policy: crate::connection_policy::ConnectionPolicyOverrides::default(),
+            group_path: None,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -94,20 +114,29 @@ fn build_profile(input: NewConnection) -> Result<ConnectionProfile, AppError> {
     } else {
         input.environment.trim().to_ascii_lowercase()
     };
-    Ok(ConnectionProfile::new(
+    let mut config = serde_json::json!({
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+    });
+    if let (Some(target), Some(extra)) = (config.as_object_mut(), input.extra_config.as_object()) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    let mut profile = ConnectionProfile::new(
         ConnectionId(Uuid::new_v4()),
         None,
         name,
         driver,
         environment,
-        serde_json::json!({
-            "host": host,
-            "port": port,
-            "database": database,
-            "username": username,
-        }),
+        config,
         SecretRef::new(Uuid::new_v4().to_string()),
-    ))
+    );
+    profile.policy = input.policy;
+    profile.group_path = input.group_path;
+    Ok(profile)
 }
 
 fn put_secret(
@@ -202,6 +231,7 @@ mod tests {
             database: "dexo".into(),
             username: "dexo".into(),
             environment: "local".into(),
+            ..NewConnection::default()
         }
     }
 

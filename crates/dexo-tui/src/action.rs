@@ -18,10 +18,45 @@ pub enum Action {
         environment: String,
         session: Option<crate::runtime::SessionId>,
         generation: u64,
+        token: u64,
+        read_only: bool,
     },
     OpenConnectionForm,
     ConnectionFormError {
         message: String,
+    },
+    SecretRequired {
+        purpose: crate::screens::secret_prompt::SecretPurpose,
+        profile: ConnectionProfile,
+        buffer: crate::screens::secret_prompt::SecretBuffer,
+    },
+    SubmitSecret {
+        kind: crate::screens::secret_prompt::SecretChoiceKind,
+    },
+    ConfirmDeleteProfile {
+        decision: crate::screens::secret_prompt::DeleteSecretDecision,
+    },
+    OpenConnections,
+    ConnectSelected,
+    DuplicateConnection,
+    TestConnection,
+    DeleteConnection,
+    MoveConnectionGroup {
+        group: String,
+    },
+    CloseSelectedSession,
+    ProfilesLoaded(Vec<ConnectionProfile>),
+    ConnectionTested {
+        name: String,
+        ok: bool,
+        message: String,
+    },
+    ProfileSaved(ConnectionProfile),
+    ProfileDeleted {
+        name: String,
+    },
+    SessionClosed {
+        session: crate::runtime::SessionId,
     },
     SaveConnection,
     QueryResultSetStarted {
@@ -195,6 +230,36 @@ pub enum Effect {
     },
     ConnectProfile {
         profile: ConnectionProfile,
+        token: u64,
+    },
+    SubmitSecret {
+        kind: crate::screens::secret_prompt::SecretChoiceKind,
+        profile: ConnectionProfile,
+        secret: crate::screens::secret_prompt::SecretBuffer,
+    },
+    DuplicateProfile {
+        id: dexo_app::ConnectionId,
+    },
+    TestConnection {
+        input: NewConnection,
+        password: String,
+    },
+    TestSavedProfile {
+        profile: ConnectionProfile,
+    },
+    SaveProfile {
+        profile: ConnectionProfile,
+    },
+    DeleteProfile {
+        profile: ConnectionProfile,
+        delete_secrets: bool,
+    },
+    MoveProfileGroup {
+        id: dexo_app::ConnectionId,
+        group_path: Option<String>,
+    },
+    CloseSession {
+        session: SessionId,
     },
     BeginTransaction {
         session: SessionId,
