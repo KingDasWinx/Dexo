@@ -190,6 +190,7 @@ impl<R: ProcessRunner> NativeToolRunner<R> {
                 .clone()
                 .unwrap_or_else(|| dir.join("secret")),
             child: Mutex::new(Some(child)),
+            cancelled: Mutex::new(false),
             prepared,
         })
     }
@@ -199,6 +200,7 @@ pub struct NativeHandle {
     pub command_line: String,
     secret_file: PathBuf,
     child: Mutex<Option<Box<dyn RunningProcess>>>,
+    cancelled: Mutex<bool>,
     #[allow(dead_code)]
     prepared: PreparedTool,
 }
@@ -212,6 +214,8 @@ impl NativeHandle {
         let child = self.child.lock().expect("child").take();
         if let Some(mut child) = child {
             child.cancel().await?;
+            *self.cancelled.lock().expect("cancelled") = true;
+            *self.child.lock().expect("child") = Some(child);
         }
         self.cleanup_secret();
         Ok(())
@@ -219,8 +223,16 @@ impl NativeHandle {
 
     pub async fn outcome(&self) -> Result<NativeRunResult, NativeToolError> {
         let child = self.child.lock().expect("child").take();
+        let cancelled = *self.cancelled.lock().expect("cancelled");
         let status = if let Some(mut child) = child {
-            child.wait().await?
+            let status = child.wait().await?;
+            if cancelled {
+                NativeStatus::Cancelled
+            } else {
+                status
+            }
+        } else if cancelled {
+            NativeStatus::Cancelled
         } else {
             NativeStatus::Failed
         };
