@@ -115,6 +115,24 @@ pub fn render(frame: &mut Frame, model: &Model) {
             popup,
         );
     }
+    if model.projects.open {
+        let popup = centered(frame.area(), 72, 18);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.projects.lines().join("\n"))
+                .block(Block::bordered().title("Projects")),
+            popup,
+        );
+    }
+    if model.config_transfer.open {
+        let popup = centered(frame.area(), 72, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.config_transfer.lines().join("\n"))
+                .block(Block::bordered().title("Config transfer")),
+            popup,
+        );
+    }
     if model.secret_prompt.open {
         let popup = centered(frame.area(), 56, 8);
         frame.render_widget(Clear, popup);
