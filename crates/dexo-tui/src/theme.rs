@@ -177,14 +177,6 @@ impl Theme {
         self.style(Role::Muted, caps)
     }
 
-    pub fn cursor_line(&self, caps: TerminalCapabilities) -> Style {
-        match caps.color_depth {
-            ColorDepth::Ansi256 | ColorDepth::TrueColor => Style::default().bg(Color::Indexed(237)),
-            ColorDepth::Ansi16 => Style::default().add_modifier(Modifier::UNDERLINED),
-            ColorDepth::None => Style::default(),
-        }
-    }
-
     pub fn overlay(&self, caps: TerminalCapabilities) -> Style {
         self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
     }

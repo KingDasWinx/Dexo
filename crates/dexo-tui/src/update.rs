@@ -1828,16 +1828,6 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
     };
     model.results_menu.open = false;
     match *id {
-        "copy-row-csv" => {
-            if !matches!(
-                model.results.kind,
-                crate::model::GridSelection::Range { .. }
-            ) && let Some((row, _)) = model.results.selection()
-            {
-                model.results.select_row(row);
-            }
-            copy_grid(model, dexo_app::data::CopyFormat::Csv)
-        }
         "copy-cell" => {
             if let Some((row, col)) = model.results.selection() {
                 model.results.select_cell(row, col);
@@ -1845,6 +1835,19 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
             copy_grid(model, dexo_app::data::CopyFormat::Text)
         }
         other => {
+            if other.starts_with("data.copy") {
+                match model.results.kind {
+                    crate::model::GridSelection::Range { start, end } => {
+                        let last_col = model.results.columns().len().saturating_sub(1);
+                        model.results.select_range((start.0, 0), (end.0, last_col));
+                    }
+                    _ => {
+                        if let Some((row, _)) = model.results.selection() {
+                            model.results.select_row(row);
+                        }
+                    }
+                }
+            }
             if let Some(action) = crate::palette::action_by_id(other) {
                 update(model, action)
             } else {

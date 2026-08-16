@@ -269,4 +269,47 @@ mod tests {
         assert!(grid.row_selected(3));
         assert!(!grid.row_selected(0));
     }
+
+    #[test]
+    fn left_right_pans_to_hidden_columns() {
+        use dexo_driver_api::{ColumnMeta, DbValue};
+
+        let mut grid = GridModel::default();
+        grid.set_columns(
+            (0..10)
+                .map(|i| ColumnMeta {
+                    name: format!("col{i}"),
+                    type_name: "text".into(),
+                    nullable: true,
+                })
+                .collect(),
+        );
+        grid.append_rows(vec![
+            (0..10).map(|i| DbValue::Text(format!("v{i}"))).collect(),
+            (0..10).map(|i| DbValue::Text(format!("w{i}"))).collect(),
+        ]);
+        grid.set_viewport_size(12, 4);
+        grid.select_cell(0, 0);
+        assert_eq!(grid.viewport().column_offset, 0);
+        for _ in 0..6 {
+            grid.move_cursor_col(1);
+        }
+        assert!(
+            grid.viewport().column_offset > 0,
+            "right should pan to columns that do not fit the viewport"
+        );
+        assert_eq!(grid.selection(), Some((0, 6)));
+        grid.move_cursor_row(1, true);
+        let before = grid.kind.clone();
+        grid.move_cursor_col(1);
+        assert_eq!(
+            std::mem::discriminant(&grid.kind),
+            std::mem::discriminant(&before),
+            "left/right must not collapse a row range"
+        );
+        while grid.viewport().column_offset > 0 {
+            grid.move_cursor_col(-1);
+        }
+        assert_eq!(grid.viewport().column_offset, 0);
+    }
 }

@@ -480,6 +480,8 @@ profile = "emacs"
 [results]
 "ctrl+p" = "results.up"
 "ctrl+n" = "results.down"
+"left" = "results.left"
+"right" = "results.right"
 "shift+up" = "results.extend_up"
 "shift+down" = "results.extend_down"
 "enter" = "results.actions"
