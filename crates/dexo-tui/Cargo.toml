@@ -25,6 +25,7 @@ unicode-width.workspace = true
 uuid.workspace = true
 sha2.workspace = true
 anyhow.workspace = true
+async-trait.workspace = true
 serde_json.workspace = true
 arboard.workspace = true
 ratatui-image.workspace = true

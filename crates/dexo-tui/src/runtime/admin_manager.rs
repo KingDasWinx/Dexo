@@ -51,6 +51,96 @@ impl AdminManager {
     }
 }
 
+pub async fn load_live(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    let Some(admin) = session.admin() else {
+        let _ = tx
+            .send(crate::action::Action::OperationFailed {
+                key: crate::runtime::OperationKey::new(
+                    crate::runtime::OperationId::new(),
+                    "",
+                    "",
+                    0,
+                ),
+                message: "admin unavailable".into(),
+            })
+            .await;
+        return;
+    };
+    let sessions = match admin.list_sessions().await {
+        Ok(list) => list,
+        Err(error) => {
+            let _ = tx
+                .send(crate::action::Action::OperationFailed {
+                    key: crate::runtime::OperationKey::new(
+                        crate::runtime::OperationId::new(),
+                        "",
+                        "",
+                        0,
+                    ),
+                    message: error.to_string(),
+                })
+                .await;
+            return;
+        }
+    };
+    let blocking = admin
+        .blocking_graph()
+        .await
+        .map(|list| list.items)
+        .unwrap_or_default();
+    let _ = tx
+        .send(crate::action::Action::AdminSessionsLoaded {
+            sessions: sessions.items,
+            captured_at: sessions.captured_at,
+            blocking,
+        })
+        .await;
+}
+
+pub async fn terminate_live(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    target: String,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    let Some(admin) = session.admin() else {
+        return;
+    };
+    let action = dexo_driver_api::AdminAction::TerminateSession {
+        session_id: target.clone(),
+    };
+    match admin.execute_action(action).await {
+        Ok(outcome) => {
+            let _ = tx
+                .send(crate::action::Action::OperationFailed {
+                    key: crate::runtime::OperationKey::new(
+                        crate::runtime::OperationId::new(),
+                        "",
+                        "",
+                        0,
+                    ),
+                    message: outcome.message,
+                })
+                .await;
+        }
+        Err(error) => {
+            let _ = tx
+                .send(crate::action::Action::OperationFailed {
+                    key: crate::runtime::OperationKey::new(
+                        crate::runtime::OperationId::new(),
+                        "",
+                        "",
+                        0,
+                    ),
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
 pub fn session_info(id: &str) -> SessionInfo {
     SessionInfo {
         id: id.into(),

@@ -306,3 +306,144 @@ fn fingerprint_of(left: &SchemaSnapshot, right: &SchemaSnapshot) -> String {
             out
         })
 }
+
+struct SessionDdl(std::sync::Arc<dyn dexo_driver_api::Session>);
+
+#[async_trait::async_trait]
+impl DdlExecutor for SessionDdl {
+    fn plan_change(&self, change: &SchemaChange) -> Result<DdlPlan, dexo_driver_api::DriverError> {
+        self.0
+            .ddl()
+            .ok_or_else(|| dexo_driver_api::DriverError::unsupported("ddl unavailable"))?
+            .plan_change(change)
+    }
+
+    async fn apply_ddl(&self, plan: &DdlPlan) -> Result<DdlOutcome, dexo_driver_api::DriverError> {
+        match self.0.ddl() {
+            Some(ddl) => ddl.apply_ddl(plan).await,
+            None => Err(dexo_driver_api::DriverError::unsupported("ddl unavailable")),
+        }
+    }
+}
+
+pub fn manager_for(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    session_id: impl Into<String>,
+) -> Result<SchemaManager, String> {
+    if session.ddl().is_none() {
+        return Err("driver has no DDL".into());
+    }
+    Ok(SchemaManager::new(
+        Arc::new(SessionDdl(session)),
+        session_id,
+    ))
+}
+
+pub async fn preview_live(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    session_id: String,
+    change: SchemaChange,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    match manager_for(session, &session_id) {
+        Ok(manager) => match manager.preview_schema(&session_id, change).await {
+            Ok(preview) => {
+                let sql = preview.plan.sqls().collect::<Vec<_>>().join(";\n");
+                let _ = tx
+                    .send(crate::action::Action::DdlPreviewed {
+                        sql,
+                        confirmation: preview.confirmation,
+                        warnings: preview.plan.warnings,
+                    })
+                    .await;
+            }
+            Err(message) => {
+                let _ = tx
+                    .send(crate::action::Action::OperationFailed {
+                        key: crate::runtime::OperationKey::new(
+                            crate::runtime::OperationId::new(),
+                            "",
+                            "",
+                            0,
+                        ),
+                        message,
+                    })
+                    .await;
+            }
+        },
+        Err(message) => {
+            let _ = tx
+                .send(crate::action::Action::OperationFailed {
+                    key: crate::runtime::OperationKey::new(
+                        crate::runtime::OperationId::new(),
+                        "",
+                        "",
+                        0,
+                    ),
+                    message,
+                })
+                .await;
+        }
+    }
+}
+
+pub async fn apply_live(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    session_id: String,
+    change: SchemaChange,
+    typed: String,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    let Ok(manager) = manager_for(session, &session_id) else {
+        let _ = tx
+            .send(crate::action::Action::SchemaApplied {
+                message: "driver has no DDL".into(),
+            })
+            .await;
+        return;
+    };
+    match manager.preview_schema(&session_id, change).await {
+        Ok(preview) => {
+            let answer = if typed.is_empty() {
+                ConfirmationAnswer::None
+            } else {
+                ConfirmationAnswer::Text(typed)
+            };
+            match manager.apply_schema(preview.operation_id, answer).await {
+                Ok(outcome) => {
+                    let _ = tx
+                        .send(crate::action::Action::SchemaApplied {
+                            message: format!("ddl {outcome:?}"),
+                        })
+                        .await;
+                }
+                Err(message) => {
+                    let _ = tx
+                        .send(crate::action::Action::OperationFailed {
+                            key: crate::runtime::OperationKey::new(
+                                crate::runtime::OperationId::new(),
+                                "",
+                                "",
+                                0,
+                            ),
+                            message,
+                        })
+                        .await;
+                }
+            }
+        }
+        Err(message) => {
+            let _ = tx
+                .send(crate::action::Action::OperationFailed {
+                    key: crate::runtime::OperationKey::new(
+                        crate::runtime::OperationId::new(),
+                        "",
+                        "",
+                        0,
+                    ),
+                    message,
+                })
+                .await;
+        }
+    }
+}

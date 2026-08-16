@@ -200,6 +200,89 @@ impl WorkbenchRuntime {
             }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
+            crate::Effect::PreviewDdl {
+                change,
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    schema_manager::preview_live(
+                        Arc::clone(&active.session),
+                        session.0.to_string(),
+                        change,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::ApplyDdlChange {
+                change,
+                typed,
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    schema_manager::apply_live(
+                        Arc::clone(&active.session),
+                        session.0.to_string(),
+                        change,
+                        typed,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::RunExplain {
+                sql,
+                analyze,
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    explain_manager::run_live(
+                        Arc::clone(&active.session),
+                        &sql,
+                        0,
+                        analyze,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadAdminSessions { session, .. } => {
+                if let Some(active) = self.sessions.get(session) {
+                    admin_manager::load_live(Arc::clone(&active.session), self.action_tx.clone())
+                        .await;
+                }
+            }
+            crate::Effect::AdminTerminate { session, target } => {
+                if let Some(active) = self.sessions.get(session) {
+                    admin_manager::terminate_live(
+                        Arc::clone(&active.session),
+                        target,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
+            crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
+            crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
+            crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
+            crate::Effect::RunTransfer { path, mode } => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", "", 0),
+                    message: format!("{mode} {path:?} queued"),
+                })
+                .await;
+            }
+            crate::Effect::LoadSnippets => {
+                if let Some(storage) = &self.storage
+                    && let Ok(snippets) = storage.list_snippets().await
+                {
+                    self.emit(Action::SnippetsLoaded(snippets)).await;
+                }
+            }
             crate::Effect::CheckpointRecovery(request) => self.checkpoint_recovery(request).await,
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
             crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
@@ -1067,6 +1150,86 @@ impl WorkbenchRuntime {
             &object_id,
             favorite,
         );
+    }
+
+    async fn load_mcp_profiles(&self) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let Ok(profiles) = dexo_storage::McpProfileRepository::new(db.connection()).list() else {
+            return;
+        };
+        let Some(profile) = profiles.into_iter().next() else {
+            self.emit(Action::McpProfilesLoaded {
+                name: String::new(),
+                enabled: false,
+                scopes: Vec::new(),
+                tools: Vec::new(),
+            })
+            .await;
+            return;
+        };
+        self.emit(Action::McpProfilesLoaded {
+            name: profile.name,
+            enabled: profile.enabled,
+            scopes: profile
+                .selectors
+                .iter()
+                .map(|rule| format!("{rule:?}"))
+                .collect(),
+            tools: profile
+                .tool_rules
+                .iter()
+                .map(|rule| rule.tool.clone())
+                .collect(),
+        })
+        .await;
+    }
+
+    async fn load_mcp_audit(&self) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            return;
+        };
+        use dexo_app::mcp::GrantLedger;
+        let events = ledger
+            .audits()
+            .into_iter()
+            .map(|event| format!("{} {} {}", event.profile, event.decision, event.target))
+            .collect();
+        self.emit(Action::McpAuditLoaded { events }).await;
+    }
+
+    async fn enable_mcp_profile(&self, name: String) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let repo = dexo_storage::McpProfileRepository::new(db.connection());
+        if let Ok(Some(mut profile)) = repo.get_by_name(&name) {
+            profile.enabled = true;
+            let _ = repo.save(&profile);
+        }
+        self.load_mcp_profiles().await;
+    }
+
+    async fn revoke_mcp(&self, profile: String) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            return;
+        };
+        use dexo_app::mcp::GrantLedger;
+        let _ = ledger.revoke_profile(&profile);
+        self.load_mcp_audit().await;
     }
 
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {

@@ -1,6 +1,8 @@
 use dexo_sql::statement_at;
 use std::sync::Mutex;
 
+use dexo_driver_api::{ExplainRequest, Session};
+
 pub struct ExplainManager {
     last_sql: Mutex<String>,
     analyze_confirmed: Mutex<bool>,
@@ -39,5 +41,77 @@ impl ExplainManager {
 
     pub fn explain_sql(&self) -> String {
         self.last_sql.lock().expect("sql").clone()
+    }
+}
+
+pub async fn run_live(
+    session: std::sync::Arc<dyn Session>,
+    document: &str,
+    cursor: usize,
+    analyze: bool,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    let manager = ExplainManager::default();
+    if analyze {
+        manager.confirm_analyze();
+    }
+    match manager.explain(document, cursor, analyze).await {
+        Ok(()) => {
+            let sql = manager.explain_sql();
+            let Some(provider) = session.explain() else {
+                let _ = tx
+                    .send(crate::action::Action::OperationFailed {
+                        key: crate::runtime::OperationKey::new(
+                            crate::runtime::OperationId::new(),
+                            "",
+                            "",
+                            0,
+                        ),
+                        message: "explain unavailable".into(),
+                    })
+                    .await;
+                return;
+            };
+            let request = if analyze {
+                ExplainRequest::analyzed(sql)
+            } else {
+                ExplainRequest::estimated(sql)
+            };
+            match provider.explain(request).await {
+                Ok(plan) => {
+                    let _ = tx
+                        .send(crate::action::Action::ExplainLoaded {
+                            plan: Box::new(plan),
+                        })
+                        .await;
+                }
+                Err(error) => {
+                    let _ = tx
+                        .send(crate::action::Action::OperationFailed {
+                            key: crate::runtime::OperationKey::new(
+                                crate::runtime::OperationId::new(),
+                                "",
+                                "",
+                                0,
+                            ),
+                            message: error.to_string(),
+                        })
+                        .await;
+                }
+            }
+        }
+        Err(message) => {
+            let _ = tx
+                .send(crate::action::Action::OperationFailed {
+                    key: crate::runtime::OperationKey::new(
+                        crate::runtime::OperationId::new(),
+                        "",
+                        "",
+                        0,
+                    ),
+                    message,
+                })
+                .await;
+        }
     }
 }
