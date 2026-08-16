@@ -84,9 +84,10 @@ impl ExplorerNode {
     }
 
     pub fn from_object(object: CatalogObject) -> Self {
+        let label = object_label(&object);
         Self {
             id: object.id,
-            label: object.qualified_name.object().to_string(),
+            label,
             kind: object.kind,
             qualified: object.qualified_name.display_unquoted(),
             schema: object.qualified_name.schema().map(str::to_string),
@@ -101,6 +102,15 @@ impl ExplorerNode {
             restriction: None,
             error: None,
         }
+    }
+}
+
+fn object_label(object: &CatalogObject) -> String {
+    let name = object.qualified_name.object();
+    if object.kind == ObjectKind::Column {
+        name.rsplit('.').next().unwrap_or(name).to_string()
+    } else {
+        name.to_string()
     }
 }
 
@@ -825,5 +835,12 @@ mod tests {
         assert!(table.children.iter().any(|n| n.label == "Columns"));
         assert!(table.children.iter().any(|n| n.label == "Indexes"));
         assert!(!table.children.iter().any(|n| n.kind == ObjectKind::Column));
+        let columns = table
+            .children
+            .iter()
+            .find(|n| n.label == "Columns")
+            .unwrap();
+        assert!(columns.children.iter().any(|n| n.label == "id"));
+        assert!(!columns.children.iter().any(|n| n.label == "users.id"));
     }
 }
