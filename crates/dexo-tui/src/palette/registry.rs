@@ -1194,7 +1194,9 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explorer.refresh_subtree"
         | "explorer.copy_name"
         | "explorer.copy_simple"
-        | "explorer.favorite" => &[ExplorerNode],
+        | "explorer.favorite"
+        | "explorer.up"
+        | "explorer.down" => &[ExplorerNode],
         "explorer.copy_ddl" => &[LoadedDdl],
         "data.revert" | "data.review" => &[PendingChanges],
         "data.nav_back" => &[Breadcrumb],

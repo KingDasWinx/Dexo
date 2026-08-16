@@ -1,5 +1,6 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 40
 expression: "render_to_string(&model, 100, 30)"
 ---
 default  no connection  —                                                                           
@@ -8,18 +9,18 @@ default  no connection  —
 │                          ││   1                                                                  │
 │                          ││                                                                      │
 │             ┌MCP profiles──────────────────────────────────────────────────────────┐             │
-│             ┌MCP audit─────────────────────────────────────────────────────────────┐             │
-│             │mcp audit confirm_revoke=false                                        │             │
-│             │audit empty                                                           │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
+│             │mcp profile=assistant enabled=false confirm=false                     │             │
+│             │scope allow db.public.*                                               │             │
+│             │scope deny db.public.secrets                                          │             │
+│             │tool catalog_search                                                   │             │
+│             │tool object_describe                                                  │             │
+│             │resource db.public.items                                              │             │
+│             │grant data_write data_insert 900s                                     │             │
+│             │diff profile db.public.* -> grant db.public.items                     │             │
+│             │confirm revoke all grants                                             │             │
 │             │                                                                      │             │
 │             │                                                                      │─────────────┘
-│             └──────────────────────────────────────────────────────────────────────┘─────────────┐
+│             │                                                                      │─────────────┐
 │             └──────────────────────────────────────────────────────────────────────┘             │
 │                          ││                                                                      │
 │                          ││                                                                      │

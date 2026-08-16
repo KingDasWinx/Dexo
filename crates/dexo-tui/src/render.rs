@@ -326,7 +326,7 @@ fn editor_tab_view(model: &Model) -> (&'static str, String) {
         2 => ("DDL", ddl_tab_body(model)),
         3 => ("Properties", properties_tab_body(model)),
         4 => ("Explain", model.explain.lines().join("\n")),
-        _ => ("Editor", String::new()),
+        _ => ("Data", data_tab_body(model)),
     }
 }
 
@@ -951,9 +951,11 @@ mod tests {
 
     #[test]
     fn editor_tabs_are_not_all_sql() {
-        let mut model = Model::default();
-        model.width = 100;
-        model.height = 40;
+        let mut model = Model {
+            width: 100,
+            height: 40,
+            ..Model::default()
+        };
         model.tabs.active = 1;
         let data = render_to_string(&model, 100, 40);
         assert!(data.contains("Open a table or run a query"));

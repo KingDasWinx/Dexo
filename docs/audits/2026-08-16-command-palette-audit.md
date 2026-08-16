@@ -267,3 +267,10 @@ Esta é uma auditoria exaustiva e verificável do Command Palette e dos fluxos d
 ## Direção de correção recomendada
 
 O conserto deve trocar closures `fn() -> Action` por comandos com contrato explícito: disponibilidade, motivo, modo de invocação e handler contextual. Comandos que precisam de entrada devem abrir a tela/modal dona do estado; comandos sobre seleção devem capturar/mostrar o alvo; operações destrutivas devem entrar no mesmo fluxo de preview/confirmação usado pela UI normal. Depois, cada ID precisa de um teste de contrato e os fluxos críticos precisam de testes renderizados pelo caminho real do palette.
+
+## Remediação verificada
+
+- Contratos: 129/129 IDs únicos, todos classificados como `Dispatch` ou `OpenFlow`.
+- Fluxos: atalhos, foco, entradas visíveis e confirmações destrutivas verificados pelo caminho real do palette.
+- Segurança: Import e Restore preservam o arquivo de origem byte a byte.
+- Gates executados: TUI, clippy e workspace completo passaram sem falhas.

@@ -49,7 +49,9 @@ pub struct CommandSpec {
     pub invocation: PaletteInvocation,
 }
 
+// ponytail: Action is ~344B; Box<Action> if PaletteInvocation is cloned on a hot path.
 #[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
 pub enum PaletteInvocation {
     Dispatch(Action),
     OpenFlow(FlowIntent),

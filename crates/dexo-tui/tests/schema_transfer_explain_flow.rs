@@ -208,8 +208,10 @@ fn transfer_session() -> dexo_tui::runtime::SessionId {
 }
 
 fn transfer_ready_model() -> dexo_tui::Model {
-    let mut model = dexo_tui::Model::default();
-    model.active_session = Some(transfer_session());
+    let mut model = dexo_tui::Model {
+        active_session: Some(transfer_session()),
+        ..dexo_tui::Model::default()
+    };
     model
         .results
         .append_rows(vec![vec![dexo_driver_api::DbValue::I64(1)]]);

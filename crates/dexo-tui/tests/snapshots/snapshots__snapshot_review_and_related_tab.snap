@@ -1,13 +1,13 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 134
+assertion_line: 135
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain │ demo.public.users            
-│[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│ ▾ local                  ││   1▸select 1                                                         │
-│>  ▸ public               ││                                                                      │
+│[offline]                 │┌▸ Data────────────────────────────────────────────────────────────────┐
+│ ▾ local                  ││table: demo.public.users                                              │
+│>  ▸ public               ││filter: Eq(ColumnId("id"), I64(1))                                    │
 │     mysql.us┌Review changes────────────────────────────────────────────────────────┐             │
 │             │target: demo.public.users                                             │             │
 │             │ops: 1                                                                │             │

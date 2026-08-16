@@ -18,7 +18,7 @@ use crate::screens::transfer::TransferMode;
 
 pub enum RunningTransfer {
     Cooperative(Arc<AtomicBool>),
-    Native(NativeHandle),
+    Native(Box<NativeHandle>),
 }
 
 #[derive(Default)]
@@ -344,7 +344,7 @@ async fn run_native(
         .map_err(|error: dexo_app::transfer::NativeToolError| error.to_string())?;
     manager
         .running
-        .insert(operation, RunningTransfer::Native(handle));
+        .insert(operation, RunningTransfer::Native(Box::new(handle)));
     let Some(RunningTransfer::Native(handle)) = manager.running.remove(&operation) else {
         return Ok(());
     };

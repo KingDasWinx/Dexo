@@ -171,7 +171,7 @@ Every bullet from spec sections 5–19 is listed. Unchecked boxes are product ga
 - [x] Light/dark/16/256/truecolor | test | theme_snapshots | pass
 - [x] Color never sole indicator | test | accessibility | pass
 - [x] Rebindable keys + conflicts | test | keymap.rs | pass
-- [x] Palette with shortcuts | test | palette.rs | pass
+- [x] Palette with shortcuts | test | palette.rs + command_palette_flow | pass
 - [x] Layouts per project | test | layout.rs | pass
 - [x] Compact mode | test | clamp | pass
 - [x] Disable mouse/animation/unicode | test | settings + Preferences | pass
@@ -233,7 +233,7 @@ Every bullet from spec sections 5–19 is listed. Unchecked boxes are product ga
 
 ## 12–16 TUI, stack, tests, perf, dist
 - [x] Default layout panes | test | snapshots | pass
-- [x] Palette + no hidden tx | test | palette/modals | pass
+- [x] Palette + no hidden tx | test | palette/modals + command_palette_contract | pass
 - [x] MCP area | test | mcp_audit screen | pass
 - [x] Approved stack lockfile | test | Cargo.lock + deny.toml | pass
 - [x] Unit/property/fuzz/contract/TUI/CLI/MCP | test | workspace tests | pass

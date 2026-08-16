@@ -739,6 +739,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             let sql = model.active_document().text();
             if !sql.trim().is_empty() {
                 model.schema_editor.apply_raw(sql);
+                model.tabs.active = 2;
+            } else {
+                model.messages.push("no SQL to apply".into());
             }
             Vec::new()
         }
@@ -876,6 +879,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }]
         }
         Action::RevokeAllMcpGrants => {
+            model.mcp_audit.open = false;
             model.mcp_profiles.open = true;
             model.mcp_profiles.confirm_revoke = true;
             model.mcp_profiles.preview = "confirm revoke all grants".into();
@@ -2863,7 +2867,7 @@ fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMet
     let Some(identity_cols) = dexo_app::data::RowIdentity::from_table(&model.data.table) else {
         return;
     };
-    let rows = model.results.rows().to_vec();
+    let rows = model.results.rows_snapshot();
     for (row_idx, row) in rows.iter().enumerate() {
         let identity: Vec<(dexo_driver_api::ColumnId, DbValue)> = identity_cols
             .iter()
@@ -2906,6 +2910,7 @@ fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMet
 
 fn open_related(model: &mut Model) -> Vec<Effect> {
     let Some(fk) = model.data.related_fk.clone() else {
+        model.messages.push("no related foreign key".into());
         return Vec::new();
     };
     let Some(filter) = related_filter(&fk, &model.data.related_row) else {

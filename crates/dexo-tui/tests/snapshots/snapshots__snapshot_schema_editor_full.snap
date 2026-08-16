@@ -1,11 +1,11 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 145
+assertion_line: 146
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
-│[offline]                 │┌▸ Schema──────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+│[offline]                 │┌▸ DDL─────────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │ ▾ local                  ││schema table                                                                                          ││                          │
 │>  ▸ public               ││> target: public.orders                                                                               ││                          │
 │     mysql.users [restrict││  columns:                                                                                            ││                          │
