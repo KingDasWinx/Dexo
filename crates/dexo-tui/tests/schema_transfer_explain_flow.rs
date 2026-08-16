@@ -272,6 +272,42 @@ async fn import_and_restore_never_write_to_the_source_path() {
     assert_eq!(runtime.recorded_modes(), vec![TransferMode::Restore]);
 }
 
+fn connected_model() -> dexo_tui::Model {
+    transfer_ready_model()
+}
+
+fn press(model: &mut dexo_tui::Model, code: crossterm::event::KeyCode) -> Vec<dexo_tui::Effect> {
+    dexo_tui::update(
+        model,
+        dexo_tui::Action::Key(crossterm::event::KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
+}
+
+#[test]
+fn schema_diff_command_starts_loading_instead_of_opening_empty_default() {
+    let mut model = connected_model();
+    choose(&mut model, "schema.diff");
+    assert!(model.schema_diff.open);
+    assert!(model.schema_diff.source_prompt);
+    assert!(model.schema_diff.entries.is_empty());
+}
+
+#[test]
+fn security_loads_and_closes_with_escape() {
+    let mut model = connected_model();
+    let effects = choose_effects(&mut model, "schema.security");
+    assert!(model.security.open);
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::LoadSecurity { .. }]
+    ));
+    press(&mut model, crossterm::event::KeyCode::Esc);
+    assert!(!model.security.open);
+}
+
 #[test]
 fn create_table_change_exists() {
     let _ = SchemaChange::CreateTable {

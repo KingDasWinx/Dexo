@@ -38,6 +38,16 @@ impl SecurityScreen {
         }
     }
 
+    pub fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+    }
+
+    pub fn select_next(&mut self) {
+        if self.selected + 1 < self.principals.len() {
+            self.selected += 1;
+        }
+    }
+
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec!["security".into()];
         for (index, principal) in self.principals.iter().enumerate() {

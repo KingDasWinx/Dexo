@@ -1,5 +1,6 @@
 use dexo_app::schema_diff::{
-    OrderedChange, SchemaDifference, classify_difference, generate_script, render_unquoted,
+    DiffSource, OrderedChange, SchemaDifference, classify_difference, generate_script,
+    render_unquoted,
 };
 
 #[derive(Clone, Debug, PartialEq)]
@@ -22,6 +23,12 @@ pub struct SchemaDiffScreen {
     pub script: String,
     pub confirmed: bool,
     pub applied: bool,
+    pub source_prompt: bool,
+    pub left: Option<DiffSource>,
+    pub right: Option<DiffSource>,
+    pub loading: bool,
+    pub error: Option<String>,
+    pub ordered: Vec<OrderedChange>,
 }
 
 impl Default for SchemaDiffScreen {
@@ -38,6 +45,12 @@ impl Default for SchemaDiffScreen {
             script: String::new(),
             confirmed: false,
             applied: false,
+            source_prompt: false,
+            left: None,
+            right: None,
+            loading: false,
+            error: None,
+            ordered: Vec::new(),
         }
     }
 }
@@ -86,6 +99,12 @@ impl SchemaDiffScreen {
             script,
             confirmed: false,
             applied: false,
+            source_prompt: false,
+            left: None,
+            right: None,
+            loading: false,
+            error: None,
+            ordered: ordered.to_vec(),
         }
     }
 
@@ -118,6 +137,12 @@ impl SchemaDiffScreen {
             script: "-- dexo:risk destructive=true data_loss=true lock=AccessExclusive reversible=false\nDROP TABLE db.public.gone;\n".into(),
             confirmed: false,
             applied: false,
+            source_prompt: false,
+            left: None,
+            right: None,
+            loading: false,
+            error: None,
+            ordered: Vec::new(),
         }
     }
 
@@ -150,7 +175,7 @@ impl SchemaDiffScreen {
     }
 
     pub fn apply(&mut self) {
-        if self.confirmed {
+        if self.confirmed && (!self.ordered.is_empty() || !self.entries.is_empty()) {
             self.applied = true;
         }
     }
@@ -168,6 +193,20 @@ impl SchemaDiffScreen {
                 if self.applied { "done" } else { "blocked" }
             ),
         ];
+        if self.source_prompt {
+            lines.push(format!(
+                "sources left={} right={}",
+                source_label(self.left.as_ref()),
+                source_label(self.right.as_ref())
+            ));
+            lines.push("l=live left  r=live right  enter=compare".into());
+        }
+        if self.loading {
+            lines.push("loading".into());
+        }
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
+        }
         for (index, entry) in self.filtered().into_iter().enumerate() {
             let marker = if index == self.selected { ">" } else { " " };
             lines.push(format!(
@@ -178,6 +217,15 @@ impl SchemaDiffScreen {
         lines.push("--- script ---".into());
         lines.extend(self.script.lines().map(str::to_string));
         lines
+    }
+}
+
+fn source_label(source: Option<&dexo_app::schema_diff::DiffSource>) -> String {
+    match source {
+        Some(dexo_app::schema_diff::DiffSource::Live(id)) => format!("live:{id}"),
+        Some(dexo_app::schema_diff::DiffSource::SavedSnapshot(id)) => format!("snap:{id}"),
+        Some(dexo_app::schema_diff::DiffSource::JsonFile(path)) => path.display().to_string(),
+        None => "none".into(),
     }
 }
 

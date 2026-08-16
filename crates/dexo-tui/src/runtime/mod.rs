@@ -235,6 +235,35 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
+            crate::Effect::LoadSchemaDiff {
+                session,
+                left,
+                right,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    schema_manager::diff_live(
+                        Arc::clone(&active.session),
+                        session.0.to_string(),
+                        left,
+                        right,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadSecurity {
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    Self::load_security_session(
+                        Arc::clone(&active.session),
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
             crate::Effect::RunExplain {
                 sql,
                 analyze,
@@ -508,6 +537,38 @@ impl WorkbenchRuntime {
 
     async fn emit(&self, action: Action) {
         let _ = self.action_tx.send(action).await;
+    }
+
+    async fn load_security_session(
+        session: Arc<dyn dexo_driver_api::Session>,
+        tx: tokio::sync::mpsc::Sender<Action>,
+    ) {
+        let Some(admin) = session.security() else {
+            let _ = tx
+                .send(Action::SecurityFailed {
+                    message: "this driver does not offer security admin".into(),
+                })
+                .await;
+            return;
+        };
+        match admin.list_grants(None).await {
+            Ok(grants) => {
+                let mut principals: Vec<String> = grants
+                    .iter()
+                    .map(|grant| grant.principal.object().to_string())
+                    .collect();
+                principals.sort();
+                principals.dedup();
+                let _ = tx.send(Action::SecurityLoaded { principals, grants }).await;
+            }
+            Err(error) => {
+                let _ = tx
+                    .send(Action::SecurityFailed {
+                        message: error.to_string(),
+                    })
+                    .await;
+            }
+        }
     }
 
     async fn create_connection(&mut self, input: NewConnection, password: String) {

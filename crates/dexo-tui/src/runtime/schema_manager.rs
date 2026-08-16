@@ -447,3 +447,66 @@ pub async fn apply_live(
         }
     }
 }
+
+pub async fn diff_live(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    session_id: String,
+    left: DiffSource,
+    right: DiffSource,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    let from_label = format!("{left:?}");
+    let to_label = format!("{right:?}");
+    let result = async {
+        let manager = manager_for(Arc::clone(&session), &session_id)?;
+        hydrate_source(&manager, session.as_ref(), &left).await?;
+        hydrate_source(&manager, session.as_ref(), &right).await?;
+        manager
+            .diff(DiffRequest {
+                left,
+                right,
+                filters: DiffFilters::all(),
+                renames: vec![],
+            })
+            .await
+    }
+    .await;
+    match result {
+        Ok(outcome) => {
+            let _ = tx
+                .send(crate::action::Action::SchemaDiffLoaded {
+                    from_label,
+                    to_label,
+                    ordered: outcome.ordered,
+                })
+                .await;
+        }
+        Err(message) => {
+            let _ = tx
+                .send(crate::action::Action::SchemaDiffFailed { message })
+                .await;
+        }
+    }
+}
+
+async fn hydrate_source(
+    manager: &SchemaManager,
+    session: &dyn dexo_driver_api::Session,
+    source: &DiffSource,
+) -> Result<(), String> {
+    let DiffSource::Live(id) = source else {
+        return Ok(());
+    };
+    let catalog = session
+        .catalog()
+        .ok_or_else(|| "catalog is unavailable".to_string())?;
+    let list = catalog
+        .list_children(None, &dexo_driver_api::CatalogListOptions::default())
+        .await
+        .map_err(|error| error.to_string())?;
+    manager.put_live(
+        id.clone(),
+        SchemaSnapshot::capture("postgres", "0", "now", id.clone(), list.objects),
+    );
+    Ok(())
+}

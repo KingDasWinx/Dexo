@@ -740,18 +740,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::OpenSecurity => {
-            model.security.open = true;
-            Vec::new()
-        }
+        Action::OpenSecurity => open_security(model),
         Action::SchemaFocusNext => {
             model.schema_editor.focus_next();
             Vec::new()
         }
-        Action::OpenSchemaDiff => {
-            model.schema_diff.open = true;
-            Vec::new()
-        }
+        Action::OpenSchemaDiff => open_schema_diff(model),
         Action::SchemaDiffToggleAdded => {
             model.schema_diff.toggle_added();
             Vec::new()
@@ -770,6 +764,37 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ApplySchemaDiff => {
             model.schema_diff.apply();
+            Vec::new()
+        }
+        Action::SchemaDiffLoaded {
+            from_label,
+            to_label,
+            ordered,
+        } => {
+            let left = model.schema_diff.left.clone();
+            let right = model.schema_diff.right.clone();
+            model.schema_diff = crate::screens::schema_diff::SchemaDiffScreen::from_ordered(
+                from_label, to_label, &ordered,
+            );
+            model.schema_diff.left = left;
+            model.schema_diff.right = right;
+            model.schema_diff.loading = false;
+            model.schema_diff.source_prompt = false;
+            Vec::new()
+        }
+        Action::SchemaDiffFailed { message } => {
+            model.schema_diff.loading = false;
+            model.schema_diff.error = Some(message);
+            Vec::new()
+        }
+        Action::SecurityLoaded { principals, grants } => {
+            model.security.principals = principals;
+            model.security.grants = grants;
+            model.security.selected = 0;
+            Vec::new()
+        }
+        Action::SecurityFailed { message } => {
+            model.messages.push(message);
             Vec::new()
         }
         Action::OpenTransfer => {
@@ -1363,6 +1388,25 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.schema_diff.open = false;
                 Vec::new()
             }
+            KeyCode::Char('l') if model.schema_diff.source_prompt => {
+                if let Some(session) = model.active_session {
+                    model.schema_diff.left = Some(dexo_app::schema_diff::DiffSource::Live(
+                        session.0.to_string(),
+                    ));
+                    model.schema_diff.error = None;
+                }
+                Vec::new()
+            }
+            KeyCode::Char('r') if model.schema_diff.source_prompt => {
+                if let Some(session) = model.active_session {
+                    model.schema_diff.right = Some(dexo_app::schema_diff::DiffSource::Live(
+                        session.0.to_string(),
+                    ));
+                    model.schema_diff.error = None;
+                }
+                Vec::new()
+            }
+            KeyCode::Enter if model.schema_diff.source_prompt => request_schema_diff(model),
             KeyCode::Char('a') => {
                 model.schema_diff.toggle_added();
                 Vec::new()
@@ -1383,6 +1427,24 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.schema_diff.apply();
                 Vec::new()
             }
+            _ => Vec::new(),
+        };
+    }
+    if model.security.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.security.open = false;
+                Vec::new()
+            }
+            KeyCode::Up => {
+                model.security.select_previous();
+                Vec::new()
+            }
+            KeyCode::Down => {
+                model.security.select_next();
+                Vec::new()
+            }
+            KeyCode::Enter => open_security_change_preview(model),
             _ => Vec::new(),
         };
     }
@@ -3263,6 +3325,73 @@ fn build_transfer_request(
             })
         }
     }
+}
+
+fn open_schema_diff(model: &mut Model) -> Vec<Effect> {
+    model.schema_diff.open = true;
+    model.schema_diff.source_prompt = true;
+    model.schema_diff.entries.clear();
+    model.schema_diff.ordered.clear();
+    model.schema_diff.left = None;
+    model.schema_diff.right = None;
+    model.schema_diff.loading = false;
+    model.schema_diff.error = None;
+    model.schema_diff.confirmed = false;
+    model.schema_diff.applied = false;
+    Vec::new()
+}
+
+fn request_schema_diff(model: &mut Model) -> Vec<Effect> {
+    let (Some(left), Some(right), Some(session)) = (
+        model.schema_diff.left.clone(),
+        model.schema_diff.right.clone(),
+        model.active_session,
+    ) else {
+        model.schema_diff.error = Some("select both schema sources".into());
+        return Vec::new();
+    };
+    model.schema_diff.loading = true;
+    model.schema_diff.error = None;
+    vec![Effect::LoadSchemaDiff {
+        session,
+        left,
+        right,
+        generation: model.session_generation,
+    }]
+}
+
+fn open_security(model: &mut Model) -> Vec<Effect> {
+    model.security.open = true;
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    vec![Effect::LoadSecurity {
+        session,
+        generation: model.session_generation,
+    }]
+}
+
+fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
+    let Some(principal) = model
+        .security
+        .principals
+        .get(model.security.selected)
+        .cloned()
+    else {
+        return Vec::new();
+    };
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    let change = crate::screens::security::SecurityScreen::grant_select(
+        model.data.target.clone(),
+        &principal,
+    );
+    vec![Effect::PreviewDdl {
+        change,
+        session,
+        generation: model.session_generation,
+    }]
 }
 
 fn open_transfer(model: &mut Model, mode: crate::screens::transfer::TransferMode) -> Vec<Effect> {

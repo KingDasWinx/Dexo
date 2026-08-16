@@ -251,6 +251,21 @@ pub enum Action {
     SchemaDiffToggleChanged,
     ConfirmSchemaDiff,
     ApplySchemaDiff,
+    SchemaDiffLoaded {
+        from_label: String,
+        to_label: String,
+        ordered: Vec<dexo_app::schema_diff::OrderedChange>,
+    },
+    SchemaDiffFailed {
+        message: String,
+    },
+    SecurityLoaded {
+        principals: Vec<String>,
+        grants: Vec<dexo_driver_api::GrantRecord>,
+    },
+    SecurityFailed {
+        message: String,
+    },
     OpenTransfer,
     OpenBackup,
     OpenRestore,
@@ -582,6 +597,16 @@ pub enum Effect {
     SaveDocument(DocumentIoRequest),
     PreviewDdl {
         change: dexo_driver_api::SchemaChange,
+        session: SessionId,
+        generation: u64,
+    },
+    LoadSchemaDiff {
+        session: SessionId,
+        left: dexo_app::schema_diff::DiffSource,
+        right: dexo_app::schema_diff::DiffSource,
+        generation: u64,
+    },
+    LoadSecurity {
         session: SessionId,
         generation: u64,
     },
