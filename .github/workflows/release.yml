@@ -25,7 +25,7 @@ jobs:
           (cd dist && sha256sum * > SHA256SUMS || shasum -a 256 * > SHA256SUMS)
       - name: SBOM from lockfile
         run: |
-          cargo metadata --format-version 1 --offline > dist/cargo-metadata.json
+          cargo metadata --format-version 1 > dist/cargo-metadata.json
           python3 - <<'PY'
           import json, hashlib, pathlib
           meta = json.loads(pathlib.Path("dist/cargo-metadata.json").read_text())
