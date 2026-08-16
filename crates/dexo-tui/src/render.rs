@@ -638,13 +638,72 @@ fn render_completion(frame: &mut Frame, model: &Model) {
             None => item.label.clone(),
         })
         .collect();
-    render_list_overlay(
-        frame,
-        "Completions",
-        &labels,
+    let popup = completion_popup_rect(frame.area(), model, &labels);
+    if popup.width < 4 || popup.height < 2 {
+        return;
+    }
+    frame.render_widget(Clear, popup);
+    let rows = (popup.height.saturating_sub(2) as usize).max(1);
+    let offset = scroll_to_selection(
         model.editor.completion_selected,
         model.editor.completion_offset,
+        labels.len(),
+        rows,
     );
+    let mut lines = Vec::new();
+    for (index, item) in labels.iter().enumerate().skip(offset).take(rows) {
+        let marker = if index == model.editor.completion_selected {
+            ">"
+        } else {
+            " "
+        };
+        lines.push(format!("{marker} {item}"));
+    }
+    if lines.is_empty() {
+        lines.push("(empty)".into());
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(Block::bordered()),
+        popup,
+    );
+}
+
+/// Vim/Neovim pum: align with the cursor, prefer below, flip above if it does not fit.
+fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
+    let plan = LayoutPlan::for_area_with(area, Some(&model.panes));
+    let inner = Block::bordered().inner(plan.content);
+    let doc = model.active_document();
+    let (line, col) = crate::screens::editor::line_col_of(&doc.text(), doc.cursor());
+    let gutter = 5u16;
+    let cursor_x = inner
+        .x
+        .saturating_add(gutter)
+        .saturating_add(col.saturating_sub(doc.viewport_column) as u16);
+    let cursor_y = inner
+        .y
+        .saturating_add(line.saturating_sub(doc.viewport_line) as u16);
+    let width = items
+        .iter()
+        .map(|item| item.chars().count().saturating_add(4))
+        .max()
+        .unwrap_or(16)
+        .clamp(12, 42) as u16;
+    let width = width.min(area.width.max(1));
+    let height = (items.len().clamp(1, 8) as u16)
+        .saturating_add(2)
+        .min(area.height.max(1));
+    let x = if cursor_x.saturating_add(width) > area.width {
+        area.width.saturating_sub(width)
+    } else {
+        cursor_x
+    };
+    let below = area.height.saturating_sub(cursor_y.saturating_add(1));
+    let y = if below >= height {
+        cursor_y.saturating_add(1)
+    } else {
+        cursor_y.saturating_sub(height)
+    };
+    Rect::new(x, y, width, height)
 }
 
 fn render_parameters(frame: &mut Frame, model: &Model) {
@@ -743,5 +802,24 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    #[test]
+    fn completion_popup_sits_under_cursor_not_centered() {
+        let mut model = Model::default();
+        model.set_sql("select ");
+        model.width = 160;
+        model.height = 50;
+        let area = ratatui::layout::Rect::new(0, 0, 160, 50);
+        let popup = super::completion_popup_rect(area, &model, &["select".into(), "from".into()]);
+        let center_x = area.width / 2;
+        assert!(
+            popup.x < center_x.saturating_sub(10),
+            "expected cursor-aligned popup, got {popup:?}"
+        );
+        assert!(
+            popup.y > 2,
+            "expected below the editor cursor, got {popup:?}"
+        );
     }
 }
