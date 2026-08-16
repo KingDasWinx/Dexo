@@ -57,6 +57,7 @@ pub struct PaletteState {
     pub query: String,
     pub selected: usize,
     pub offset: usize,
+    pub origin_focus: Option<Focus>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

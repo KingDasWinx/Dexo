@@ -622,11 +622,16 @@ fn render_palette(frame: &mut Frame, model: &Model) {
         } else {
             " "
         };
+        let shortcut = entry
+            .shortcut
+            .map(|value| format!(" [{value}]"))
+            .unwrap_or_default();
         let disabled = entry
             .disabled_reason
+            .as_deref()
             .map(|reason| format!(" ({reason})"))
             .unwrap_or_default();
-        lines.push(format!("{marker} {}{disabled}", entry.title));
+        lines.push(format!("{marker} {}{shortcut}{disabled}", entry.title));
     }
     frame.render_widget(
         Paragraph::new(lines.join("\n")).block(overlay_block(model, "Command Palette")),

@@ -1467,8 +1467,8 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match model.keymap.resolve(&chord, ctx) {
         Ok(Some(command)) => {
             model.pending_chord.keys.clear();
-            if let Some(action) = crate::palette::action_by_id(command) {
-                return update(model, action);
+            if let Some(invocation) = crate::palette::invocation_by_id(model, command) {
+                return invoke_palette(model, invocation);
             }
         }
         Ok(None) => model.pending_chord.keys.clear(),
@@ -1772,6 +1772,9 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
 }
 
 fn open_palette(model: &mut Model) {
+    if !model.palette.open {
+        model.palette.origin_focus = Some(model.focus);
+    }
     model.palette.open = true;
     model.palette.query.clear();
     model.palette.selected = 0;
@@ -1804,7 +1807,7 @@ fn close_palette(model: &mut Model) {
     if model.palette.open {
         model.palette.open = false;
         if model.focus == Focus::Palette {
-            model.focus = Focus::Editor;
+            model.focus = model.palette.origin_focus.take().unwrap_or(Focus::Editor);
         }
     }
 }
@@ -1908,8 +1911,8 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
                     }
                 }
             }
-            if let Some(action) = crate::palette::action_by_id(other) {
-                update(model, action)
+            if let Some(invocation) = crate::palette::invocation_by_id(model, other) {
+                invoke_palette(model, invocation)
             } else {
                 Vec::new()
             }
@@ -3332,18 +3335,44 @@ fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocation) -> Vec<Effect> {
+    use crate::palette::{FlowIntent, PaletteInvocation};
+    match invocation {
+        PaletteInvocation::Dispatch(action) => update(model, action),
+        PaletteInvocation::OpenFlow(FlowIntent::ProjectCreate) => {
+            model.projects.open = true;
+            model.projects.mode = crate::screens::projects::ProjectsMode::Create;
+            model.projects.name_input.clear();
+            Vec::new()
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ProjectSwitch) => {
+            model.projects.open = true;
+            vec![Effect::ListProjects]
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ProjectRename) => {
+            model.projects.open = true;
+            vec![Effect::ListProjects]
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ProjectDelete) => {
+            model.projects.open = true;
+            vec![Effect::ListProjects]
+        }
+    }
+}
+
 fn palette_select(model: &mut Model) -> Vec<Effect> {
     let entries = crate::palette::palette_entries(model);
     let visible = crate::palette::filter_entries(&entries, &model.palette.query);
     let Some(entry) = visible.get(model.palette.selected) else {
         return Vec::new();
     };
-    if entry.disabled_reason.is_some() {
+    if let Some(reason) = &entry.disabled_reason {
+        model.messages.push(reason.clone());
         return Vec::new();
     }
-    let action = (entry.action)();
+    let invocation = entry.invocation.clone();
     close_palette(model);
-    update(model, action)
+    invoke_palette(model, invocation)
 }
 
 #[cfg(test)]
