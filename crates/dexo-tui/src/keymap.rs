@@ -414,6 +414,7 @@ profile = "default"
 "shift+up" = "results.extend_up"
 "shift+down" = "results.extend_down"
 "enter" = "results.actions"
+"ctrl+enter" = "results.toggle_pick"
 "r" = "results.select_row"
 "c" = "results.select_column"
 "[" = "results.prev_tab"
@@ -461,6 +462,7 @@ profile = "vim"
 "shift+k" = "results.extend_up"
 "shift+j" = "results.extend_down"
 "enter" = "results.actions"
+"ctrl+enter" = "results.toggle_pick"
 "?" = "help.open"
 "#;
 
@@ -501,6 +503,7 @@ profile = "emacs"
 "shift+up" = "results.extend_up"
 "shift+down" = "results.extend_down"
 "enter" = "results.actions"
+"ctrl+enter" = "results.toggle_pick"
 "?" = "help.open"
 "#;
 

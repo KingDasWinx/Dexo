@@ -864,6 +864,14 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::OpenResultsMenu,
         },
         PaletteEntry {
+            id: "results.toggle_pick",
+            title: "Toggle Results Row Pick",
+            keywords: &["grid", "ctrl", "select"],
+            shortcut: Some("Ctrl+Enter"),
+            disabled_reason: None,
+            action: || Action::ToggleResultsPick,
+        },
+        PaletteEntry {
             id: "connection.add",
             title: "Add Connection",
             keywords: &["database", "postgres", "mysql", "connect"],
@@ -1304,6 +1312,9 @@ mod tests {
                 end: (2, _)
             }
         ));
+        update(&mut model, Action::ToggleResultsPick);
+        assert!(!model.results_menu.open);
+        assert!(model.results.picked_rows.contains(&2));
         update(&mut model, Action::OpenResultsMenu);
         assert!(model.results_menu.open);
         let view = crate::render::render_to_string(&model, 80, 24);

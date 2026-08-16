@@ -1,3 +1,4 @@
+use std::collections::BTreeSet;
 use std::ops::Range;
 
 use dexo_app::event::TaskId;
@@ -75,6 +76,7 @@ pub struct ResultsMenuState {
 pub struct TabsState {
     pub active: usize,
     pub titles: Vec<String>,
+    pub scroll: u16,
 }
 
 impl Default for TabsState {
@@ -88,6 +90,7 @@ impl Default for TabsState {
                 "Properties".into(),
                 "Explain".into(),
             ],
+            scroll: 0,
         }
     }
 }
@@ -198,6 +201,7 @@ pub struct GridModel {
     selection: Option<(usize, usize)>,
     column_widths: Vec<u16>,
     pub kind: GridSelection,
+    pub picked_rows: BTreeSet<usize>,
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
     pub cells: std::collections::BTreeMap<(usize, usize), GridCell>,
@@ -303,6 +307,7 @@ static EMPTY_GRID: GridModel = GridModel {
     selection: None,
     column_widths: Vec::new(),
     kind: GridSelection::Cell { row: 0, col: 0 },
+    picked_rows: BTreeSet::new(),
     frozen_columns: 0,
     hidden_columns: Vec::new(),
     cells: std::collections::BTreeMap::new(),
@@ -343,6 +348,7 @@ impl GridModel {
             selection: Some((0, 0)),
             column_widths: vec![8],
             kind: GridSelection::Cell { row: 0, col: 0 },
+            picked_rows: BTreeSet::new(),
             frozen_columns: 0,
             hidden_columns: Vec::new(),
             cells: std::collections::BTreeMap::new(),
@@ -414,6 +420,7 @@ impl GridModel {
         self.viewport.row_offset = 0;
         self.viewport.column_offset = 0;
         self.selection = None;
+        self.picked_rows.clear();
         self.column_widths.clear();
     }
 
@@ -482,6 +489,9 @@ impl GridModel {
     }
 
     pub fn row_selected(&self, row: usize) -> bool {
+        if self.picked_rows.contains(&row) {
+            return true;
+        }
         match self.kind {
             GridSelection::Cell { row: r, .. } | GridSelection::Row { row: r } => r == row,
             GridSelection::Column { .. } => self.selection.is_some_and(|(r, _)| r == row),
@@ -493,6 +503,16 @@ impl GridModel {
         }
     }
 
+    pub fn toggle_picked_row(&mut self) {
+        self.ensure_cursor();
+        let Some(row) = self.cursor_row() else {
+            return;
+        };
+        if !self.picked_rows.remove(&row) {
+            self.picked_rows.insert(row);
+        }
+    }
+
     pub fn move_cursor_row(&mut self, delta: i32, extend: bool) {
         self.ensure_cursor();
         let Some((row, col)) = self.selection else {
@@ -501,6 +521,7 @@ impl GridModel {
         let last = self.buffer.row_count().saturating_sub(1);
         let next = (row as i32 + delta).clamp(0, last as i32) as usize;
         if extend {
+            self.picked_rows.clear();
             let start = match self.kind {
                 GridSelection::Range { start, .. } => start,
                 GridSelection::Cell { row, col } => (row, col),
@@ -576,17 +597,23 @@ impl GridModel {
     }
 
     fn selected_matrix(&self) -> (Vec<String>, Vec<Vec<DbValue>>) {
-        let cols: Vec<usize> = match self.kind {
-            GridSelection::Cell { col, .. } | GridSelection::Column { col } => vec![col],
-            GridSelection::Row { .. } => (0..self.buffer.columns.len())
+        let cols: Vec<usize> = if !self.picked_rows.is_empty() {
+            (0..self.buffer.columns.len())
                 .filter(|index| !self.hidden_columns.contains(index))
-                .collect(),
-            GridSelection::Range { start, end } => {
-                let lo = start.1.min(end.1);
-                let hi = start.1.max(end.1);
-                (lo..=hi)
+                .collect()
+        } else {
+            match self.kind {
+                GridSelection::Cell { col, .. } | GridSelection::Column { col } => vec![col],
+                GridSelection::Row { .. } => (0..self.buffer.columns.len())
                     .filter(|index| !self.hidden_columns.contains(index))
-                    .collect()
+                    .collect(),
+                GridSelection::Range { start, end } => {
+                    let lo = start.1.min(end.1);
+                    let hi = start.1.max(end.1);
+                    (lo..=hi)
+                        .filter(|index| !self.hidden_columns.contains(index))
+                        .collect()
+                }
             }
         };
         let names: Vec<String> = cols
@@ -599,13 +626,17 @@ impl GridModel {
                     .unwrap_or_else(|| index.to_string())
             })
             .collect();
-        let row_idxs: Vec<usize> = match self.kind {
-            GridSelection::Cell { row, .. } | GridSelection::Row { row } => vec![row],
-            GridSelection::Column { .. } => (0..self.buffer.row_count()).collect(),
-            GridSelection::Range { start, end } => {
-                let lo = start.0.min(end.0);
-                let hi = start.0.max(end.0);
-                (lo..=hi).collect()
+        let row_idxs: Vec<usize> = if !self.picked_rows.is_empty() {
+            self.picked_rows.iter().copied().collect()
+        } else {
+            match self.kind {
+                GridSelection::Cell { row, .. } | GridSelection::Row { row } => vec![row],
+                GridSelection::Column { .. } => (0..self.buffer.row_count()).collect(),
+                GridSelection::Range { start, end } => {
+                    let lo = start.0.min(end.0);
+                    let hi = start.0.max(end.0);
+                    (lo..=hi).collect()
+                }
             }
         };
         let rows = row_idxs

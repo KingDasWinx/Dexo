@@ -277,6 +277,7 @@ pub enum Action {
     ResultsPageDown,
     ResultsTop,
     OpenResultsMenu,
+    ToggleResultsPick,
     ResultsExtendUp,
     ResultsExtendDown,
     ToggleHelp,

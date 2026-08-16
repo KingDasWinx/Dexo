@@ -458,12 +458,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SwitchTab { index } => {
             if index < model.tabs.titles.len() {
                 model.tabs.active = index;
+                model.tabs.scroll = 0;
             }
             Vec::new()
         }
         Action::NextTab => {
             if !model.tabs.titles.is_empty() {
                 model.tabs.active = (model.tabs.active + 1) % model.tabs.titles.len();
+                model.tabs.scroll = 0;
             }
             Vec::new()
         }
@@ -1077,6 +1079,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             open_results_menu(model);
             Vec::new()
         }
+        Action::ToggleResultsPick => {
+            model.results.toggle_picked_row();
+            Vec::new()
+        }
         Action::ToggleHelp => {
             toggle_help(model);
             Vec::new()
@@ -1476,12 +1482,35 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             return Vec::new();
         }
     }
-    if model.tabs.active != 2 && crate::screens::editor::handle_key(model, key) {
+    if model.tabs.active == 0 && crate::screens::editor::handle_key(model, key) {
         crate::screens::editor::refresh_intelligence(model, false);
         return Vec::new();
     }
-    if key.code == KeyCode::Tab && model.tabs.active == 2 {
-        model.schema_editor.focus_next();
+    if model.focus == Focus::Editor && model.tabs.active != 0 {
+        return handle_editor_tab_key(model, key);
+    }
+    Vec::new()
+}
+
+fn handle_editor_tab_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let ddl_is_form = model.tabs.active == 2 && model.inspector.ddl.is_none();
+    match key.code {
+        KeyCode::Tab if model.tabs.active == 2 => {
+            model.schema_editor.focus_next();
+        }
+        KeyCode::Up if ddl_is_form => {
+            model.schema_editor.focus_prev();
+        }
+        KeyCode::Down if ddl_is_form => {
+            model.schema_editor.focus_next();
+        }
+        KeyCode::Up => {
+            model.tabs.scroll = model.tabs.scroll.saturating_sub(1);
+        }
+        KeyCode::Down => {
+            model.tabs.scroll = model.tabs.scroll.saturating_add(1);
+        }
+        _ => {}
     }
     Vec::new()
 }
@@ -1858,7 +1887,7 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
             copy_grid(model, dexo_app::data::CopyFormat::Text)
         }
         other => {
-            if other.starts_with("data.copy") {
+            if other.starts_with("data.copy") && model.results.picked_rows.is_empty() {
                 match model.results.kind {
                     crate::model::GridSelection::Range { start, end } => {
                         let last_col = model.results.columns().len().saturating_sub(1);

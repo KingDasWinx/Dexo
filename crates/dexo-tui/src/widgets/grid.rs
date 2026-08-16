@@ -271,6 +271,24 @@ mod tests {
     }
 
     #[test]
+    fn ctrl_pick_copies_noncontiguous_rows() {
+        use dexo_app::data::{CopyFormat, SqlDialect};
+
+        let mut grid = GridModel::sample_rows(6);
+        grid.select_cell(0, 0);
+        grid.toggle_picked_row();
+        grid.move_cursor_row(2, false);
+        grid.toggle_picked_row();
+        assert!(grid.row_selected(0));
+        assert!(grid.row_selected(2));
+        assert!(!grid.picked_rows.contains(&1));
+        let json = grid.copy(CopyFormat::Json, SqlDialect::Postgres).unwrap();
+        assert!(json.contains("\"n\": 0"));
+        assert!(json.contains("\"n\": 2"));
+        assert!(!json.contains("\"n\": 1"));
+    }
+
+    #[test]
     fn left_right_pans_to_hidden_columns() {
         use crate::model::GridSelection;
         use dexo_driver_api::{ColumnMeta, DbValue};
