@@ -46,6 +46,13 @@ impl ExplorerAction {
     }
 }
 
+pub fn opens_table_data(kind: &ObjectKind) -> bool {
+    matches!(
+        kind,
+        ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplorerNode {
     pub id: ObjectId,
@@ -97,6 +104,7 @@ pub struct ExplorerState {
     pub copied: Option<String>,
     pub include_system: bool,
     pub stale: bool,
+    pub offset: usize,
 }
 
 impl ExplorerState {
@@ -408,6 +416,23 @@ impl ExplorerState {
         self.selected = Some(ids[next].clone());
     }
 
+    pub fn selected_index(&self) -> usize {
+        let ids = self.visible_ids();
+        self.selected
+            .as_ref()
+            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+            .unwrap_or(0)
+    }
+
+    pub fn sync_scroll(&mut self, rows: usize) {
+        self.offset = crate::palette::scroll_to_selection(
+            self.selected_index(),
+            self.offset,
+            self.visible_ids().len(),
+            rows,
+        );
+    }
+
     pub fn copy_selected_name(&mut self) {
         if let Some(id) = &self.selected
             && let Some(node) = Self::find(&self.roots, id)
@@ -523,5 +548,35 @@ mod tests {
                 "copy-name"
             ]
         );
+    }
+
+    #[test]
+    fn enter_hint_only_on_tables() {
+        use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("table:orders"),
+                ObjectKind::Table,
+                QualifiedName::new(Some("db"), Some("public"), "orders"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        explorer.select(ObjectId::new("table:orders"));
+        let lines = crate::widgets::object_tree::render_lines(&explorer);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains('>') && line.contains("orders")),
+            "{lines:?}"
+        );
+        assert!(
+            lines.iter().any(|line| line.contains("Enter abre a table")),
+            "{lines:?}"
+        );
+        assert!(super::opens_table_data(&ObjectKind::View));
+        assert!(!super::opens_table_data(&ObjectKind::Schema));
     }
 }

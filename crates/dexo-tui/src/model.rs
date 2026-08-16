@@ -515,19 +515,24 @@ impl GridModel {
     }
 
     pub fn move_cursor_col(&mut self, delta: i32) {
-        self.ensure_cursor();
-        let Some((row, col)) = self.selection else {
-            return;
-        };
-        let last = self.buffer.columns.len().saturating_sub(1);
-        let next = (col as i32 + delta).clamp(0, last as i32) as usize;
-        match &mut self.kind {
-            GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
-            // ponytail: Left/Right pans columns; row/range select stays. Add Shift+Left/Right if column-range lands.
-            GridSelection::Row { .. } | GridSelection::Range { .. } => {}
+        match self.kind {
+            // ponytail: H-scroll is column_offset pan (pre-row-cursor). Ceiling: no sticky column cursor. Add one if cell-edit lands.
+            GridSelection::Row { .. } | GridSelection::Range { .. } => self.scroll_columns(delta),
+            GridSelection::Cell { .. } | GridSelection::Column { .. } => {
+                self.ensure_cursor();
+                let Some((row, col)) = self.selection else {
+                    return;
+                };
+                let last = self.buffer.columns.len().saturating_sub(1);
+                let next = (col as i32 + delta).clamp(0, last as i32) as usize;
+                match &mut self.kind {
+                    GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
+                    GridSelection::Row { .. } | GridSelection::Range { .. } => {}
+                }
+                self.selection = Some((row, next));
+                self.scroll_columns(delta);
+            }
         }
-        self.selection = Some((row, next));
-        self.ensure_col_visible(next);
     }
 
     fn ensure_row_visible(&mut self, row: usize) {
@@ -538,42 +543,6 @@ impl GridModel {
             self.viewport.row_offset = row.saturating_add(1).saturating_sub(height);
         }
         self.clamp_scroll();
-    }
-
-    fn ensure_col_visible(&mut self, col: usize) {
-        let n = self.column_widths.len().max(self.buffer.columns.len());
-        if n == 0 {
-            return;
-        }
-        let frozen = self.frozen_columns.min(n);
-        if col < frozen {
-            return;
-        }
-        if col < self.viewport.column_offset.max(frozen) {
-            self.viewport.column_offset = col;
-            self.clamp_scroll();
-            return;
-        }
-        while self.viewport.column_offset < col && !self.column_painted(col) {
-            self.viewport.column_offset += 1;
-        }
-        self.clamp_scroll();
-    }
-
-    fn column_painted(&self, col: usize) -> bool {
-        let mut remaining = self.viewport.width.max(1);
-        for index in self.visible_column_indices() {
-            if remaining == 0 {
-                return false;
-            }
-            let width = self.column_widths.get(index).copied().unwrap_or(8) as usize;
-            let cell_width = width.min(remaining);
-            if index == col {
-                return cell_width > 0;
-            }
-            remaining = remaining.saturating_sub(cell_width.saturating_add(1));
-        }
-        false
     }
 
     pub fn freeze_columns(&mut self, count: usize) {

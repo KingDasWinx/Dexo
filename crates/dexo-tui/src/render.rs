@@ -22,7 +22,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 model,
                 "Explorer",
                 model.focus == Focus::Explorer,
-                crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
+                explorer_body(model, plan.explorer),
             );
             crate::widgets::tabs::render(frame, plan.tabs, model);
             hits.register(HitTarget::Editor, plan.content);
@@ -220,6 +220,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             "History",
             &model.editor.history,
             model.editor.history_selected,
+            0,
         );
     }
     if model.editor.snippet_open {
@@ -229,7 +230,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             .iter()
             .map(|snippet| snippet.name.clone())
             .collect();
-        render_list_overlay(frame, "Snippets", &names, model.editor.snippet_selected);
+        render_list_overlay(frame, "Snippets", &names, model.editor.snippet_selected, 0);
     }
     if let Some(preview) = &model.diagnostic_preview {
         let popup = centered(frame.area(), 72, 16);
@@ -251,7 +252,7 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
                 model,
                 "Explorer",
                 true,
-                crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
+                explorer_body(model, area),
             );
         }
         Focus::Editor | Focus::Palette => {
@@ -316,7 +317,15 @@ fn inspector_title(model: &Model) -> String {
 
 fn inspector_body(model: &Model) -> String {
     if model.inspector.open {
-        return describe_object_inspector(&model.inspector);
+        let mut body = describe_object_inspector(&model.inspector);
+        if !model.results.columns().is_empty() {
+            body.push('\n');
+            for column in model.results.columns() {
+                let null = if column.nullable { "null" } else { "not null" };
+                body.push_str(&format!("{} {} {null}\n", column.name, column.type_name));
+            }
+        }
+        return body;
     }
     if let Some(view) = &model.data.viewer {
         return crate::widgets::viewer::describe(view);
@@ -425,6 +434,11 @@ fn describe_object_inspector(
         }
     }
     lines.join("\n")
+}
+
+fn explorer_body(model: &Model, area: Rect) -> String {
+    let rows = area.height.saturating_sub(2) as usize;
+    crate::widgets::object_tree::render_visible(&model.explorer, Some(rows.max(1))).join("\n")
 }
 
 fn render_bar(frame: &mut Frame, area: Rect, text: String) {
@@ -619,13 +633,17 @@ fn render_completion(frame: &mut Frame, model: &Model) {
         .editor
         .completions
         .iter()
-        .map(|item| item.label.clone())
+        .map(|item| match &item.detail {
+            Some(detail) => format!("{}  {detail}", item.label),
+            None => item.label.clone(),
+        })
         .collect();
     render_list_overlay(
         frame,
         "Completions",
         &labels,
         model.editor.completion_selected,
+        model.editor.completion_offset,
     );
 }
 
@@ -645,15 +663,23 @@ fn render_parameters(frame: &mut Frame, model: &Model) {
     );
 }
 
-fn render_list_overlay(frame: &mut Frame, title: &str, items: &[String], selected: usize) {
+fn render_list_overlay(
+    frame: &mut Frame,
+    title: &str,
+    items: &[String],
+    selected: usize,
+    offset: usize,
+) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
     }
     let popup = centered(area, 48, 12);
     frame.render_widget(Clear, popup);
+    let rows = (popup.height.saturating_sub(2) as usize).max(1);
+    let offset = scroll_to_selection(selected, offset, items.len(), rows);
     let mut lines = Vec::new();
-    for (index, item) in items.iter().enumerate().take(10) {
+    for (index, item) in items.iter().enumerate().skip(offset).take(rows) {
         let marker = if index == selected { ">" } else { " " };
         lines.push(format!("{marker} {item}"));
     }

@@ -1,13 +1,14 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 94
 expression: "render_to_string(&snapshot_model(), 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
 │[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│▾ local                   ││   1▸select 1                                                         │
-│  ▸ public                ││                                                                      │
-│  ▸ mysql.users [restricte││                                                                      │
+│ ▾ local                  ││   1▸select 1                                                         │
+│>  ▸ public               ││                                                                      │
+│   ▸ mysql.users [restrict││                                                                      │
 │actions: properties DDL da││                                                                      │
 │selected: local.public    ││                                                                      │
 │                          ││                                                                      │

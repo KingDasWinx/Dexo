@@ -1,13 +1,14 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 227
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
 │[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
-│▾ local                   ││   1▸select 1                                                                                         ││                          │
-│  ▸ public                ││                                                                                                      ││                          │
-│  ▸ mysql.users [restricte││                                                                                                      ││                          │
+│ ▾ local                  ││   1▸select 1                                                                                         ││                          │
+│>  ▸ public               ││                                                                                                      ││                          │
+│   ▸ mysql.users [restrict││                                                                                                      ││                          │
 │actions: properties DDL da││                                                                                                      ││                          │
 │selected: local.public    ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │

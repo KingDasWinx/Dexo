@@ -411,4 +411,11 @@ fn explorer_up_down_moves_selection() {
         model.explorer.selected.as_ref().map(|id| id.as_str()),
         Some("catalog:db")
     );
+    let lines = dexo_tui::widgets::object_tree::render_lines(&model.explorer);
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.starts_with('>') && line.contains("db")),
+        "{lines:?}"
+    );
 }

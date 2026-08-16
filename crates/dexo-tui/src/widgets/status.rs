@@ -66,6 +66,17 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         model.layout_preset.label(),
         model.results.row_count()
     )));
+    if model.focus == crate::model::Focus::Explorer {
+        let hint = model
+            .explorer
+            .selected_node()
+            .and_then(|node| {
+                crate::screens::explorer::opens_table_data(&node.kind)
+                    .then_some("Enter abre a table")
+            })
+            .unwrap_or("Enter expande");
+        spans.push(Span::raw(format!("  {hint}")));
+    }
     if let Some(message) = model.messages.last() {
         spans.push(Span::raw(format!("  {message}")));
     }

@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
     CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete, expand_placeholders, format_sql, named_parameters,
+    complete, current_token, expand_placeholders, format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -23,6 +23,7 @@ pub struct EditorState {
     pub format_preview: Option<String>,
     pub completion_open: bool,
     pub completion_selected: usize,
+    pub completion_offset: usize,
     pub parameter_prompt: bool,
     pub parameter_index: usize,
     pub parameter_draft: String,
@@ -57,6 +58,7 @@ impl Clone for EditorState {
             format_preview: self.format_preview.clone(),
             completion_open: self.completion_open,
             completion_selected: self.completion_selected,
+            completion_offset: self.completion_offset,
             parameter_prompt: self.parameter_prompt,
             parameter_index: self.parameter_index,
             parameter_draft: self.parameter_draft.clone(),
@@ -100,6 +102,7 @@ impl Default for EditorState {
             format_preview: None,
             completion_open: false,
             completion_selected: 0,
+            completion_offset: 0,
             parameter_prompt: false,
             parameter_index: 0,
             parameter_draft: String::new(),
@@ -132,27 +135,40 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
         })
         .collect();
     if with_completion {
-        // ponytail: complete after FROM when present so table names survive a trailing :param token.
-        let at = sql
-            .to_ascii_lowercase()
-            .find(" from ")
-            .map(|index| index + 6)
-            .unwrap_or(byte_cursor);
-        let objects = model.explorer.flatten();
-        model.editor.completions = if objects.is_empty() {
-            complete(
-                &sql,
-                at.min(sql.len()),
-                &model.editor.catalog,
-                Dialect::Postgres,
-            )
-        } else {
-            let snapshot = dexo_app::SnapshotCatalog::new(objects);
-            complete(&sql, at.min(sql.len()), &snapshot, Dialect::Postgres)
-        };
-        model.editor.completion_open = true;
-        model.editor.completion_selected = 0;
+        apply_completions(model, &sql, byte_cursor, false);
     }
+}
+
+fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
+    let at = byte_cursor.min(sql.len());
+    let objects = model.explorer.flatten();
+    let items = if objects.is_empty() {
+        complete(sql, at, &model.editor.catalog, Dialect::Postgres)
+    } else {
+        let snapshot = dexo_app::SnapshotCatalog::new(objects);
+        complete(sql, at, &snapshot, Dialect::Postgres)
+    };
+    let prefix = &sql[..at];
+    let token = current_token(prefix);
+    let after_dot = prefix.trim_end().ends_with('.');
+    if items.is_empty() || (live && token.is_empty() && !after_dot) {
+        model.editor.completions.clear();
+        model.editor.completion_open = false;
+        model.editor.completion_selected = 0;
+        model.editor.completion_offset = 0;
+        return;
+    }
+    model.editor.completions = items;
+    model.editor.completion_open = true;
+    model.editor.completion_selected = 0;
+    model.editor.completion_offset = 0;
+}
+
+fn suggest_live(model: &mut Model) {
+    let sql = model.active_document().text();
+    let cursor = model.active_document().cursor();
+    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    apply_completions(model, &sql, byte_cursor, true);
 }
 
 fn is_sensitive_name(name: &str) -> bool {
@@ -198,8 +214,9 @@ pub fn accept_completion(model: &mut Model) {
     let Some(item) = model.editor.completions.get(index).cloned() else {
         return;
     };
-    insert_text(model, &item.label);
+    replace_current_token(model, &item.label);
     model.editor.completion_open = false;
+    model.editor.completions.clear();
     refresh_intelligence(model, false);
 }
 
@@ -210,6 +227,29 @@ pub fn move_completion(model: &mut Model, delta: i32) {
     let max = model.editor.completions.len() as i32 - 1;
     model.editor.completion_selected =
         (model.editor.completion_selected as i32 + delta).clamp(0, max) as usize;
+    model.editor.completion_offset = crate::palette::scroll_to_selection(
+        model.editor.completion_selected,
+        model.editor.completion_offset,
+        model.editor.completions.len(),
+        8,
+    );
+}
+
+fn replace_current_token(model: &mut Model, text: &str) {
+    let sql = model.active_document().text();
+    let cursor = model.active_document().cursor();
+    let prefix: String = sql.chars().take(cursor).collect();
+    let token_chars = current_token(&prefix).chars().count();
+    let start = cursor.saturating_sub(token_chars);
+    let doc = model.active_document_mut();
+    if !doc.typing {
+        doc.sql.end_group();
+        doc.sql.begin_group();
+        doc.typing = true;
+    }
+    doc.anchor = None;
+    let _ = doc.sql.replace_chars(start..cursor, text);
+    reveal_cursor(doc);
 }
 
 pub fn submit_parameters(model: &mut Model) {
@@ -256,6 +296,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
         }
         KeyCode::Char(ch) if !ctrl => {
             insert_text(model, &ch.to_string());
+            suggest_live(model);
             true
         }
         KeyCode::Enter if model.editor.completion_open => {
@@ -288,6 +329,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
         }
         KeyCode::Backspace => {
             backspace(model);
+            suggest_live(model);
             true
         }
         KeyCode::Delete => {

@@ -481,8 +481,8 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
         },
         PaletteEntry {
             id: "explorer.expand",
-            title: "Expand Explorer Node",
-            keywords: &["tree", "open"],
+            title: "Expand or Open Table",
+            keywords: &["tree", "open", "enter", "table"],
             shortcut: Some("Enter"),
             disabled_reason: None,
             action: || Action::ExplorerExpand,

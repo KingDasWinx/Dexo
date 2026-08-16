@@ -272,41 +272,46 @@ mod tests {
 
     #[test]
     fn left_right_pans_to_hidden_columns() {
+        use crate::model::GridSelection;
         use dexo_driver_api::{ColumnMeta, DbValue};
 
         let mut grid = GridModel::default();
         grid.set_columns(
-            (0..10)
+            (0..8)
                 .map(|i| ColumnMeta {
-                    name: format!("col{i}"),
+                    name: format!("wide_column_name_{i:02}"),
                     type_name: "text".into(),
                     nullable: true,
                 })
                 .collect(),
         );
         grid.append_rows(vec![
-            (0..10).map(|i| DbValue::Text(format!("v{i}"))).collect(),
-            (0..10).map(|i| DbValue::Text(format!("w{i}"))).collect(),
+            (0..8).map(|_| DbValue::Text("x".repeat(40))).collect(),
         ]);
-        grid.set_viewport_size(12, 4);
-        grid.select_cell(0, 0);
+        grid.set_viewport_size(20, 4);
+        grid.select_row(0);
         assert_eq!(grid.viewport().column_offset, 0);
-        for _ in 0..6 {
+        for expected in 1..=4 {
             grid.move_cursor_col(1);
+            assert_eq!(
+                grid.viewport().column_offset,
+                expected,
+                "right should increment column_offset every key when columns overflow"
+            );
+            assert!(
+                matches!(grid.kind, GridSelection::Row { row: 0 }),
+                "left/right must keep the row cursor"
+            );
         }
-        assert!(
-            grid.viewport().column_offset > 0,
-            "right should pan to columns that do not fit the viewport"
-        );
-        assert_eq!(grid.selection(), Some((0, 6)));
         grid.move_cursor_row(1, true);
         let before = grid.kind.clone();
         grid.move_cursor_col(1);
         assert_eq!(
             std::mem::discriminant(&grid.kind),
             std::mem::discriminant(&before),
-            "left/right must not collapse a row range"
+            "left/right must not extend or collapse a row range"
         );
+        assert!(grid.viewport().column_offset > 4);
         while grid.viewport().column_offset > 0 {
             grid.move_cursor_col(-1);
         }

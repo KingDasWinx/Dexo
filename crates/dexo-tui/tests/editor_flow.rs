@@ -41,6 +41,8 @@ fn editor_highlights_formats_completes_and_prompts_for_parameters() {
             .collect::<Vec<_>>(),
         ["id"]
     );
+    model.set_sql("select * from u");
+    update(&mut model, Action::RefreshSqlIntelligence);
     assert!(
         model
             .editor
@@ -48,6 +50,24 @@ fn editor_highlights_formats_completes_and_prompts_for_parameters() {
             .iter()
             .any(|item| item.label == "users")
     );
+}
+
+#[test]
+fn typing_opens_completion_and_tab_replaces_token() {
+    let mut model = Model::default();
+    model.focus = dexo_tui::model::Focus::Editor;
+    send_text(&mut model, "sel");
+    assert!(model.editor.completion_open);
+    assert!(
+        model
+            .editor
+            .completions
+            .iter()
+            .any(|item| item.label == "select")
+    );
+    update(&mut model, key(KeyCode::Tab));
+    assert_eq!(model.active_document().text(), "select");
+    assert!(!model.editor.completion_open);
 }
 
 #[test]

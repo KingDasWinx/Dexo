@@ -3,7 +3,9 @@ use dexo_app::data::{inspect_value, related_filter};
 use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 
 use crate::action::{Action, Effect, FocusTarget};
+use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
+use ratatui::layout::Rect;
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
@@ -386,7 +388,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
-        Action::ExplorerExpand => expand_selected_catalog(model),
+        Action::ExplorerExpand => expand_or_open_selected(model),
         Action::RefreshCatalogNode => refresh_catalog(model, false),
         Action::RefreshCatalogSubtree | Action::RefreshCatalogAll => refresh_catalog(model, true),
         Action::CatalogLoaded {
@@ -445,10 +447,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ExplorerUp => {
             model.explorer.move_selection(-1);
+            model.explorer.sync_scroll(explorer_visible_rows(model));
             Vec::new()
         }
         Action::ExplorerDown => {
             model.explorer.move_selection(1);
+            model.explorer.sync_scroll(explorer_visible_rows(model));
             Vec::new()
         }
         Action::SwitchTab { index } => {
@@ -1035,11 +1039,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ResultsLeft => {
-            model.results.move_cursor_col(-1);
+            model.results.scroll_columns(-1);
             Vec::new()
         }
         Action::ResultsRight => {
-            model.results.move_cursor_col(1);
+            model.results.scroll_columns(1);
             Vec::new()
         }
         Action::ResultsPageUp => {
@@ -1657,6 +1661,17 @@ fn confirm_delete(
     }]
 }
 
+fn explorer_visible_rows(model: &Model) -> usize {
+    let area = Rect::new(0, 0, model.width.max(1), model.height.max(1));
+    let plan = LayoutPlan::for_area_with(area, Some(&model.panes));
+    let height = if matches!(plan.mode, crate::layout::LayoutMode::Compact) {
+        plan.content.height
+    } else {
+        plan.explorer.height
+    };
+    height.saturating_sub(2).max(1) as usize
+}
+
 fn connect_selected(model: &mut Model) -> Vec<Effect> {
     let Some(profile) = model.connections.selected().cloned() else {
         return Vec::new();
@@ -2228,6 +2243,17 @@ fn catalog_load_effect(
     }]
 }
 
+fn expand_or_open_selected(model: &mut Model) -> Vec<Effect> {
+    if model
+        .explorer
+        .selected_node()
+        .is_some_and(|node| crate::screens::explorer::opens_table_data(&node.kind))
+    {
+        return open_selected_table(model);
+    }
+    expand_selected_catalog(model)
+}
+
 fn expand_selected_catalog(model: &mut Model) -> Vec<Effect> {
     let Some(id) = model.explorer.selected.clone() else {
         return Vec::new();
@@ -2238,6 +2264,26 @@ fn expand_selected_catalog(model: &mut Model) -> Vec<Effect> {
     } else {
         Vec::new()
     }
+}
+
+fn open_selected_table(model: &mut Model) -> Vec<Effect> {
+    let mut effects = open_object_data(model);
+    effects.extend(open_inspector(model));
+    if let Some(id) = model.explorer.selected.clone() {
+        let operation = crate::runtime::OperationId::new();
+        if model.explorer.expand_with(&id, operation) {
+            effects.extend(catalog_load_effect(model, Some(id), operation, false));
+        }
+    }
+    if effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::LoadTableData { .. }))
+    {
+        model.focus = Focus::Results;
+        model.panes.results_visible = true;
+        model.panes.inspector_visible = true;
+    }
+    effects
 }
 
 fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
@@ -3321,5 +3367,113 @@ mod tests {
         let mut model = Model::default();
         update(&mut model, Action::SaveActiveDocument);
         assert!(model.file_picker.open);
+    }
+
+    fn catalog_object(
+        id: &str,
+        kind: dexo_driver_api::ObjectKind,
+        name: &str,
+    ) -> dexo_driver_api::CatalogObject {
+        dexo_driver_api::CatalogObject::new(
+            dexo_driver_api::ObjectId::new(id),
+            kind,
+            dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), name),
+            None,
+        )
+    }
+
+    #[test]
+    fn explorer_enter_opens_table_data_and_inspector() {
+        use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
+
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        model.explorer.replace_roots(CatalogList {
+            objects: vec![catalog_object("table:orders", ObjectKind::Table, "orders")],
+            restrictions: vec![],
+        });
+        model.explorer.select(ObjectId::new("table:orders"));
+        let effects = update(&mut model, Action::ExplorerExpand);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTableData { .. }))
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadObjectInspector { .. }))
+        );
+        assert!(model.inspector.open);
+        assert_eq!(model.focus, Focus::Results);
+    }
+
+    #[test]
+    fn explorer_enter_on_schema_still_expands() {
+        use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
+
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        model.explorer.replace_roots(CatalogList {
+            objects: vec![catalog_object(
+                "schema:public",
+                ObjectKind::Schema,
+                "public",
+            )],
+            restrictions: vec![],
+        });
+        model.explorer.select(ObjectId::new("schema:public"));
+        let effects = update(&mut model, Action::ExplorerExpand);
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadCatalogChildren { .. }))
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTableData { .. }))
+        );
+    }
+
+    #[test]
+    fn results_right_increments_column_offset_each_key() {
+        use crate::model::GridSelection;
+        use dexo_driver_api::ColumnMeta;
+
+        let mut model = Model::default();
+        model.results.set_columns(
+            (0..8)
+                .map(|i| ColumnMeta {
+                    name: format!("wide_column_name_{i:02}"),
+                    type_name: "text".into(),
+                    nullable: true,
+                })
+                .collect(),
+        );
+        model.results.append_rows(vec![
+            (0..8).map(|_| DbValue::Text("x".repeat(40))).collect(),
+            (0..8).map(|_| DbValue::Text("y".repeat(40))).collect(),
+        ]);
+        model.results.set_viewport_size(20, 4);
+        model.results.select_row(0);
+        update(&mut model, Action::ResultsRight);
+        assert_eq!(model.results.viewport().column_offset, 1);
+        update(&mut model, Action::ResultsRight);
+        assert_eq!(model.results.viewport().column_offset, 2);
+        model.results.move_cursor_row(1, true);
+        let before = model.results.kind.clone();
+        update(&mut model, Action::ResultsRight);
+        assert_eq!(
+            std::mem::discriminant(&model.results.kind),
+            std::mem::discriminant(&before)
+        );
+        assert!(matches!(before, GridSelection::Range { .. }));
     }
 }
