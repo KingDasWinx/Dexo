@@ -26,27 +26,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             );
             crate::widgets::tabs::render(frame, plan.tabs, model);
             hits.register(HitTarget::Editor, plan.content);
-            if model.tabs.active == 2 {
-                render_panel(
-                    frame,
-                    plan.content,
-                    model,
-                    "Schema",
-                    model.focus == Focus::Editor,
-                    crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
-                );
-            } else if model.tabs.active == 4 {
-                render_panel(
-                    frame,
-                    plan.content,
-                    model,
-                    "Explain",
-                    model.focus == Focus::Editor,
-                    model.explain.lines().join("\n"),
-                );
-            } else {
-                crate::widgets::editor::render(frame, plan.content, model);
-            }
+            render_editor_content(frame, plan.content, model);
             hits.register(HitTarget::Grid, plan.results);
             crate::widgets::grid::render(frame, plan.results, model, hits);
             render_panel(
@@ -257,27 +237,7 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
         }
         Focus::Editor | Focus::Palette => {
             hits.register(HitTarget::Editor, area);
-            if model.tabs.active == 2 {
-                render_panel(
-                    frame,
-                    area,
-                    model,
-                    "Schema",
-                    true,
-                    crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
-                );
-            } else if model.tabs.active == 4 {
-                render_panel(
-                    frame,
-                    area,
-                    model,
-                    "Explain",
-                    true,
-                    model.explain.lines().join("\n"),
-                );
-            } else {
-                crate::widgets::editor::render(frame, area, model);
-            }
+            render_editor_content(frame, area, model);
         }
         Focus::Results => {
             hits.register(HitTarget::Grid, area);
@@ -313,6 +273,130 @@ fn context_line(model: &Model) -> String {
 
 fn inspector_title(model: &Model) -> String {
     format!("Inspector · {}", model.inspector.tab.label())
+}
+
+fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model) {
+    if model.tabs.active == 0 {
+        crate::widgets::editor::render(frame, area, model);
+        return;
+    }
+    let (title, body) = editor_tab_view(model);
+    render_panel_scrolled(
+        frame,
+        area,
+        model,
+        title,
+        model.focus == Focus::Editor,
+        body,
+        model.tabs.scroll,
+    );
+}
+
+fn editor_tab_view(model: &Model) -> (&'static str, String) {
+    match model.tabs.active {
+        1 => ("Data", data_tab_body(model)),
+        2 => ("DDL", ddl_tab_body(model)),
+        3 => ("Properties", properties_tab_body(model)),
+        4 => ("Explain", model.explain.lines().join("\n")),
+        _ => ("Editor", String::new()),
+    }
+}
+
+fn data_tab_body(model: &Model) -> String {
+    let mut lines = Vec::new();
+    let target = model.data.target.display_unquoted();
+    if !target.is_empty() && target != "tbl" {
+        lines.push(format!("table: {target}"));
+    }
+    if let Some(filter) = &model.data.filter {
+        lines.push(format!("filter: {filter:?}"));
+    }
+    lines.push(format!(
+        "rows: {}  page: {}  limit: {}",
+        model.results.row_count(),
+        model.data.page_offset,
+        model.data.page_limit
+    ));
+    if model.results.columns().is_empty() {
+        lines.push("Open a table or run a query. Rows stay in Results.".into());
+    } else {
+        lines.push("columns:".into());
+        for column in model.results.columns() {
+            let null = if column.nullable { "null" } else { "not null" };
+            lines.push(format!("  {} {} {null}", column.name, column.type_name));
+        }
+    }
+    lines.join("\n")
+}
+
+fn ddl_tab_body(model: &Model) -> String {
+    if let Some(ddl) = &model.inspector.ddl {
+        let name = if model.inspector.qualified_name.is_empty() {
+            "DDL"
+        } else {
+            model.inspector.qualified_name.as_str()
+        };
+        format!("{name}\n\n{ddl}")
+    } else {
+        crate::widgets::form::render_lines(&model.schema_editor).join("\n")
+    }
+}
+
+fn properties_tab_body(model: &Model) -> String {
+    if model.inspector.qualified_name.is_empty() && model.inspector.object.is_none() {
+        return "Select an object in Explorer.".into();
+    }
+    let mut lines = Vec::new();
+    if !model.inspector.qualified_name.is_empty() {
+        lines.push(model.inspector.qualified_name.clone());
+    }
+    if let Some(error) = &model.inspector.error {
+        lines.push(format!("error: {error}"));
+    }
+    for restriction in &model.inspector.restrictions {
+        lines.push(format!("restricted: {restriction}"));
+    }
+    if let Some(object) = &model.inspector.object {
+        lines.push(format!("kind: {}", object.kind.as_str()));
+    }
+    if !model.inspector.dependencies.is_empty() {
+        lines.push(format!(
+            "deps: {}",
+            model
+                .inspector
+                .dependencies
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !model.inspector.dependents.is_empty() {
+        lines.push(format!(
+            "dependents: {}",
+            model
+                .inspector
+                .dependents
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !model.inspector.effective_privileges.is_empty() {
+        lines.push(format!(
+            "privileges: {}",
+            model.inspector.effective_privileges.join(", ")
+        ));
+    }
+    if !model.results.columns().is_empty() {
+        lines.push("columns:".into());
+        for column in model.results.columns() {
+            let null = if column.nullable { "null" } else { "not null" };
+            lines.push(format!("  {} {} {null}", column.name, column.type_name));
+        }
+    }
+    lines.join("\n")
 }
 
 fn inspector_body(model: &Model) -> String {
@@ -456,15 +540,29 @@ fn render_panel(
     focused: bool,
     body: String,
 ) {
+    render_panel_scrolled(frame, area, model, title, focused, body, 0);
+}
+
+fn render_panel_scrolled(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    title: &str,
+    focused: bool,
+    body: String,
+    scroll: u16,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     if area.width < 2 || area.height < 2 {
-        frame.render_widget(Paragraph::new(body), area);
+        frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), area);
         return;
     }
     frame.render_widget(
-        Paragraph::new(body).block(pane_block(model, title, focused)),
+        Paragraph::new(body)
+            .scroll((scroll, 0))
+            .block(pane_block(model, title, focused)),
         area,
     );
 }
@@ -816,6 +914,22 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    #[test]
+    fn editor_tabs_are_not_all_sql() {
+        let mut model = Model::default();
+        model.width = 100;
+        model.height = 40;
+        model.tabs.active = 1;
+        let data = render_to_string(&model, 100, 40);
+        assert!(data.contains("Open a table or run a query"));
+        model.tabs.active = 3;
+        let props = render_to_string(&model, 100, 40);
+        assert!(props.contains("Select an object in Explorer"));
+        model.tabs.active = 2;
+        let ddl = render_to_string(&model, 100, 40);
+        assert!(ddl.contains("schema table") || ddl.contains("target:"));
     }
 
     #[test]
