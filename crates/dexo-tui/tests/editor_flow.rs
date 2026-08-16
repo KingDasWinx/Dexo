@@ -198,3 +198,30 @@ async fn save_is_atomic_and_external_change_requires_resolution() {
     assert!(matches!(error, DocumentIoError::ExternalConflict { .. }));
     assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "select 2");
 }
+
+#[test]
+fn completion_popup_accepts_selected_item() {
+    let mut model = model_with_sql("select * from ");
+    update(&mut model, Action::RefreshSqlIntelligence);
+    assert!(model.editor.completion_open);
+    assert!(!model.editor.completions.is_empty());
+    model.editor.completion_selected = model
+        .editor
+        .completions
+        .iter()
+        .position(|item| item.label == "users")
+        .unwrap_or(0);
+    update(&mut model, Action::AcceptCompletion);
+    assert!(model.active_document().text().contains("users"));
+}
+
+#[test]
+fn history_overlay_enter_reruns() {
+    let mut model = Model::default();
+    model.editor.history = vec!["select 9".into()];
+    update(&mut model, Action::HistoryLoaded(vec!["select 9".into()]));
+    assert!(model.editor.history_open);
+    update(&mut model, Action::HistoryPick);
+    assert_eq!(model.active_document().text(), "select 9");
+    assert!(!model.editor.history_open);
+}

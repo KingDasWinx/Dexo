@@ -384,3 +384,31 @@ fn replace_roots_requests_snapshot_capture() {
             .any(|effect| matches!(effect, dexo_tui::Effect::CaptureCatalogSnapshot { .. }))
     );
 }
+
+#[test]
+fn explorer_up_down_moves_selection() {
+    let mut model = Model::default();
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![
+            object("catalog:db", ObjectKind::Catalog, ("db", "db", "db"), None),
+            object(
+                "schema:public",
+                ObjectKind::Schema,
+                ("db", "public", "public"),
+                Some("catalog:db"),
+            ),
+        ],
+        restrictions: vec![],
+    });
+    model.explorer.select(ObjectId::new("catalog:db"));
+    update(&mut model, Action::ExplorerDown);
+    assert_eq!(
+        model.explorer.selected.as_ref().map(|id| id.as_str()),
+        Some("schema:public")
+    );
+    update(&mut model, Action::ExplorerUp);
+    assert_eq!(
+        model.explorer.selected.as_ref().map(|id| id.as_str()),
+        Some("catalog:db")
+    );
+}

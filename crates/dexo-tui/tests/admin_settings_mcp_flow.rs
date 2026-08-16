@@ -110,3 +110,19 @@ fn settings_open_applies_without_fixture() {
     update(&mut model, Action::OpenSettings);
     assert!(model.settings.open);
 }
+
+#[test]
+fn open_admin_emits_load_when_session_ready() {
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
+    let effects = update(&mut model, Action::OpenAdmin);
+    assert!(model.admin.open);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadAdminSessions { .. }))
+    );
+}

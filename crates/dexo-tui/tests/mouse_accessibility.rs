@@ -13,8 +13,59 @@ fn click_on_second_result_tab_selects_that_tab() {
     let (x, y) = map.center(HitTarget::ResultTab(2));
     assert_eq!(
         mouse_action(x, y, &map),
-        Some(Action::Focus(dexo_tui::action::FocusTarget::Results))
+        Some(Action::SelectResultTab { index: 2 })
     );
+    let mut model = Model::default();
+    model.results.tabs = vec![
+        dexo_tui::model::ResultTab::new(
+            dexo_tui::model::ResultKey {
+                operation: dexo_tui::runtime::OperationKey::new(
+                    dexo_tui::runtime::OperationId::new(),
+                    "",
+                    "scratch",
+                    1,
+                ),
+                index: 0,
+            },
+            "r0",
+        ),
+        dexo_tui::model::ResultTab::new(
+            dexo_tui::model::ResultKey {
+                operation: dexo_tui::runtime::OperationKey::new(
+                    dexo_tui::runtime::OperationId::new(),
+                    "",
+                    "scratch",
+                    1,
+                ),
+                index: 1,
+            },
+            "r1",
+        ),
+        dexo_tui::model::ResultTab::new(
+            dexo_tui::model::ResultKey {
+                operation: dexo_tui::runtime::OperationKey::new(
+                    dexo_tui::runtime::OperationId::new(),
+                    "",
+                    "scratch",
+                    1,
+                ),
+                index: 2,
+            },
+            "r2",
+        ),
+    ];
+    model.hits = map;
+    update(
+        &mut model,
+        Action::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }),
+    );
+    assert_eq!(model.results.active, 2);
+    assert_eq!(model.focus, dexo_tui::model::Focus::Results);
 }
 
 #[test]

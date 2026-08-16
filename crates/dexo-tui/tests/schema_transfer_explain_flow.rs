@@ -227,3 +227,21 @@ fn create_table_change_exists() {
         },
     };
 }
+
+#[test]
+fn open_ddl_preview_emits_preview_effect_when_connected() {
+    use dexo_tui::action::Action;
+    use dexo_tui::model::Model;
+    use dexo_tui::update;
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
+    let effects = update(&mut model, Action::OpenDdlPreview);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::PreviewDdl { .. }))
+    );
+}

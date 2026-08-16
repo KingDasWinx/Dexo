@@ -93,6 +93,7 @@ fn bootstrap_lists_profiles_without_auto_connecting() {
         layout: None,
         documents: Vec::new(),
         projects: Vec::new(),
+        snippets: Vec::new(),
     };
     let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
     assert_eq!(model.connections.profiles.len(), 1);
