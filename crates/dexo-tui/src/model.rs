@@ -1,5 +1,6 @@
 use std::collections::BTreeSet;
 use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
 use dexo_app::event::TaskId;
 use dexo_app::{ExecutionTarget, ScriptPolicy};
@@ -125,7 +126,7 @@ pub struct VisibleRow<'a> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultBuffer {
     pub columns: Vec<ColumnMeta>,
-    rows: Vec<Vec<DbValue>>,
+    rows: Arc<Vec<Vec<DbValue>>>,
     estimated_bytes: usize,
     truncated: bool,
 }
@@ -142,6 +143,10 @@ impl ResultBuffer {
         &self.rows
     }
 
+    pub fn rows_snapshot(&self) -> Arc<Vec<Vec<DbValue>>> {
+        Arc::clone(&self.rows)
+    }
+
     pub fn estimated_bytes(&self) -> usize {
         self.estimated_bytes
     }
@@ -151,22 +156,23 @@ impl ResultBuffer {
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<DbValue>>) {
+        let storage = Arc::make_mut(&mut self.rows);
         for row in rows {
             let added = estimated_row_bytes(&row);
-            if self.rows.len() >= Self::MAX_ROWS
+            if storage.len() >= Self::MAX_ROWS
                 || self.estimated_bytes.saturating_add(added) > Self::MAX_BYTES
             {
                 self.truncated = true;
                 break;
             }
             self.estimated_bytes += added;
-            self.rows.push(row);
+            storage.push(row);
         }
     }
 
     pub fn clear(&mut self) {
         self.columns.clear();
-        self.rows.clear();
+        self.rows = Arc::default();
         self.estimated_bytes = 0;
         self.truncated = false;
     }
@@ -274,7 +280,7 @@ impl ResultsState {
         self.tabs
             .get(self.active)
             .map(|tab| &tab.grid)
-            .unwrap_or(&EMPTY_GRID)
+            .unwrap_or_else(|| &*EMPTY_GRID)
     }
 
     fn grid_mut(&mut self) -> &mut GridModel {
@@ -293,27 +299,7 @@ impl ResultsState {
     }
 }
 
-static EMPTY_GRID: GridModel = GridModel {
-    buffer: ResultBuffer {
-        columns: Vec::new(),
-        rows: Vec::new(),
-        estimated_bytes: 0,
-        truncated: false,
-    },
-    viewport: GridViewport {
-        row_offset: 0,
-        column_offset: 0,
-        height: 20,
-        width: 80,
-    },
-    selection: None,
-    column_widths: Vec::new(),
-    kind: GridSelection::Cell { row: 0, col: 0 },
-    picked_rows: BTreeSet::new(),
-    frozen_columns: 0,
-    hidden_columns: Vec::new(),
-    cells: std::collections::BTreeMap::new(),
-};
+static EMPTY_GRID: LazyLock<GridModel> = LazyLock::new(GridModel::default);
 
 impl std::ops::Deref for ResultsState {
     type Target = GridModel;
@@ -661,6 +647,10 @@ impl GridModel {
 
     pub fn rows(&self) -> &[Vec<DbValue>] {
         self.buffer.rows()
+    }
+
+    pub fn rows_snapshot(&self) -> Arc<Vec<Vec<DbValue>>> {
+        self.buffer.rows_snapshot()
     }
 
     pub fn truncated(&self) -> bool {

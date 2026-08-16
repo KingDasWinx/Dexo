@@ -203,6 +203,75 @@ async fn explain_uses_statement_at_editor_cursor() {
     runtime.explain(&sql, cursor, true).await.unwrap();
 }
 
+fn transfer_session() -> dexo_tui::runtime::SessionId {
+    dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))
+}
+
+fn transfer_ready_model() -> dexo_tui::Model {
+    let mut model = dexo_tui::Model::default();
+    model.active_session = Some(transfer_session());
+    model
+        .results
+        .append_rows(vec![vec![dexo_driver_api::DbValue::I64(1)]]);
+    model
+}
+
+fn choose_effects(model: &mut dexo_tui::Model, query: &str) -> Vec<dexo_tui::Effect> {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use dexo_tui::{Action, update};
+    let mut effects = update(model, Action::OpenPalette);
+    for ch in query.chars() {
+        effects.extend(update(
+            model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        ));
+    }
+    effects.extend(update(
+        model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    ));
+    effects
+}
+
+fn choose(model: &mut dexo_tui::Model, query: &str) {
+    let _ = choose_effects(model, query);
+}
+
+fn recording_transfer_runtime() -> dexo_tui::runtime::transfer_manager::TransferManager {
+    dexo_tui::runtime::transfer_manager::TransferManager::default()
+}
+
+#[test]
+fn every_transfer_palette_command_opens_its_own_mode() {
+    use dexo_tui::screens::transfer::TransferMode;
+    for (id, expected) in [
+        ("transfer.export", TransferMode::Export),
+        ("transfer.import", TransferMode::Import),
+        ("backup.dump", TransferMode::Backup),
+        ("backup.restore", TransferMode::Restore),
+    ] {
+        let mut model = transfer_ready_model();
+        choose(&mut model, id);
+        assert_eq!(model.transfer.mode, expected);
+    }
+}
+
+#[tokio::test]
+async fn import_and_restore_never_write_to_the_source_path() {
+    use dexo_tui::action::TransferRequest;
+    use dexo_tui::screens::transfer::TransferMode;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("source.dump");
+    std::fs::write(&source, b"ORIGINAL").unwrap();
+    let mut runtime = recording_transfer_runtime();
+    runtime
+        .run(TransferRequest::restore(source.clone(), transfer_session()))
+        .await
+        .unwrap();
+    assert_eq!(std::fs::read(&source).unwrap(), b"ORIGINAL");
+    assert_eq!(runtime.recorded_modes(), vec![TransferMode::Restore]);
+}
+
 #[test]
 fn create_table_change_exists() {
     let _ = SchemaChange::CreateTable {

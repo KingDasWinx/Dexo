@@ -2,7 +2,11 @@ use crossterm::event::{KeyEvent, MouseEvent};
 use dexo_app::{ConnectionProfile, NewConnection, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, TransactionMode, TransactionState};
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use crate::runtime::{OperationId, OperationKey, SessionId};
+use crate::screens::transfer::TransferMode;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -250,6 +254,19 @@ pub enum Action {
     OpenTransfer,
     OpenBackup,
     OpenRestore,
+    TransferProgress {
+        operation: OperationId,
+        rows: u64,
+        bytes: u64,
+    },
+    TransferFinished {
+        operation: OperationId,
+        message: String,
+    },
+    TransferFailed {
+        operation: OperationId,
+        message: String,
+    },
     OpenExplain,
     ExplainViewTree,
     ExplainViewTable,
@@ -430,6 +447,63 @@ pub struct PersistHistoryRequest {
 }
 
 #[derive(Clone, Debug)]
+pub enum TransferRequest {
+    Export {
+        operation: OperationId,
+        path: PathBuf,
+        format: dexo_app::transfer::TransferFormat,
+        columns: Vec<String>,
+        rows: Arc<Vec<Vec<DbValue>>>,
+    },
+    Import {
+        operation: OperationId,
+        path: PathBuf,
+        format: dexo_app::transfer::TransferFormat,
+        target: dexo_driver_api::QualifiedName,
+        strategy: dexo_app::transfer::ErrorStrategy,
+        session: SessionId,
+    },
+    Backup {
+        operation: OperationId,
+        path: PathBuf,
+        session: SessionId,
+    },
+    Restore {
+        operation: OperationId,
+        path: PathBuf,
+        session: SessionId,
+    },
+}
+
+impl TransferRequest {
+    pub fn restore(path: PathBuf, session: SessionId) -> Self {
+        Self::Restore {
+            operation: OperationId::new(),
+            path,
+            session,
+        }
+    }
+
+    pub fn mode(&self) -> TransferMode {
+        match self {
+            Self::Export { .. } => TransferMode::Export,
+            Self::Import { .. } => TransferMode::Import,
+            Self::Backup { .. } => TransferMode::Backup,
+            Self::Restore { .. } => TransferMode::Restore,
+        }
+    }
+
+    pub fn operation(&self) -> OperationId {
+        match self {
+            Self::Export { operation, .. }
+            | Self::Import { operation, .. }
+            | Self::Backup { operation, .. }
+            | Self::Restore { operation, .. } => *operation,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct FlushedDocument {
     pub id: String,
     pub title: String,
@@ -540,10 +614,7 @@ pub enum Effect {
     RevokeMcpGrants {
         profile: String,
     },
-    RunTransfer {
-        path: std::path::PathBuf,
-        mode: String,
-    },
+    RunTransfer(TransferRequest),
     LoadSnippets,
     CheckpointRecovery(RecoveryCheckpointRequest),
     PersistHistory(PersistHistoryRequest),

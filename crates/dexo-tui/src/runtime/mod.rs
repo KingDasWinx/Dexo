@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
+    TransferRequest,
 };
 
 pub mod admin_manager;
@@ -130,6 +131,7 @@ pub struct WorkbenchRuntime {
     secrets: SessionSecrets,
     query: QueryService,
     live: Arc<tokio::sync::Mutex<Option<query_runner::LiveQuery>>>,
+    transfer: transfer_manager::TransferManager,
 }
 
 impl WorkbenchRuntime {
@@ -146,6 +148,7 @@ impl WorkbenchRuntime {
             secrets: SessionSecrets::default(),
             query: QueryService::new(Arc::new(TaskRegistry::default())),
             live: Arc::new(tokio::sync::Mutex::new(None)),
+            transfer: transfer_manager::TransferManager::default(),
         }
     }
 
@@ -275,13 +278,7 @@ impl WorkbenchRuntime {
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
             crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
-            crate::Effect::RunTransfer { path, mode } => {
-                self.emit(Action::OperationFailed {
-                    key: OperationKey::new(OperationId::new(), "", "", 0),
-                    message: format!("{mode} {path:?} queued"),
-                })
-                .await;
-            }
+            crate::Effect::RunTransfer(request) => self.dispatch_transfer(request).await,
             crate::Effect::LoadSnippets => {
                 if let Some(storage) = &self.storage
                     && let Ok(snippets) = storage.list_snippets().await
@@ -450,6 +447,63 @@ impl WorkbenchRuntime {
             } => self.persist_favorite(project_id, connection_id, object_id, favorite),
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
+    }
+
+    async fn dispatch_transfer(&mut self, request: TransferRequest) {
+        let operation = request.operation();
+        let access = match &request {
+            TransferRequest::Export { .. } => transfer_manager::RuntimeAccess {
+                action_tx: self.action_tx.clone(),
+                session: None,
+                driver: None,
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                secret: None,
+            },
+            TransferRequest::Import { session, .. }
+            | TransferRequest::Backup { session, .. }
+            | TransferRequest::Restore { session, .. } => match self.transfer_access(*session) {
+                Ok(access) => access,
+                Err(message) => {
+                    self.emit(Action::TransferFailed { operation, message })
+                        .await;
+                    return;
+                }
+            },
+        };
+        let _ = self.transfer.run_with(request, Some(&access)).await;
+    }
+
+    fn transfer_access(
+        &self,
+        session: SessionId,
+    ) -> Result<transfer_manager::RuntimeAccess, String> {
+        let active = self
+            .sessions
+            .get(session)
+            .ok_or_else(|| "session is closed".to_string())?;
+        let session_arc = Arc::clone(&active.session);
+        let name = active.connection.clone();
+        let profile = self.with_repo(|repo| {
+            repo.list()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|profile| profile.name == name)
+                .ok_or_else(|| "connection profile not found".into())
+        })?;
+        let secret = self
+            .secrets
+            .get(profile.secret_ref.as_str())
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "secret is missing for this connection".to_string())?;
+        transfer_manager::RuntimeAccess::from_profile(
+            self.action_tx.clone(),
+            session_arc,
+            &profile,
+            secret,
+        )
     }
 
     async fn emit(&self, action: Action) {
@@ -709,6 +763,13 @@ impl WorkbenchRuntime {
     }
 
     pub async fn cancel(&mut self, id: OperationId) {
+        if self.transfer.cancel(id).await {
+            let _ = self
+                .action_tx
+                .send(Action::OperationCancelled(OperationKey::new(id, "", "", 0)))
+                .await;
+            return;
+        }
         query_runner::cancel_live(&self.query, &self.live, id).await;
         let _ = self
             .action_tx

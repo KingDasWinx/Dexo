@@ -2,8 +2,9 @@ use dexo_app::diagnostic_service::redact_text;
 use dexo_app::mcp::profile::McpProfile;
 use dexo_app::mcp::service::advertised_tools;
 use dexo_app::mcp::{Effect, ObjectPolicy, SelectorRule};
-use dexo_app::transfer::native_tool::{NativeToolKind, prepare};
+use dexo_app::transfer::native_tool::{NativeToolKind, NativeToolRequest, prepare};
 use dexo_mcp::hidden_error;
+use secrecy::SecretString;
 
 #[test]
 fn sql_scope_deny_does_not_enumerate() {
@@ -34,10 +35,17 @@ fn redaction_and_stdout_injection_sentinels() {
 fn native_tool_args_never_include_secret() {
     let dir = tempfile::tempdir().unwrap();
     let prepared = prepare(
-        NativeToolKind::PgDump,
-        "SUPER_SECRET_SENTINEL",
+        &NativeToolRequest {
+            kind: NativeToolKind::PgDump,
+            host: "localhost".into(),
+            port: 5432,
+            database: "dexo".into(),
+            username: "dexo".into(),
+            path: dir.path().join("out.dump"),
+            secret: SecretString::from("SUPER_SECRET_SENTINEL"),
+            expected_major: 16,
+        },
         "16.9",
-        16,
         dir.path(),
     )
     .unwrap();

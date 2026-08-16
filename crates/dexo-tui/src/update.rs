@@ -182,6 +182,17 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_query = None;
             Vec::new()
         }
+        Action::TransferProgress {
+            operation,
+            rows,
+            bytes,
+        } => apply_transfer_progress(model, operation, rows, bytes),
+        Action::TransferFinished { operation, message } => {
+            apply_transfer_finished(model, operation, message)
+        }
+        Action::TransferFailed { operation, message } => {
+            apply_transfer_failed(model, operation, message)
+        }
         Action::Bootstrapped(state) => {
             apply_bootstrap(model, *state);
             Vec::new()
@@ -762,18 +773,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenTransfer => {
-            model.transfer.open = true;
-            Vec::new()
+            open_transfer(model, crate::screens::transfer::TransferMode::Export)
         }
-        Action::OpenBackup => {
-            model.transfer.open = true;
-            model.transfer.mode = "backup";
-            Vec::new()
-        }
+        Action::OpenBackup => open_transfer(model, crate::screens::transfer::TransferMode::Backup),
         Action::OpenRestore => {
-            model.transfer.open = true;
-            model.transfer.mode = "restore";
-            Vec::new()
+            open_transfer(model, crate::screens::transfer::TransferMode::Restore)
         }
         Action::OpenExplain => {
             model.tabs.active = 4;
@@ -3165,41 +3169,149 @@ fn apply_saved_settings(model: &mut Model) {
 }
 
 fn run_transfer(model: &mut Model) -> Vec<Effect> {
-    if model.transfer.path.is_empty() {
+    let path = std::path::PathBuf::from(model.transfer.path.trim());
+    if path.as_os_str().is_empty() {
         model.file_picker.open = true;
         model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Transfer;
         model.file_picker.refresh();
         return Vec::new();
     }
-    let path = std::path::PathBuf::from(&model.transfer.path);
-    let columns: Vec<String> = model
-        .results
-        .columns()
-        .iter()
-        .map(|column| column.name.clone())
-        .collect();
-    let rows = model.results.rows().to_vec();
+    if model.transfer.mode == crate::screens::transfer::TransferMode::Restore
+        && !model.transfer.confirm_restore
+    {
+        model.transfer.confirm_restore = true;
+        model.transfer.error = None;
+        return Vec::new();
+    }
+    match build_transfer_request(model, path) {
+        Ok(request) => {
+            model.transfer.running = true;
+            model.transfer.error = None;
+            model.transfer.operation = Some(request.operation());
+            vec![Effect::RunTransfer(request)]
+        }
+        Err(message) => {
+            model.transfer.error = Some(message);
+            Vec::new()
+        }
+    }
+}
+
+fn build_transfer_request(
+    model: &Model,
+    path: std::path::PathBuf,
+) -> Result<crate::action::TransferRequest, String> {
+    use crate::action::TransferRequest;
+    use crate::screens::transfer::TransferMode;
+    let operation = crate::runtime::OperationId::new();
     let format = match model.transfer.format.as_str() {
         "json" => dexo_app::transfer::TransferFormat::Json,
         "tsv" => dexo_app::transfer::TransferFormat::Tsv,
+        "jsonl" => dexo_app::transfer::TransferFormat::Jsonl,
+        "sql" => dexo_app::transfer::TransferFormat::Sql,
         _ => dexo_app::transfer::TransferFormat::Csv,
     };
-    match dexo_app::transfer::export_rows(
-        &path,
-        format,
-        &dexo_app::transfer::FormatOptions::default(),
-        &columns,
-        rows,
-        &std::sync::atomic::AtomicBool::new(false),
-        |_| {},
-    ) {
-        Ok(progress) => {
-            model.transfer.progress = progress;
-            model.transfer.running = false;
-            model.messages.push(format!("exported {}", path.display()));
+    match model.transfer.mode {
+        TransferMode::Export => {
+            if model.results.rows().is_empty() {
+                return Err("no results available".into());
+            }
+            Ok(TransferRequest::Export {
+                operation,
+                path,
+                format,
+                columns: model
+                    .results
+                    .columns()
+                    .iter()
+                    .map(|column| column.name.clone())
+                    .collect(),
+                rows: model.results.rows_snapshot(),
+            })
         }
-        Err(error) => model.messages.push(format!("{error:?}")),
+        TransferMode::Import => {
+            let session = model.active_session.ok_or("connect a session first")?;
+            if model.data.target.object().is_empty() {
+                return Err("open a table first".into());
+            }
+            Ok(TransferRequest::Import {
+                operation,
+                path,
+                format,
+                target: model.data.target.clone(),
+                strategy: model.transfer.strategy,
+                session,
+            })
+        }
+        TransferMode::Backup => {
+            let session = model.active_session.ok_or("connect a session first")?;
+            Ok(TransferRequest::Backup {
+                operation,
+                path,
+                session,
+            })
+        }
+        TransferMode::Restore => {
+            let session = model.active_session.ok_or("connect a session first")?;
+            if !model.transfer.confirm_restore {
+                return Err("confirm restore first".into());
+            }
+            Ok(TransferRequest::Restore {
+                operation,
+                path,
+                session,
+            })
+        }
     }
+}
+
+fn open_transfer(model: &mut Model, mode: crate::screens::transfer::TransferMode) -> Vec<Effect> {
+    model.transfer.open = true;
+    model.transfer.mode = mode;
+    model.transfer.running = false;
+    model.transfer.error = None;
+    model.transfer.message = None;
+    model.transfer.confirm_restore = false;
+    model.transfer.operation = None;
+    Vec::new()
+}
+
+fn apply_transfer_progress(
+    model: &mut Model,
+    operation: crate::runtime::OperationId,
+    rows: u64,
+    bytes: u64,
+) -> Vec<Effect> {
+    if model.transfer.operation != Some(operation) {
+        return Vec::new();
+    }
+    model.transfer.progress = dexo_app::transfer::ExportProgress { rows, bytes };
+    Vec::new()
+}
+
+fn apply_transfer_finished(
+    model: &mut Model,
+    operation: crate::runtime::OperationId,
+    message: String,
+) -> Vec<Effect> {
+    if model.transfer.operation != Some(operation) {
+        return Vec::new();
+    }
+    model.transfer.running = false;
+    model.transfer.message = Some(message);
+    Vec::new()
+}
+
+fn apply_transfer_failed(
+    model: &mut Model,
+    operation: crate::runtime::OperationId,
+    message: String,
+) -> Vec<Effect> {
+    if model.transfer.operation != Some(operation) {
+        return Vec::new();
+    }
+    model.transfer.running = false;
+    model.transfer.error = Some(message);
     Vec::new()
 }
 
@@ -3640,13 +3752,17 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         }
         PaletteInvocation::OpenFlow(FlowIntent::Security) => update(model, Action::OpenSecurity),
         PaletteInvocation::OpenFlow(FlowIntent::TransferExport) => {
-            update(model, Action::OpenTransfer)
+            open_transfer(model, crate::screens::transfer::TransferMode::Export)
         }
         PaletteInvocation::OpenFlow(FlowIntent::TransferImport) => {
-            update(model, Action::OpenTransfer)
+            open_transfer(model, crate::screens::transfer::TransferMode::Import)
         }
-        PaletteInvocation::OpenFlow(FlowIntent::Backup) => update(model, Action::OpenBackup),
-        PaletteInvocation::OpenFlow(FlowIntent::Restore) => update(model, Action::OpenRestore),
+        PaletteInvocation::OpenFlow(FlowIntent::Backup) => {
+            open_transfer(model, crate::screens::transfer::TransferMode::Backup)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::Restore) => {
+            open_transfer(model, crate::screens::transfer::TransferMode::Restore)
+        }
         PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect) => open_connection_intent(
             model,
             crate::screens::connections::ConnectionIntent::Connect,

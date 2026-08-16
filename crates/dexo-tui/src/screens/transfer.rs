@@ -1,9 +1,29 @@
 use dexo_app::transfer::{Detection, ErrorStrategy, ExportProgress, RejectedRow};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum TransferMode {
+    #[default]
+    Export,
+    Import,
+    Backup,
+    Restore,
+}
+
+impl TransferMode {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Export => "export",
+            Self::Import => "import",
+            Self::Backup => "backup",
+            Self::Restore => "restore",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct TransferScreen {
     pub open: bool,
-    pub mode: &'static str,
+    pub mode: TransferMode,
     pub path: String,
     pub format: String,
     pub preview: Vec<String>,
@@ -11,13 +31,17 @@ pub struct TransferScreen {
     pub rejects: Vec<RejectedRow>,
     pub strategy: ErrorStrategy,
     pub running: bool,
+    pub operation: Option<crate::runtime::OperationId>,
+    pub error: Option<String>,
+    pub message: Option<String>,
+    pub confirm_restore: bool,
 }
 
 impl Default for TransferScreen {
     fn default() -> Self {
         Self {
             open: false,
-            mode: "export",
+            mode: TransferMode::Export,
             path: String::new(),
             format: "csv".into(),
             preview: Vec::new(),
@@ -25,6 +49,10 @@ impl Default for TransferScreen {
             rejects: Vec::new(),
             strategy: ErrorStrategy::Stop,
             running: false,
+            operation: None,
+            error: None,
+            message: None,
+            confirm_restore: false,
         }
     }
 }
@@ -33,7 +61,7 @@ impl TransferScreen {
     pub fn sample_preview() -> Self {
         Self {
             open: true,
-            mode: "import",
+            mode: TransferMode::Import,
             path: "orders.csv".into(),
             format: "csv".into(),
             preview: vec!["id,name".into(), "1,ok".into(), "2,BAD".into()],
@@ -41,13 +69,17 @@ impl TransferScreen {
             rejects: Vec::new(),
             strategy: ErrorStrategy::RejectFile,
             running: false,
+            operation: None,
+            error: None,
+            message: None,
+            confirm_restore: false,
         }
     }
 
     pub fn sample_progress() -> Self {
         Self {
             open: true,
-            mode: "export",
+            mode: TransferMode::Export,
             path: "out.csv".into(),
             format: "csv".into(),
             preview: Vec::new(),
@@ -58,13 +90,17 @@ impl TransferScreen {
             rejects: Vec::new(),
             strategy: ErrorStrategy::Stop,
             running: true,
+            operation: None,
+            error: None,
+            message: None,
+            confirm_restore: false,
         }
     }
 
     pub fn sample_rejects() -> Self {
         Self {
             open: true,
-            mode: "import",
+            mode: TransferMode::Import,
             path: "orders.csv".into(),
             format: "csv".into(),
             preview: vec!["preview ready".into()],
@@ -76,13 +112,17 @@ impl TransferScreen {
             }],
             strategy: ErrorStrategy::RejectFile,
             running: false,
+            operation: None,
+            error: None,
+            message: None,
+            confirm_restore: false,
         }
     }
 
     pub fn from_detection(path: &str, detection: &Detection) -> Self {
         Self {
             open: true,
-            mode: "import",
+            mode: TransferMode::Import,
             path: path.into(),
             format: if detection.delimiter == b'\t' {
                 "tsv"
@@ -95,18 +135,35 @@ impl TransferScreen {
             rejects: Vec::new(),
             strategy: ErrorStrategy::Stop,
             running: false,
+            operation: None,
+            error: None,
+            message: None,
+            confirm_restore: false,
         }
     }
 
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
-            format!("{} {}", self.mode, self.path),
+            format!("{} {}", self.mode.as_str(), self.path),
             format!("format={} strategy={:?}", self.format, self.strategy),
             format!(
                 "progress rows={} bytes={} running={}",
                 self.progress.rows, self.progress.bytes, self.running
             ),
         ];
+        if self.mode == TransferMode::Restore {
+            if self.confirm_restore {
+                lines.push("restore confirmed".into());
+            } else {
+                lines.push("confirm restore into current session".into());
+            }
+        }
+        if let Some(error) = &self.error {
+            lines.push(format!("error: {error}"));
+        }
+        if let Some(message) = &self.message {
+            lines.push(message.clone());
+        }
         if !self.preview.is_empty() {
             lines.push("preview:".into());
             lines.extend(self.preview.iter().cloned());

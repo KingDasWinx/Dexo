@@ -1,7 +1,8 @@
 use dexo_app::transfer::{
-    NativeStatus, NativeToolError, NativeToolKind, NativeToolRunner, ProcessRunner, ProcessSpec,
-    RunningProcess,
+    NativeStatus, NativeToolError, NativeToolKind, NativeToolRequest, NativeToolRunner,
+    ProcessRunner, ProcessSpec, RunningProcess,
 };
+use secrecy::SecretString;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -46,7 +47,20 @@ async fn cancellation_kills_the_child_and_removes_secret_material() {
         cancelled: Arc::clone(&cancelled),
     });
     let handle = runner
-        .start(NativeToolKind::PgDump, "SECRET", "16.9", 16, temp.path())
+        .start(
+            NativeToolRequest {
+                kind: NativeToolKind::PgDump,
+                host: "localhost".into(),
+                port: 5432,
+                database: "dexo".into(),
+                username: "dexo".into(),
+                path: temp.path().join("out.dump"),
+                secret: SecretString::from("SECRET"),
+                expected_major: 16,
+            },
+            "16.9",
+            temp.path(),
+        )
         .await
         .unwrap();
     handle.cancel().await.unwrap();
