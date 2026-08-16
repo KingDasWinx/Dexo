@@ -1,9 +1,10 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 199
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector─────────────────┐
+┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector · properties────┐
 │[offline]                 │┌Explain───────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │▾ local                   ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                               ││                          │
 │  ▸ public                ││planning_ms=0.04 execution_ms=0.21                                                                    ││                          │
