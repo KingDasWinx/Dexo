@@ -37,4 +37,18 @@ mod tests {
         update(&mut model, Action::ExecuteQuery);
         assert_eq!(model.results.tabs.len(), 3);
     }
+
+    #[test]
+    fn execute_statement_uses_current_statement_target() {
+        let mut model = Model::default();
+        model.set_sql("select 1; select 2;");
+        let _ = model.active_document_mut().sql.set_cursor(0);
+        crate::screens::workbench::execute_current_statement(&mut model);
+        assert_eq!(
+            model.execution_target,
+            dexo_app::ExecutionTarget::CurrentStatement
+        );
+        update(&mut model, Action::ExecuteStatement);
+        assert_eq!(model.results.tabs.len(), 1);
+    }
 }

@@ -10,6 +10,7 @@ use crate::runtime::{OperationId, OperationKey, SessionId};
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
+use crate::mouse::HitMap;
 use crate::screens::admin::AdminScreen;
 use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
@@ -18,6 +19,7 @@ use crate::screens::data::DataScreen;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
+use crate::screens::file_picker::{FilePicker, FilePickerMode};
 use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
 use crate::screens::object_inspector::ObjectInspector;
@@ -828,6 +830,10 @@ pub struct Model {
     pub mouse: bool,
     pub animation: bool,
     pub layout_dirty: bool,
+    pub hits: HitMap,
+    pub file_picker: FilePicker,
+    pub file_picker_mode: FilePickerMode,
+    pub diagnostic_preview: Option<String>,
 }
 
 impl Default for Model {
@@ -862,6 +868,10 @@ impl Default for Model {
             mouse: true,
             animation: true,
             layout_dirty: false,
+            hits: HitMap::default(),
+            file_picker: FilePicker::default(),
+            file_picker_mode: FilePickerMode::Open,
+            diagnostic_preview: None,
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
             tabs: TabsState::default(),

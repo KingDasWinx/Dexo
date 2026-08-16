@@ -394,6 +394,20 @@ impl ExplorerState {
         self.selected = Some(id);
     }
 
+    pub fn move_selection(&mut self, delta: i32) {
+        let ids = self.visible_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+            .unwrap_or(0);
+        let next = (current as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
+        self.selected = Some(ids[next].clone());
+    }
+
     pub fn copy_selected_name(&mut self) {
         if let Some(id) = &self.selected
             && let Some(node) = Self::find(&self.roots, id)
