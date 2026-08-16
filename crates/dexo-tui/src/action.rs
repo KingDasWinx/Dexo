@@ -24,6 +24,7 @@ pub enum Action {
         generation: u64,
         token: u64,
         read_only: bool,
+        driver: String,
     },
     OpenConnectionForm,
     ConnectionFormError {
@@ -618,6 +619,7 @@ pub enum Effect {
     },
     RunExplain {
         sql: String,
+        cursor: usize,
         analyze: bool,
         session: SessionId,
         generation: u64,

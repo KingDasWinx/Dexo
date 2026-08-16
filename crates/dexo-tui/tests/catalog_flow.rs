@@ -159,6 +159,7 @@ impl CatalogHarness {
                 generation,
                 token: 0,
                 read_only: false,
+                driver: "postgres".into(),
             },
         );
     }

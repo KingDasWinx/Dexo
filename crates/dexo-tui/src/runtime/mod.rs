@@ -266,6 +266,7 @@ impl WorkbenchRuntime {
             }
             crate::Effect::RunExplain {
                 sql,
+                cursor,
                 analyze,
                 session,
                 generation: _,
@@ -274,7 +275,7 @@ impl WorkbenchRuntime {
                     explain_manager::run_live(
                         Arc::clone(&active.session),
                         &sql,
-                        0,
+                        cursor,
                         analyze,
                         self.action_tx.clone(),
                     )
@@ -656,6 +657,7 @@ impl WorkbenchRuntime {
                         generation,
                         token,
                         read_only,
+                        driver: profile.driver,
                     })
                     .await;
                 }

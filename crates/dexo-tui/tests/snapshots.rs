@@ -61,6 +61,7 @@ fn snapshot_model() -> Model {
             ready: true,
             environment: String::new(),
             read_only: false,
+            driver: String::new(),
         },
         schema: "public".into(),
         explorer: explorer_fixture(),

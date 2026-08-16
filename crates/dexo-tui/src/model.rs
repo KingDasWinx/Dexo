@@ -51,6 +51,7 @@ pub struct ConnectionStatus {
     pub ready: bool,
     pub environment: String,
     pub read_only: bool,
+    pub driver: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -968,6 +969,7 @@ impl Default for Model {
                 ready: false,
                 environment: String::new(),
                 read_only: false,
+                driver: String::new(),
             },
             theme: crate::theme::builtin_dark(),
             capabilities: TerminalCapabilities {

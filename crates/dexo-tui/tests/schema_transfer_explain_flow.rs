@@ -350,3 +350,26 @@ fn open_ddl_preview_emits_preview_effect_when_connected() {
             .any(|effect| matches!(effect, dexo_tui::Effect::PreviewDdl { .. }))
     );
 }
+
+fn connected_model_with_sql(sql: &str) -> dexo_tui::Model {
+    let mut model = connected_model();
+    model.set_sql(sql);
+    model
+}
+
+#[test]
+fn explain_effect_carries_second_statement_cursor() {
+    use dexo_tui::action::{Action, Effect};
+    use dexo_tui::update;
+    let mut model = connected_model_with_sql("select 1;\nselect 2;");
+    model
+        .active_document_mut()
+        .sql
+        .set_cursor("select 1;\nselect ".chars().count())
+        .unwrap();
+    let effects = update(&mut model, Action::OpenExplain);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::RunExplain { cursor, .. }] if *cursor > 0
+    ));
+}

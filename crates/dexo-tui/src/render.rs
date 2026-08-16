@@ -213,13 +213,22 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         render_parameters(frame, model);
     }
     if model.editor.history_open {
-        render_list_overlay(
-            frame,
-            "History",
-            &model.editor.history,
-            model.editor.history_selected,
-            0,
-        );
+        if model.editor.history_confirm_clear {
+            let target = if model.connection.name.is_empty() {
+                "all"
+            } else {
+                model.connection.name.as_str()
+            };
+            render_list_overlay(frame, &format!("clear history for {target}?"), &[], 0, 0);
+        } else {
+            render_list_overlay(
+                frame,
+                "History",
+                &model.editor.history,
+                model.editor.history_selected,
+                0,
+            );
+        }
     }
     if model.editor.snippet_open {
         let names: Vec<String> = model

@@ -30,9 +30,11 @@ pub struct EditorState {
     pub snippets: Vec<Snippet>,
     pub snippet_open: bool,
     pub snippet_selected: usize,
+    pub snippet_pending: bool,
     pub history: Vec<String>,
     pub history_open: bool,
     pub history_selected: usize,
+    pub history_confirm_clear: bool,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
 }
@@ -65,9 +67,11 @@ impl Clone for EditorState {
             snippets: self.snippets.clone(),
             snippet_open: self.snippet_open,
             snippet_selected: self.snippet_selected,
+            snippet_pending: self.snippet_pending,
             history: self.history.clone(),
             history_open: self.history_open,
             history_selected: self.history_selected,
+            history_confirm_clear: self.history_confirm_clear,
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
         }
@@ -109,12 +113,22 @@ impl Default for EditorState {
             snippets: Vec::new(),
             snippet_open: false,
             snippet_selected: 0,
+            snippet_pending: false,
             history: Vec::new(),
             history_open: false,
             history_selected: 0,
+            history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::table("public.users", ["id", "email"]),
         }
+    }
+}
+
+fn editor_dialect(model: &Model) -> Dialect {
+    if model.connection.driver == "mysql" {
+        Dialect::Mysql
+    } else {
+        Dialect::Postgres
     }
 }
 
@@ -141,12 +155,13 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
 
 fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
     let at = byte_cursor.min(sql.len());
+    let dialect = editor_dialect(model);
     let objects = model.explorer.flatten();
     let items = if objects.is_empty() {
-        complete(sql, at, &model.editor.catalog, Dialect::Postgres)
+        complete(sql, at, &model.editor.catalog, dialect)
     } else {
         let snapshot = dexo_app::SnapshotCatalog::new(objects);
-        complete(sql, at, &snapshot, Dialect::Postgres)
+        complete(sql, at, &snapshot, dialect)
     };
     let prefix = &sql[..at];
     let token = current_token(prefix);
@@ -178,7 +193,7 @@ fn is_sensitive_name(name: &str) -> bool {
 
 pub fn apply_format(model: &mut Model) {
     let sql = model.active_document().text();
-    match format_sql(&sql, Dialect::Postgres) {
+    match format_sql(&sql, editor_dialect(model)) {
         Ok(formatted) => {
             model.editor.format_preview = Some(formatted.clone());
             model.set_sql(&formatted);

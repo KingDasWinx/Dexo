@@ -45,6 +45,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             generation,
             token,
             read_only,
+            driver,
         } => {
             if let Some(pending) = model.connections.pending_connect {
                 if token != pending {
@@ -56,6 +57,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.connection.ready = ready;
             model.connection.environment = environment;
             model.connection.read_only = read_only;
+            model.connection.driver = driver;
             model.active_session = session;
             model.session_generation = generation;
             model.connection_form.close();
@@ -958,10 +960,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             crate::screens::editor::insert_active_snippet(model);
             Vec::new()
         }
-        Action::SubmitParameters => {
-            crate::screens::editor::submit_parameters(model);
-            start_query(model)
-        }
+        Action::SubmitParameters => submit_parameter_prompt(model),
         Action::SearchHistory => {
             model.editor.history_open = true;
             model.editor.history_selected = 0;
@@ -969,9 +968,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 connection_id: None,
             }]
         }
-        Action::ClearHistory => vec![Effect::ClearHistory {
-            connection_id: model.connection.name.clone(),
-        }],
+        Action::ClearHistory => confirm_clear_history(model),
         Action::HistoryLoaded(entries) => {
             model.editor.history = entries;
             model.editor.history_open = true;
@@ -987,7 +984,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
         }
         Action::SnippetsLoaded(snippets) => {
+            model.editor.snippet_pending = false;
             model.editor.snippets = snippets;
+            model.editor.snippet_open = !model.editor.snippets.is_empty();
+            if model.editor.snippets.is_empty() {
+                model.messages.push("no snippets available".into());
+            }
             Vec::new()
         }
         Action::SnippetPick => {
@@ -3134,8 +3136,16 @@ fn explain_effect(model: &Model, analyze: bool) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
+    let document = model.active_document();
+    let sql = document.text();
+    let cursor = sql
+        .chars()
+        .take(document.cursor())
+        .map(char::len_utf8)
+        .sum();
     vec![Effect::RunExplain {
-        sql: model.active_document().text(),
+        sql,
+        cursor,
         analyze,
         session,
         generation: model.session_generation,
@@ -3445,6 +3455,16 @@ fn apply_transfer_failed(
 }
 
 fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if model.editor.history_confirm_clear {
+        return match key.code {
+            KeyCode::Esc => {
+                model.editor.history_confirm_clear = false;
+                Vec::new()
+            }
+            KeyCode::Enter => confirm_clear_history(model),
+            _ => Vec::new(),
+        };
+    }
     if key.code == KeyCode::Enter {
         return update(model, Action::HistoryPick);
     }
@@ -3832,6 +3852,57 @@ fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
     }
 }
 
+fn open_snippets(model: &mut Model) -> Vec<Effect> {
+    if model.editor.snippets.is_empty() {
+        model.editor.snippet_pending = true;
+        return vec![Effect::LoadSnippets];
+    }
+    model.editor.snippet_open = true;
+    model.editor.snippet_selected = 0;
+    Vec::new()
+}
+
+fn open_parameters(model: &mut Model) -> Vec<Effect> {
+    crate::screens::editor::refresh_intelligence(model, false);
+    if model.editor.parameters.is_empty() {
+        model.messages.push("no query parameters".into());
+        return Vec::new();
+    }
+    model.editor.parameter_index = model
+        .editor
+        .parameters
+        .iter()
+        .position(|parameter| matches!(parameter.value, DbValue::Null))
+        .unwrap_or(0);
+    model.editor.parameter_draft.clear();
+    model.editor.parameter_prompt = true;
+    Vec::new()
+}
+
+fn submit_parameter_prompt(model: &mut Model) -> Vec<Effect> {
+    if !model.editor.parameter_prompt {
+        return Vec::new();
+    }
+    crate::screens::editor::submit_parameters(model);
+    if model.editor.parameter_prompt {
+        Vec::new()
+    } else {
+        start_query(model)
+    }
+}
+
+fn open_clear_history(model: &mut Model) -> Vec<Effect> {
+    model.editor.history_open = true;
+    model.editor.history_confirm_clear = true;
+    Vec::new()
+}
+
+fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
+    let connection_id = model.connection.name.clone();
+    model.editor.history_confirm_clear = false;
+    vec![Effect::ClearHistory { connection_id }]
+}
+
 fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocation) -> Vec<Effect> {
     use crate::palette::{FlowIntent, PaletteInvocation};
     match invocation {
@@ -3922,15 +3993,9 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::McpRevokeAll) => {
             update(model, Action::RevokeAllMcpGrants)
         }
-        PaletteInvocation::OpenFlow(FlowIntent::InsertSnippet) => {
-            update(model, Action::InsertSnippet)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::SubmitParameters) => {
-            update(model, Action::SubmitParameters)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::ClearHistory) => {
-            update(model, Action::ClearHistory)
-        }
+        PaletteInvocation::OpenFlow(FlowIntent::InsertSnippet) => open_snippets(model),
+        PaletteInvocation::OpenFlow(FlowIntent::SubmitParameters) => open_parameters(model),
+        PaletteInvocation::OpenFlow(FlowIntent::ClearHistory) => open_clear_history(model),
         PaletteInvocation::OpenFlow(FlowIntent::DiagnosticsExport) => {
             update(model, Action::OpenDiagnostics)
         }

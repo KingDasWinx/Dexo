@@ -245,3 +245,37 @@ fn history_overlay_enter_reruns() {
     assert_eq!(model.active_document().text(), "select 9");
     assert!(!model.editor.history_open);
 }
+
+fn choose_effects(model: &mut Model, query: &str) -> Vec<dexo_tui::Effect> {
+    let mut effects = update(model, Action::OpenPalette);
+    for ch in query.chars() {
+        effects.extend(update(model, key(KeyCode::Char(ch))));
+    }
+    effects.extend(update(model, key(KeyCode::Enter)));
+    effects
+}
+
+fn connected_model_with_sql(sql: &str) -> Model {
+    let mut model = model_with_sql(sql);
+    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
+    model
+}
+
+#[test]
+fn insert_snippet_loads_storage_before_opening_picker() {
+    let mut model = Model::default();
+    let effects = choose_effects(&mut model, "editor.snippet");
+    assert!(model.editor.snippet_pending);
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::LoadSnippets]
+    ));
+}
+
+#[test]
+fn submit_parameters_outside_prompt_never_executes_query() {
+    let mut model = connected_model_with_sql("select 1");
+    let effects = update(&mut model, Action::SubmitParameters);
+    assert!(effects.is_empty());
+    assert!(model.active_operation.is_none());
+}

@@ -237,6 +237,7 @@ fn two_sessions_for_one_profile_and_close() {
             generation: 1,
             token: 0,
             read_only: false,
+            driver: "postgres".into(),
         },
     );
     let _ = update(
@@ -249,6 +250,7 @@ fn two_sessions_for_one_profile_and_close() {
             generation: 1,
             token: 0,
             read_only: false,
+            driver: "postgres".into(),
         },
     );
     assert_eq!(model.connections.sessions.len(), 2);
@@ -274,6 +276,7 @@ fn stale_connect_completion_is_ignored() {
             generation: 1,
             token: 1,
             read_only: false,
+            driver: "postgres".into(),
         },
     );
     assert!(!model.connection.ready);
