@@ -2991,6 +2991,10 @@ fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+fn file_picker_rows() -> usize {
+    12
+}
+
 fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
@@ -2998,13 +3002,11 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Up => {
-            model.file_picker.selected = model.file_picker.selected.saturating_sub(1);
+            model.file_picker.move_selection(-1, file_picker_rows());
             Vec::new()
         }
         KeyCode::Down => {
-            if model.file_picker.selected + 1 < model.file_picker.entries.len() {
-                model.file_picker.selected += 1;
-            }
+            model.file_picker.move_selection(1, file_picker_rows());
             Vec::new()
         }
         KeyCode::Backspace => {

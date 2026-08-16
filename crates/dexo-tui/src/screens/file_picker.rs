@@ -14,6 +14,7 @@ pub struct FilePicker {
     pub cwd: PathBuf,
     pub entries: Vec<PathBuf>,
     pub selected: usize,
+    pub offset: usize,
     pub show_hidden: bool,
     pub error: Option<String>,
     pub overwrite: bool,
@@ -26,6 +27,7 @@ impl Default for FilePicker {
             cwd: std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")),
             entries: Vec::new(),
             selected: 0,
+            offset: 0,
             show_hidden: false,
             error: None,
             overwrite: false,
@@ -39,6 +41,7 @@ impl FilePicker {
             Ok(entries) => {
                 self.entries = entries;
                 self.selected = 0;
+                self.offset = 0;
                 self.error = None;
             }
             Err(error) => {
@@ -76,6 +79,20 @@ impl FilePicker {
 
     pub fn selected_path(&self) -> Option<PathBuf> {
         self.entries.get(self.selected).cloned()
+    }
+
+    pub fn move_selection(&mut self, delta: i32, rows: usize) {
+        if self.entries.is_empty() {
+            return;
+        }
+        let next = (self.selected as i32 + delta).clamp(0, self.entries.len() as i32 - 1) as usize;
+        self.selected = next;
+        self.offset = crate::palette::scroll_to_selection(
+            self.selected,
+            self.offset,
+            self.entries.len(),
+            rows.max(1),
+        );
     }
 }
 
@@ -144,5 +161,26 @@ mod tests {
         assert!(!drive_roots().is_empty());
         let missing = read_entries(&dir.path().join("nope"), false);
         assert!(missing.is_err());
+    }
+
+    #[test]
+    fn arrows_scroll_past_the_visible_window() {
+        let dir = tempfile::tempdir().unwrap();
+        for i in 0..20 {
+            std::fs::write(dir.path().join(format!("f{i:02}.txt")), b"x").unwrap();
+        }
+        let mut picker = FilePicker {
+            cwd: dir.path().to_path_buf(),
+            ..FilePicker::default()
+        };
+        picker.refresh();
+        assert!(picker.entries.len() >= 20);
+        for _ in 0..15 {
+            picker.move_selection(1, 8);
+        }
+        assert!(picker.selected >= 15);
+        assert!(picker.offset > 0);
+        assert!(picker.selected >= picker.offset);
+        assert!(picker.selected < picker.offset + 8);
     }
 }

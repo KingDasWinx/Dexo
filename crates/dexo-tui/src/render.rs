@@ -755,7 +755,21 @@ fn render_file_picker(frame: &mut Frame, model: &Model) {
     let popup = centered(frame.area(), 64, 16);
     frame.render_widget(Clear, popup);
     let mut lines = vec![model.file_picker.cwd.display().to_string()];
-    for (index, path) in model.file_picker.entries.iter().enumerate().take(12) {
+    let rows = popup.height.saturating_sub(3) as usize;
+    let offset = crate::palette::scroll_to_selection(
+        model.file_picker.selected,
+        model.file_picker.offset,
+        model.file_picker.entries.len(),
+        rows.max(1),
+    );
+    for (index, path) in model
+        .file_picker
+        .entries
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(rows.max(1))
+    {
         let marker = if index == model.file_picker.selected {
             ">"
         } else {
