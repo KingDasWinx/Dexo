@@ -4,14 +4,17 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
+use crate::mouse::{HitMap, HitTarget};
 use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 
-pub fn render(frame: &mut Frame, model: &Model) {
+pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    hits.clear();
     let plan = LayoutPlan::for_area_with(frame.area(), Some(&model.panes));
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
-        crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model),
+        crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model, hits),
         _ => {
+            hits.register(HitTarget::Explorer, plan.explorer);
             render_panel(
                 frame,
                 plan.explorer,
@@ -19,6 +22,7 @@ pub fn render(frame: &mut Frame, model: &Model) {
                 crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
             );
             crate::widgets::tabs::render(frame, plan.tabs, model);
+            hits.register(HitTarget::Editor, plan.content);
             if model.tabs.active == 2 {
                 render_panel(
                     frame,
@@ -36,8 +40,14 @@ pub fn render(frame: &mut Frame, model: &Model) {
             } else {
                 crate::widgets::editor::render(frame, plan.content, model);
             }
-            crate::widgets::grid::render(frame, plan.results, model);
-            render_panel(frame, plan.inspector, "Inspector", inspector_body(model));
+            hits.register(HitTarget::Grid, plan.results);
+            crate::widgets::grid::render(frame, plan.results, model, hits);
+            render_panel(
+                frame,
+                plan.inspector,
+                &inspector_title(model),
+                inspector_body(model),
+            );
         }
     }
     crate::widgets::status::render(frame, plan.status, model);
@@ -178,17 +188,55 @@ pub fn render(frame: &mut Frame, model: &Model) {
             popup,
         );
     }
+    if model.file_picker.open {
+        render_file_picker(frame, model);
+    }
+    if model.editor.completion_open {
+        render_completion(frame, model);
+    }
+    if model.editor.parameter_prompt {
+        render_parameters(frame, model);
+    }
+    if model.editor.history_open {
+        render_list_overlay(
+            frame,
+            "History",
+            &model.editor.history,
+            model.editor.history_selected,
+        );
+    }
+    if model.editor.snippet_open {
+        let names: Vec<String> = model
+            .editor
+            .snippets
+            .iter()
+            .map(|snippet| snippet.name.clone())
+            .collect();
+        render_list_overlay(frame, "Snippets", &names, model.editor.snippet_selected);
+    }
+    if let Some(preview) = &model.diagnostic_preview {
+        let popup = centered(frame.area(), 72, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(preview.as_str()).block(Block::bordered().title("Diagnostics")),
+            popup,
+        );
+    }
 }
 
-fn render_compact(frame: &mut Frame, area: Rect, model: &Model) {
+fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     match model.focus {
-        Focus::Explorer => render_panel(
-            frame,
-            area,
-            "Explorer",
-            crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
-        ),
+        Focus::Explorer => {
+            hits.register(HitTarget::Explorer, area);
+            render_panel(
+                frame,
+                area,
+                "Explorer",
+                crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
+            );
+        }
         Focus::Editor | Focus::Palette => {
+            hits.register(HitTarget::Editor, area);
             if model.tabs.active == 2 {
                 render_panel(
                     frame,
@@ -202,8 +250,13 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model) {
                 crate::widgets::editor::render(frame, area, model);
             }
         }
-        Focus::Results => crate::widgets::grid::render(frame, area, model),
-        Focus::Inspector => render_panel(frame, area, "Inspector", inspector_body(model)),
+        Focus::Results => {
+            hits.register(HitTarget::Grid, area);
+            crate::widgets::grid::render(frame, area, model, hits);
+        }
+        Focus::Inspector => {
+            render_panel(frame, area, &inspector_title(model), inspector_body(model))
+        }
     }
 }
 
@@ -222,6 +275,10 @@ fn context_line(model: &Model) -> String {
             &model.schema
         }
     )
+}
+
+fn inspector_title(model: &Model) -> String {
+    format!("Inspector · {}", model.inspector.tab.label())
 }
 
 fn inspector_body(model: &Model) -> String {
@@ -262,36 +319,77 @@ fn describe_object_inspector(
     if let Some(object) = &inspector.object {
         lines.push(format!("kind: {}", object.kind.as_str()));
     }
-    if let Some(ddl) = &inspector.ddl {
-        lines.push(ddl.clone());
-    }
-    if !inspector.dependencies.is_empty() {
-        lines.push(format!(
-            "deps: {}",
-            inspector
-                .dependencies
-                .iter()
-                .map(|id| id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !inspector.dependents.is_empty() {
-        lines.push(format!(
-            "dependents: {}",
-            inspector
-                .dependents
-                .iter()
-                .map(|id| id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !inspector.effective_privileges.is_empty() {
-        lines.push(format!(
-            "privileges: {}",
-            inspector.effective_privileges.join(", ")
-        ));
+    match inspector.tab {
+        crate::screens::object_inspector::InspectorTab::Ddl => {
+            if let Some(ddl) = &inspector.ddl {
+                lines.push(ddl.clone());
+            }
+        }
+        crate::screens::object_inspector::InspectorTab::Dependencies => {
+            if !inspector.dependencies.is_empty() {
+                lines.push(format!(
+                    "deps: {}",
+                    inspector
+                        .dependencies
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !inspector.dependents.is_empty() {
+                lines.push(format!(
+                    "dependents: {}",
+                    inspector
+                        .dependents
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        crate::screens::object_inspector::InspectorTab::Privileges => {
+            if !inspector.effective_privileges.is_empty() {
+                lines.push(format!(
+                    "privileges: {}",
+                    inspector.effective_privileges.join(", ")
+                ));
+            }
+        }
+        crate::screens::object_inspector::InspectorTab::Properties => {
+            if let Some(ddl) = &inspector.ddl {
+                lines.push(ddl.clone());
+            }
+            if !inspector.dependencies.is_empty() {
+                lines.push(format!(
+                    "deps: {}",
+                    inspector
+                        .dependencies
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !inspector.dependents.is_empty() {
+                lines.push(format!(
+                    "dependents: {}",
+                    inspector
+                        .dependents
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !inspector.effective_privileges.is_empty() {
+                lines.push(format!(
+                    "privileges: {}",
+                    inspector.effective_privileges.join(", ")
+                ));
+            }
+        }
     }
     lines.join("\n")
 }
@@ -392,10 +490,86 @@ fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
+fn render_completion(frame: &mut Frame, model: &Model) {
+    let labels: Vec<String> = model
+        .editor
+        .completions
+        .iter()
+        .map(|item| item.label.clone())
+        .collect();
+    render_list_overlay(
+        frame,
+        "Completions",
+        &labels,
+        model.editor.completion_selected,
+    );
+}
+
+fn render_parameters(frame: &mut Frame, model: &Model) {
+    let name = model
+        .editor
+        .parameters
+        .get(model.editor.parameter_index)
+        .map(|parameter| parameter.name.as_str())
+        .unwrap_or("param");
+    let popup = centered(frame.area(), 48, 6);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(format!("{name} = {}", model.editor.parameter_draft))
+            .block(Block::bordered().title("Parameters")),
+        popup,
+    );
+}
+
+fn render_list_overlay(frame: &mut Frame, title: &str, items: &[String], selected: usize) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 48, 12);
+    frame.render_widget(Clear, popup);
+    let mut lines = Vec::new();
+    for (index, item) in items.iter().enumerate().take(10) {
+        let marker = if index == selected { ">" } else { " " };
+        lines.push(format!("{marker} {item}"));
+    }
+    if lines.is_empty() {
+        lines.push("(empty)".into());
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(Block::bordered().title(title)),
+        popup,
+    );
+}
+
+fn render_file_picker(frame: &mut Frame, model: &Model) {
+    let popup = centered(frame.area(), 64, 16);
+    frame.render_widget(Clear, popup);
+    let mut lines = vec![model.file_picker.cwd.display().to_string()];
+    for (index, path) in model.file_picker.entries.iter().enumerate().take(12) {
+        let marker = if index == model.file_picker.selected {
+            ">"
+        } else {
+            " "
+        };
+        lines.push(format!("{marker} {}", path.display()));
+    }
+    if let Some(error) = &model.file_picker.error {
+        lines.push(error.clone());
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(Block::bordered().title("File")),
+        popup,
+    );
+}
+
 pub fn render_to_string(model: &Model, width: u16, height: u16) -> String {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
         .expect("test backend");
-    terminal.draw(|frame| render(frame, model)).expect("render");
+    let mut hits = HitMap::default();
+    terminal
+        .draw(|frame| render(frame, model, &mut hits))
+        .expect("render");
     buffer_view(terminal.backend().buffer())
 }
 

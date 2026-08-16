@@ -5,9 +5,10 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Paragraph};
 
 use crate::model::{Model, format_value, truncate_cell};
+use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -15,10 +16,11 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(preview_lines(model, area)), area);
         return;
     }
+    let extra = result_banner(model);
     let title = if model.results.truncated() {
-        format!("Results ({}) …", model.results.row_count())
+        format!("Results ({}) …{extra}", model.results.row_count())
     } else {
-        format!("Results ({})", model.results.row_count())
+        format!("Results ({}){extra}", model.results.row_count())
     };
     let block = Block::bordered().title(title);
     let inner = block.inner(area);
@@ -26,7 +28,71 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    frame.render_widget(Paragraph::new(preview_lines(model, inner)), inner);
+    let tab_h = if model.results.tabs.len() > 1 { 1 } else { 0 };
+    if tab_h > 0 {
+        let tabs = Rect::new(inner.x, inner.y, inner.width, 1);
+        let mut x = tabs.x;
+        for (index, tab) in model.results.tabs.iter().enumerate() {
+            let label = format!(" {} ", tab.title);
+            let width = label.len() as u16;
+            let rect = Rect::new(
+                x,
+                tabs.y,
+                width.min(tabs.width.saturating_sub(x.saturating_sub(tabs.x))),
+                1,
+            );
+            hits.register(HitTarget::ResultTab(index), rect);
+            x = x.saturating_add(width);
+        }
+        frame.render_widget(
+            Paragraph::new(
+                model
+                    .results
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        if index == model.results.active {
+                            format!("[{}]", tab.title)
+                        } else {
+                            format!(" {} ", tab.title)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+            ),
+            tabs,
+        );
+    }
+    let body = Rect::new(
+        inner.x,
+        inner.y.saturating_add(tab_h),
+        inner.width,
+        inner.height.saturating_sub(tab_h),
+    );
+    frame.render_widget(Paragraph::new(preview_lines(model, body)), body);
+}
+
+fn result_banner(model: &Model) -> String {
+    let mut extra = String::new();
+    if let Some(tab) = model.results.tabs.get(model.results.active) {
+        if !tab.notices.is_empty() {
+            extra.push_str(" !");
+            extra.push_str(tab.notices.last().expect("notice"));
+        }
+        if let Some(reason) = &tab.local_only {
+            extra.push_str(" local-only:");
+            extra.push_str(reason);
+        }
+    }
+    if !model.data.crumbs.is_empty() {
+        extra.push_str(" crumbs:");
+        extra.push_str(&model.data.crumbs.len().to_string());
+    }
+    if model.data.has_more {
+        extra.push_str(" more");
+    }
+    extra
 }
 
 fn preview_lines(model: &Model, area: Rect) -> Vec<Line<'static>> {

@@ -55,5 +55,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         "rows:{}  ctrl+p palette",
         model.results.row_count()
     )));
+    if let Some(message) = model.messages.last() {
+        spans.push(Span::raw(format!("  {message}")));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

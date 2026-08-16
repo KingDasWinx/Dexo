@@ -74,7 +74,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 sel_style,
             ));
         } else {
-            spans.push(Span::raw(visible.text));
+            spans.extend(highlight_spans(
+                &visible.text,
+                line_start + visible.skip_chars,
+                &text,
+                &model.editor.highlights,
+            ));
         }
         rendered.push(Line::from(spans));
         char_at = line_end + 1;
@@ -155,6 +160,54 @@ fn span_owned(text: String, selected: bool, sel_style: Style) -> Span<'static> {
         Span::styled(text, sel_style)
     } else {
         Span::raw(text)
+    }
+}
+
+fn highlight_spans(
+    visible: &str,
+    line_char_start: usize,
+    full: &str,
+    highlights: &[dexo_sql::HighlightSpan],
+) -> Vec<Span<'static>> {
+    if highlights.is_empty() {
+        return vec![Span::raw(visible.to_string())];
+    }
+    let mut spans = Vec::new();
+    let mut buf = String::new();
+    let mut current = Style::default();
+    let char_to_byte =
+        |chars: usize| -> usize { full.chars().take(chars).map(char::len_utf8).sum() };
+    for (offset, ch) in visible.chars().enumerate() {
+        let byte = char_to_byte(line_char_start + offset);
+        let style = highlights
+            .iter()
+            .find(|span| byte >= span.byte_range.start && byte < span.byte_range.end)
+            .map(|span| highlight_style(span.kind))
+            .unwrap_or_default();
+        if style != current && !buf.is_empty() {
+            spans.push(Span::styled(std::mem::take(&mut buf), current));
+        }
+        current = style;
+        buf.push(ch);
+    }
+    if !buf.is_empty() {
+        spans.push(Span::styled(buf, current));
+    }
+    if spans.is_empty() {
+        spans.push(Span::raw(String::new()));
+    }
+    spans
+}
+
+fn highlight_style(kind: dexo_sql::Highlight) -> Style {
+    use ratatui::style::Color;
+    match kind {
+        dexo_sql::Highlight::Keyword => Style::default().fg(Color::Cyan),
+        dexo_sql::Highlight::String => Style::default().fg(Color::Green),
+        dexo_sql::Highlight::Comment => Style::default().fg(Color::DarkGray),
+        dexo_sql::Highlight::Number => Style::default().fg(Color::Yellow),
+        dexo_sql::Highlight::Function => Style::default().fg(Color::Magenta),
+        dexo_sql::Highlight::Identifier | dexo_sql::Highlight::Other => Style::default(),
     }
 }
 

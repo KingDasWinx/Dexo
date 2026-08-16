@@ -56,7 +56,9 @@ async fn run_loop(
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
-        terminal.draw(|frame| crate::render::render(frame, &model))?;
+        let mut hits = crate::mouse::HitMap::default();
+        terminal.draw(|frame| crate::render::render(frame, &model, &mut hits))?;
+        model.hits = hits;
         tokio::select! {
             terminal_event = events.next() => {
                 let Some(event) = terminal_event else { break };
