@@ -5,6 +5,9 @@ pub fn render_lines(state: &ExplorerState) -> Vec<String> {
     if state.offline {
         lines.push("[offline]".into());
     }
+    if !state.search.is_empty() {
+        lines.push(format!("search:{}", state.search));
+    }
     if !state.filter_name.is_empty() || state.filter_kind.is_some() || state.favorites_only {
         lines.push(format!(
             "filter:{} kind:{} fav:{}",
@@ -37,10 +40,11 @@ fn collect(nodes: &[ExplorerNode], state: &ExplorerState, depth: usize, lines: &
         if state.matches(node) {
             let marker = if node.expanded { "▾" } else { "▸" };
             let badge = match node.state {
-                NodeState::Loading => " [loading]",
+                NodeState::Loading(_) => " [loading]",
                 NodeState::Restricted => " [restricted]",
-                NodeState::Error => " [error]",
-                NodeState::Unloaded | NodeState::Loaded => "",
+                NodeState::Error { .. } => " [error]",
+                NodeState::Stale => " [stale]",
+                NodeState::Collapsed | NodeState::Expanded => "",
             };
             let fav = if node.favorite { "*" } else { "" };
             lines.push(format!(

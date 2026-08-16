@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use crate::{DriverError, ObjectId};
+use crate::{ChangeRisk, DriverError, ObjectId, SchemaChange};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct ObjectDdl {
@@ -20,6 +20,7 @@ pub struct DdlPlan {
     pub rollback: Vec<String>,
     pub warnings: Vec<String>,
     pub transactional: bool,
+    pub risk: ChangeRisk,
 }
 
 impl DdlPlan {
@@ -50,6 +51,7 @@ pub enum DdlOutcome {
 
 #[async_trait::async_trait]
 pub trait DdlExecutor: Send + Sync {
+    fn plan_change(&self, change: &SchemaChange) -> Result<DdlPlan, DriverError>;
     async fn apply_ddl(&self, plan: &DdlPlan) -> Result<DdlOutcome, DriverError>;
 }
 

@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 default  no connection  —                                   
-┌SQL───────────────────────────────────────────────────────┐
+┌SQL · scratch.sql─────────────────────────────────────────┐
 ┌Settings──────────────────────────────────────────────────┐
 │theme=dark                                                │
 │keymap=default                                            │

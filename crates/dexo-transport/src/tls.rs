@@ -5,7 +5,17 @@ use rustls::{ClientConfig, RootCertStore};
 use rustls_platform_verifier::BuilderVerifierExt;
 use tokio_rustls::TlsConnector;
 
-use crate::{BoxStream, ClientCertificate, TlsConfig, TlsMode, TransportError};
+#[cfg(feature = "dangerous-tls")]
+use crate::TlsMode;
+use crate::{BoxStream, ClientCertificate, TlsConfig, TransportError};
+
+pub fn rustls_client_config(
+    config: &TlsConfig,
+    client_cert: Option<&ClientCertificate>,
+) -> Result<Arc<ClientConfig>, TransportError> {
+    ensure_crypto_provider();
+    Ok(Arc::new(build_client_config(config, client_cert)?))
+}
 
 pub async fn connect_tls(
     stream: BoxStream,
@@ -13,9 +23,8 @@ pub async fn connect_tls(
     client_cert: Option<&ClientCertificate>,
 ) -> Result<BoxStream, TransportError> {
     config.validate()?;
-    ensure_crypto_provider();
-    let client_config = build_client_config(config, client_cert)?;
-    let connector = TlsConnector::from(Arc::new(client_config));
+    let client_config = rustls_client_config(config, client_cert)?;
+    let connector = TlsConnector::from(client_config);
     let server_name = ServerName::try_from(config.server_name.clone())
         .map_err(|_| TransportError::InvalidConfig("invalid TLS server name".into()))?;
     let tls = connector

@@ -10,12 +10,16 @@ allow = [
     "Unicode-3.0",
     "Zlib",
     "CDLA-Permissive-2.0",
+    "BSL-1.0",
+    "NCSA",
 ]
 
 [advisories]
 ignore = [
     # ponytail: rsa has no patched release (Marvin). Transitive via russh. Drop when rsa publishes constant-time.
     { id = "RUSTSEC-2023-0071", reason = "no patched rsa crate; pulled by russh. Prefer Ed25519 SSH keys until upstream ships a fix." },
+    # ponytail: paste is archived; pulled by image->exr->pulp and rav1e. Drop when image/rav1e stop depending on paste.
+    { id = "RUSTSEC-2024-0436", reason = "paste is unmaintained; transitive via image/exr/pulp and rav1e with no safe upgrade." },
 ]
 
 [sources]

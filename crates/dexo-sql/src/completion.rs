@@ -200,9 +200,11 @@ fn resolve_alias(sql: &str, alias: &str, catalog: &dyn Catalog) -> Option<TableI
 }
 
 fn split_qualified(qualified: &str) -> (String, String) {
-    match qualified.rsplit_once('.') {
-        Some((schema, name)) => (schema.to_string(), name.to_string()),
-        None => (String::new(), qualified.to_string()),
+    let parts: Vec<&str> = qualified.split('.').collect();
+    match parts.as_slice() {
+        [_, schema, name] => ((*schema).into(), (*name).into()),
+        [schema, name] => ((*schema).into(), (*name).into()),
+        _ => (String::new(), qualified.to_string()),
     }
 }
 

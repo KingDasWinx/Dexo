@@ -1,12 +1,14 @@
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::Duration;
 
 use dexo_driver_api::{
-    ColumnMeta, DriverError, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch, Session,
-    TransactionControl, TransactionMode, TransactionState, validate_savepoint,
+    ColumnMeta, DbValue, DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryRequest,
+    QueryStream, RowBatch, Session, TransactionControl, TransactionMode, TransactionState,
+    validate_savepoint,
 };
-use futures_util::StreamExt;
 use mysql_async::prelude::Queryable;
-use mysql_async::{Conn, Opts};
+use mysql_async::{Conn, Opts, Params, Value};
 use tokio::sync::Mutex;
 
 use crate::decode::{column_meta, decode_row};
@@ -18,20 +20,37 @@ pub const ROW_BATCH_SIZE: usize = 256;
 pub struct MysqlSession {
     pub(crate) conn: Arc<Mutex<Conn>>,
     conn_id: u32,
+    connect_generation: u64,
+    live_generation: Arc<AtomicU64>,
     opts: Opts,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
     tx_state: std::sync::Mutex<TransactionState>,
+    _lease: Option<dexo_transport::TransportLease>,
 }
 
 impl MysqlSession {
-    pub(crate) fn new(conn: Arc<Mutex<Conn>>, opts: Opts, conn_id: u32) -> Self {
+    pub(crate) fn new(
+        conn: Arc<Mutex<Conn>>,
+        opts: Opts,
+        conn_id: u32,
+        live_generation: Arc<AtomicU64>,
+        lease: Option<dexo_transport::TransportLease>,
+    ) -> Self {
+        let connect_generation = live_generation.load(Ordering::SeqCst);
         Self {
             conn,
             conn_id,
+            connect_generation,
+            live_generation,
             opts,
             capabilities: capabilities(),
             tx_state: std::sync::Mutex::new(TransactionState::Idle),
+            _lease: lease,
         }
+    }
+
+    pub fn bump_generation(&self) {
+        self.live_generation.fetch_add(1, Ordering::SeqCst);
     }
 
     fn set_state(&self, state: TransactionState) {
@@ -49,75 +68,23 @@ impl Session for MysqlSession {
         let conn = Arc::clone(&self.conn);
         let sql = request.sql;
         let row_limit = request.row_limit;
+        let parameters = request.parameters;
+        let timeout = request.timeout;
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         tokio::spawn(async move {
-            let mut conn = conn.lock().await;
-            // ponytail: text protocol; CREATE FUNCTION/EVENT cannot be prepared (MySQL 1295). Bind params when execute grows a param path.
-            let result = match conn.query_iter(sql).await {
-                Ok(result) => result,
-                Err(error) => {
-                    let _ = tx.send(Err(map_error(error))).await;
-                    return;
-                }
-            };
-            let columns: Vec<ColumnMeta> = result.columns_ref().iter().map(column_meta).collect();
-            if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
+            let run = run_mysql_query(conn, sql, parameters, row_limit, tx.clone());
+            if timeout == Duration::ZERO {
+                run.await;
                 return;
             }
-            let mut stream = match result.stream_and_drop::<mysql_async::Row>().await {
-                Ok(Some(stream)) => stream,
-                Ok(None) => {
-                    let _ = tx
-                        .send(Ok(QueryEvent::Finished {
-                            rows_affected: Some(0),
-                        }))
-                        .await;
-                    return;
-                }
-                Err(error) => {
-                    let _ = tx.send(Err(map_error(error))).await;
-                    return;
-                }
-            };
-            let mut batch = Vec::new();
-            let mut emitted = 0_u64;
-            while let Some(row) = stream.next().await {
-                let row = match row {
-                    Ok(row) => row,
-                    Err(error) => {
-                        let _ = tx.send(Err(map_error(error))).await;
-                        return;
-                    }
-                };
-                batch.push(decode_row(&row));
-                emitted += 1;
-                if batch.len() >= ROW_BATCH_SIZE
-                    && tx
-                        .send(Ok(QueryEvent::Rows(RowBatch {
-                            rows: std::mem::take(&mut batch),
-                        })))
-                        .await
-                        .is_err()
-                {
-                    return;
-                }
-                if row_limit > 0 && emitted >= row_limit {
-                    break;
-                }
+            if tokio::time::timeout(timeout, run).await.is_err() {
+                let _ = tx
+                    .send(Err(DriverError::new(
+                        DriverErrorCategory::Timeout,
+                        "query timed out",
+                    )))
+                    .await;
             }
-            if !batch.is_empty()
-                && tx
-                    .send(Ok(QueryEvent::Rows(RowBatch { rows: batch })))
-                    .await
-                    .is_err()
-            {
-                return;
-            }
-            let _ = tx
-                .send(Ok(QueryEvent::Finished {
-                    rows_affected: None,
-                }))
-                .await;
         });
         Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
             rx.recv().await.map(|item| (item, rx))
@@ -125,6 +92,12 @@ impl Session for MysqlSession {
     }
 
     async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
+        if self.connect_generation != self.live_generation.load(Ordering::SeqCst) {
+            return Err(DriverError::new(
+                DriverErrorCategory::Cancelled,
+                "session generation changed",
+            ));
+        }
         // ponytail: cache conn_id at connect so KILL QUERY does not wait on the execute lock.
         // Ceiling: id is stale after a server-side reconnect. Store a generation when sessions reconnect.
         let mut killer = Conn::new(self.opts.clone()).await.map_err(map_error)?;
@@ -235,4 +208,140 @@ impl MysqlSession {
         let mut conn = self.conn.lock().await;
         conn.query_drop(sql).await.map_err(map_error)
     }
+}
+
+fn mysql_values(values: &[DbValue]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| match value {
+            DbValue::Null => Value::NULL,
+            DbValue::Bool(value) => Value::Int(i64::from(*value)),
+            DbValue::I64(value) => Value::Int(*value),
+            DbValue::U64(value) => Value::UInt(*value),
+            DbValue::Decimal(text) | DbValue::Text(text) | DbValue::Json(text) => {
+                Value::Bytes(text.as_bytes().to_vec())
+            }
+            DbValue::Bytes(bytes) => Value::Bytes(bytes.clone()),
+            DbValue::Native { text, bytes, .. } => {
+                if bytes.is_empty() {
+                    Value::Bytes(text.as_bytes().to_vec())
+                } else {
+                    Value::Bytes(bytes.clone())
+                }
+            }
+        })
+        .collect()
+}
+
+async fn run_mysql_query(
+    conn: Arc<Mutex<Conn>>,
+    sql: String,
+    parameters: Vec<DbValue>,
+    row_limit: u64,
+    tx: tokio::sync::mpsc::Sender<Result<QueryEvent, DriverError>>,
+) {
+    let mut conn = conn.lock().await;
+    // ponytail: text protocol when unbound; CREATE FUNCTION/EVENT cannot be prepared (MySQL 1295).
+    if parameters.is_empty() {
+        match conn.query_iter(sql).await {
+            Ok(result) => emit_mysql_sets(result, row_limit, tx).await,
+            Err(error) => {
+                let _ = tx.send(Err(map_error(error))).await;
+            }
+        }
+    } else {
+        match conn
+            .exec_iter(sql, Params::Positional(mysql_values(&parameters)))
+            .await
+        {
+            Ok(result) => emit_mysql_sets(result, row_limit, tx).await,
+            Err(error) => {
+                let _ = tx.send(Err(map_error(error))).await;
+            }
+        }
+    }
+}
+
+async fn emit_mysql_sets<P>(
+    mut result: mysql_async::QueryResult<'_, '_, P>,
+    row_limit: u64,
+    tx: tokio::sync::mpsc::Sender<Result<QueryEvent, DriverError>>,
+) where
+    P: mysql_async::prelude::Protocol + Unpin,
+{
+    let mut index = 0usize;
+    let mut last_affected = None;
+    loop {
+        if result.is_empty() {
+            break;
+        }
+        if tx
+            .send(Ok(QueryEvent::ResultSetStarted { index }))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        let columns: Vec<ColumnMeta> = result.columns_ref().iter().map(column_meta).collect();
+        if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
+            return;
+        }
+        let mut batch = Vec::new();
+        let mut emitted = 0_u64;
+        loop {
+            match result.next().await {
+                Ok(Some(row)) => {
+                    batch.push(decode_row(&row));
+                    emitted += 1;
+                    if batch.len() >= ROW_BATCH_SIZE
+                        && tx
+                            .send(Ok(QueryEvent::Rows(RowBatch {
+                                rows: std::mem::take(&mut batch),
+                            })))
+                            .await
+                            .is_err()
+                    {
+                        return;
+                    }
+                    if row_limit > 0 && emitted >= row_limit {
+                        break;
+                    }
+                }
+                Ok(None) => break,
+                Err(error) => {
+                    let _ = tx.send(Err(map_error(error))).await;
+                    return;
+                }
+            }
+        }
+        if !batch.is_empty()
+            && tx
+                .send(Ok(QueryEvent::Rows(RowBatch { rows: batch })))
+                .await
+                .is_err()
+        {
+            return;
+        }
+        let rows_affected = Some(result.affected_rows());
+        last_affected = rows_affected;
+        if tx
+            .send(Ok(QueryEvent::ResultSetFinished {
+                index,
+                rows_affected,
+            }))
+            .await
+            .is_err()
+        {
+            return;
+        }
+        index += 1;
+        if result.is_empty() {
+            break;
+        }
+    }
+    let _ = tx
+        .send(Ok(QueryEvent::Finished {
+            rows_affected: last_affected,
+        }))
+        .await;
 }

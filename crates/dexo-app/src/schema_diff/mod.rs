@@ -12,7 +12,7 @@ pub use graph::{OrderedChange, infer_edges, order_changes};
 pub use normalize::normalize;
 pub use risk::classify_difference;
 pub use script::{MigrationScript, generate_script, render_unquoted};
-pub use snapshot::{SchemaSnapshot, SnapshotError};
+pub use snapshot::{DiffSource, SchemaSnapshot, SnapshotEnvelope, SnapshotError};
 
 pub fn plan_migration(
     from: &SchemaSnapshot,

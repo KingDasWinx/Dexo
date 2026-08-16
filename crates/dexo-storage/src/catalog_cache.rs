@@ -2,6 +2,15 @@ use dexo_driver_api::{CatalogObject, QualifiedName};
 use rusqlite::{Connection, OptionalExtension, params};
 use uuid::Uuid;
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct CatalogSnapshotMetadata {
+    pub id: String,
+    pub connection_id: String,
+    pub database_name: String,
+    pub complete: bool,
+    pub created_at: String,
+}
+
 pub struct CatalogCache<'a> {
     conn: &'a Connection,
 }
@@ -45,6 +54,32 @@ impl<'a> CatalogCache<'a> {
         )?;
         tx.commit()?;
         Ok(snapshot_id)
+    }
+
+    pub fn latest_metadata(
+        &self,
+        connection_id: &str,
+        database_name: &str,
+    ) -> anyhow::Result<Option<CatalogSnapshotMetadata>> {
+        self.conn
+            .query_row(
+                "SELECT id, connection_id, database_name, complete, created_at
+                 FROM catalog_snapshots
+                 WHERE connection_id = ?1 AND database_name = ?2 AND complete = 1
+                 ORDER BY created_at DESC LIMIT 1",
+                params![connection_id, database_name],
+                |row| {
+                    Ok(CatalogSnapshotMetadata {
+                        id: row.get(0)?,
+                        connection_id: row.get(1)?,
+                        database_name: row.get(2)?,
+                        complete: row.get::<_, i64>(3)? != 0,
+                        created_at: row.get(4)?,
+                    })
+                },
+            )
+            .optional()
+            .map_err(Into::into)
     }
 
     pub fn load_latest(
@@ -233,11 +268,30 @@ mod tests {
         cache.replace_snapshot("c1", "db", &replacement).unwrap();
         let loaded = cache.load_latest("c1", "db").unwrap();
         assert_eq!(loaded.len(), 1);
+        let meta = cache.latest_metadata("c1", "db").unwrap().unwrap();
+        assert!(meta.complete);
+        assert_eq!(meta.connection_id, "c1");
         let count: i64 = conn
             .query_row("SELECT COUNT(*) FROM catalog_snapshots", [], |row| {
                 row.get(0)
             })
             .unwrap();
         assert_eq!(count, 1);
+    }
+
+    #[test]
+    fn incomplete_snapshot_is_rejected_for_offline_use() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        conn.execute(
+            "INSERT INTO catalog_snapshots(id, connection_id, database_name, complete, created_at)
+             VALUES ('s-incomplete', 'c1', 'db', 0, datetime('now'))",
+            [],
+        )
+        .unwrap();
+        let cache = CatalogCache::new(&conn);
+        assert!(cache.latest_metadata("c1", "db").unwrap().is_none());
+        assert!(cache.load_latest("c1", "db").unwrap().is_empty());
     }
 }

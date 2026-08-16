@@ -45,6 +45,13 @@ impl Database {
         Ok(Self { conn })
     }
 
+    pub fn open_in_memory_at(version: u32) -> anyhow::Result<Self> {
+        let conn = Connection::open_in_memory()?;
+        prepare_connection(&conn)?;
+        migrations::apply_up_to(&conn, version)?;
+        Ok(Self { conn })
+    }
+
     pub fn open(path: impl AsRef<Path>) -> anyhow::Result<Self> {
         let path = path.as_ref();
         if let Some(parent) = path.parent() {
@@ -114,7 +121,7 @@ mod tests {
                 .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 7);
+        assert_eq!(db.schema_version().unwrap(), 11);
         assert!(backup_path(&path).exists());
     }
 

@@ -35,7 +35,7 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             title: "Execute Query",
             keywords: &["run", "sql"],
             shortcut: Some("F5"),
-            disabled_reason: if model.sql.trim().is_empty() {
+            disabled_reason: if model.active_document().text().trim().is_empty() {
                 Some("editor is empty")
             } else {
                 None
@@ -53,6 +53,32 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
                 None
             },
             action: || Action::CancelQuery,
+        },
+        PaletteEntry {
+            id: "transaction.begin",
+            title: "Begin Transaction",
+            keywords: &["tx", "begin", "start"],
+            shortcut: None,
+            disabled_reason: if model.active_session.is_some()
+                && model.transaction == TransactionState::Idle
+            {
+                None
+            } else {
+                Some("session is not idle")
+            },
+            action: || Action::BeginTransaction,
+        },
+        PaletteEntry {
+            id: "transaction.savepoint",
+            title: "Create Savepoint",
+            keywords: &["tx", "savepoint"],
+            shortcut: None,
+            disabled_reason: if model.transaction == TransactionState::Active {
+                None
+            } else {
+                Some("no active transaction")
+            },
+            action: || Action::Savepoint,
         },
         PaletteEntry {
             id: "transaction.commit",
@@ -242,12 +268,92 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::ExplorerExpand,
         },
         PaletteEntry {
+            id: "explorer.refresh",
+            title: "Refresh Catalog Node",
+            keywords: &["reload", "tree"],
+            shortcut: Some("r"),
+            disabled_reason: None,
+            action: || Action::RefreshCatalogNode,
+        },
+        PaletteEntry {
+            id: "explorer.refresh_all",
+            title: "Refresh Catalog",
+            keywords: &["reload", "tree"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::RefreshCatalogAll,
+        },
+        PaletteEntry {
+            id: "explorer.inspect",
+            title: "Inspect Object",
+            keywords: &["properties", "ddl"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenObjectInspector,
+        },
+        PaletteEntry {
+            id: "explorer.data",
+            title: "Open Object Data",
+            keywords: &["rows", "table"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenObjectData,
+        },
+        PaletteEntry {
+            id: "editor.goto",
+            title: "Go To Definition",
+            keywords: &["navigate", "catalog"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::GoToDefinition,
+        },
+        PaletteEntry {
             id: "explorer.copy_name",
             title: "Copy Object Name",
             keywords: &["clipboard", "tree"],
             shortcut: Some("c"),
             disabled_reason: None,
             action: || Action::ExplorerCopyName,
+        },
+        PaletteEntry {
+            id: "explorer.copy_simple",
+            title: "Copy Simple Name",
+            keywords: &["clipboard", "tree"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::CopySimpleName,
+        },
+        PaletteEntry {
+            id: "explorer.copy_ddl",
+            title: "Copy DDL",
+            keywords: &["clipboard", "create"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::CopyDdl,
+        },
+        PaletteEntry {
+            id: "explorer.favorite",
+            title: "Toggle Favorite",
+            keywords: &["star", "pin"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ToggleFavorite,
+        },
+        PaletteEntry {
+            id: "explorer.favorites_only",
+            title: "Show Favorites Only",
+            keywords: &["filter", "star"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ToggleFavoritesOnly,
+        },
+        PaletteEntry {
+            id: "explorer.system_objects",
+            title: "Toggle System Objects",
+            keywords: &["filter", "pg_catalog", "mysql"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ToggleSystemObjects,
         },
         PaletteEntry {
             id: "results.up",
@@ -306,6 +412,116 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::ResultsTop,
         },
         PaletteEntry {
+            id: "connection.add",
+            title: "Add Connection",
+            keywords: &["database", "postgres", "mysql", "connect"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenConnectionForm,
+        },
+        PaletteEntry {
+            id: "connection.browse",
+            title: "Browse Connections",
+            keywords: &["database", "sessions", "profiles"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenConnections,
+        },
+        PaletteEntry {
+            id: "connection.connect",
+            title: "Connect Selected",
+            keywords: &["session"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ConnectSelected,
+        },
+        PaletteEntry {
+            id: "connection.duplicate",
+            title: "Duplicate Connection",
+            keywords: &["copy", "profile"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::DuplicateConnection,
+        },
+        PaletteEntry {
+            id: "connection.test",
+            title: "Test Connection",
+            keywords: &["ping"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::TestConnection,
+        },
+        PaletteEntry {
+            id: "connection.delete",
+            title: "Delete Connection",
+            keywords: &["remove"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::DeleteConnection,
+        },
+        PaletteEntry {
+            id: "connection.close_session",
+            title: "Close Session",
+            keywords: &["disconnect"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::CloseSelectedSession,
+        },
+        PaletteEntry {
+            id: "project.browse",
+            title: "Browse Projects",
+            keywords: &["workspace", "switch"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenProjects,
+        },
+        PaletteEntry {
+            id: "project.switch",
+            title: "Switch Project",
+            keywords: &["workspace", "open"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::SwitchProject {
+                name: String::new(),
+            },
+        },
+        PaletteEntry {
+            id: "project.create",
+            title: "Create Project",
+            keywords: &["workspace", "new"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::CreateProject {
+                name: String::new(),
+            },
+        },
+        PaletteEntry {
+            id: "project.rename",
+            title: "Rename Project",
+            keywords: &["workspace"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::RenameProject {
+                name: String::new(),
+            },
+        },
+        PaletteEntry {
+            id: "project.delete",
+            title: "Delete Project",
+            keywords: &["workspace"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::DeleteProject,
+        },
+        PaletteEntry {
+            id: "config.transfer",
+            title: "Import/Export Config",
+            keywords: &["portable", "toml"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::OpenConfigTransfer,
+        },
+        PaletteEntry {
             id: "settings.open",
             title: "Open Settings",
             keywords: &["theme", "keymap", "mouse"],
@@ -362,6 +578,62 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::RevokeAllMcpGrants,
         },
         PaletteEntry {
+            id: "editor.complete",
+            title: "Trigger Completion",
+            keywords: &["intellisense", "suggest"],
+            shortcut: Some("Ctrl+Space"),
+            disabled_reason: None,
+            action: || Action::RefreshSqlIntelligence,
+        },
+        PaletteEntry {
+            id: "editor.format",
+            title: "Format SQL",
+            keywords: &["pretty", "indent"],
+            shortcut: Some("Ctrl+Shift+I"),
+            disabled_reason: None,
+            action: || Action::FormatSql,
+        },
+        PaletteEntry {
+            id: "editor.accept_completion",
+            title: "Accept Completion",
+            keywords: &["complete"],
+            shortcut: Some("Tab"),
+            disabled_reason: None,
+            action: || Action::AcceptCompletion,
+        },
+        PaletteEntry {
+            id: "editor.snippet",
+            title: "Insert Snippet",
+            keywords: &["snippet", "template"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::InsertSnippet,
+        },
+        PaletteEntry {
+            id: "editor.parameters",
+            title: "Submit Parameters",
+            keywords: &["bind", "params"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::SubmitParameters,
+        },
+        PaletteEntry {
+            id: "editor.history",
+            title: "Search History",
+            keywords: &["rerun", "sql"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::SearchHistory,
+        },
+        PaletteEntry {
+            id: "editor.history.clear",
+            title: "Clear History",
+            keywords: &["history", "delete"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ClearHistory,
+        },
+        PaletteEntry {
             id: "diagnostics.export",
             title: "Export Diagnostics",
             keywords: &["logs", "support"],
@@ -377,6 +649,30 @@ pub fn action_by_id(id: &str) -> Option<Action> {
         .into_iter()
         .find(|entry| entry.id == id)
         .map(|entry| (entry.action)())
+}
+
+/// Popup list rows for a terminal height. Matches `render_palette` (height clamp 5..=12, minus border+query).
+pub fn popup_list_rows(term_height: u16) -> usize {
+    term_height.clamp(5, 12).saturating_sub(3) as usize
+}
+
+/// Keep `selected` inside `[offset, offset + rows)`. Same rule as ratatui `ListState`.
+pub fn scroll_to_selection(selected: usize, offset: usize, count: usize, rows: usize) -> usize {
+    if count == 0 || rows == 0 {
+        return 0;
+    }
+    let selected = selected.min(count - 1);
+    let max_offset = count.saturating_sub(rows);
+    if selected < offset {
+        selected
+    } else if selected >= offset.saturating_add(rows) {
+        selected
+            .saturating_add(1)
+            .saturating_sub(rows)
+            .min(max_offset)
+    } else {
+        offset.min(max_offset)
+    }
 }
 
 pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a PaletteEntry> {
@@ -423,7 +719,7 @@ fn is_subsequence(text: &str, query: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{filter_entries, palette_entries};
+    use super::{filter_entries, palette_entries, popup_list_rows, scroll_to_selection};
     use crate::model::Model;
     use dexo_driver_api::TransactionState;
 
@@ -449,6 +745,37 @@ mod tests {
         let entries = palette_entries(&Model::default());
         let filtered = filter_entries(&entries, "pal");
         assert_eq!(filtered[0].id, "palette.open");
+    }
+
+    #[test]
+    fn scroll_keeps_selection_in_window() {
+        assert_eq!(scroll_to_selection(0, 0, 20, 9), 0);
+        assert_eq!(scroll_to_selection(8, 0, 20, 9), 0);
+        assert_eq!(scroll_to_selection(9, 0, 20, 9), 1);
+        assert_eq!(scroll_to_selection(8, 1, 20, 9), 1);
+        assert_eq!(scroll_to_selection(0, 1, 20, 9), 0);
+        assert_eq!(scroll_to_selection(19, 1, 20, 9), 11);
+
+        let mut model = Model::default();
+        model.palette.open = true;
+        let entries = palette_entries(&model);
+        model.palette.selected = entries.len() - 1;
+        model.palette.offset = scroll_to_selection(
+            model.palette.selected,
+            0,
+            entries.len(),
+            popup_list_rows(model.height),
+        );
+        let view = crate::render::render_to_string(&model, 80, 24);
+        let last = entries.last().unwrap().title;
+        assert!(
+            view.contains(last),
+            "selected command `{last}` should stay visible after scroll"
+        );
+        assert!(
+            !view.contains(entries[0].title),
+            "first command should scroll off when selection is at the end"
+        );
     }
 
     #[test]

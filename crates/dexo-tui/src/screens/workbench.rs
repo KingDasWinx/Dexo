@@ -3,11 +3,12 @@ use dexo_app::{ExecutionTarget, statements_for};
 use crate::model::Model;
 
 pub fn planned_statements(model: &Model) -> Vec<String> {
+    let doc = model.active_document();
     statements_for(
-        &model.sql,
+        &doc.text(),
         model.execution_target,
-        model.cursor,
-        model.selection.clone(),
+        doc.cursor(),
+        doc.selection(),
     )
 }
 
@@ -31,11 +32,9 @@ mod tests {
 
     #[test]
     fn script_creates_result_tabs_in_order() {
-        let mut model = Model {
-            sql: "select 1; select 2; select 3;".into(),
-            ..Model::default()
-        };
+        let mut model = Model::default();
+        model.set_sql("select 1; select 2; select 3;");
         update(&mut model, Action::ExecuteQuery);
-        assert_eq!(model.result_tabs.len(), 3);
+        assert_eq!(model.results.tabs.len(), 3);
     }
 }

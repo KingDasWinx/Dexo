@@ -4,8 +4,8 @@ expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │┌SQL───────────────────────────────────────────────────────────────────┐
-│▾ local                   ││select 1                                                              │
+│[offline]                 │┌SQL · scratch.sql─────────────────────────────────────────────────────┐
+│▾ local                   ││   1▸select 1                                                         │
 │  ▸ public   ┌Transfer──────────────────────────────────────────────────────────────┐             │
 │  ▸ mysql.use│import orders.csv                                                     │             │
 │actions: prop│format=csv strategy=RejectFile                                        │             │

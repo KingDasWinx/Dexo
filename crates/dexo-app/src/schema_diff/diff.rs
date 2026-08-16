@@ -16,6 +16,15 @@ pub enum SchemaDifference {
     },
 }
 
+impl SchemaDifference {
+    pub fn object_name(&self) -> String {
+        match self {
+            Self::Added(object) | Self::Removed(object) => object.qualified_name.display_unquoted(),
+            Self::Changed { after, .. } => after.qualified_name.display_unquoted(),
+        }
+    }
+}
+
 pub fn diff(
     from: &[CatalogObject],
     to: &[CatalogObject],

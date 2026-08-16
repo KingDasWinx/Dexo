@@ -43,13 +43,13 @@ fn admin_errors_are_not_retryable() {
 async fn sessions_sizes_stats_variables_and_restricted_role() {
     let pair = dexo_test_support::DatabasePair::start().await.unwrap();
     let session = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     let admin = session.admin().unwrap();
@@ -85,13 +85,13 @@ async fn sessions_sizes_stats_variables_and_restricted_role() {
     assert!(missing.idempotent_noop);
 
     let root = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "root".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "root".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     for sql in [
@@ -108,13 +108,13 @@ async fn sessions_sizes_stats_variables_and_restricted_role() {
         .await;
     }
     let limited = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo_limited".into(),
-            secret: SecretString::from("limited_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo_limited".into(),
+            SecretString::from("limited_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     let limited_sessions = limited.admin().unwrap().list_sessions().await.unwrap();

@@ -1,8 +1,19 @@
+use std::path::PathBuf;
+
 use dexo_driver_api::CatalogObject;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 pub const FORMAT_VERSION: u32 = 1;
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum DiffSource {
+    Live(String),
+    SavedSnapshot(String),
+    JsonFile(PathBuf),
+}
+
+pub type SnapshotEnvelope = SchemaSnapshot;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SchemaSnapshot {

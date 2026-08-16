@@ -34,3 +34,27 @@ fn public_commands_are_documented() {
         assert!(help.contains(name), "missing {name}");
     }
 }
+
+#[test]
+fn connections_help_documents_add_and_set_secret() {
+    let mut cmd = Args::command();
+    let add = cmd
+        .find_subcommand_mut("connections")
+        .unwrap()
+        .find_subcommand_mut("add")
+        .unwrap();
+    let mut buf = Vec::new();
+    add.write_long_help(&mut buf).unwrap();
+    let help = String::from_utf8(buf).unwrap();
+    assert!(help.contains("--password-stdin"));
+    assert!(!help.contains("--password "));
+    let connections_help = {
+        let mut cmd = Args::command();
+        let connections = cmd.find_subcommand_mut("connections").unwrap();
+        let mut buf = Vec::new();
+        connections.write_long_help(&mut buf).unwrap();
+        String::from_utf8(buf).unwrap()
+    };
+    assert!(connections_help.contains("add"));
+    assert!(connections_help.contains("set-secret"));
+}

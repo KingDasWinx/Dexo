@@ -1,10 +1,64 @@
 use secrecy::SecretString;
 
+use crate::query::SessionEventStream;
+use crate::transport::{ConnectionSecrets, TransportRequest};
 use crate::{
     AdministrationProvider, BulkWriter, CapabilityState, CatalogReader, DataMutator, DdlExecutor,
     DriverError, ExplainProvider, QueryId, QueryRequest, QueryStream, SecurityAdmin,
     TransactionControl,
 };
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ConnectionOptions {
+    pub tls: bool,
+    pub client_certificate: bool,
+    pub ssh: bool,
+    pub proxy: bool,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DriverDescriptor {
+    pub id: &'static str,
+    pub display_name: &'static str,
+    pub default_port: u16,
+    pub options: ConnectionOptions,
+}
+
+impl DriverDescriptor {
+    pub fn postgres() -> Self {
+        Self {
+            id: "postgres",
+            display_name: "PostgreSQL",
+            default_port: 5432,
+            options: ConnectionOptions {
+                tls: true,
+                client_certificate: true,
+                ssh: true,
+                proxy: true,
+            },
+        }
+    }
+
+    pub fn mysql() -> Self {
+        Self {
+            id: "mysql",
+            display_name: "MySQL",
+            default_port: 3306,
+            options: ConnectionOptions {
+                tls: true,
+                client_certificate: true,
+                ssh: true,
+                proxy: true,
+            },
+        }
+    }
+
+    pub fn for_id(id: &str) -> Option<Self> {
+        [Self::postgres(), Self::mysql()]
+            .into_iter()
+            .find(|descriptor| descriptor.id == id)
+    }
+}
 
 #[derive(Clone, Debug)]
 pub struct ConnectRequest {
@@ -13,11 +67,40 @@ pub struct ConnectRequest {
     pub username: String,
     pub secret: SecretString,
     pub read_only: bool,
+    pub transport: TransportRequest,
+    pub secrets: ConnectionSecrets,
+}
+
+impl ConnectRequest {
+    pub fn new(
+        endpoint: impl Into<String>,
+        database: Option<String>,
+        username: String,
+        secret: SecretString,
+        read_only: bool,
+    ) -> Self {
+        let endpoint = endpoint.into();
+        let transport = TransportRequest::from_endpoint(&endpoint)
+            .unwrap_or_else(|_| TransportRequest::direct(endpoint.clone(), 1));
+        let secrets = ConnectionSecrets::database_password(secret.clone());
+        Self {
+            endpoint,
+            database,
+            username,
+            secret,
+            read_only,
+            transport,
+            secrets,
+        }
+    }
 }
 
 #[async_trait::async_trait]
 pub trait ConnectionFactory: Send + Sync {
-    fn driver_name(&self) -> &'static str;
+    fn descriptor(&self) -> DriverDescriptor;
+    fn driver_name(&self) -> &'static str {
+        self.descriptor().id
+    }
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError>;
 }
 
@@ -56,6 +139,10 @@ pub trait Session: Send + Sync {
     }
 
     fn admin(&self) -> Option<&dyn AdministrationProvider> {
+        None
+    }
+
+    fn events(&self) -> Option<SessionEventStream> {
         None
     }
 }

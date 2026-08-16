@@ -4,7 +4,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
-use crate::palette::{filter_entries, palette_entries};
+use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 
 pub fn render(frame: &mut Frame, model: &Model) {
     let plan = LayoutPlan::for_area_with(frame.area(), Some(&model.panes));
@@ -106,6 +106,51 @@ pub fn render(frame: &mut Frame, model: &Model) {
             );
         }
     }
+    if model.connections.open {
+        let popup = centered(frame.area(), 72, 18);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.connections.lines().join("\n"))
+                .block(Block::bordered().title("Connections")),
+            popup,
+        );
+    }
+    if model.projects.open {
+        let popup = centered(frame.area(), 72, 18);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.projects.lines().join("\n"))
+                .block(Block::bordered().title("Projects")),
+            popup,
+        );
+    }
+    if model.config_transfer.open {
+        let popup = centered(frame.area(), 72, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.config_transfer.lines().join("\n"))
+                .block(Block::bordered().title("Config transfer")),
+            popup,
+        );
+    }
+    if model.secret_prompt.open {
+        let popup = centered(frame.area(), 56, 8);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.secret_prompt.lines().join("\n"))
+                .block(Block::bordered().title("Secret")),
+            popup,
+        );
+    }
+    if model.connection_form.open {
+        let popup = centered(frame.area(), 64, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.connection_form.lines().join("\n"))
+                .block(Block::bordered().title("Add connection")),
+            popup,
+        );
+    }
     if model.settings.open {
         let popup = centered(frame.area(), 64, 12);
         frame.render_widget(Clear, popup);
@@ -180,6 +225,9 @@ fn context_line(model: &Model) -> String {
 }
 
 fn inspector_body(model: &Model) -> String {
+    if model.inspector.open {
+        return describe_object_inspector(&model.inspector);
+    }
     if let Some(view) = &model.data.viewer {
         return crate::widgets::viewer::describe(view);
     }
@@ -194,6 +242,58 @@ fn inspector_body(model: &Model) -> String {
             .collect::<Vec<_>>()
             .join("\n")
     }
+}
+
+fn describe_object_inspector(
+    inspector: &crate::screens::object_inspector::ObjectInspector,
+) -> String {
+    let mut lines = Vec::new();
+    if inspector.qualified_name.is_empty() {
+        lines.push("loading…".into());
+    } else {
+        lines.push(inspector.qualified_name.clone());
+    }
+    if let Some(error) = &inspector.error {
+        lines.push(format!("error: {error}"));
+    }
+    for restriction in &inspector.restrictions {
+        lines.push(format!("restricted: {restriction}"));
+    }
+    if let Some(object) = &inspector.object {
+        lines.push(format!("kind: {}", object.kind.as_str()));
+    }
+    if let Some(ddl) = &inspector.ddl {
+        lines.push(ddl.clone());
+    }
+    if !inspector.dependencies.is_empty() {
+        lines.push(format!(
+            "deps: {}",
+            inspector
+                .dependencies
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !inspector.dependents.is_empty() {
+        lines.push(format!(
+            "dependents: {}",
+            inspector
+                .dependents
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !inspector.effective_privileges.is_empty() {
+        lines.push(format!(
+            "privileges: {}",
+            inspector.effective_privileges.join(", ")
+        ));
+    }
+    lines.join("\n")
 }
 
 fn render_bar(frame: &mut Frame, area: Rect, text: String) {
@@ -231,11 +331,14 @@ fn render_palette(frame: &mut Frame, model: &Model) {
     let entries = palette_entries(model);
     let visible = filter_entries(&entries, &model.palette.query);
     let mut lines = vec![format!("> {}", model.palette.query)];
-    for (index, entry) in visible
-        .iter()
-        .take(height.saturating_sub(3) as usize)
-        .enumerate()
-    {
+    let rows = height.saturating_sub(3) as usize;
+    let offset = scroll_to_selection(
+        model.palette.selected,
+        model.palette.offset,
+        visible.len(),
+        rows,
+    );
+    for (index, entry) in visible.iter().enumerate().skip(offset).take(rows) {
         let marker = if index == model.palette.selected {
             ">"
         } else {

@@ -17,13 +17,13 @@ async fn connect() -> Fixture {
     let pair = DatabasePair::start().await.unwrap();
     let endpoint = pair.postgres_endpoint().to_string();
     let session = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: endpoint.clone(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            endpoint.clone(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     Fixture {
@@ -74,6 +74,7 @@ async fn postgres_ddl_round_trip_matches_introspected_shape() {
             rollback: vec![],
             warnings: vec![],
             transactional: true,
+            ..dexo_driver_api::DdlPlan::default()
         })
         .await
         .unwrap(),
@@ -427,13 +428,13 @@ async fn postgres_least_privilege_grant_revoke() {
         DdlOutcome::Committed
     );
     let limited = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: fixture.endpoint.clone(),
-            database: Some("dexo".into()),
-            username: "dexo_lp_role".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            fixture.endpoint.clone(),
+            Some("dexo".into()),
+            "dexo_lp_role".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     drain(limited.as_ref(), "SELECT * FROM dexo_lp.allowed")

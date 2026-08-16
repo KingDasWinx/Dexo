@@ -1,19 +1,31 @@
+use std::ops::Range;
+
 use dexo_app::event::TaskId;
 use dexo_app::{ExecutionTarget, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, QueryId, TransactionState};
+use dexo_sql::SqlDocument;
+
+use crate::runtime::{OperationId, OperationKey, SessionId};
 
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
 use crate::screens::admin::AdminScreen;
+use crate::screens::config_transfer::ConfigTransferScreen;
+use crate::screens::connection::ConnectionForm;
+use crate::screens::connections::ConnectionsScreen;
 use crate::screens::data::DataScreen;
+use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
 use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
+use crate::screens::object_inspector::ObjectInspector;
+use crate::screens::projects::ProjectsScreen;
 use crate::screens::recovery::RecoveryScreen;
 use crate::screens::schema_diff::SchemaDiffScreen;
 use crate::screens::schema_editor::SchemaEditor;
+use crate::screens::secret_prompt::SecretPrompt;
 use crate::screens::security::SecurityScreen;
 use crate::screens::settings::SettingsScreen;
 use crate::screens::transfer::TransferScreen;
@@ -28,11 +40,12 @@ pub enum Focus {
     Palette,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectionStatus {
     pub name: String,
     pub ready: bool,
     pub environment: String,
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -40,6 +53,7 @@ pub struct PaletteState {
     pub open: bool,
     pub query: String,
     pub selected: usize,
+    pub offset: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -171,10 +185,130 @@ pub struct GridModel {
     pub kind: GridSelection,
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
+    pub cells: std::collections::BTreeMap<(usize, usize), GridCell>,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum OperationStatus {
+    #[default]
+    Idle,
+    Running,
+    Finished,
+    Failed,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum GridCell {
+    Inline(DbValue),
+    Spool {
+        id: uuid::Uuid,
+        path: std::path::PathBuf,
+        loaded: u64,
+        total: u64,
+    },
+    Remote(dexo_driver_api::RemoteValueRef),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultKey {
+    pub operation: OperationKey,
+    pub index: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct ResultTab {
+    pub key: ResultKey,
+    pub title: String,
+    pub grid: GridModel,
+    pub status: OperationStatus,
+    pub rows_affected: Option<u64>,
+    pub notices: Vec<String>,
+    pub source_sql: Option<String>,
+    pub local_only: Option<String>,
+}
+
+impl ResultTab {
+    pub fn new(key: ResultKey, title: impl Into<String>) -> Self {
+        Self {
+            key,
+            title: title.into(),
+            grid: GridModel::default(),
+            status: OperationStatus::Idle,
+            rows_affected: None,
+            notices: Vec::new(),
+            source_sql: None,
+            local_only: None,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResultsState {
+    pub tabs: Vec<ResultTab>,
+    pub active: usize,
+}
+
+impl ResultsState {
+    fn grid(&self) -> &GridModel {
+        self.tabs
+            .get(self.active)
+            .map(|tab| &tab.grid)
+            .unwrap_or(&EMPTY_GRID)
+    }
+
+    fn grid_mut(&mut self) -> &mut GridModel {
+        if self.tabs.is_empty() {
+            self.tabs.push(ResultTab::new(
+                ResultKey {
+                    operation: OperationKey::new(OperationId::new(), "", "", 0),
+                    index: 0,
+                },
+                "result",
+            ));
+            self.active = 0;
+        }
+        let index = self.active.min(self.tabs.len() - 1);
+        &mut self.tabs[index].grid
+    }
+}
+
+static EMPTY_GRID: GridModel = GridModel {
+    buffer: ResultBuffer {
+        columns: Vec::new(),
+        rows: Vec::new(),
+        estimated_bytes: 0,
+        truncated: false,
+    },
+    viewport: GridViewport {
+        row_offset: 0,
+        column_offset: 0,
+        height: 20,
+        width: 80,
+    },
+    selection: None,
+    column_widths: Vec::new(),
+    kind: GridSelection::Cell { row: 0, col: 0 },
+    frozen_columns: 0,
+    hidden_columns: Vec::new(),
+    cells: std::collections::BTreeMap::new(),
+};
+
+impl std::ops::Deref for ResultsState {
+    type Target = GridModel;
+
+    fn deref(&self) -> &GridModel {
+        self.grid()
+    }
+}
+
+impl std::ops::DerefMut for ResultsState {
+    fn deref_mut(&mut self) -> &mut GridModel {
+        self.grid_mut()
+    }
 }
 
 impl GridModel {
-    pub fn fixture_rows(count: usize) -> Self {
+    pub fn sample_rows(count: usize) -> Self {
         let mut buffer = ResultBuffer {
             columns: vec![ColumnMeta {
                 name: "n".into(),
@@ -196,6 +330,7 @@ impl GridModel {
             kind: GridSelection::Cell { row: 0, col: 0 },
             frozen_columns: 0,
             hidden_columns: Vec::new(),
+            cells: std::collections::BTreeMap::new(),
         }
     }
 
@@ -236,16 +371,37 @@ impl GridModel {
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<DbValue>>) {
-        self.buffer.append_rows(rows);
+        for row in rows {
+            let row_index = self.buffer.row_count();
+            let mut display = Vec::with_capacity(row.len());
+            for (col, value) in row.into_iter().enumerate() {
+                let (shown, deferred) = bound_value(value);
+                if let Some(cell) = deferred {
+                    self.cells.insert((row_index, col), cell);
+                }
+                display.push(shown);
+            }
+            self.buffer.append_rows(vec![display]);
+        }
         self.recompute_column_widths();
     }
 
     pub fn clear(&mut self) {
+        for cell in self.cells.values() {
+            if let GridCell::Spool { path, .. } = cell {
+                let _ = std::fs::remove_file(path);
+            }
+        }
+        self.cells.clear();
         self.buffer.clear();
         self.viewport.row_offset = 0;
         self.viewport.column_offset = 0;
         self.selection = None;
         self.column_widths.clear();
+    }
+
+    pub fn cell_at(&self, row: usize, col: usize) -> Option<&GridCell> {
+        self.cells.get(&(row, col))
     }
 
     pub fn viewport(&self) -> GridViewport {
@@ -492,6 +648,134 @@ fn estimated_row_bytes(row: &[DbValue]) -> usize {
         .sum()
 }
 
+fn spool_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("dexo-spool-{}", std::process::id()))
+}
+
+fn bound_value(value: DbValue) -> (DbValue, Option<GridCell>) {
+    let inline = dexo_app::data::value::INLINE_BYTES as usize;
+    match value {
+        DbValue::Bytes(bytes) if bytes.len() > inline => spool_or_prefix(bytes, inline),
+        DbValue::Text(text) if text.len() > inline => spool_or_prefix(text.into_bytes(), inline),
+        DbValue::Json(text) if text.len() > inline => spool_or_prefix(text.into_bytes(), inline),
+        DbValue::Native {
+            bytes,
+            text,
+            type_name,
+        } if bytes.len() > inline => {
+            let (shown, cell) = spool_or_prefix(bytes, inline);
+            match shown {
+                DbValue::Bytes(prefix) => (
+                    DbValue::Native {
+                        type_name,
+                        bytes: prefix,
+                        text,
+                    },
+                    cell,
+                ),
+                other => (other, cell),
+            }
+        }
+        other => (other, None),
+    }
+}
+
+fn spool_or_prefix(bytes: Vec<u8>, inline: usize) -> (DbValue, Option<GridCell>) {
+    let total = bytes.len() as u64;
+    let prefix = bytes[..inline.min(bytes.len())].to_vec();
+    match crate::runtime::result_spool::spool_bytes(&spool_dir(), &bytes) {
+        Ok(file) => (
+            DbValue::Bytes(prefix),
+            Some(GridCell::Spool {
+                id: file.id,
+                path: file.path,
+                loaded: inline as u64,
+                total,
+            }),
+        ),
+        Err(_) => (DbValue::Bytes(prefix), None),
+    }
+}
+
+#[derive(Clone, Debug)]
+pub struct EditorDocument {
+    pub id: String,
+    pub title: String,
+    pub path: Option<std::path::PathBuf>,
+    pub sql: SqlDocument,
+    pub saved_revision: u64,
+    pub session: Option<SessionId>,
+    pub viewport_line: usize,
+    pub viewport_column: usize,
+    pub typing: bool,
+    pub anchor: Option<usize>,
+}
+
+impl PartialEq for EditorDocument {
+    fn eq(&self, other: &Self) -> bool {
+        self.id == other.id
+            && self.title == other.title
+            && self.path == other.path
+            && self.sql.text() == other.sql.text()
+            && self.sql.cursor() == other.sql.cursor()
+            && self.saved_revision == other.saved_revision
+            && self.session == other.session
+            && self.viewport_line == other.viewport_line
+            && self.viewport_column == other.viewport_column
+            && self.typing == other.typing
+            && self.anchor == other.anchor
+    }
+}
+
+impl EditorDocument {
+    pub fn scratch() -> Self {
+        Self {
+            id: "scratch".into(),
+            title: "scratch.sql".into(),
+            path: None,
+            sql: SqlDocument::new(""),
+            saved_revision: 0,
+            session: None,
+            viewport_line: 0,
+            viewport_column: 0,
+            typing: false,
+            anchor: None,
+        }
+    }
+
+    pub fn with_text(text: impl AsRef<str>) -> Self {
+        let sql = SqlDocument::new(text.as_ref());
+        let saved_revision = sql.revision();
+        Self {
+            sql,
+            saved_revision,
+            ..Self::scratch()
+        }
+    }
+
+    pub fn is_dirty(&self) -> bool {
+        self.sql.revision() != self.saved_revision
+    }
+
+    pub fn text(&self) -> String {
+        self.sql.text()
+    }
+
+    pub fn cursor(&self) -> usize {
+        self.sql.cursor()
+    }
+
+    pub fn selection(&self) -> Option<Range<usize>> {
+        let anchor = self.anchor?;
+        let cursor = self.sql.cursor();
+        if anchor == cursor {
+            None
+        } else {
+            Some(anchor.min(cursor)..anchor.max(cursor))
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub focus: Focus,
@@ -500,21 +784,25 @@ pub struct Model {
     pub layout_mode: LayoutMode,
     pub connection: ConnectionStatus,
     pub transaction: TransactionState,
-    pub results: GridModel,
+    pub results: ResultsState,
     pub tabs: TabsState,
     pub palette: PaletteState,
     pub messages: Vec<String>,
-    pub sql: String,
-    pub cursor: usize,
-    pub selection: Option<std::ops::Range<usize>>,
-    pub result_tabs: Vec<GridModel>,
+    pub documents: Vec<EditorDocument>,
+    pub active_document: usize,
     pub execution_target: ExecutionTarget,
     pub script_policy: ScriptPolicy,
     pub active_task: Option<TaskId>,
     pub active_query: Option<QueryId>,
+    pub active_operation: Option<OperationId>,
+    pub active_session: Option<SessionId>,
+    pub session_generation: u64,
+    pub connect_token: u64,
     pub project: String,
+    pub project_id: String,
     pub schema: String,
     pub explorer: ExplorerState,
+    pub inspector: ObjectInspector,
     pub data: DataScreen,
     pub schema_editor: SchemaEditor,
     pub schema_diff: SchemaDiffScreen,
@@ -523,9 +811,15 @@ pub struct Model {
     pub explain: ExplainScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
+    pub connection_form: ConnectionForm,
+    pub connections: ConnectionsScreen,
+    pub projects: ProjectsScreen,
+    pub config_transfer: ConfigTransferScreen,
+    pub secret_prompt: SecretPrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
+    pub editor: EditorState,
     pub theme: Theme,
     pub capabilities: TerminalCapabilities,
     pub keymap: Keymap,
@@ -533,6 +827,7 @@ pub struct Model {
     pub panes: PaneLayout,
     pub mouse: bool,
     pub animation: bool,
+    pub layout_dirty: bool,
 }
 
 impl Default for Model {
@@ -546,6 +841,7 @@ impl Default for Model {
                 name: String::new(),
                 ready: false,
                 environment: String::new(),
+                read_only: false,
             },
             theme: crate::theme::builtin_dark(),
             capabilities: TerminalCapabilities {
@@ -565,22 +861,27 @@ impl Default for Model {
             },
             mouse: true,
             animation: true,
+            layout_dirty: false,
             transaction: TransactionState::Idle,
-            results: GridModel::default(),
+            results: ResultsState::default(),
             tabs: TabsState::default(),
             palette: PaletteState::default(),
             messages: Vec::new(),
-            sql: String::new(),
-            cursor: 0,
-            selection: None,
-            result_tabs: Vec::new(),
+            documents: vec![EditorDocument::scratch()],
+            active_document: 0,
             execution_target: ExecutionTarget::Document,
             script_policy: ScriptPolicy::StopOnError,
             active_task: None,
             active_query: None,
+            active_operation: None,
+            active_session: None,
+            session_generation: 0,
+            connect_token: 0,
             project: "default".into(),
+            project_id: String::new(),
             schema: String::new(),
             explorer: ExplorerState::default(),
+            inspector: ObjectInspector::default(),
             data: DataScreen::default(),
             schema_editor: SchemaEditor::default(),
             schema_diff: SchemaDiffScreen::default(),
@@ -589,9 +890,15 @@ impl Default for Model {
             explain: ExplainScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
+            connection_form: ConnectionForm::default(),
+            connections: ConnectionsScreen::default(),
+            projects: ProjectsScreen::default(),
+            config_transfer: ConfigTransferScreen::default(),
+            secret_prompt: SecretPrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
+            editor: EditorState::default(),
         }
     }
 }
@@ -619,6 +926,32 @@ impl Model {
         seed.into()
     }
 
+    pub fn workbench_layout(&self) -> dexo_storage::WorkbenchLayout {
+        dexo_storage::WorkbenchLayout {
+            version: dexo_storage::LAYOUT_VERSION,
+            explorer_visible: self.panes.explorer_visible,
+            inspector_visible: self.panes.inspector_visible,
+            results_visible: self.panes.results_visible,
+            explorer_width: self.panes.explorer_width,
+            inspector_width: self.panes.inspector_width,
+            results_height: self.panes.results_height,
+            focused_panel: format!("{:?}", self.focus).to_ascii_lowercase(),
+            active_tab: self.tabs.active,
+            tabs: self.tabs.titles.clone(),
+            document_ids: self.documents.iter().map(|d| d.id.clone()).collect(),
+            active_document_id: self
+                .documents
+                .get(self.active_document)
+                .map(|d| d.id.clone()),
+            active_connection_id: if self.connection.name.is_empty() {
+                None
+            } else {
+                Some(self.connection.name.clone())
+            },
+            active_result_tab: 0,
+        }
+    }
+
     pub fn apply_size(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
@@ -628,5 +961,23 @@ impl Model {
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
+    }
+
+    pub fn active_document(&self) -> &EditorDocument {
+        &self.documents[self
+            .active_document
+            .min(self.documents.len().saturating_sub(1))]
+    }
+
+    pub fn active_document_mut(&mut self) -> &mut EditorDocument {
+        let index = self
+            .active_document
+            .min(self.documents.len().saturating_sub(1));
+        &mut self.documents[index]
+    }
+
+    pub fn set_sql(&mut self, text: impl AsRef<str>) {
+        *self.active_document_mut() = EditorDocument::with_text(text);
+        self.editor.reset_parse();
     }
 }

@@ -5,7 +5,7 @@ use dexo_driver_api::ConnectionFactory;
 
 use crate::error::{AppError, ErrorCategory};
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct DriverRegistry {
     factories: HashMap<&'static str, Arc<dyn ConnectionFactory>>,
 }
@@ -26,5 +26,15 @@ impl DriverRegistry {
                 format!("unknown driver '{driver}'"),
             )
         })
+    }
+
+    pub fn descriptors(&self) -> Vec<dexo_driver_api::DriverDescriptor> {
+        let mut descriptors: Vec<_> = self
+            .factories
+            .values()
+            .map(|factory| factory.descriptor())
+            .collect();
+        descriptors.sort_by_key(|descriptor| descriptor.id);
+        descriptors
     }
 }

@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeToolKind {
@@ -8,10 +9,19 @@ pub enum NativeToolKind {
     MysqlRestore,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NativeStatus {
+    Running,
+    Succeeded,
+    Failed,
+    Cancelled,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct NativeRunResult {
     pub command_line: String,
     pub sanitized_log: String,
+    pub status: NativeStatus,
 }
 
 #[derive(Debug)]
@@ -131,48 +141,261 @@ pub fn prepare(
     })
 }
 
-pub async fn fake_pg_dump(secret: &str) -> NativeRunResult {
-    let dir = tempfile::tempdir().expect("temp");
-    let mut prepared =
-        prepare(NativeToolKind::PgDump, secret, "16.9", 16, dir.path()).expect("prepare");
-    let sanitized_log = format!("spawn {}", prepared.command_line);
-    let command_line = prepared.command_line.clone();
-    prepared.cleanup();
-    NativeRunResult {
-        command_line,
-        sanitized_log,
+#[derive(Clone, Debug)]
+pub struct ProcessSpec {
+    pub program: String,
+    pub args: Vec<String>,
+    pub env: Vec<(String, String)>,
+}
+
+#[async_trait::async_trait]
+pub trait ProcessRunner: Send + Sync {
+    async fn spawn(&self, spec: ProcessSpec) -> Result<Box<dyn RunningProcess>, NativeToolError>;
+}
+
+#[async_trait::async_trait]
+pub trait RunningProcess: Send {
+    async fn cancel(&mut self) -> Result<(), NativeToolError>;
+    async fn wait(&mut self) -> Result<NativeStatus, NativeToolError>;
+}
+
+pub struct NativeToolRunner<R: ProcessRunner> {
+    process: R,
+}
+
+impl<R: ProcessRunner> NativeToolRunner<R> {
+    pub fn new(process: R) -> Self {
+        Self { process }
+    }
+
+    pub async fn start(
+        &self,
+        kind: NativeToolKind,
+        secret: &str,
+        version: &str,
+        expected_major: u32,
+        dir: &Path,
+    ) -> Result<NativeHandle, NativeToolError> {
+        let prepared = prepare(kind, secret, version, expected_major, dir)?;
+        let spec = ProcessSpec {
+            program: prepared.program.clone(),
+            args: prepared.args.clone(),
+            env: prepared.env.clone(),
+        };
+        let child = self.process.spawn(spec).await?;
+        Ok(NativeHandle {
+            command_line: prepared.command_line.clone(),
+            secret_file: prepared
+                .passfile
+                .clone()
+                .unwrap_or_else(|| dir.join("secret")),
+            child: Mutex::new(Some(child)),
+            cancelled: Mutex::new(false),
+            prepared,
+        })
     }
 }
 
-pub struct FakeChild {
-    pub killed: bool,
+pub struct NativeHandle {
+    pub command_line: String,
+    secret_file: PathBuf,
+    child: Mutex<Option<Box<dyn RunningProcess>>>,
+    cancelled: Mutex<bool>,
+    #[allow(dead_code)]
+    prepared: PreparedTool,
 }
 
-impl FakeChild {
-    pub fn cancel(&mut self) {
-        self.killed = true;
+impl NativeHandle {
+    pub fn secret_file(&self) -> &Path {
+        &self.secret_file
+    }
+
+    pub async fn cancel(&self) -> Result<(), NativeToolError> {
+        let child = self.child.lock().expect("child").take();
+        if let Some(mut child) = child {
+            child.cancel().await?;
+            *self.cancelled.lock().expect("cancelled") = true;
+            *self.child.lock().expect("child") = Some(child);
+        }
+        self.cleanup_secret();
+        Ok(())
+    }
+
+    pub async fn outcome(&self) -> Result<NativeRunResult, NativeToolError> {
+        let child = self.child.lock().expect("child").take();
+        let cancelled = *self.cancelled.lock().expect("cancelled");
+        let status = if let Some(mut child) = child {
+            let status = child.wait().await?;
+            if cancelled {
+                NativeStatus::Cancelled
+            } else {
+                status
+            }
+        } else if cancelled {
+            NativeStatus::Cancelled
+        } else {
+            NativeStatus::Failed
+        };
+        self.cleanup_secret();
+        Ok(NativeRunResult {
+            command_line: self.command_line.clone(),
+            sanitized_log: format!("status={status:?} {}", self.command_line),
+            status,
+        })
+    }
+
+    fn cleanup_secret(&self) {
+        let _ = std::fs::remove_file(&self.secret_file);
+    }
+}
+
+impl Drop for NativeHandle {
+    fn drop(&mut self) {
+        self.cleanup_secret();
+    }
+}
+
+pub struct TokioProcessRunner;
+
+#[async_trait::async_trait]
+impl ProcessRunner for TokioProcessRunner {
+    async fn spawn(&self, spec: ProcessSpec) -> Result<Box<dyn RunningProcess>, NativeToolError> {
+        let mut command = tokio::process::Command::new(&spec.program);
+        command.args(&spec.args);
+        for (key, value) in &spec.env {
+            command.env(key, value);
+        }
+        command.kill_on_drop(true);
+        command.stdout(std::process::Stdio::piped());
+        command.stderr(std::process::Stdio::piped());
+        let child = command
+            .spawn()
+            .map_err(|error| NativeToolError::Io(error.to_string()))?;
+        Ok(Box::new(TokioChild { child: Some(child) }))
+    }
+}
+
+struct TokioChild {
+    child: Option<tokio::process::Child>,
+}
+
+#[async_trait::async_trait]
+impl RunningProcess for TokioChild {
+    async fn cancel(&mut self) -> Result<(), NativeToolError> {
+        if let Some(child) = &mut self.child {
+            let _ = child.kill().await;
+        }
+        Ok(())
+    }
+
+    async fn wait(&mut self) -> Result<NativeStatus, NativeToolError> {
+        let Some(mut child) = self.child.take() else {
+            return Ok(NativeStatus::Failed);
+        };
+        match child.wait().await {
+            Ok(status) if status.success() => Ok(NativeStatus::Succeeded),
+            Ok(_) => Ok(NativeStatus::Failed),
+            Err(error) => Err(NativeToolError::Io(error.to_string())),
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{FakeChild, NativeToolError, NativeToolKind, fake_pg_dump, prepare};
+    use super::{
+        NativeStatus, NativeToolError, NativeToolKind, NativeToolRunner, ProcessRunner,
+        ProcessSpec, RunningProcess, prepare,
+    };
+    use std::path::{Path, PathBuf};
+    use std::sync::{Arc, Mutex};
+
+    struct RecordingRunner {
+        cancelled: Arc<Mutex<bool>>,
+        secret: PathBuf,
+    }
+
+    struct RecordingChild {
+        cancelled: Arc<Mutex<bool>>,
+        secret: PathBuf,
+    }
+
+    #[async_trait::async_trait]
+    impl ProcessRunner for RecordingRunner {
+        async fn spawn(
+            &self,
+            spec: ProcessSpec,
+        ) -> Result<Box<dyn RunningProcess>, NativeToolError> {
+            assert!(!spec.args.iter().any(|arg| arg.contains("SECRET")));
+            Ok(Box::new(RecordingChild {
+                cancelled: Arc::clone(&self.cancelled),
+                secret: self.secret.clone(),
+            }))
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl RunningProcess for RecordingChild {
+        async fn cancel(&mut self) -> Result<(), NativeToolError> {
+            *self.cancelled.lock().expect("cancel") = true;
+            let _ = std::fs::remove_file(&self.secret);
+            Ok(())
+        }
+
+        async fn wait(&mut self) -> Result<NativeStatus, NativeToolError> {
+            if *self.cancelled.lock().expect("cancel") {
+                Ok(NativeStatus::Cancelled)
+            } else {
+                Ok(NativeStatus::Succeeded)
+            }
+        }
+    }
 
     #[tokio::test]
     async fn password_never_appears_in_arguments_or_logs() {
-        let result = fake_pg_dump("SUPER_SECRET_SENTINEL").await;
-        assert!(!result.command_line.contains("SUPER_SECRET_SENTINEL"));
+        let dir = tempfile::tempdir().unwrap();
+        let runner = NativeToolRunner::new(RecordingRunner {
+            cancelled: Arc::new(Mutex::new(false)),
+            secret: dir.path().join("pgpass"),
+        });
+        let handle = runner
+            .start(
+                NativeToolKind::PgDump,
+                "SUPER_SECRET_SENTINEL",
+                "16.9",
+                16,
+                dir.path(),
+            )
+            .await
+            .unwrap();
+        assert!(!handle.command_line.contains("SUPER_SECRET_SENTINEL"));
+        let result = handle.outcome().await.unwrap();
         assert!(!result.sanitized_log.contains("SUPER_SECRET_SENTINEL"));
+        assert!(!handle.secret_file().exists());
+    }
+
+    #[tokio::test]
+    async fn cancellation_kills_the_child_and_removes_secret_material() {
+        let dir = tempfile::tempdir().unwrap();
+        let cancelled = Arc::new(Mutex::new(false));
+        let runner = NativeToolRunner::new(RecordingRunner {
+            cancelled: Arc::clone(&cancelled),
+            secret: dir.path().join("pgpass"),
+        });
+        let handle = runner
+            .start(NativeToolKind::PgDump, "SECRET", "16.9", 16, dir.path())
+            .await
+            .unwrap();
+        handle.cancel().await.unwrap();
+        assert!(!handle.secret_file().exists());
+        assert!(*cancelled.lock().unwrap());
+        let _ = Path::new(".");
     }
 
     #[test]
-    fn version_mismatch_and_cancel() {
+    fn version_mismatch_and_mysql_option_file() {
         let dir = tempfile::tempdir().unwrap();
         let error = prepare(NativeToolKind::PgDump, "x", "15.4", 16, dir.path()).unwrap_err();
         assert!(matches!(error, NativeToolError::VersionMismatch { .. }));
-        let mut child = FakeChild { killed: false };
-        child.cancel();
-        assert!(child.killed);
         let mysql = prepare(NativeToolKind::MysqlDump, "SECRET", "8.4", 8, dir.path()).unwrap();
         assert!(!mysql.command_line.contains("SECRET"));
         assert!(

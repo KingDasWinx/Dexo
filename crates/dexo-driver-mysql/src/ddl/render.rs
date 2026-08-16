@@ -57,6 +57,7 @@ pub fn render(change: &SchemaChange) -> Result<DdlPlan, DriverError> {
         SchemaChange::Grant { target, def } => render_grant(&mut plan, target, def, true),
         SchemaChange::Revoke { target, def } => render_grant(&mut plan, target, def, false),
     }
+    plan.risk = change.risk();
     Ok(plan)
 }
 

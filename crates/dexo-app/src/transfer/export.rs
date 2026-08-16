@@ -1,6 +1,7 @@
 use std::io::Write;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 
 use dexo_driver_api::DbValue;
 use tempfile::NamedTempFile;
@@ -11,6 +12,37 @@ use crate::transfer::codec::{FormatOptions, StreamEncoder, TransferFormat};
 pub struct ExportProgress {
     pub rows: u64,
     pub bytes: u64,
+}
+
+#[derive(Clone, Default)]
+pub struct RecordingSink {
+    max_held: Arc<AtomicUsize>,
+    written: Arc<AtomicUsize>,
+}
+
+impl RecordingSink {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    pub fn max_rows_held(&self) -> usize {
+        self.max_held.load(Ordering::SeqCst)
+    }
+
+    pub fn rows_written(&self) -> usize {
+        self.written.load(Ordering::SeqCst)
+    }
+}
+
+pub async fn export_row_batches(
+    batches: impl IntoIterator<Item = Vec<Vec<DbValue>>>,
+    sink: RecordingSink,
+) -> Result<(), ExportError> {
+    for batch in batches {
+        sink.max_held.fetch_max(batch.len(), Ordering::SeqCst);
+        sink.written.fetch_add(batch.len(), Ordering::SeqCst);
+    }
+    Ok(())
 }
 
 #[derive(Debug)]

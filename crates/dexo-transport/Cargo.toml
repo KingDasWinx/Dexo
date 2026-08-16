@@ -17,6 +17,7 @@ russh = "0.62.6"
 secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
+tokio-util.workspace = true
 tokio-rustls = "0.26"
 tokio-socks = "0.5"
 

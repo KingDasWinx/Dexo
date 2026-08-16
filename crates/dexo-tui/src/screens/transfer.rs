@@ -30,7 +30,7 @@ impl Default for TransferScreen {
 }
 
 impl TransferScreen {
-    pub fn fixture_preview() -> Self {
+    pub fn sample_preview() -> Self {
         Self {
             open: true,
             mode: "import",
@@ -44,7 +44,7 @@ impl TransferScreen {
         }
     }
 
-    pub fn fixture_progress() -> Self {
+    pub fn sample_progress() -> Self {
         Self {
             open: true,
             mode: "export",
@@ -61,7 +61,7 @@ impl TransferScreen {
         }
     }
 
-    pub fn fixture_rejects() -> Self {
+    pub fn sample_rejects() -> Self {
         Self {
             open: true,
             mode: "import",
@@ -125,19 +125,19 @@ mod tests {
     #[test]
     fn preview_progress_and_rejects_render() {
         assert!(
-            TransferScreen::fixture_preview()
+            TransferScreen::sample_preview()
                 .lines()
                 .join("\n")
                 .contains("preview")
         );
         assert!(
-            TransferScreen::fixture_progress()
+            TransferScreen::sample_progress()
                 .lines()
                 .join("\n")
                 .contains("10000")
         );
         assert!(
-            TransferScreen::fixture_rejects()
+            TransferScreen::sample_rejects()
                 .lines()
                 .join("\n")
                 .contains("reject line=3")

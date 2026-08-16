@@ -2,10 +2,11 @@ use dexo_app::schema_diff::{
     OrderedChange, SchemaDifference, generate_script, infer_edges, order_changes,
 };
 use dexo_driver_api::{
-    CatalogListOptions, CatalogObject, ConnectRequest, ConnectionFactory, DdlPlan, ObjectId,
-    ObjectKind, QualifiedName, SchemaChange, Session,
+    AlterOp, CatalogListOptions, CatalogObject, ColumnSpec, ConnectRequest, ConnectionFactory,
+    DdlPlan, IndexDef, ObjectId, ObjectKind, PrivilegeDef, QualifiedName, SchemaChange, Session,
+    TableDef, TableShape, ViewDef,
 };
-use dexo_driver_postgres::{PostgresFactory, render_ddl};
+use dexo_driver_postgres::{PostgresFactory, plan_ddl, render_ddl};
 use dexo_test_support::DatabasePair;
 use secrecy::SecretString;
 
@@ -20,6 +21,156 @@ fn table(schema: &str, name: &str) -> CatalogObject {
 
 fn pg_render(change: &SchemaChange) -> Result<DdlPlan, String> {
     render_ddl(change).map_err(|error| error.to_string())
+}
+
+struct Planner;
+
+impl Planner {
+    fn plan_change(&self, change: &SchemaChange) -> Result<DdlPlan, dexo_driver_api::DriverError> {
+        plan_ddl(change)
+    }
+}
+
+fn ddl() -> Planner {
+    Planner
+}
+
+fn ident(name: &str) -> QualifiedName {
+    QualifiedName::new(None::<String>, None::<String>, name)
+}
+
+fn q(schema: &str, object: &str) -> QualifiedName {
+    QualifiedName::new(None::<String>, Some(schema), object)
+}
+
+fn create_table(schema: &str, name: &str) -> SchemaChange {
+    SchemaChange::CreateTable {
+        target: q(schema, name),
+        def: TableDef {
+            shape: TableShape::Table,
+            columns: vec![ColumnSpec {
+                name: ident("id"),
+                data_type: "int".into(),
+                nullable: false,
+                default_sql: None,
+                identity: None,
+                auto_increment: false,
+                generated: None,
+                primary_key: true,
+            }],
+            constraints: vec![],
+            partition: None,
+            engine: None,
+            charset: None,
+            collation: None,
+        },
+    }
+}
+
+#[test]
+fn plan_change_uses_driver_quoting_and_reports_risk() {
+    let plan = ddl().plan_change(&create_table("Sales", "Order")).unwrap();
+    assert!(plan.statements[0].sql.contains("\"Sales\".\"Order\""));
+    assert!(!plan.statements[0].sql.contains("Sales.Order"));
+    assert!(!plan.risk.destructive);
+}
+
+#[test]
+fn plan_change_covers_drop_alter_grant_and_unsupported() {
+    let drop = ddl()
+        .plan_change(&SchemaChange::DropObject {
+            target: q("Sales", "Order"),
+            kind: ObjectKind::Table,
+        })
+        .unwrap();
+    assert!(
+        drop.statements[0]
+            .sql
+            .contains("DROP TABLE \"Sales\".\"Order\"")
+    );
+    assert!(drop.risk.destructive);
+
+    let alter = ddl()
+        .plan_change(&SchemaChange::AlterTable {
+            target: q("Sales", "Order"),
+            ops: vec![AlterOp::AddColumn(ColumnSpec {
+                name: ident("qty"),
+                data_type: "int".into(),
+                nullable: true,
+                default_sql: None,
+                identity: None,
+                auto_increment: false,
+                generated: None,
+                primary_key: false,
+            })],
+        })
+        .unwrap();
+    assert!(
+        alter.statements[0]
+            .sql
+            .contains("ALTER TABLE \"Sales\".\"Order\"")
+    );
+
+    let grant = ddl()
+        .plan_change(&SchemaChange::Grant {
+            target: q("Sales", "Order"),
+            def: PrivilegeDef {
+                principal: ident("reporter"),
+                privileges: vec!["SELECT".into()],
+                with_grant_option: false,
+                role_membership: false,
+                create_principal: false,
+                login: false,
+            },
+        })
+        .unwrap();
+    assert!(grant.statements[0].sql.contains("GRANT SELECT"));
+
+    let view = ddl()
+        .plan_change(&SchemaChange::CreateView {
+            target: q("Sales", "v_order"),
+            def: ViewDef {
+                sql: "SELECT 1".into(),
+                materialized: false,
+                replace: false,
+            },
+        })
+        .unwrap();
+    assert!(view.statements[0].sql.contains("CREATE"));
+
+    let index = ddl()
+        .plan_change(&SchemaChange::CreateIndex {
+            target: ident("order_idx"),
+            def: IndexDef {
+                table: q("Sales", "Order"),
+                columns: vec![ident("id")],
+                unique: false,
+                concurrently: false,
+                method: None,
+                include: vec![],
+                predicate: None,
+            },
+        })
+        .unwrap();
+    assert!(index.statements[0].sql.contains("CREATE"));
+
+    let event = SchemaChange::AlterRoutine {
+        target: ident("tick"),
+        def: dexo_driver_api::RoutineDef {
+            kind: dexo_driver_api::RoutineKind::Event,
+            arguments: String::new(),
+            language: "sql".into(),
+            body: "SELECT 1".into(),
+            returns: None,
+            volatility: None,
+            table: None,
+            timing: None,
+            schedule: None,
+        },
+    };
+    let err = ddl().plan_change(&event).unwrap_err();
+    assert!(err.to_string().contains("postgres"));
+    assert!(err.to_string().contains("AlterRoutine"));
 }
 
 #[test]
@@ -52,13 +203,13 @@ fn postgres_script_golden_drop_and_create() {
 async fn postgres_forward_script_reaches_empty_diff() {
     let pair = DatabasePair::start().await.unwrap();
     let session = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: pair.postgres_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     apply_sql(session.as_ref(), "CREATE SCHEMA dexo_mig", true).await;
@@ -135,7 +286,10 @@ async fn apply_sql(session: &dyn Session, sql: &str, transactional: bool) {
         .lines()
         .filter(|line| !line.trim().starts_with("--"))
         .collect::<Vec<_>>()
-        .join("\n");
+        .join(
+            "
+",
+        );
     for statement in body
         .split(';')
         .map(str::trim)

@@ -21,13 +21,13 @@ async fn drain(mut stream: dexo_driver_api::QueryStream) {
 async fn connect() -> Fixture {
     let pair = DatabasePair::start().await.unwrap();
     let session = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: pair.postgres_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     drain(
@@ -81,6 +81,8 @@ async fn postgres_paging_and_typed_filter() {
         .unwrap();
     assert_eq!(page.rows.len(), 2);
     assert_eq!(page.rows[0][0], DbValue::I64(3));
+    assert!(!page.has_more);
+    assert_eq!(page.offset, 0);
 }
 
 #[tokio::test]

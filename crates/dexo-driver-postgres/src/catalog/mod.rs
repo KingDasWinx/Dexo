@@ -1,9 +1,9 @@
 use dexo_driver_api::{
-    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, DriverError, ObjectDdl,
-    ObjectId, ObjectKind, QualifiedName,
+    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction, DriverError,
+    ObjectDdl, ObjectId, ObjectKind, QualifiedName,
 };
 
-use crate::error::map_error;
+use crate::error::{is_permission, map_error};
 use crate::session::PostgresSession;
 
 const SYSTEM_SCHEMAS: &[&str] = &["pg_catalog", "information_schema", "pg_toast"];
@@ -108,36 +108,48 @@ impl PostgresSession {
         &self,
         parent: &ObjectId,
         catalog: &str,
-    ) -> Result<Vec<CatalogObject>, DriverError> {
-        let rows = self
+    ) -> Result<(Vec<CatalogObject>, Option<CatalogRestriction>), DriverError> {
+        match self
             .client
             .query(
                 "SELECT oid::bigint, rolname::text, rolcanlogin FROM pg_roles ORDER BY rolname",
                 &[],
             )
             .await
-            .map_err(map_error)?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let oid: i64 = row.get(0);
-                let name: String = row.get(1);
-                let can_login: bool = row.get(2);
-                let kind = if can_login {
-                    ObjectKind::User
-                } else {
-                    ObjectKind::Role
-                };
-                let key = if can_login { "user" } else { "role" };
-                CatalogObject::new(
-                    pg_id(key, oid),
-                    kind,
-                    QualifiedName::new(Some(catalog), None::<String>, name),
-                    Some(parent.clone()),
-                )
-                .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
-            })
-            .collect())
+        {
+            Ok(rows) => Ok((
+                rows.into_iter()
+                    .map(|row| {
+                        let oid: i64 = row.get(0);
+                        let name: String = row.get(1);
+                        let can_login: bool = row.get(2);
+                        let kind = if can_login {
+                            ObjectKind::User
+                        } else {
+                            ObjectKind::Role
+                        };
+                        let key = if can_login { "user" } else { "role" };
+                        CatalogObject::new(
+                            pg_id(key, oid),
+                            kind,
+                            QualifiedName::new(Some(catalog), None::<String>, name),
+                            Some(parent.clone()),
+                        )
+                        .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+                    })
+                    .collect(),
+                None,
+            )),
+            Err(error) if is_permission(&error) => Ok((
+                Vec::new(),
+                Some(CatalogRestriction {
+                    parent: Some(parent.clone()),
+                    capability: "postgres.roles".into(),
+                    reason: error.to_string(),
+                }),
+            )),
+            Err(error) => Err(map_error(error)),
+        }
     }
 
     async fn list_driver_objects(
@@ -146,22 +158,34 @@ impl PostgresSession {
         catalog: &str,
         sql: &str,
         kind: &str,
-    ) -> Result<Vec<CatalogObject>, DriverError> {
-        let rows = self.client.query(sql, &[]).await.map_err(map_error)?;
-        Ok(rows
-            .into_iter()
-            .map(|row| {
-                let oid: i64 = row.get(0);
-                let name: String = row.get(1);
-                CatalogObject::new(
-                    pg_id(kind, oid),
-                    ObjectKind::DriverSpecific(kind.to_string()),
-                    QualifiedName::new(Some(catalog), None::<String>, name),
-                    Some(parent.clone()),
-                )
-                .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
-            })
-            .collect())
+    ) -> Result<(Vec<CatalogObject>, Option<CatalogRestriction>), DriverError> {
+        match self.client.query(sql, &[]).await {
+            Ok(rows) => Ok((
+                rows.into_iter()
+                    .map(|row| {
+                        let oid: i64 = row.get(0);
+                        let name: String = row.get(1);
+                        CatalogObject::new(
+                            pg_id(kind, oid),
+                            ObjectKind::DriverSpecific(kind.to_string()),
+                            QualifiedName::new(Some(catalog), None::<String>, name),
+                            Some(parent.clone()),
+                        )
+                        .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+                    })
+                    .collect(),
+                None,
+            )),
+            Err(error) if is_permission(&error) => Ok((
+                Vec::new(),
+                Some(CatalogRestriction {
+                    parent: Some(parent.clone()),
+                    capability: format!("postgres.{kind}"),
+                    reason: error.to_string(),
+                }),
+            )),
+            Err(error) => Err(map_error(error)),
+        }
     }
 
     async fn list_schema_children(
@@ -170,7 +194,38 @@ impl PostgresSession {
         schema_oid: i64,
         catalog: &str,
         schema: &str,
-    ) -> Result<Vec<CatalogObject>, DriverError> {
+    ) -> Result<CatalogList, DriverError> {
+        let allowed: bool = match self
+            .client
+            .query_one(
+                "SELECT has_schema_privilege($1::bigint::oid, 'USAGE')",
+                &[&schema_oid],
+            )
+            .await
+        {
+            Ok(row) => row.get(0),
+            Err(error) if is_permission(&error) => {
+                return Ok(CatalogList {
+                    objects: Vec::new(),
+                    restrictions: vec![CatalogRestriction {
+                        parent: Some(parent.clone()),
+                        capability: "schema.usage".into(),
+                        reason: error.to_string(),
+                    }],
+                });
+            }
+            Err(error) => return Err(map_error(error)),
+        };
+        if !allowed {
+            return Ok(CatalogList {
+                objects: Vec::new(),
+                restrictions: vec![CatalogRestriction {
+                    parent: Some(parent.clone()),
+                    capability: "schema.usage".into(),
+                    reason: format!("permission denied for schema {schema}"),
+                }],
+            });
+        }
         let mut objects = Vec::new();
         let classes = self
             .client
@@ -262,7 +317,10 @@ impl PostgresSession {
                 .with_attribute(oid_attr(oid).0, oid_attr(oid).1),
             );
         }
-        Ok(objects)
+        Ok(CatalogList {
+            objects,
+            restrictions: vec![],
+        })
     }
 
     async fn list_relation_children(
@@ -332,8 +390,21 @@ impl PostgresSession {
         let constraints = self
             .client
             .query(
-                "SELECT oid::bigint, conname::text, contype::text
-                 FROM pg_constraint WHERE conrelid = $1::bigint::oid ORDER BY conname",
+                "SELECT c.oid::bigint, c.conname::text, c.contype::text,
+                        nsp.nspname::text, rel.relname::text,
+                        ARRAY(SELECT a.attname::text
+                              FROM unnest(c.conkey) WITH ORDINALITY AS k(attnum, ord)
+                              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.attnum
+                              ORDER BY ord),
+                        ARRAY(SELECT a.attname::text
+                              FROM unnest(c.confkey) WITH ORDINALITY AS k(attnum, ord)
+                              JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.attnum
+                              ORDER BY ord)
+                 FROM pg_constraint c
+                 LEFT JOIN pg_class rel ON rel.oid = c.confrelid
+                 LEFT JOIN pg_namespace nsp ON nsp.oid = rel.relnamespace
+                 WHERE c.conrelid = $1::bigint::oid
+                 ORDER BY c.conname",
                 &[&relid],
             )
             .await
@@ -342,16 +413,27 @@ impl PostgresSession {
             let oid: i64 = row.get(0);
             let name: String = row.get(1);
             let contype: String = row.get(2);
-            objects.push(
-                CatalogObject::new(
-                    pg_id("constraint", oid),
-                    ObjectKind::Constraint,
-                    QualifiedName::new(Some(catalog), Some(schema), name),
-                    Some(parent.clone()),
-                )
-                .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
-                .with_attribute("driver.postgres.contype", serde_json::json!(contype)),
-            );
+            let mut object = CatalogObject::new(
+                pg_id("constraint", oid),
+                ObjectKind::Constraint,
+                QualifiedName::new(Some(catalog), Some(schema), name),
+                Some(parent.clone()),
+            )
+            .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+            .with_attribute("driver.postgres.contype", serde_json::json!(contype));
+            if contype == "f" {
+                let fk_schema: Option<String> = row.get(3);
+                let fk_table: Option<String> = row.get(4);
+                let local: Vec<String> = row.get(5);
+                let referenced: Vec<String> = row.get(6);
+                object = object
+                    .with_attribute("fk_local", serde_json::json!(local))
+                    .with_attribute("fk_referenced", serde_json::json!(referenced))
+                    .with_attribute("fk_schema", serde_json::json!(fk_schema))
+                    .with_attribute("fk_table", serde_json::json!(fk_table))
+                    .with_attribute("fk_catalog", serde_json::json!(catalog));
+            }
+            objects.push(object);
         }
 
         let triggers = self
@@ -459,35 +541,114 @@ impl PostgresSession {
 
     async fn depend_ids(&self, oid: i64, outgoing: bool) -> Result<Vec<ObjectId>, DriverError> {
         let sql = if outgoing {
-            "SELECT d.refobjid::bigint, c.relname::text
+            "SELECT DISTINCT d.refobjid::bigint,
+                    CASE c.relname
+                      WHEN 'pg_class' THEN COALESCE((
+                        SELECT CASE relkind
+                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                          WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
+                          WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
+                          ELSE 'class' END
+                        FROM pg_class obj WHERE obj.oid = d.refobjid), 'table')
+                      WHEN 'pg_proc' THEN COALESCE((
+                        SELECT CASE prokind WHEN 'p' THEN 'procedure' ELSE 'function' END
+                        FROM pg_proc obj WHERE obj.oid = d.refobjid), 'function')
+                      WHEN 'pg_namespace' THEN 'schema'
+                      WHEN 'pg_constraint' THEN 'constraint'
+                      WHEN 'pg_trigger' THEN 'trigger'
+                      WHEN 'pg_type' THEN 'type'
+                      WHEN 'pg_authid' THEN 'role'
+                      ELSE NULL
+                    END
              FROM pg_depend d
              JOIN pg_class c ON c.oid = d.refclassid
-             WHERE d.objid = $1::bigint::oid AND d.deptype <> 'i'"
+             WHERE d.deptype <> 'i'
+               AND (d.objid = $1::bigint::oid
+                    OR d.objid IN (SELECT r.oid FROM pg_rewrite r WHERE r.ev_class = $1::bigint::oid))"
         } else {
-            "SELECT d.objid::bigint, c.relname::text
+            "SELECT DISTINCT
+                    CASE WHEN c.relname = 'pg_rewrite'
+                         THEN (SELECT ev_class::bigint FROM pg_rewrite r WHERE r.oid = d.objid)
+                         ELSE d.objid::bigint END,
+                    CASE c.relname
+                      WHEN 'pg_class' THEN COALESCE((
+                        SELECT CASE relkind
+                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                          WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
+                          WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
+                          ELSE 'class' END
+                        FROM pg_class obj WHERE obj.oid = d.objid), 'table')
+                      WHEN 'pg_rewrite' THEN COALESCE((
+                        SELECT CASE relkind
+                          WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
+                          ELSE 'table' END
+                        FROM pg_rewrite r JOIN pg_class obj ON obj.oid = r.ev_class
+                        WHERE r.oid = d.objid), 'view')
+                      WHEN 'pg_proc' THEN COALESCE((
+                        SELECT CASE prokind WHEN 'p' THEN 'procedure' ELSE 'function' END
+                        FROM pg_proc obj WHERE obj.oid = d.objid), 'function')
+                      WHEN 'pg_namespace' THEN 'schema'
+                      WHEN 'pg_constraint' THEN 'constraint'
+                      WHEN 'pg_trigger' THEN 'trigger'
+                      WHEN 'pg_type' THEN 'type'
+                      WHEN 'pg_authid' THEN 'role'
+                      ELSE NULL
+                    END
              FROM pg_depend d
              JOIN pg_class c ON c.oid = d.classid
-             WHERE d.refobjid = $1::bigint::oid AND d.deptype <> 'i'"
+             WHERE d.deptype <> 'i' AND d.refobjid = $1::bigint::oid"
         };
         let rows = self.client.query(sql, &[&oid]).await.map_err(map_error)?;
-        Ok(rows
+        let mut ids: Vec<ObjectId> = rows
             .into_iter()
             .filter_map(|row| {
                 let dep_oid: i64 = row.get(0);
-                let catalog: String = row.get(1);
-                let kind = match catalog.as_str() {
-                    "pg_class" => "table",
-                    "pg_proc" => "function",
-                    "pg_type" => "type",
-                    "pg_namespace" => "schema",
-                    "pg_constraint" => "constraint",
-                    "pg_trigger" => "trigger",
-                    "pg_authid" => "role",
-                    _ => return None,
-                };
-                Some(pg_id(kind, dep_oid))
+                let kind: Option<String> = row.get(1);
+                kind.filter(|kind| !kind.is_empty())
+                    .map(|kind| pg_id(&kind, dep_oid))
             })
-            .collect())
+            .collect();
+        let fk_sql = if outgoing {
+            "SELECT confrelid::bigint FROM pg_constraint
+             WHERE conrelid = $1::bigint::oid AND contype = 'f' AND confrelid <> 0"
+        } else {
+            "SELECT conrelid::bigint FROM pg_constraint
+             WHERE confrelid = $1::bigint::oid AND contype = 'f'"
+        };
+        let fk_rows = self
+            .client
+            .query(fk_sql, &[&oid])
+            .await
+            .map_err(map_error)?;
+        for row in fk_rows {
+            let relid: i64 = row.get(0);
+            if let Some(id) = self.class_object_id(relid).await?
+                && !ids.iter().any(|existing| existing == &id)
+            {
+                ids.push(id);
+            }
+        }
+        Ok(ids)
+    }
+
+    async fn class_object_id(&self, oid: i64) -> Result<Option<ObjectId>, DriverError> {
+        let row = self
+            .client
+            .query_opt(
+                "SELECT CASE relkind
+                   WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                   WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
+                   WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
+                   ELSE 'class' END
+                 FROM pg_class WHERE oid = $1::bigint::oid",
+                &[&oid],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(row.map(|row| {
+            let kind: String = row.get(0);
+            pg_id(&kind, oid)
+        }))
     }
 }
 
@@ -509,59 +670,62 @@ impl CatalogReader for PostgresSession {
         let Some((kind, key)) = parse_id(parent) else {
             return Ok(CatalogList::default());
         };
-        let objects = match kind {
+        match kind {
             "catalog" => {
                 let mut objects = self
                     .list_schemas(parent, &catalog_name, options.include_system)
                     .await?;
-                objects.extend(self.list_roles(parent, &catalog_name).await?);
-                objects.extend(
-                    self.list_driver_objects(
-                        parent,
-                        &catalog_name,
+                let mut restrictions = Vec::new();
+                let (roles, restriction) = self.list_roles(parent, &catalog_name).await?;
+                objects.extend(roles);
+                if let Some(restriction) = restriction {
+                    restrictions.push(restriction);
+                }
+                for (sql, kind) in [
+                    (
                         "SELECT oid::bigint, extname::text FROM pg_extension ORDER BY extname",
                         "extension",
-                    )
-                    .await?,
-                );
-                objects.extend(
-                    self.list_driver_objects(
-                        parent,
-                        &catalog_name,
+                    ),
+                    (
                         "SELECT oid::bigint, fdwname::text FROM pg_foreign_data_wrapper ORDER BY fdwname",
                         "fdw",
-                    )
-                    .await?,
-                );
-                objects.extend(
-                    self.list_driver_objects(
-                        parent,
-                        &catalog_name,
+                    ),
+                    (
                         "SELECT oid::bigint, pubname::text FROM pg_publication ORDER BY pubname",
                         "publication",
-                    )
-                    .await?,
-                );
-                objects
+                    ),
+                ] {
+                    let (extra, restriction) = self
+                        .list_driver_objects(parent, &catalog_name, sql, kind)
+                        .await?;
+                    objects.extend(extra);
+                    if let Some(restriction) = restriction {
+                        restrictions.push(restriction);
+                    }
+                }
+                Ok(CatalogList {
+                    objects,
+                    restrictions,
+                })
             }
             "schema" => {
                 let oid: i64 = key.parse().unwrap_or(0);
                 let (catalog_name, schema) = self.schema_name(oid).await?;
                 self.list_schema_children(parent, oid, &catalog_name, &schema)
-                    .await?
+                    .await
             }
             "table" | "view" | "materialized_view" | "partition" => {
                 let oid: i64 = key.parse().unwrap_or(0);
                 let (catalog_name, schema, relation) = self.relation_name(oid).await?;
-                self.list_relation_children(parent, oid, &catalog_name, &schema, &relation)
-                    .await?
+                Ok(CatalogList {
+                    objects: self
+                        .list_relation_children(parent, oid, &catalog_name, &schema, &relation)
+                        .await?,
+                    restrictions: vec![],
+                })
             }
-            _ => Vec::new(),
-        };
-        Ok(CatalogList {
-            objects,
-            restrictions: vec![],
-        })
+            _ => Ok(CatalogList::default()),
+        }
     }
 
     async fn object(&self, id: &ObjectId) -> Result<Option<CatalogObject>, DriverError> {

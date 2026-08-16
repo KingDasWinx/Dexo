@@ -52,10 +52,31 @@ pub struct RowBatch {
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum QueryEvent {
+    ResultSetStarted {
+        index: usize,
+    },
     Columns(Vec<ColumnMeta>),
     Rows(RowBatch),
-    Finished { rows_affected: Option<u64> },
-    Notice { message: String },
+    Notice {
+        message: String,
+    },
+    ResultSetFinished {
+        index: usize,
+        rows_affected: Option<u64>,
+    },
+    Finished {
+        rows_affected: Option<u64>,
+    },
 }
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum SessionEvent {
+    Notice {
+        severity: Option<String>,
+        message: String,
+    },
+}
+
+pub type SessionEventStream = std::pin::Pin<Box<dyn Stream<Item = SessionEvent> + Send>>;
 
 pub type QueryStream = Pin<Box<dyn Stream<Item = Result<QueryEvent, DriverError>> + Send>>;

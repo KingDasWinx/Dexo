@@ -35,13 +35,13 @@ async fn drain(mut stream: dexo_driver_api::QueryStream) {
 async fn postgres_and_mysql_reject_mutating_mcp_reads() {
     let pair = DatabasePair::start().await.unwrap();
     let pg = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: pair.postgres_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     drain(
@@ -53,13 +53,13 @@ async fn postgres_and_mysql_reject_mutating_mcp_reads() {
     )
     .await;
     let mysql = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     drain(

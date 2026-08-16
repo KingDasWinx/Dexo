@@ -1,20 +1,24 @@
 pub mod completion;
+pub mod derived;
 pub mod diagnostic;
 pub mod dialect;
 pub mod document;
 pub mod edit;
 pub mod format;
+pub mod navigation;
 pub mod parameter;
 pub mod parse;
 pub mod snippet;
 pub mod statement;
 
 pub use completion::{Catalog, CompletionItem, FakeCatalog, complete, labels};
+pub use derived::{derive_page, filter_values};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};
 pub use format::format_sql;
-pub use parameter::{HistoryEntry, HistoryPolicy};
-pub use parse::{Highlight, ParsedSql, ParserService};
+pub use navigation::definition_at;
+pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
+pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
 pub use snippet::{Snippet, expand_placeholders};
 pub use statement::{StatementEffect, StatementSpan, split_statements, statement_at};

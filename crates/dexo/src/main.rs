@@ -12,7 +12,10 @@ fn main() -> anyhow::Result<()> {
     let mut registry = DriverRegistry::new();
     registry.register(Arc::new(PostgresFactory));
     registry.register(Arc::new(MysqlFactory));
-    run_dispatch(Args::parse(), registry, || Ok(dexo_tui::run()?))
+    let tui_registry = registry.clone();
+    run_dispatch(Args::parse(), registry, move || {
+        Ok(dexo_tui::run(tui_registry)?)
+    })
 }
 
 fn init_tracing() {

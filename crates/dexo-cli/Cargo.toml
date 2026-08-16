@@ -15,6 +15,7 @@ dexo-runtime = { path = "../dexo-runtime" }
 dexo-secrets = { path = "../dexo-secrets" }
 dexo-storage = { path = "../dexo-storage" }
 dexo-mcp = { path = "../dexo-mcp" }
+rpassword.workspace = true
 serde_json.workspace = true
 tokio.workspace = true
 

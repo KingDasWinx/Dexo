@@ -14,13 +14,13 @@ struct Fixture {
 async fn connect_mysql_fixture() -> Fixture {
     let pair = DatabasePair::start().await.unwrap();
     let session = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     Fixture {
@@ -173,6 +173,97 @@ async fn transaction_contract() {
         count,
         Some(DbValue::I64(0) | DbValue::U64(0) | DbValue::Decimal(_))
     ));
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn parameters_rows_affected_and_result_sets_are_observable() {
+    let fixture = connect_mysql_fixture().await;
+    drain(
+        fixture
+            .session
+            .execute(QueryRequest::write(
+                "create table if not exists dexo_params(value varchar(64))",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let mut request = QueryRequest::write("insert into dexo_params(value) values (?)");
+    request.parameters = vec![DbValue::Text("bound-value".into())];
+    let events = collect(fixture.session.execute(request).await.unwrap()).await;
+    assert!(events.iter().any(|event| {
+        matches!(
+            event,
+            QueryEvent::Finished {
+                rows_affected: Some(1),
+            }
+        )
+    }));
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn two_result_sets_are_indexed() {
+    let fixture = connect_mysql_fixture().await;
+    let events = collect(
+        fixture
+            .session
+            .execute(QueryRequest::read("select 1; select 2;", 10))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let indexes: Vec<usize> = events
+        .iter()
+        .filter_map(|event| match event {
+            QueryEvent::ResultSetStarted { index } => Some(*index),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(indexes, vec![0, 1]);
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn timeout_or_cancel_mysql_sleep() {
+    let fixture = connect_mysql_fixture().await;
+    let mut request = QueryRequest::read("SELECT SLEEP(30)", 1);
+    request.timeout = std::time::Duration::from_millis(200);
+    let events = collect_results(fixture.session.execute(request).await.unwrap()).await;
+    assert!(events.iter().any(|event| {
+        match event {
+            Err(error) => matches!(
+                error.category(),
+                dexo_driver_api::DriverErrorCategory::Timeout
+                    | dexo_driver_api::DriverErrorCategory::Cancelled
+            ),
+            Ok(QueryEvent::Rows(batch)) => batch
+                .rows
+                .iter()
+                .flatten()
+                .any(|value| matches!(value, DbValue::I64(1) | DbValue::U64(1))),
+            Ok(_) => false,
+        }
+    }));
+}
+
+async fn collect(mut stream: dexo_driver_api::QueryStream) -> Vec<QueryEvent> {
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event.unwrap());
+    }
+    events
+}
+
+async fn collect_results(
+    mut stream: dexo_driver_api::QueryStream,
+) -> Vec<Result<QueryEvent, dexo_driver_api::DriverError>> {
+    let mut events = Vec::new();
+    while let Some(event) = stream.next().await {
+        events.push(event);
+    }
+    events
 }
 
 async fn drain(mut stream: dexo_driver_api::QueryStream) {

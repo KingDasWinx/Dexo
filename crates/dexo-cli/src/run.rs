@@ -1,4 +1,4 @@
-use std::io::Write;
+use std::io::{IsTerminal, Write};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -15,8 +15,9 @@ use dexo_app::mcp::{
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
 use dexo_app::search_service::SearchService;
 use dexo_app::{
-    AppError, CatalogService, DriverRegistry, ErrorCategory, ExecutionTarget, QueryService,
-    ScriptPolicy, map_driver_error,
+    AppError, CatalogService, DriverRegistry, ErrorCategory, ExecutionTarget, NewConnection,
+    QueryService, ScriptPolicy, SecretPersist, create_connection, map_driver_error,
+    set_connection_secret,
 };
 use dexo_driver_api::{
     CatalogListOptions, CatalogObject, CatalogReader, DbValue, QueryEvent, RowBatch,
@@ -356,6 +357,56 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
                 );
             }
         }
+        ConnectionsCommand::Add {
+            name,
+            driver,
+            host,
+            port,
+            database,
+            username,
+            environment,
+            non_interactive,
+            password_stdin,
+            test,
+            no_test,
+        } => {
+            let password = read_secret(non_interactive, password_stdin)?;
+            let repo = ConnectionRepository::new(db.connection());
+            let (profile, persist) = create_connection(
+                NewConnection {
+                    name,
+                    driver,
+                    host,
+                    port,
+                    database,
+                    username,
+                    environment,
+                    ..NewConnection::default()
+                },
+                &password,
+                &KeyringSecretStore,
+                &repo,
+            )?;
+            print_secret_persist(&profile.name, persist);
+            if should_test_connection(test, no_test, non_interactive) {
+                tokio::runtime::Runtime::new()?.block_on(async {
+                    let _session = connect_session(&registry, &profile).await?;
+                    println!("ok");
+                    Ok::<_, anyhow::Error>(())
+                })?;
+            }
+        }
+        ConnectionsCommand::SetSecret {
+            name,
+            non_interactive,
+            password_stdin,
+        } => {
+            let password = read_secret(non_interactive, password_stdin)?;
+            let repo = ConnectionRepository::new(db.connection());
+            let (profile, persist) =
+                set_connection_secret(&name, &password, &KeyringSecretStore, &repo)?;
+            print_secret_persist(&profile.name, persist);
+        }
         ConnectionsCommand::Test { name } => {
             let profile = ConnectionRepository::new(db.connection())
                 .get_by_name(&name)?
@@ -373,6 +424,37 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
         }
     }
     Ok(())
+}
+
+fn read_secret(non_interactive: bool, password_stdin: bool) -> anyhow::Result<String> {
+    let from_stdin = password_stdin || non_interactive || !std::io::stdin().is_terminal();
+    let password = if from_stdin {
+        let mut line = String::new();
+        std::io::stdin().read_line(&mut line)?;
+        line.trim_end_matches(['\r', '\n']).to_string()
+    } else {
+        rpassword::prompt_password("Password: ")?
+    };
+    if password.is_empty() {
+        anyhow::bail!("password is required");
+    }
+    Ok(password)
+}
+
+fn should_test_connection(test: bool, no_test: bool, non_interactive: bool) -> bool {
+    if no_test {
+        return false;
+    }
+    test || (std::io::stdin().is_terminal() && !non_interactive)
+}
+
+fn print_secret_persist(name: &str, persist: SecretPersist) {
+    match persist {
+        SecretPersist::Stored => println!("saved {name}"),
+        SecretPersist::SessionOnly => println!(
+            "saved {name}; keychain unavailable, secret not persisted (use connections set-secret)"
+        ),
+    }
 }
 
 fn print_completion(shell: &str) -> anyhow::Result<()> {

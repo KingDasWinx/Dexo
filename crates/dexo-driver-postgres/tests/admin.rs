@@ -45,13 +45,13 @@ fn admin_errors_are_not_retryable() {
 async fn sessions_locks_sizes_stats_variables_and_blocker() {
     let pair = dexo_test_support::DatabasePair::start().await.unwrap();
     let connect = || {
-        PostgresFactory.connect(ConnectRequest {
-            endpoint: pair.postgres_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        PostgresFactory.connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
     };
     let admin = connect().await.unwrap();
     let provider = admin.admin().unwrap();
@@ -159,13 +159,13 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
         ))
         .await;
     let limited = PostgresFactory
-        .connect(ConnectRequest {
-            endpoint: pair.postgres_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo_limited".into(),
-            secret: SecretString::from("limited_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo_limited".into(),
+            SecretString::from("limited_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     let limited_sessions = limited.admin().unwrap().list_sessions().await.unwrap();

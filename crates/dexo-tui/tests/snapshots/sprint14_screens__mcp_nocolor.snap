@@ -4,8 +4,8 @@ expression: "render_to_string(&model, 100, 30)"
 ---
 default  no connection  —                                                                           
 ┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│No connection             │┌SQL───────────────────────────────────────────────────────────────────┐
-│                          ││-- editor                                                             │
+│No connection             │┌SQL · scratch.sql─────────────────────────────────────────────────────┐
+│                          ││   1                                                                  │
 │                          ││                                                                      │
 │             ┌MCP profiles──────────────────────────────────────────────────────────┐             │
 │             ┌MCP audit─────────────────────────────────────────────────────────────┐             │

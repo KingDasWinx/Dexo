@@ -5,7 +5,7 @@ use futures_util::StreamExt;
 use secrecy::SecretString;
 
 struct Fixture {
-    _pair: DatabasePair,
+    pair: DatabasePair,
     session: Box<dyn Session>,
 }
 
@@ -18,13 +18,13 @@ async fn drain(mut stream: dexo_driver_api::QueryStream) {
 async fn connect_seeded() -> Fixture {
     let pair = DatabasePair::start().await.unwrap();
     let root = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "root".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "root".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
     let statements = [
@@ -37,6 +37,12 @@ async fn connect_seeded() -> Fixture {
             PARTITION p0 VALUES LESS THAN (1000),
             PARTITION p1 VALUES LESS THAN MAXVALUE
         )",
+        "CREATE TABLE customers (id INT PRIMARY KEY)",
+        "CREATE TABLE order_items (
+            id INT PRIMARY KEY,
+            customer_id INT NOT NULL,
+            CONSTRAINT order_items_customer_fk FOREIGN KEY (customer_id) REFERENCES customers(id)
+        ) ENGINE=InnoDB",
         "CREATE TABLE generated_demo (
             id INT PRIMARY KEY,
             total INT GENERATED ALWAYS AS (id * 2) STORED
@@ -48,6 +54,8 @@ async fn connect_seeded() -> Fixture {
         "CREATE EVENT IF NOT EXISTS tick ON SCHEDULE EVERY 1 DAY DO SELECT 1",
         "CREATE ROLE IF NOT EXISTS dexo_reader",
         "GRANT SELECT ON dexo.orders TO dexo",
+        "CREATE USER 'catalog_restricted'@'%' IDENTIFIED BY 'dexo_test_only'",
+        "GRANT SELECT ON dexo.customers TO 'catalog_restricted'@'%'",
     ];
     for statement in statements {
         let stream = root
@@ -57,19 +65,16 @@ async fn connect_seeded() -> Fixture {
         drain(stream).await;
     }
     let session = MysqlFactory
-        .connect(ConnectRequest {
-            endpoint: pair.mysql_endpoint().to_string(),
-            database: Some("dexo".into()),
-            username: "dexo".into(),
-            secret: SecretString::from("dexo_test_only"),
-            read_only: false,
-        })
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
         .await
         .unwrap();
-    Fixture {
-        _pair: pair,
-        session,
-    }
+    Fixture { pair, session }
 }
 
 fn has_kind_named(
@@ -197,4 +202,79 @@ async fn mysql_catalog_contract() {
 
     let ddl = catalog.ddl(&table.id).await.unwrap();
     assert!(ddl.sql.to_ascii_uppercase().contains("CREATE TABLE"));
+
+    let customers = children
+        .objects
+        .iter()
+        .find(|object| object.qualified_name.object() == "customers")
+        .expect("customers table");
+    let items = children
+        .objects
+        .iter()
+        .find(|object| object.qualified_name.object() == "order_items")
+        .expect("order_items table");
+    let view = children
+        .objects
+        .iter()
+        .find(|object| object.qualified_name.object() == "orders_v")
+        .expect("orders_v view");
+    let deps = catalog.dependencies(&items.id).await.unwrap();
+    assert!(
+        deps.iter().any(|id| id == &customers.id),
+        "order_items should depend on customers, got {deps:?}"
+    );
+    let dependents = catalog.dependents(&customers.id).await.unwrap();
+    assert!(
+        dependents.iter().any(|id| id == &items.id),
+        "customers should have order_items as dependent, got {dependents:?}"
+    );
+    let order_dependents = catalog.dependents(&table.id).await.unwrap();
+    assert!(
+        order_dependents.iter().any(|id| id == &view.id),
+        "orders should have orders_v as dependent, got {order_dependents:?}"
+    );
+    let view_deps = catalog.dependencies(&view.id).await.unwrap();
+    assert!(
+        view_deps.iter().any(|id| id == &table.id),
+        "orders_v should depend on orders, got {view_deps:?}"
+    );
+    let trigger = table_children
+        .objects
+        .iter()
+        .find(|object| object.kind == ObjectKind::Trigger)
+        .expect("orders trigger");
+    assert!(
+        order_dependents.iter().any(|id| id == &trigger.id),
+        "orders should have trigger as dependent, got {order_dependents:?}"
+    );
+
+    let restricted = MysqlFactory
+        .connect(ConnectRequest::new(
+            fixture.pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "catalog_restricted".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let restricted_catalog = restricted.catalog().expect("catalog capability");
+    let restricted_roots = restricted_catalog
+        .list_children(None, &CatalogListOptions::default())
+        .await
+        .unwrap();
+    let restricted_children = restricted_catalog
+        .list_children(
+            Some(&restricted_roots.objects[0].id),
+            &CatalogListOptions::default(),
+        )
+        .await
+        .unwrap();
+    assert!(
+        !restricted_children.restrictions.is_empty()
+            || restricted_catalog.ddl(&table.id).await.is_err_and(
+                |error| error.category() == dexo_driver_api::DriverErrorCategory::Permission
+            ),
+        "least-privilege user must get a restriction or permission error, not empty success"
+    );
 }

@@ -117,7 +117,8 @@ fn render_fetch(request: &DataRequest) -> (String, Binder) {
     }
     sql.push_str(&format!(
         " LIMIT {} OFFSET {}",
-        request.page.limit, request.page.offset
+        request.page.limit.saturating_add(1),
+        request.page.offset
     ));
     (sql, binder)
 }
@@ -188,10 +189,52 @@ fn predicate(
         .join(" AND ")
 }
 
+fn identity_predicate(
+    identity: &[(ColumnId, DbValue)],
+    binder: &mut Binder,
+) -> Result<String, DriverError> {
+    if identity.is_empty() {
+        return Err(DriverError::unsupported(
+            "remote value requires a stable row identity",
+        ));
+    }
+    Ok(identity
+        .iter()
+        .map(|(column, value)| match value {
+            DbValue::Null => format!("{} IS NULL", quote(&column.0)),
+            _ => format!("{} = {}", quote(&column.0), binder.push(value)),
+        })
+        .collect::<Vec<_>>()
+        .join(" AND "))
+}
+
+fn cap_row(row: Vec<DbValue>) -> Vec<DbValue> {
+    row.into_iter().map(cap_value).collect()
+}
+
+fn cap_value(value: DbValue) -> DbValue {
+    // ponytail: cap after fetch; ceiling: large cells are still materialized once. Upgrade: SUBSTRING() in SELECT by column type.
+    const CAP: usize = 64 * 1024;
+    match value {
+        DbValue::Bytes(bytes) if bytes.len() > CAP => DbValue::Native {
+            type_name: "truncated".into(),
+            text: bytes.len().to_string(),
+            bytes: bytes[..CAP].to_vec(),
+        },
+        DbValue::Text(text) if text.len() > CAP => DbValue::Native {
+            type_name: "truncated-text".into(),
+            text: text.len().to_string(),
+            bytes: text.as_bytes()[..CAP].to_vec(),
+        },
+        other => other,
+    }
+}
+
 #[async_trait::async_trait]
 impl DataMutator for MysqlSession {
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError> {
         let _ = Page::new(request.page.offset, request.page.limit)?;
+        request.validate()?;
         let (sql, binder) = render_fetch(&request);
         let mut conn = self.conn.lock().await;
         let rows: Vec<mysql_async::Row> = conn
@@ -202,9 +245,48 @@ impl DataMutator for MysqlSession {
             .first()
             .map(|row| row.columns_ref().iter().map(column_meta).collect())
             .unwrap_or_default();
-        Ok(DataPage {
+        Ok(DataPage::from_fetched(
             columns,
-            rows: rows.iter().map(decode_row).collect(),
+            rows.iter().map(|row| cap_row(decode_row(row))).collect(),
+            request.page.offset,
+            request.page.limit,
+        ))
+    }
+
+    async fn fetch_value(
+        &self,
+        value: &dexo_driver_api::RemoteValueRef,
+        offset: u64,
+        limit: u32,
+    ) -> Result<Vec<u8>, DriverError> {
+        if value.identity.is_empty() {
+            return Err(DriverError::unsupported(
+                "remote value requires a stable row identity",
+            ));
+        }
+        let mut binder = Binder::new();
+        let start = binder.push(&DbValue::I64(offset.saturating_add(1) as i64));
+        let len = binder.push(&DbValue::I64(i64::from(limit)));
+        let pred = identity_predicate(&value.identity, &mut binder)?;
+        let sql = format!(
+            "SELECT SUBSTRING({} FROM {start} FOR {len}) FROM {} WHERE {pred}",
+            quote(&value.column.0),
+            qualify(&value.object)
+        );
+        let mut conn = self.conn.lock().await;
+        let row: Option<mysql_async::Row> = conn
+            .exec_first(sql, Params::Positional(binder.values))
+            .await
+            .map_err(map_error)?;
+        let Some(row) = row else {
+            return Ok(Vec::new());
+        };
+        Ok(match row.get::<Vec<u8>, _>(0) {
+            Some(bytes) => bytes,
+            None => row
+                .get::<String, _>(0)
+                .map(String::into_bytes)
+                .unwrap_or_default(),
         })
     }
 

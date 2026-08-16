@@ -7,15 +7,15 @@ fn export_fixture_with_secret(secret: &str) -> String {
     store.put("secret-123", secret).unwrap();
     let db = Database::open_in_memory().unwrap();
     let repo = ConnectionRepository::new(db.connection());
-    repo.save(&dexo_app::ConnectionProfile {
-        id: dexo_app::ConnectionId(uuid::Uuid::new_v4()),
-        project_id: None,
-        name: "local-pg".into(),
-        driver: "postgres".into(),
-        environment: "local".into(),
-        config: serde_json::json!({"host":"localhost","port":5432}),
-        secret_ref: dexo_app::SecretRef::new("secret-123".into()),
-    })
+    repo.save(&dexo_app::ConnectionProfile::new(
+        dexo_app::ConnectionId(uuid::Uuid::new_v4()),
+        None,
+        "local-pg",
+        "postgres",
+        "local",
+        serde_json::json!({"host":"localhost","port":5432}),
+        dexo_app::SecretRef::new("secret-123".into()),
+    ))
     .unwrap();
     let output = export_portable(db.connection()).unwrap();
     assert_eq!(

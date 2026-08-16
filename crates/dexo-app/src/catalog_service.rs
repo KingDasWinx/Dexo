@@ -152,8 +152,16 @@ impl Catalog for SnapshotCatalog {
                     qualified: object.qualified_name.display_unquoted(),
                     schema: object.qualified_name.schema().unwrap_or("").to_string(),
                     name: object.qualified_name.object().to_string(),
-                    favorite: false,
-                    recency: 0,
+                    favorite: object
+                        .attributes
+                        .get("favorite")
+                        .and_then(|value| value.as_bool())
+                        .unwrap_or(false),
+                    recency: object
+                        .attributes
+                        .get("recency")
+                        .and_then(|value| value.as_u64())
+                        .unwrap_or(0),
                     columns,
                 }
             })
