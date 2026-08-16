@@ -104,21 +104,37 @@ impl ConnectionForm {
     }
 
     pub fn type_char(&mut self, ch: char) {
+        if self.focused_label() == Some("driver") {
+            return;
+        }
         if let Some(field) = self.fields.get_mut(self.focus) {
             field.value.push(ch);
-        }
-        if self.fields.get(self.focus).map(|f| f.label.as_str()) == Some("driver") {
-            self.sync_descriptor_fields();
         }
     }
 
     pub fn backspace(&mut self) {
+        if self.focused_label() == Some("driver") {
+            return;
+        }
         if let Some(field) = self.fields.get_mut(self.focus) {
             field.value.pop();
         }
-        if self.fields.get(self.focus).map(|f| f.label.as_str()) == Some("driver") {
-            self.sync_descriptor_fields();
+    }
+
+    pub fn cycle_driver(&mut self, delta: i32) {
+        if self.focused_label() != Some("driver") {
+            return;
         }
+        let current = field(&self.fields, "driver");
+        let next = next_driver(&current, delta);
+        set_field(&mut self.fields, "driver", next);
+        self.sync_descriptor_fields();
+    }
+
+    fn focused_label(&self) -> Option<&str> {
+        self.fields
+            .get(self.focus)
+            .map(|field| field.label.as_str())
     }
 
     pub fn set_error(&mut self, message: String) {
@@ -181,6 +197,13 @@ impl ConnectionForm {
         }];
         for (index, field) in self.fields.iter().enumerate() {
             let marker = if index == self.focus { ">" } else { " " };
+            if field.label == "driver" {
+                let name = DriverDescriptor::for_id(&field.value)
+                    .map(|item| item.display_name)
+                    .unwrap_or(field.value.as_str());
+                lines.push(format!("{marker} driver: < {name} >  left/right"));
+                continue;
+            }
             let value = if field.secret && !field.value.is_empty() {
                 "***"
             } else {
@@ -195,11 +218,41 @@ impl ConnectionForm {
     }
 }
 
+fn drivers() -> [&'static str; 2] {
+    [
+        DriverDescriptor::postgres().id,
+        DriverDescriptor::mysql().id,
+    ]
+}
+
+fn normalize_driver(driver: &str) -> &'static str {
+    let id = driver.trim();
+    drivers()
+        .into_iter()
+        .find(|known| *known == id)
+        .unwrap_or(DriverDescriptor::postgres().id)
+}
+
+fn next_driver(current: &str, delta: i32) -> &'static str {
+    let known = drivers();
+    let index = known
+        .iter()
+        .position(|id| *id == current.trim())
+        .unwrap_or(0);
+    let next = (index as i32 + delta).rem_euclid(known.len() as i32) as usize;
+    known[next]
+}
+
 fn blank_fields(driver: &str) -> Vec<FormField> {
-    let descriptor = DriverDescriptor::for_id(driver.trim());
+    let driver = normalize_driver(driver);
+    let descriptor = DriverDescriptor::for_id(driver);
     let mut fields = vec![
         field_of("name", false),
-        field_of("driver", false),
+        FormField {
+            label: "driver".into(),
+            value: driver.into(),
+            secret: false,
+        },
         field_of("host", false),
         FormField {
             label: "port".into(),
@@ -406,11 +459,46 @@ mod tests {
     }
 
     #[test]
-    fn unknown_driver_hides_transport_options() {
-        let form = ConnectionForm::open();
+    fn driver_is_a_left_right_picker() {
+        let mut form = ConnectionForm::open();
         let dump = form.lines().join("\n");
-        assert!(!dump.contains("tls_mode"));
-        assert!(!dump.contains("ssh_host"));
-        assert!(!dump.contains("proxy_kind"));
+        assert!(dump.contains("< PostgreSQL >"));
+        assert!(dump.contains("tls_mode"));
+        form.focus = form
+            .fields
+            .iter()
+            .position(|field| field.label == "driver")
+            .unwrap();
+        form.type_char('x');
+        form.backspace();
+        assert_eq!(
+            form.fields
+                .iter()
+                .find(|field| field.label == "driver")
+                .unwrap()
+                .value,
+            "postgres"
+        );
+        form.cycle_driver(1);
+        assert_eq!(
+            form.fields
+                .iter()
+                .find(|field| field.label == "driver")
+                .unwrap()
+                .value,
+            "mysql"
+        );
+        let dump = form.lines().join("\n");
+        assert!(dump.contains("< MySQL >"));
+        assert!(dump.contains("left/right"));
+        form.cycle_driver(1);
+        assert_eq!(
+            form.fields
+                .iter()
+                .find(|field| field.label == "driver")
+                .unwrap()
+                .value,
+            "postgres"
+        );
     }
 }

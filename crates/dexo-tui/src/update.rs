@@ -1574,6 +1574,14 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.connection_form.focus_prev();
             Vec::new()
         }
+        KeyCode::Left => {
+            model.connection_form.cycle_driver(-1);
+            Vec::new()
+        }
+        KeyCode::Right => {
+            model.connection_form.cycle_driver(1);
+            Vec::new()
+        }
         KeyCode::Backspace => {
             model.connection_form.backspace();
             Vec::new()
