@@ -9,7 +9,7 @@ use crate::runtime::{OperationId, OperationKey, SessionId};
 
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
-use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
+use crate::layout::{LayoutMode, LayoutPlan, LayoutPreset, PaneLayout};
 use crate::mouse::HitMap;
 use crate::screens::admin::AdminScreen;
 use crate::screens::config_transfer::ConfigTransferScreen;
@@ -54,6 +54,19 @@ pub struct ConnectionStatus {
 pub struct PaletteState {
     pub open: bool,
     pub query: String,
+    pub selected: usize,
+    pub offset: usize,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HelpState {
+    pub open: bool,
+    pub scroll: u16,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResultsMenuState {
+    pub open: bool,
     pub selected: usize,
     pub offset: usize,
 }
@@ -370,6 +383,7 @@ impl GridModel {
     pub fn set_columns(&mut self, columns: Vec<ColumnMeta>) {
         self.buffer.columns = columns;
         self.recompute_column_widths();
+        self.ensure_cursor();
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<DbValue>>) {
@@ -386,6 +400,7 @@ impl GridModel {
             self.buffer.append_rows(vec![display]);
         }
         self.recompute_column_widths();
+        self.ensure_cursor();
     }
 
     pub fn clear(&mut self) {
@@ -449,7 +464,77 @@ impl GridModel {
 
     pub fn select_range(&mut self, start: (usize, usize), end: (usize, usize)) {
         self.kind = GridSelection::Range { start, end };
-        self.selection = Some(start);
+        self.selection = Some(end);
+    }
+
+    pub fn ensure_cursor(&mut self) {
+        if self.buffer.row_count() == 0 {
+            self.selection = None;
+            return;
+        }
+        if self.selection.is_none() {
+            self.select_cell(0, 0);
+        }
+    }
+
+    pub fn cursor_row(&self) -> Option<usize> {
+        self.selection.map(|(row, _)| row)
+    }
+
+    pub fn row_selected(&self, row: usize) -> bool {
+        match self.kind {
+            GridSelection::Cell { row: r, .. } | GridSelection::Row { row: r } => r == row,
+            GridSelection::Column { .. } => self.selection.is_some_and(|(r, _)| r == row),
+            GridSelection::Range { start, end } => {
+                let lo = start.0.min(end.0);
+                let hi = start.0.max(end.0);
+                row >= lo && row <= hi
+            }
+        }
+    }
+
+    pub fn move_cursor_row(&mut self, delta: i32, extend: bool) {
+        self.ensure_cursor();
+        let Some((row, col)) = self.selection else {
+            return;
+        };
+        let last = self.buffer.row_count().saturating_sub(1);
+        let next = (row as i32 + delta).clamp(0, last as i32) as usize;
+        if extend {
+            let start = match self.kind {
+                GridSelection::Range { start, .. } => start,
+                GridSelection::Cell { row, col } => (row, col),
+                GridSelection::Row { row } => (row, col),
+                GridSelection::Column { col } => (row, col),
+            };
+            self.select_range(start, (next, col));
+        } else {
+            self.select_cell(next, col);
+        }
+        self.ensure_row_visible(next);
+    }
+
+    pub fn move_cursor_col(&mut self, delta: i32) {
+        self.ensure_cursor();
+        let Some((row, col)) = self.selection else {
+            return;
+        };
+        let last = self.buffer.columns.len().saturating_sub(1);
+        let next = (col as i32 + delta).clamp(0, last as i32) as usize;
+        match self.kind {
+            GridSelection::Range { start, .. } => self.select_range(start, (row, next)),
+            _ => self.select_cell(row, next),
+        }
+    }
+
+    fn ensure_row_visible(&mut self, row: usize) {
+        let height = self.viewport.height.max(1);
+        if row < self.viewport.row_offset {
+            self.viewport.row_offset = row;
+        } else if row >= self.viewport.row_offset.saturating_add(height) {
+            self.viewport.row_offset = row.saturating_add(1).saturating_sub(height);
+        }
+        self.clamp_scroll();
     }
 
     pub fn freeze_columns(&mut self, count: usize) {
@@ -789,6 +874,9 @@ pub struct Model {
     pub results: ResultsState,
     pub tabs: TabsState,
     pub palette: PaletteState,
+    pub help: HelpState,
+    pub results_menu: ResultsMenuState,
+    pub layout_preset: LayoutPreset,
     pub messages: Vec<String>,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
@@ -857,6 +945,9 @@ impl Default for Model {
             },
             keymap: Keymap::default_profile(),
             pending_chord: Chord { keys: Vec::new() },
+            help: HelpState::default(),
+            results_menu: ResultsMenuState::default(),
+            layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,
                 inspector_visible: true,
@@ -971,6 +1062,17 @@ impl Model {
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
+        self.sync_grid_viewport();
+    }
+
+    pub fn sync_grid_viewport(&mut self) {
+        let plan = LayoutPlan::for_area_with(
+            ratatui::layout::Rect::new(0, 0, self.width, self.height),
+            Some(&self.panes),
+        );
+        let width = plan.results.width.saturating_sub(2).max(1);
+        let height = plan.results.height.saturating_sub(2).max(1);
+        self.results.set_viewport_size(width, height);
     }
 
     pub fn active_document(&self) -> &EditorDocument {
