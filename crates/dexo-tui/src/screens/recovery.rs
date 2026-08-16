@@ -2,6 +2,7 @@
 pub struct RecoveryScreen {
     pub open: bool,
     pub documents: Vec<String>,
+    pub checkpoints: Vec<(String, String, String)>,
     pub transaction: String,
     pub confirm_discard: bool,
 }
@@ -11,6 +12,7 @@ impl Default for RecoveryScreen {
         Self {
             open: false,
             documents: Vec::new(),
+            checkpoints: Vec::new(),
             transaction: "idle".into(),
             confirm_discard: false,
         }
@@ -22,6 +24,7 @@ impl RecoveryScreen {
         Self {
             open: true,
             documents: vec!["scratch.sql".into()],
+            checkpoints: Vec::new(),
             transaction: "unknown".into(),
             confirm_discard: false,
         }
@@ -30,6 +33,10 @@ impl RecoveryScreen {
     pub fn recover(&mut self) {
         self.open = false;
         self.confirm_discard = false;
+    }
+
+    pub fn restore_documents(&self) -> Vec<(String, String, String)> {
+        self.checkpoints.clone()
     }
 
     pub fn discard(&mut self) {

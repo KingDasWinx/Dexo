@@ -1,5 +1,13 @@
 use std::path::{Path, PathBuf};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FilePickerMode {
+    #[default]
+    Open,
+    Save,
+    Transfer,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilePicker {
     pub open: bool,
