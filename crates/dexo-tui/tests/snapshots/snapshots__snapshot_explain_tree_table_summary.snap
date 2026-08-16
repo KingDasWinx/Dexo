@@ -8,9 +8,9 @@ demo  local  public
 │[offline]                 │┌▸ Explain─────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │ ▾ local                  ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                               ││                          │
 │>  ▸ public               ││planning_ms=0.04 execution_ms=0.21                                                                    ││                          │
-│   ▸ mysql.users [restrict││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)    ││                          │
-│actions: properties DDL da││raw_bytes=59                                                                                          ││                          │
-│selected: local.public    ││                                                                                                      ││                          │
+│     mysql.users [restrict││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)    ││                          │
+│                          ││raw_bytes=59                                                                                          ││                          │
+│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │

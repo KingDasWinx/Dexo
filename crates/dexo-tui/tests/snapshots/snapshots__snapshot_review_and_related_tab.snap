@@ -8,9 +8,9 @@ demo  local  public
 │[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │ ▾ local                  ││   1▸select 1                                                         │
 │>  ▸ public               ││                                                                      │
-│   ▸ mysql.us┌Review changes────────────────────────────────────────────────────────┐             │
-│actions: prop│target: demo.public.users                                             │             │
-│selected: loc│ops: 1                                                                │             │
+│     mysql.us┌Review changes────────────────────────────────────────────────────────┐             │
+│             │target: demo.public.users                                             │             │
+│             │ops: 1                                                                │             │
 │             │status: Pending                                                       │             │
 │             │ready                                                                 │             │
 │             │INSERT INTO demo.public.users (id) VALUES ($1)                        │             │

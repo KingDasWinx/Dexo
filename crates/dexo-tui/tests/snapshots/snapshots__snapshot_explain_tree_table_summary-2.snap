@@ -8,9 +8,9 @@ demo  local  public
 │[offline]                 │┌▸ Explain─────────────────────────────────────────────────────────────┐
 │ ▾ local                  ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
 │>  ▸ public               ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
-│   ▸ mysql.users [restrict││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
-│actions: properties DDL da││raw_bytes=59                                                          │
-│selected: local.public    ││                                                                      │
+│     mysql.users [restrict││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
+│                          ││raw_bytes=59                                                          │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

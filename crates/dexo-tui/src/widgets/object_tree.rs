@@ -23,26 +23,9 @@ pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Ve
     }
     let mut tree = Vec::new();
     collect(&state.roots, state, 0, &mut tree);
-    let mut footer = Vec::new();
-    if let Some(node) = state.selected_node() {
-        let actions = crate::screens::explorer::ExplorerAction::all()
-            .iter()
-            .map(|action| action.label())
-            .collect::<Vec<_>>()
-            .join(" ");
-        footer.push(format!("actions: {actions}"));
-        footer.push(format!("selected: {}", node.qualified));
-        if crate::screens::explorer::opens_table_data(&node.kind) {
-            footer.push("Enter abre a table".into());
-        }
-    }
-    if let Some(copied) = &state.copied {
-        footer.push(format!("copied: {copied}"));
-    }
-    let tree = window_tree(state, &tree, viewport_rows, header.len() + footer.len());
+    let tree = window_tree(state, &tree, viewport_rows, header.len());
     let mut lines = header;
     lines.extend(tree);
-    lines.extend(footer);
     if lines.is_empty() {
         lines.push("No connection".into());
     }
@@ -66,7 +49,11 @@ fn window_tree(
 fn collect(nodes: &[ExplorerNode], state: &ExplorerState, depth: usize, lines: &mut Vec<String>) {
     for node in nodes {
         if state.matches(node) {
-            let marker = if node.expanded { "▾" } else { "▸" };
+            let marker = if node.can_expand() {
+                if node.expanded { "▾ " } else { "▸ " }
+            } else {
+                "  "
+            };
             let badge = match node.state {
                 NodeState::Loading(_) => " [loading]",
                 NodeState::Restricted => " [restricted]",
@@ -81,7 +68,7 @@ fn collect(nodes: &[ExplorerNode], state: &ExplorerState, depth: usize, lines: &
                 " "
             };
             lines.push(format!(
-                "{cursor}{}{marker} {fav}{}{badge}",
+                "{cursor}{}{marker}{fav}{}{badge}",
                 "  ".repeat(depth),
                 node.label
             ));
@@ -139,6 +126,32 @@ mod tests {
         assert!(
             !tree.iter().any(|line| line.contains("t0")),
             "scroll should hide the top: {window:?}"
+        );
+    }
+
+    #[test]
+    fn leaves_have_no_twistie() {
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("col:id"),
+                ObjectKind::Column,
+                QualifiedName::new(Some("db"), Some("public"), "id"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        explorer.select(ObjectId::new("col:id"));
+        let lines = super::render_lines(&explorer);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains("id") && !line.contains('▸') && !line.contains('▾')),
+            "{lines:?}"
+        );
+        assert!(
+            !lines.iter().any(|line| line.contains("actions:")),
+            "{lines:?}"
         );
     }
 }

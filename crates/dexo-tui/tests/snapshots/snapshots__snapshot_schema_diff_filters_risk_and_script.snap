@@ -8,9 +8,9 @@ demo  local  public
 │[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │ ▾ local                  ││   1▸select 1                                                                                         ││                          │
 │>  ▸ public               ││                                                                                                      ││                          │
-│   ▸ mysql.users [restrict││                                                                                                      ││                          │
-│actions: properties DDL da││                                                                                                      ││                          │
-│selected: local.public    ││                                                                                                      ││                          │
+│     mysql.users [restrict││                                                                                                      ││                          │
+│                          ││                                                                                                      ││                          │
+│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││           ┌Schema diff───────────────────────────────────────────────────────────────────┐           ││                          │

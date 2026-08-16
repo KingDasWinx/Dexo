@@ -8,9 +8,9 @@ demo  local  public
 │[offline]                 │┌▸ Schema──────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │ ▾ local                  ││schema table                                                                                          ││                          │
 │>  ▸ public               ││> target: public.orders                                                                               ││                          │
-│   ▸ mysql.users [restrict││  columns:                                                                                            ││                          │
-│actions: properties DDL da││  defaults:                                                                                           ││                          │
-│selected: local.public    ││  indexes:                                                                                            ││                          │
+│     mysql.users [restrict││  columns:                                                                                            ││                          │
+│                          ││  defaults:                                                                                           ││                          │
+│                          ││  indexes:                                                                                            ││                          │
 │                          ││  constraints:                                                                                        ││                          │
 │                          ││  foreign_keys:                                                                                       ││                          │
 │                          ││error: columns are required                                                                           ││                          │

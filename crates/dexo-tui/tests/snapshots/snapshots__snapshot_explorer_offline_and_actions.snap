@@ -8,8 +8,8 @@ demo  local  public
 │[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │filter:public kind:- fav:f││   1▸select 1                                                         │
 │>  ▸ public               ││                                                                      │
-│actions: properties DDL da││                                                                      │
-│selected: local.public    ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

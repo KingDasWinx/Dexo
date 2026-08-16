@@ -8,9 +8,9 @@ demo  local  public
 │[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │ ▾ local                  ││   1▸select 1                                                         │
 │>  ▸ public  ┌Transfer──────────────────────────────────────────────────────────────┐             │
-│   ▸ mysql.us│import orders.csv                                                     │             │
-│actions: prop│format=csv strategy=RejectFile                                        │             │
-│selected: loc│progress rows=2 bytes=0 running=false                                 │             │
+│     mysql.us│import orders.csv                                                     │             │
+│             │format=csv strategy=RejectFile                                        │             │
+│             │progress rows=2 bytes=0 running=false                                 │             │
 │             │preview:                                                              │             │
 │             │preview ready                                                         │             │
 │             │reject line=3 invalid value                                           │             │
