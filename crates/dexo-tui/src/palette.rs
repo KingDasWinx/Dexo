@@ -2,14 +2,51 @@ use crate::action::Action;
 use crate::model::Model;
 
 mod registry;
-pub use registry::palette_entries;
+pub use registry::{command_spec, palette_entries};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowIntent {
+    SavepointCreate,
+    SavepointRollback,
+    SavepointRelease,
+    DataSort,
+    DataFilter,
+    DataReview,
+    SchemaPreview,
+    SchemaRaw,
+    SchemaDiff,
+    Security,
+    TransferExport,
+    TransferImport,
+    Backup,
+    Restore,
+    ConnectionConnect,
+    ConnectionDuplicate,
+    ConnectionTest,
+    ConnectionDelete,
+    ConnectionCloseSession,
     ProjectCreate,
     ProjectSwitch,
     ProjectRename,
     ProjectDelete,
+    SettingsReset,
+    RecoveryRestore,
+    RecoveryDiscard,
+    McpRevokeAll,
+    InsertSnippet,
+    SubmitParameters,
+    ClearHistory,
+    DiagnosticsExport,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandSpec {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub keywords: &'static [&'static str],
+    pub shortcut: Option<&'static str>,
+    pub requirements: &'static [Requirement],
+    pub invocation: PaletteInvocation,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -159,7 +196,9 @@ mod tests {
 
     #[test]
     fn palette_explains_disabled_commit() {
-        let entries = palette_entries(&Model::fixture(TransactionState::Idle));
+        let mut model = Model::fixture(TransactionState::Idle);
+        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
+        let entries = palette_entries(&model);
         let commit = entries
             .iter()
             .find(|e| e.id == "transaction.commit")
@@ -217,26 +256,10 @@ mod tests {
 
     #[test]
     fn every_current_action_is_in_palette() {
-        let ids: Vec<_> = palette_entries(&Model::default())
-            .iter()
-            .map(|entry| entry.id)
-            .collect();
-        for id in [
-            "workbench.quit",
-            "palette.open",
-            "query.execute",
-            "query.cancel",
-            "transaction.commit",
-            "transaction.rollback",
-            "focus.explorer",
-            "focus.editor",
-            "focus.results",
-            "focus.inspector",
-            "help.open",
-            "layout.cycle",
-        ] {
-            assert!(ids.contains(&id), "missing {id}");
-        }
+        let entries = palette_entries(&Model::default());
+        let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(entries.len(), 129);
+        assert_eq!(ids.len(), 129);
     }
 
     #[test]

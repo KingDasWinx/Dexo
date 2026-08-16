@@ -3357,6 +3357,76 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
             model.projects.open = true;
             vec![Effect::ListProjects]
         }
+        // ponytail: domain tasks replace these with prepared screens; keep current actions until then.
+        PaletteInvocation::OpenFlow(FlowIntent::SavepointCreate) => {
+            update(model, Action::Savepoint)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::SavepointRollback) => {
+            update(model, Action::RollbackSavepoint)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::SavepointRelease) => {
+            update(model, Action::ReleaseSavepoint)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::DataSort) => update(model, Action::ApplyRemoteSort),
+        PaletteInvocation::OpenFlow(FlowIntent::DataFilter) => {
+            update(model, Action::ApplyRemoteFilter)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::DataReview) => update(model, Action::OpenReview),
+        PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
+            update(model, Action::OpenDdlPreview)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::SchemaRaw) => update(model, Action::ApplyRawDdl),
+        PaletteInvocation::OpenFlow(FlowIntent::SchemaDiff) => {
+            update(model, Action::OpenSchemaDiff)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::Security) => update(model, Action::OpenSecurity),
+        PaletteInvocation::OpenFlow(FlowIntent::TransferExport) => {
+            update(model, Action::OpenTransfer)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::TransferImport) => {
+            update(model, Action::OpenTransfer)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::Backup) => update(model, Action::OpenBackup),
+        PaletteInvocation::OpenFlow(FlowIntent::Restore) => update(model, Action::OpenRestore),
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect) => {
+            update(model, Action::ConnectSelected)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDuplicate) => {
+            update(model, Action::DuplicateConnection)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionTest) => {
+            update(model, Action::TestConnection)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete) => {
+            update(model, Action::DeleteConnection)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionCloseSession) => {
+            update(model, Action::CloseSelectedSession)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::SettingsReset) => {
+            update(model, Action::ConfirmResetSettings)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::RecoveryRestore) => {
+            update(model, Action::ConfirmRecover)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::RecoveryDiscard) => {
+            update(model, Action::ConfirmDiscardRecovery)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::McpRevokeAll) => {
+            update(model, Action::RevokeAllMcpGrants)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::InsertSnippet) => {
+            update(model, Action::InsertSnippet)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::SubmitParameters) => {
+            update(model, Action::SubmitParameters)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::ClearHistory) => {
+            update(model, Action::ClearHistory)
+        }
+        PaletteInvocation::OpenFlow(FlowIntent::DiagnosticsExport) => {
+            update(model, Action::OpenDiagnostics)
+        }
     }
 }
 

@@ -510,8 +510,6 @@ profile = "emacs"
 #[cfg(test)]
 mod tests {
     use super::{KeyContext, Keymap, chord_from_event, parse_chord, parse_keymap};
-    use crate::model::Model;
-    use crate::palette::palette_entries;
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
@@ -624,24 +622,26 @@ profile = "overlap"
         assert!(err.commands.contains(&"workbench.quit".into()));
     }
 
+    fn assert_registered(ids: impl IntoIterator<Item = impl AsRef<str>>) {
+        let registered: std::collections::BTreeSet<_> =
+            crate::palette::palette_entries(&crate::model::Model::default())
+                .into_iter()
+                .map(|entry| entry.id)
+                .collect();
+        for id in ids {
+            let id = id.as_ref();
+            assert!(registered.contains(id), "unregistered command: {id}");
+        }
+    }
+
     #[test]
     fn every_registered_command_is_palette_reachable() {
-        let ids: Vec<_> = palette_entries(&Model::default())
-            .into_iter()
-            .map(|e| e.id.to_string())
-            .collect();
         for keymap in [
             Keymap::default_profile(),
             Keymap::vim_profile(),
             Keymap::emacs_profile(),
         ] {
-            for command in keymap.command_ids() {
-                assert!(
-                    ids.iter().any(|id| id == command),
-                    "{} command `{command}` missing from palette",
-                    keymap.name
-                );
-            }
+            assert_registered(keymap.command_ids());
         }
     }
 
