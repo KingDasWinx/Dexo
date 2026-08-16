@@ -11,7 +11,9 @@ pub mod parse;
 pub mod snippet;
 pub mod statement;
 
-pub use completion::{Catalog, CompletionItem, FakeCatalog, complete, labels};
+pub use completion::{
+    Catalog, CompletionItem, CompletionKind, FakeCatalog, complete, current_token, labels,
+};
 pub use derived::{derive_page, filter_values};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
