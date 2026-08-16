@@ -1,11 +1,10 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
-assertion_line: 12
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector · properties────┐
-│No connection             │┌SQL · scratch.sql─────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
+│No connection             │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │                          ││   1                                                                                                  ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -40,7 +39,7 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────┘│                          │
-│                          │┌Results (0)───────────────────────────────────────────────────────────────────────────────────────────┐│                          │
+│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────┐│                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -52,4 +51,4 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-disconnected  tx:idle  rows:0  ctrl+p palette
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help

@@ -1,11 +1,10 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 199
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector · properties────┐
-│[offline]                 │┌Explain───────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
+│[offline]                 │┌▸ Explain─────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │▾ local                   ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                               ││                          │
 │  ▸ public                ││planning_ms=0.04 execution_ms=0.21                                                                    ││                          │
 │  ▸ mysql.users [restricte││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)    ││                          │
@@ -40,7 +39,7 @@ demo  local  public
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────┘│                          │
-│                          │┌Results (0)───────────────────────────────────────────────────────────────────────────────────────────┐│                          │
+│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────┐│                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -52,4 +51,4 @@ demo  local  public
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-connected:local  tx:idle  rows:0  ctrl+p palette
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help

@@ -3,8 +3,8 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&snapshot_model(), 100, 30)"
 ---
 demo  local  public                                                                                 
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │┌SQL · scratch.sql─────────────────────────────────────────────────────┐
+┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
+│[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │▾ local                   ││   1▸select 1                                                         │
 │  ▸ public                ││                                                                      │
 │  ▸ mysql.users [restricte││                                                                      │
@@ -18,12 +18,12 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
-│                          │┌Results (0)───────────────────────────────────────────────────────────┐
+│                          │┌  Results (0)─────────────────────────────────────────────────────────┐
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-connected:local  tx:idle  rows:0  ctrl+p palette
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help
