@@ -14,6 +14,16 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if !matches!(mouse.kind, MouseEventKind::Down(_)) {
                 return Vec::new();
             }
+            if let Some(crate::mouse::HitTarget::GridRow(row)) =
+                model.hits.at(mouse.column, mouse.row)
+            {
+                crate::screens::editor::end_typing(model);
+                model.focus = Focus::Results;
+                close_palette(model);
+                let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
+                click_results_row(model, row, extend);
+                return Vec::new();
+            }
             match crate::mouse::mouse_action(mouse.column, mouse.row, &model.hits) {
                 Some(action) => update(model, action),
                 None => Vec::new(),
@@ -353,11 +363,22 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             let leaving_editor =
                 model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
             model.focus = match target {
-                FocusTarget::Explorer => Focus::Explorer,
+                FocusTarget::Explorer => {
+                    model.panes.explorer_visible = true;
+                    Focus::Explorer
+                }
                 FocusTarget::Editor => Focus::Editor,
-                FocusTarget::Results => Focus::Results,
-                FocusTarget::Inspector => Focus::Inspector,
+                FocusTarget::Results => {
+                    model.panes.results_visible = true;
+                    Focus::Results
+                }
+                FocusTarget::Inspector => {
+                    model.panes.inspector_visible = true;
+                    Focus::Inspector
+                }
             };
+            model.panes = model.panes.clamp(model.width, model.height);
+            model.sync_grid_viewport();
             close_palette(model);
             if leaving_editor {
                 checkpoint_dirty(model)
@@ -1006,34 +1027,93 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ResultsUp => {
-            model.results.scroll_rows(-1);
+            model.results.move_cursor_row(-1, false);
             Vec::new()
         }
         Action::ResultsDown => {
-            model.results.scroll_rows(1);
+            model.results.move_cursor_row(1, false);
             Vec::new()
         }
         Action::ResultsLeft => {
-            model.results.scroll_columns(-1);
+            model.results.move_cursor_col(-1);
             Vec::new()
         }
         Action::ResultsRight => {
-            model.results.scroll_columns(1);
+            model.results.move_cursor_col(1);
             Vec::new()
         }
         Action::ResultsPageUp => {
             let height = model.results.viewport().height as i32;
-            model.results.scroll_rows(-height);
+            model.results.move_cursor_row(-height.max(1), false);
             Vec::new()
         }
         Action::ResultsPageDown => {
             let height = model.results.viewport().height as i32;
-            model.results.scroll_rows(height);
+            model.results.move_cursor_row(height.max(1), false);
             Vec::new()
         }
         Action::ResultsTop => {
+            model.results.ensure_cursor();
+            if let Some((_, col)) = model.results.selection() {
+                model.results.select_cell(0, col);
+            }
             let offset = model.results.viewport().row_offset as i32;
             model.results.scroll_rows(-offset);
+            Vec::new()
+        }
+        Action::ResultsExtendUp => {
+            model.results.move_cursor_row(-1, true);
+            Vec::new()
+        }
+        Action::ResultsExtendDown => {
+            model.results.move_cursor_row(1, true);
+            Vec::new()
+        }
+        Action::OpenResultsMenu => {
+            open_results_menu(model);
+            Vec::new()
+        }
+        Action::ToggleHelp => {
+            toggle_help(model);
+            Vec::new()
+        }
+        Action::CycleLayout => {
+            apply_layout_preset(model, model.layout_preset.next());
+            Vec::new()
+        }
+        Action::ResetLayout => {
+            apply_layout_preset(model, crate::layout::LayoutPreset::Normal);
+            Vec::new()
+        }
+        Action::HideInspector => {
+            model.panes.inspector_visible = !model.panes.inspector_visible;
+            if !model.panes.inspector_visible && model.focus == Focus::Inspector {
+                model.focus = Focus::Editor;
+            }
+            model.panes = model.panes.clamp(model.width, model.height);
+            model.layout_dirty = true;
+            model.sync_grid_viewport();
+            Vec::new()
+        }
+        Action::LayoutResultsFocus => {
+            apply_layout_preset(model, crate::layout::LayoutPreset::ResultsWide);
+            model.focus = Focus::Results;
+            Vec::new()
+        }
+        Action::GrowResults => {
+            adjust_results_height(model, 2);
+            Vec::new()
+        }
+        Action::ShrinkResults => {
+            adjust_results_height(model, -2);
+            Vec::new()
+        }
+        Action::GrowExplorer => {
+            adjust_explorer_width(model, 2);
+            Vec::new()
+        }
+        Action::ShrinkExplorer => {
+            adjust_explorer_width(model, -2);
             Vec::new()
         }
         Action::Quit => {
@@ -1173,6 +1253,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.palette.open {
         return handle_palette_key(model, key);
+    }
+    if model.help.open {
+        return handle_help_key(model, key);
+    }
+    if model.results_menu.open {
+        return handle_results_menu_key(model, key);
     }
     if model.secret_prompt.open {
         return handle_secret_prompt_key(model, key);
@@ -1661,6 +1747,155 @@ fn close_palette(model: &mut Model) {
             model.focus = Focus::Editor;
         }
     }
+}
+
+fn toggle_help(model: &mut Model) {
+    if model.help.open {
+        model.help.open = false;
+        model.help.scroll = 0;
+        return;
+    }
+    close_palette(model);
+    model.results_menu.open = false;
+    model.help.open = true;
+    model.help.scroll = 0;
+}
+
+fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc | KeyCode::F(1) => {
+            model.help.open = false;
+            model.help.scroll = 0;
+            Vec::new()
+        }
+        KeyCode::Char('?') => {
+            model.help.open = false;
+            model.help.scroll = 0;
+            Vec::new()
+        }
+        KeyCode::Up | KeyCode::PageUp => {
+            model.help.scroll = model.help.scroll.saturating_sub(1);
+            Vec::new()
+        }
+        KeyCode::Down | KeyCode::PageDown => {
+            model.help.scroll = model.help.scroll.saturating_add(1);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn open_results_menu(model: &mut Model) {
+    model.results.ensure_cursor();
+    if model.results.row_count() == 0 {
+        return;
+    }
+    model.results_menu.open = true;
+    model.results_menu.selected = 0;
+    model.results_menu.offset = 0;
+}
+
+fn handle_results_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let count = crate::palette::results_menu_items().len();
+    match key.code {
+        KeyCode::Esc => {
+            model.results_menu.open = false;
+            Vec::new()
+        }
+        KeyCode::Up => {
+            if count > 0 {
+                model.results_menu.selected = model.results_menu.selected.saturating_sub(1);
+            }
+            Vec::new()
+        }
+        KeyCode::Down => {
+            if count > 0 {
+                model.results_menu.selected =
+                    (model.results_menu.selected + 1).min(count.saturating_sub(1));
+            }
+            Vec::new()
+        }
+        KeyCode::Enter => pick_results_menu(model),
+        _ => Vec::new(),
+    }
+}
+
+fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
+    let items = crate::palette::results_menu_items();
+    let Some((id, _)) = items.get(model.results_menu.selected) else {
+        model.results_menu.open = false;
+        return Vec::new();
+    };
+    model.results_menu.open = false;
+    match *id {
+        "copy-row-csv" => {
+            if !matches!(
+                model.results.kind,
+                crate::model::GridSelection::Range { .. }
+            ) && let Some((row, _)) = model.results.selection()
+            {
+                model.results.select_row(row);
+            }
+            copy_grid(model, dexo_app::data::CopyFormat::Csv)
+        }
+        "copy-cell" => {
+            if let Some((row, col)) = model.results.selection() {
+                model.results.select_cell(row, col);
+            }
+            copy_grid(model, dexo_app::data::CopyFormat::Text)
+        }
+        other => {
+            if let Some(action) = crate::palette::action_by_id(other) {
+                update(model, action)
+            } else {
+                Vec::new()
+            }
+        }
+    }
+}
+
+fn click_results_row(model: &mut Model, row: usize, extend: bool) {
+    model.results.ensure_cursor();
+    let col = model.results.selection().map(|(_, col)| col).unwrap_or(0);
+    let last = model.results.row_count().saturating_sub(1);
+    if model.results.row_count() == 0 {
+        return;
+    }
+    let row = row.min(last);
+    if extend {
+        let start = match model.results.kind {
+            crate::model::GridSelection::Range { start, .. } => start,
+            _ => model.results.selection().unwrap_or((row, col)),
+        };
+        model.results.select_range(start, (row, col));
+    } else {
+        model.results.select_cell(row, col);
+    }
+}
+
+fn apply_layout_preset(model: &mut Model, preset: crate::layout::LayoutPreset) {
+    model.layout_preset = preset;
+    model.panes = preset.apply(model.width, model.height);
+    model.sync_grid_viewport();
+    model.layout_dirty = true;
+}
+
+fn adjust_results_height(model: &mut Model, delta: i16) {
+    let next = (model.panes.results_height as i16 + delta).max(3) as u16;
+    model.panes.results_visible = true;
+    model.panes.results_height = next;
+    model.panes = model.panes.clamp(model.width, model.height);
+    model.sync_grid_viewport();
+    model.layout_dirty = true;
+}
+
+fn adjust_explorer_width(model: &mut Model, delta: i16) {
+    let next = (model.panes.explorer_width as i16 + delta).max(8) as u16;
+    model.panes.explorer_visible = true;
+    model.panes.explorer_width = next;
+    model.panes = model.panes.clamp(model.width, model.height);
+    model.sync_grid_viewport();
+    model.layout_dirty = true;
 }
 
 fn persist_layout_effect(model: &Model) -> Effect {

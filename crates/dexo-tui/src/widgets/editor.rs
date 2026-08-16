@@ -2,7 +2,7 @@ use ratatui::Frame;
 use ratatui::layout::{Position, Rect};
 use ratatui::style::{Modifier, Style};
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 use unicode_width::UnicodeWidthChar;
 
 use crate::model::{Focus, Model};
@@ -23,7 +23,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(doc.text()), area);
         return;
     }
-    let block = Block::bordered().title(title);
+    let focused = model.focus == Focus::Editor;
+    let block = crate::render::pane_block(model, &title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
@@ -46,8 +47,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         .style(Role::Selection, model.capabilities)
         .add_modifier(Modifier::REVERSED);
     let marker_style = model.theme.style(Role::Focus, model.capabilities);
-    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let muted = model.theme.gutter(model.capabilities);
+    let cursor_line_style = model.theme.cursor_line(model.capabilities);
 
+    let cursor_line_idx = line_col_of(&text, cursor).0;
     let mut rendered = Vec::new();
     let start = doc.viewport_line.min(lines.len().saturating_sub(1));
     let end = (start + inner.height as usize).min(lines.len());
@@ -59,6 +62,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         } else {
             " "
         };
+        let is_cursor_line = start + row == cursor_line_idx;
         let mut spans = vec![
             Span::styled(format!("{line_no:>4}"), muted),
             Span::styled(marker.to_string(), marker_style),
@@ -81,7 +85,11 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 &model.editor.highlights,
             ));
         }
-        rendered.push(Line::from(spans));
+        let mut rendered_line = Line::from(spans);
+        if is_cursor_line {
+            rendered_line = rendered_line.style(cursor_line_style);
+        }
+        rendered.push(rendered_line);
         char_at = line_end + 1;
     }
     frame.render_widget(Paragraph::new(rendered), inner);

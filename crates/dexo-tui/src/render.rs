@@ -1,5 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::text::Span;
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
@@ -18,7 +19,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             render_panel(
                 frame,
                 plan.explorer,
+                model,
                 "Explorer",
+                model.focus == Focus::Explorer,
                 crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
             );
             crate::widgets::tabs::render(frame, plan.tabs, model);
@@ -27,14 +30,18 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 render_panel(
                     frame,
                     plan.content,
+                    model,
                     "Schema",
+                    model.focus == Focus::Editor,
                     crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
                 );
             } else if model.tabs.active == 4 {
                 render_panel(
                     frame,
                     plan.content,
+                    model,
                     "Explain",
+                    model.focus == Focus::Editor,
                     model.explain.lines().join("\n"),
                 );
             } else {
@@ -45,7 +52,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             render_panel(
                 frame,
                 plan.inspector,
+                model,
                 &inspector_title(model),
+                model.focus == Focus::Inspector,
                 inspector_body(model),
             );
         }
@@ -53,6 +62,12 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     crate::widgets::status::render(frame, plan.status, model);
     if model.palette.open {
         render_palette(frame, model);
+    }
+    if model.help.open {
+        render_help(frame, model);
+    }
+    if model.results_menu.open {
+        render_results_menu(frame, model);
     }
     if let Some(review) = &model.data.review {
         render_review(frame, review);
@@ -88,7 +103,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         render_panel(
             frame,
             centered(frame.area(), 40, 12),
+            model,
             "Security",
+            true,
             model.security.lines().join("\n"),
         );
     }
@@ -231,7 +248,9 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             render_panel(
                 frame,
                 area,
+                model,
                 "Explorer",
+                true,
                 crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
             );
         }
@@ -241,11 +260,20 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
                 render_panel(
                     frame,
                     area,
+                    model,
                     "Schema",
+                    true,
                     crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
                 );
             } else if model.tabs.active == 4 {
-                render_panel(frame, area, "Explain", model.explain.lines().join("\n"));
+                render_panel(
+                    frame,
+                    area,
+                    model,
+                    "Explain",
+                    true,
+                    model.explain.lines().join("\n"),
+                );
             } else {
                 crate::widgets::editor::render(frame, area, model);
             }
@@ -254,9 +282,14 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             hits.register(HitTarget::Grid, area);
             crate::widgets::grid::render(frame, area, model, hits);
         }
-        Focus::Inspector => {
-            render_panel(frame, area, &inspector_title(model), inspector_body(model))
-        }
+        Focus::Inspector => render_panel(
+            frame,
+            area,
+            model,
+            &inspector_title(model),
+            true,
+            inspector_body(model),
+        ),
     }
 }
 
@@ -401,7 +434,14 @@ fn render_bar(frame: &mut Frame, area: Rect, text: String) {
     frame.render_widget(Paragraph::new(text), area);
 }
 
-fn render_panel(frame: &mut Frame, area: Rect, title: &str, body: String) {
+fn render_panel(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    title: &str,
+    focused: bool,
+    body: String,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -410,9 +450,37 @@ fn render_panel(frame: &mut Frame, area: Rect, title: &str, body: String) {
         return;
     }
     frame.render_widget(
-        Paragraph::new(body).block(Block::bordered().title(title)),
+        Paragraph::new(body).block(pane_block(model, title, focused)),
         area,
     );
+}
+
+pub fn pane_title(title: &str, focused: bool, unicode: bool) -> String {
+    let mark = if focused {
+        if unicode { "▸ " } else { "> " }
+    } else {
+        "  "
+    };
+    format!("{mark}{title}")
+}
+
+pub fn pane_block(model: &Model, title: &str, focused: bool) -> Block<'static> {
+    let caps = model.capabilities;
+    Block::bordered()
+        .title(Span::styled(
+            pane_title(title, focused, caps.unicode),
+            model.theme.pane_title(focused, caps),
+        ))
+        .border_style(model.theme.pane_border(focused, caps))
+}
+
+fn overlay_block(model: &Model, title: &str) -> Block<'static> {
+    Block::bordered()
+        .title(Span::styled(
+            title.to_string(),
+            model.theme.overlay(model.capabilities),
+        ))
+        .border_style(model.theme.overlay(model.capabilities))
 }
 
 fn render_palette(frame: &mut Frame, model: &Model) {
@@ -449,7 +517,63 @@ fn render_palette(frame: &mut Frame, model: &Model) {
         lines.push(format!("{marker} {}{disabled}", entry.title));
     }
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(Block::bordered().title("Command Palette")),
+        Paragraph::new(lines.join("\n")).block(overlay_block(model, "Command Palette")),
+        popup,
+    );
+}
+
+fn render_help(frame: &mut Frame, model: &Model) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 76, area.height.saturating_sub(2).max(12));
+    frame.render_widget(Clear, popup);
+    let mut lines = Vec::new();
+    for (section, rows) in model.keymap.help_sections() {
+        lines.push(format!("[{section}]"));
+        for (chord, command) in rows {
+            let title = palette_entries(model)
+                .iter()
+                .find(|entry| entry.id == command)
+                .map(|entry| entry.title)
+                .unwrap_or(command.as_str());
+            lines.push(format!("  {chord:<16} {title}"));
+        }
+        lines.push(String::new());
+    }
+    if lines.is_empty() {
+        lines.push("no bindings".into());
+    }
+    let inner_h = popup.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_h.max(1));
+    let scroll = (model.help.scroll as usize).min(max_scroll) as u16;
+    frame.render_widget(
+        Paragraph::new(lines.join("\n"))
+            .scroll((scroll, 0))
+            .block(overlay_block(model, "Keybindings  Esc to close")),
+        popup,
+    );
+}
+
+fn render_results_menu(frame: &mut Frame, model: &Model) {
+    let items = crate::palette::results_menu_items();
+    let labels: Vec<String> = items
+        .iter()
+        .enumerate()
+        .map(|(index, (_, title))| {
+            let marker = if index == model.results_menu.selected {
+                ">"
+            } else {
+                " "
+            };
+            format!("{marker} {title}")
+        })
+        .collect();
+    let popup = centered(frame.area(), 48, 14);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(labels.join("\n")).block(overlay_block(model, "Row actions  Esc to close")),
         popup,
     );
 }

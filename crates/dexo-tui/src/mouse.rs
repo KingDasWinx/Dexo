@@ -7,6 +7,7 @@ pub enum HitTarget {
     Explorer,
     Editor,
     Grid,
+    GridRow(usize),
     ModalButton,
 }
 
@@ -50,6 +51,7 @@ pub fn mouse_action(x: u16, y: u16, map: &HitMap) -> Option<Action> {
     match map.at(x, y)? {
         HitTarget::ResultTab(index) => Some(Action::SelectResultTab { index }),
         HitTarget::Grid => Some(Action::Focus(crate::action::FocusTarget::Results)),
+        HitTarget::GridRow(_) => Some(Action::Focus(crate::action::FocusTarget::Results)),
         HitTarget::Explorer => Some(Action::Focus(crate::action::FocusTarget::Explorer)),
         HitTarget::Editor => Some(Action::Focus(crate::action::FocusTarget::Editor)),
         HitTarget::ModalButton => None,

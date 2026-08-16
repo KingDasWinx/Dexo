@@ -168,10 +168,18 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::RollbackTransaction,
         },
         PaletteEntry {
+            id: "help.open",
+            title: "Show Keybindings",
+            keywords: &["help", "keys", "cheatsheet", "shortcuts"],
+            shortcut: Some("F1"),
+            disabled_reason: None,
+            action: || Action::ToggleHelp,
+        },
+        PaletteEntry {
             id: "focus.explorer",
             title: "Focus Explorer",
             keywords: &["sidebar", "tree"],
-            shortcut: None,
+            shortcut: Some("Alt+1"),
             disabled_reason: None,
             action: || Action::Focus(FocusTarget::Explorer),
         },
@@ -179,7 +187,7 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             id: "focus.editor",
             title: "Focus Editor",
             keywords: &["sql", "query"],
-            shortcut: None,
+            shortcut: Some("Alt+2"),
             disabled_reason: None,
             action: || Action::Focus(FocusTarget::Editor),
         },
@@ -187,7 +195,7 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             id: "focus.results",
             title: "Focus Results",
             keywords: &["grid", "rows"],
-            shortcut: None,
+            shortcut: Some("Alt+3"),
             disabled_reason: None,
             action: || Action::Focus(FocusTarget::Results),
         },
@@ -195,9 +203,73 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             id: "focus.inspector",
             title: "Focus Inspector",
             keywords: &["details", "side"],
-            shortcut: None,
+            shortcut: Some("Alt+4"),
             disabled_reason: None,
             action: || Action::Focus(FocusTarget::Inspector),
+        },
+        PaletteEntry {
+            id: "layout.cycle",
+            title: "Cycle Layout",
+            keywords: &["preset", "panes", "split"],
+            shortcut: Some("F10"),
+            disabled_reason: None,
+            action: || Action::CycleLayout,
+        },
+        PaletteEntry {
+            id: "layout.results_focus",
+            title: "Layout: Results focus",
+            keywords: &["preset", "wide", "grid"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::LayoutResultsFocus,
+        },
+        PaletteEntry {
+            id: "layout.hide_inspector",
+            title: "Hide Inspector",
+            keywords: &["layout", "pane", "toggle"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::HideInspector,
+        },
+        PaletteEntry {
+            id: "layout.reset",
+            title: "Reset layout",
+            keywords: &["preset", "default", "panes"],
+            shortcut: None,
+            disabled_reason: None,
+            action: || Action::ResetLayout,
+        },
+        PaletteEntry {
+            id: "layout.results_grow",
+            title: "Grow Results Pane",
+            keywords: &["split", "height"],
+            shortcut: Some("Alt+="),
+            disabled_reason: None,
+            action: || Action::GrowResults,
+        },
+        PaletteEntry {
+            id: "layout.results_shrink",
+            title: "Shrink Results Pane",
+            keywords: &["split", "height"],
+            shortcut: Some("Alt+-"),
+            disabled_reason: None,
+            action: || Action::ShrinkResults,
+        },
+        PaletteEntry {
+            id: "layout.explorer_grow",
+            title: "Grow Explorer Pane",
+            keywords: &["split", "width"],
+            shortcut: Some("Alt+]"),
+            disabled_reason: None,
+            action: || Action::GrowExplorer,
+        },
+        PaletteEntry {
+            id: "layout.explorer_shrink",
+            title: "Shrink Explorer Pane",
+            keywords: &["split", "width"],
+            shortcut: Some("Alt+["),
+            disabled_reason: None,
+            action: || Action::ShrinkExplorer,
         },
         PaletteEntry {
             id: "data.copy.csv",
@@ -752,6 +824,30 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::ResultsTop,
         },
         PaletteEntry {
+            id: "results.extend_up",
+            title: "Extend Results Selection Up",
+            keywords: &["grid", "shift", "select"],
+            shortcut: Some("Shift+Up"),
+            disabled_reason: None,
+            action: || Action::ResultsExtendUp,
+        },
+        PaletteEntry {
+            id: "results.extend_down",
+            title: "Extend Results Selection Down",
+            keywords: &["grid", "shift", "select"],
+            shortcut: Some("Shift+Down"),
+            disabled_reason: None,
+            action: || Action::ResultsExtendDown,
+        },
+        PaletteEntry {
+            id: "results.actions",
+            title: "Results Row Actions",
+            keywords: &["grid", "copy", "menu"],
+            shortcut: Some("Enter"),
+            disabled_reason: None,
+            action: || Action::OpenResultsMenu,
+        },
+        PaletteEntry {
             id: "connection.add",
             title: "Add Connection",
             keywords: &["database", "postgres", "mysql", "connect"],
@@ -984,6 +1080,20 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
     ]
 }
 
+pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("copy-row-csv", "Copy row as CSV"),
+        ("copy-cell", "Copy cell"),
+        ("data.copy.json", "Copy as JSON"),
+        ("data.copy.csv", "Copy as CSV"),
+        ("data.copy.markdown", "Copy as Markdown"),
+        ("data.copy.sql", "Copy as SQL"),
+        ("data.inspect", "Inspect value"),
+        ("data.filter", "Apply remote filter"),
+        ("data.related", "Open related"),
+    ]
+}
+
 pub fn action_by_id(id: &str) -> Option<Action> {
     palette_entries(&Model::default())
         .into_iter()
@@ -1135,8 +1245,65 @@ mod tests {
             "focus.editor",
             "focus.results",
             "focus.inspector",
+            "help.open",
+            "layout.cycle",
         ] {
             assert!(ids.contains(&id), "missing {id}");
         }
+    }
+
+    #[test]
+    fn help_layout_and_results_menu_actions() {
+        use crate::action::{Action, FocusTarget};
+        use crate::layout::LayoutPreset;
+        use crate::model::GridSelection;
+        use crate::update::update;
+
+        let mut model = Model::default();
+        update(&mut model, Action::ToggleHelp);
+        assert!(model.help.open);
+        let view = crate::render::render_to_string(&model, 100, 40);
+        assert!(view.contains("Keybindings"));
+        assert!(view.contains("Editor"));
+        update(&mut model, Action::ToggleHelp);
+        assert!(!model.help.open);
+
+        update(&mut model, Action::CycleLayout);
+        assert_eq!(model.layout_preset, LayoutPreset::ResultsWide);
+        assert!(!model.panes.inspector_visible);
+        update(&mut model, Action::ResetLayout);
+        assert_eq!(model.layout_preset, LayoutPreset::Normal);
+        assert!(model.panes.inspector_visible);
+
+        update(&mut model, Action::Focus(FocusTarget::Results));
+        model.results = crate::model::ResultsState::default();
+        *model.results = crate::model::GridModel::sample_rows(6);
+        update(&mut model, Action::ResultsDown);
+        assert_eq!(model.results.cursor_row(), Some(1));
+        update(&mut model, Action::ResultsExtendDown);
+        assert!(matches!(
+            model.results.kind,
+            GridSelection::Range {
+                start: (1, _),
+                end: (2, _)
+            }
+        ));
+        update(&mut model, Action::OpenResultsMenu);
+        assert!(model.results_menu.open);
+        let view = crate::render::render_to_string(&model, 80, 24);
+        assert!(view.contains("Row actions"));
+        update(
+            &mut model,
+            Action::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert!(!model.results_menu.open);
+
+        update(&mut model, Action::Focus(FocusTarget::Editor));
+        let view = crate::render::render_to_string(&model, 100, 40);
+        assert!(view.contains("FOCUS: Editor"));
+        assert!(view.contains("▸ SQL") || view.contains("> SQL"));
     }
 }

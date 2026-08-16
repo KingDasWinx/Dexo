@@ -150,6 +150,40 @@ impl Keymap {
                 && binding.chord.keys.len() > chord.keys.len()
         })
     }
+
+    pub fn help_sections(&self) -> Vec<(&'static str, Vec<(String, String)>)> {
+        let mut buckets: [(KeyContext, Vec<(String, String)>); 5] = [
+            (KeyContext::Editor, Vec::new()),
+            (KeyContext::Results, Vec::new()),
+            (KeyContext::Explorer, Vec::new()),
+            (KeyContext::Global, Vec::new()),
+            (KeyContext::Palette, Vec::new()),
+        ];
+        for binding in &self.bindings {
+            let chord = chord_label(&binding.chord);
+            let entry = (chord, binding.command.clone());
+            match binding.context {
+                KeyContext::Editor => buckets[0].1.push(entry),
+                KeyContext::Results => buckets[1].1.push(entry),
+                KeyContext::Explorer => buckets[2].1.push(entry),
+                KeyContext::Inspector | KeyContext::Global => buckets[3].1.push(entry),
+                KeyContext::Palette | KeyContext::Modal => buckets[4].1.push(entry),
+            }
+        }
+        let names = ["Editor", "Results", "Explorer", "Workbench", "Overlays"];
+        buckets
+            .into_iter()
+            .zip(names)
+            .filter_map(|((_, mut rows), name)| {
+                if rows.is_empty() {
+                    return None;
+                }
+                rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+                rows.dedup();
+                Some((name, rows))
+            })
+            .collect()
+    }
 }
 
 pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
@@ -298,12 +332,14 @@ fn key_label(key: &KeySpec) -> String {
     if key.modifiers.contains(KeyModifiers::ALT) {
         out.push_str("alt+");
     }
-    if key.modifiers.contains(KeyModifiers::SHIFT) {
+    if key.modifiers.contains(KeyModifiers::SHIFT)
+        && !matches!(key.code, KeyCode::Char(c) if !c.is_ascii_alphabetic())
+    {
         out.push_str("shift+");
     }
     out.push_str(&match key.code {
         KeyCode::Char(' ') => "space".into(),
-        KeyCode::Char(ch) => ch.to_string(),
+        KeyCode::Char(ch) => ch.to_ascii_lowercase().to_string(),
         KeyCode::F(n) => format!("f{n}"),
         KeyCode::Esc => "esc".into(),
         KeyCode::Enter => "enter".into(),
@@ -325,8 +361,10 @@ profile = "default"
 [global]
 "ctrl+p" = "palette.open"
 "ctrl+q" = "workbench.quit"
+"f1" = "help.open"
 "f5" = "query.execute"
 "f8" = "query.execute_statement"
+"f10" = "layout.cycle"
 "ctrl+c" = "query.cancel"
 "ctrl+s" = "document.save"
 "ctrl+o" = "document.open"
@@ -336,6 +374,14 @@ profile = "default"
 "ctrl+4" = "tab.properties"
 "ctrl+5" = "tab.explain"
 "ctrl+tab" = "tab.next"
+"alt+1" = "focus.explorer"
+"alt+2" = "focus.editor"
+"alt+3" = "focus.results"
+"alt+4" = "focus.inspector"
+"alt+-" = "layout.results_shrink"
+"alt+=" = "layout.results_grow"
+"alt+[" = "layout.explorer_shrink"
+"alt+]" = "layout.explorer_grow"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+space" = "editor.complete"
@@ -348,6 +394,7 @@ profile = "default"
 "up" = "explorer.up"
 "down" = "explorer.down"
 "d" = "explorer.ddl"
+"?" = "help.open"
 [results]
 "up" = "results.up"
 "down" = "results.down"
@@ -355,6 +402,9 @@ profile = "default"
 "right" = "results.right"
 "pageup" = "results.pageup"
 "pagedown" = "results.pagedown"
+"shift+up" = "results.extend_up"
+"shift+down" = "results.extend_down"
+"enter" = "results.actions"
 "r" = "results.select_row"
 "c" = "results.select_column"
 "[" = "results.prev_tab"
@@ -362,8 +412,10 @@ profile = "default"
 "n" = "data.page_next"
 "p" = "data.page_prev"
 "b" = "data.nav_back"
+"?" = "help.open"
 [inspector]
 "tab" = "inspector.next_tab"
+"?" = "help.open"
 "#;
 
 const VIM_TOML: &str = r#"
@@ -371,8 +423,14 @@ profile = "vim"
 [global]
 "ctrl+p" = "palette.open"
 "ctrl+q" = "workbench.quit"
+"f1" = "help.open"
 "f5" = "query.execute"
 "f8" = "query.execute_statement"
+"f10" = "layout.cycle"
+"alt+1" = "focus.explorer"
+"alt+2" = "focus.editor"
+"alt+3" = "focus.results"
+"alt+4" = "focus.inspector"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+space" = "editor.complete"
@@ -382,12 +440,17 @@ profile = "vim"
 "c" = "explorer.copy_name"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
+"?" = "help.open"
 [results]
 "k" = "results.up"
 "j" = "results.down"
 "h" = "results.left"
 "l" = "results.right"
 "g g" = "results.top"
+"shift+k" = "results.extend_up"
+"shift+j" = "results.extend_down"
+"enter" = "results.actions"
+"?" = "help.open"
 "#;
 
 const EMACS_TOML: &str = r#"
@@ -395,9 +458,15 @@ profile = "emacs"
 [global]
 "alt+x" = "palette.open"
 "ctrl+x ctrl+c" = "workbench.quit"
+"f1" = "help.open"
 "f5" = "query.execute"
 "f8" = "query.execute_statement"
+"f10" = "layout.cycle"
 "ctrl+c ctrl+c" = "query.execute"
+"alt+1" = "focus.explorer"
+"alt+2" = "focus.editor"
+"alt+3" = "focus.results"
+"alt+4" = "focus.inspector"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+space" = "editor.complete"
@@ -407,9 +476,14 @@ profile = "emacs"
 "c" = "explorer.copy_name"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
+"?" = "help.open"
 [results]
 "ctrl+p" = "results.up"
 "ctrl+n" = "results.down"
+"shift+up" = "results.extend_up"
+"shift+down" = "results.extend_down"
+"enter" = "results.actions"
+"?" = "help.open"
 "#;
 
 #[cfg(test)]
@@ -440,6 +514,25 @@ mod tests {
                 .unwrap()
                 == Some("workbench.quit")
         );
+        assert_eq!(
+            Keymap::default_profile()
+                .resolve(&parse_chord("f1").unwrap(), KeyContext::Editor)
+                .unwrap(),
+            Some("help.open")
+        );
+        assert_eq!(
+            Keymap::default_profile()
+                .resolve(&parse_chord("alt+3").unwrap(), KeyContext::Editor)
+                .unwrap(),
+            Some("focus.results")
+        );
+        let help = Keymap::default_profile().help_sections();
+        assert!(help.iter().any(|(name, rows)| {
+            *name == "Workbench"
+                && rows
+                    .iter()
+                    .any(|(chord, cmd)| chord == "f1" && cmd == "help.open")
+        }));
     }
 
     #[test]
