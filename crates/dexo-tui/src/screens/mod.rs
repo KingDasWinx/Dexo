@@ -4,6 +4,7 @@ pub mod connection;
 pub mod connections;
 pub mod data;
 pub mod data_browser;
+pub mod diagnostics;
 pub mod editor;
 pub mod explain;
 pub mod explorer;

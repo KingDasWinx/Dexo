@@ -194,6 +194,15 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             popup,
         );
     }
+    if model.diagnostics.open {
+        let popup = centered(frame.area(), 72, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.diagnostics.lines().join("\n"))
+                .block(Block::bordered().title("Diagnostics")),
+            popup,
+        );
+    }
     if model.mcp_audit.open {
         let popup = centered(frame.area(), 72, 12);
         frame.render_widget(Clear, popup);
@@ -238,14 +247,6 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             .map(|snippet| snippet.name.clone())
             .collect();
         render_list_overlay(frame, "Snippets", &names, model.editor.snippet_selected, 0);
-    }
-    if let Some(preview) = &model.diagnostic_preview {
-        let popup = centered(frame.area(), 72, 16);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(preview.as_str()).block(Block::bordered().title("Diagnostics")),
-            popup,
-        );
     }
 }
 

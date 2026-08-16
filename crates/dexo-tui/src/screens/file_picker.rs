@@ -6,6 +6,7 @@ pub enum FilePickerMode {
     Open,
     Save,
     Transfer,
+    Diagnostics,
 }
 
 #[derive(Clone, Debug, PartialEq)]

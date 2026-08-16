@@ -295,6 +295,12 @@ pub enum Action {
     OpenMcpProfiles,
     ConfirmMcpEnable,
     RevokeAllMcpGrants,
+    McpGrantsRevoked {
+        count: usize,
+    },
+    McpRevokeFailed {
+        message: String,
+    },
     OpenSettings,
     ConfirmResetSettings,
     OpenRecovery,
@@ -302,6 +308,12 @@ pub enum Action {
     ConfirmDiscardRecovery,
     OpenMcpAudit,
     OpenDiagnostics,
+    DiagnosticsWritten {
+        path: std::path::PathBuf,
+    },
+    DiagnosticsFailed {
+        message: String,
+    },
     ResultsUp,
     ResultsDown,
     ResultsLeft,
@@ -355,10 +367,7 @@ pub enum Action {
         preview: String,
     },
     McpProfilesLoaded {
-        name: String,
-        enabled: bool,
-        scopes: Vec<String>,
-        tools: Vec<String>,
+        profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
     },
     McpAuditLoaded {
         events: Vec<String>,
@@ -640,6 +649,11 @@ pub enum Effect {
     },
     RevokeMcpGrants {
         profile: String,
+    },
+    RevokeAllMcpGrants,
+    WriteDiagnostics {
+        path: std::path::PathBuf,
+        bundle: dexo_app::diagnostic_service::DiagnosticBundle,
     },
     RunTransfer(TransferRequest),
     LoadSnippets,

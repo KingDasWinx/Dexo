@@ -308,6 +308,10 @@ impl WorkbenchRuntime {
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
             crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
+            crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
+            crate::Effect::WriteDiagnostics { path, bundle } => {
+                diagnostic_manager::write(bundle, path, self.action_tx.clone()).await;
+            }
             crate::Effect::RunTransfer(request) => self.dispatch_transfer(request).await,
             crate::Effect::LoadSnippets => {
                 if let Some(storage) = &self.storage
@@ -1292,31 +1296,24 @@ impl WorkbenchRuntime {
         let Ok(profiles) = dexo_storage::McpProfileRepository::new(db.connection()).list() else {
             return;
         };
-        let Some(profile) = profiles.into_iter().next() else {
-            self.emit(Action::McpProfilesLoaded {
-                name: String::new(),
-                enabled: false,
-                scopes: Vec::new(),
-                tools: Vec::new(),
+        let profiles = profiles
+            .into_iter()
+            .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
+                name: profile.name,
+                enabled: profile.enabled,
+                scopes: profile
+                    .selectors
+                    .iter()
+                    .map(|rule| format!("{rule:?}"))
+                    .collect(),
+                tools: profile
+                    .tool_rules
+                    .iter()
+                    .map(|rule| rule.tool.clone())
+                    .collect(),
             })
-            .await;
-            return;
-        };
-        self.emit(Action::McpProfilesLoaded {
-            name: profile.name,
-            enabled: profile.enabled,
-            scopes: profile
-                .selectors
-                .iter()
-                .map(|rule| format!("{rule:?}"))
-                .collect(),
-            tools: profile
-                .tool_rules
-                .iter()
-                .map(|rule| rule.tool.clone())
-                .collect(),
-        })
-        .await;
+            .collect();
+        self.emit(Action::McpProfilesLoaded { profiles }).await;
     }
 
     async fn load_mcp_audit(&self) {
@@ -1360,6 +1357,35 @@ impl WorkbenchRuntime {
         use dexo_app::mcp::GrantLedger;
         let _ = ledger.revoke_profile(&profile);
         self.load_mcp_audit().await;
+    }
+
+    async fn revoke_all_mcp(&self) {
+        let Ok(paths) = AppPaths::discover() else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
+            return;
+        };
+        match ledger.revoke_all() {
+            Ok(count) => {
+                self.emit(Action::McpGrantsRevoked { count }).await;
+                self.load_mcp_audit().await;
+            }
+            Err(error) => {
+                self.emit(Action::McpRevokeFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
     }
 
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {

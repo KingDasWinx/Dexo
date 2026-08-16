@@ -876,11 +876,20 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }]
         }
         Action::RevokeAllMcpGrants => {
-            model.mcp_profiles.revoke_all();
-            model.mcp_audit.revoke_all();
-            vec![Effect::RevokeMcpGrants {
-                profile: model.mcp_profiles.name.clone(),
-            }]
+            model.mcp_profiles.open = true;
+            model.mcp_profiles.confirm_revoke = true;
+            model.mcp_profiles.preview = "confirm revoke all grants".into();
+            Vec::new()
+        }
+        Action::McpGrantsRevoked { count } => {
+            model.mcp_profiles.grants.clear();
+            model.mcp_profiles.confirm_revoke = false;
+            model.mcp_profiles.preview = format!("revoked {count} grants");
+            Vec::new()
+        }
+        Action::McpRevokeFailed { message } => {
+            model.mcp_profiles.preview = message;
+            Vec::new()
         }
         Action::OpenSettings => {
             model.settings.open = true;
@@ -888,10 +897,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ConfirmResetSettings => {
+            if !model.settings.open {
+                model.settings.open = true;
+            }
             if !model.settings.confirm_reset {
                 model.settings.confirm_reset = true;
             } else {
                 model.settings.reset();
+                persist_settings(model);
             }
             Vec::new()
         }
@@ -917,6 +930,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ConfirmDiscardRecovery => {
+            if !model.recovery.open {
+                model.recovery.open = true;
+            }
             if !model.recovery.confirm_discard {
                 model.recovery.confirm_discard = true;
             } else {
@@ -929,19 +945,26 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             vec![Effect::LoadMcpAudit]
         }
         Action::OpenDiagnostics => {
-            let bundle = dexo_app::diagnostic_service::DiagnosticBundle::assemble(
-                env!("CARGO_PKG_VERSION").into(),
-                format!("{:?}", model.capabilities),
-                format!("theme={} mouse={}", model.settings.theme, model.mouse),
-                String::new(),
+            let bundle = diagnostics_bundle(model);
+            model.diagnostics.open = true;
+            model.diagnostics.writing = false;
+            model.diagnostics.error = None;
+            model.diagnostics.preview = format!(
+                "Dexo never uploads this bundle automatically.\n\n{}",
+                bundle.preview
             );
-            let manager = crate::runtime::diagnostic_manager::DiagnosticManager {
-                preview: Some(bundle),
-            };
-            model.diagnostic_preview = manager.preview.as_ref().map(|item| item.preview.clone());
-            if let Some(preview) = &model.diagnostic_preview {
-                model.messages.push(preview.clone());
-            }
+            model.diagnostic_preview = Some(model.diagnostics.preview.clone());
+            Vec::new()
+        }
+        Action::DiagnosticsWritten { path } => {
+            model.diagnostics.writing = false;
+            model.diagnostics.path = Some(path);
+            model.diagnostics.error = None;
+            Vec::new()
+        }
+        Action::DiagnosticsFailed { message } => {
+            model.diagnostics.writing = false;
+            model.diagnostics.error = Some(message);
             Vec::new()
         }
         Action::RefreshSqlIntelligence => {
@@ -1043,19 +1066,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::DiagnosticsReady { preview } => {
             model.diagnostic_preview = Some(preview.clone());
+            model.diagnostics.preview = preview.clone();
+            model.diagnostics.open = true;
             model.messages.push(preview);
             Vec::new()
         }
-        Action::McpProfilesLoaded {
-            name,
-            enabled,
-            scopes,
-            tools,
-        } => {
-            model.mcp_profiles.name = name;
-            model.mcp_profiles.enabled = enabled;
-            model.mcp_profiles.scopes = scopes;
-            model.mcp_profiles.tools = tools;
+        Action::McpProfilesLoaded { profiles } => {
+            model.mcp_profiles.load_profiles(profiles);
             Vec::new()
         }
         Action::McpAuditLoaded { events } => {
@@ -1450,6 +1467,17 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
+    if model.diagnostics.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.diagnostics.open = false;
+                model.diagnostics.writing = false;
+                Vec::new()
+            }
+            KeyCode::Enter if !model.diagnostics.writing => open_diagnostics_picker(model),
+            _ => Vec::new(),
+        };
+    }
     if model.transfer.open {
         return match key.code {
             KeyCode::Esc => {
@@ -1494,7 +1522,19 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return match key.code {
             KeyCode::Esc => {
                 model.mcp_profiles.open = false;
+                model.mcp_profiles.confirm_revoke = false;
                 Vec::new()
+            }
+            KeyCode::Up => {
+                model.mcp_profiles.select_previous();
+                Vec::new()
+            }
+            KeyCode::Down => {
+                model.mcp_profiles.select_next();
+                Vec::new()
+            }
+            KeyCode::Enter | KeyCode::Char('r') if model.mcp_profiles.confirm_revoke => {
+                vec![Effect::RevokeAllMcpGrants]
             }
             KeyCode::Char('r') => {
                 model.mcp_profiles.revoke_all();
@@ -1507,9 +1547,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return match key.code {
             KeyCode::Esc => {
                 model.settings.open = false;
+                model.settings.confirm_reset = false;
                 Vec::new()
             }
-            KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
+            KeyCode::Enter | KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
             KeyCode::Char('t') => update(model, Action::CycleTheme),
             KeyCode::Char('k') => update(model, Action::CycleKeymap),
             KeyCode::Char('m') => update(model, Action::ToggleMouse),
@@ -1520,9 +1561,13 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return match key.code {
             KeyCode::Esc => {
                 model.recovery.open = false;
+                model.recovery.confirm_discard = false;
                 Vec::new()
             }
-            KeyCode::Char('y') => update(model, Action::ConfirmRecover),
+            KeyCode::Enter if model.recovery.confirm_discard => {
+                update(model, Action::ConfirmDiscardRecovery)
+            }
+            KeyCode::Enter | KeyCode::Char('y') => update(model, Action::ConfirmRecover),
             KeyCode::Char('n') => update(model, Action::ConfirmDiscardRecovery),
             _ => Vec::new(),
         };
@@ -3548,6 +3593,15 @@ fn file_picker_enter(model: &mut Model) -> Vec<Effect> {
             model.transfer.path = path.display().to_string();
             run_transfer(model)
         }
+        crate::screens::file_picker::FilePickerMode::Diagnostics => {
+            model.diagnostics.path = Some(path.clone());
+            model.diagnostics.writing = true;
+            model.diagnostics.error = None;
+            vec![Effect::WriteDiagnostics {
+                path,
+                bundle: diagnostics_bundle(model),
+            }]
+        }
     }
 }
 
@@ -3903,6 +3957,22 @@ fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
     vec![Effect::ClearHistory { connection_id }]
 }
 
+fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::DiagnosticBundle {
+    dexo_app::diagnostic_service::DiagnosticBundle::assemble(
+        env!("CARGO_PKG_VERSION").into(),
+        format!("{:?}", model.capabilities),
+        format!("theme={} mouse={}", model.settings.theme, model.mouse),
+        String::new(),
+    )
+}
+
+fn open_diagnostics_picker(model: &mut Model) -> Vec<Effect> {
+    model.file_picker.open = true;
+    model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Diagnostics;
+    model.file_picker.refresh();
+    Vec::new()
+}
+
 fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocation) -> Vec<Effect> {
     use crate::palette::{FlowIntent, PaletteInvocation};
     match invocation {
@@ -3982,13 +4052,19 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
             crate::screens::connections::ConnectionIntent::CloseSession,
         ),
         PaletteInvocation::OpenFlow(FlowIntent::SettingsReset) => {
-            update(model, Action::ConfirmResetSettings)
+            model.settings.open = true;
+            model.settings.confirm_reset = true;
+            Vec::new()
         }
         PaletteInvocation::OpenFlow(FlowIntent::RecoveryRestore) => {
-            update(model, Action::ConfirmRecover)
+            model.recovery.open = true;
+            model.recovery.confirm_discard = false;
+            Vec::new()
         }
         PaletteInvocation::OpenFlow(FlowIntent::RecoveryDiscard) => {
-            update(model, Action::ConfirmDiscardRecovery)
+            model.recovery.open = true;
+            model.recovery.confirm_discard = true;
+            Vec::new()
         }
         PaletteInvocation::OpenFlow(FlowIntent::McpRevokeAll) => {
             update(model, Action::RevokeAllMcpGrants)

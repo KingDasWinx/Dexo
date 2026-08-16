@@ -18,6 +18,7 @@ use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::connections::ConnectionsScreen;
 use crate::screens::data::DataScreen;
+use crate::screens::diagnostics::DiagnosticsScreen;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
@@ -955,6 +956,7 @@ pub struct Model {
     pub file_picker: FilePicker,
     pub file_picker_mode: FilePickerMode,
     pub diagnostic_preview: Option<String>,
+    pub diagnostics: DiagnosticsScreen,
 }
 
 impl Default for Model {
@@ -997,6 +999,7 @@ impl Default for Model {
             file_picker: FilePicker::default(),
             file_picker_mode: FilePickerMode::Open,
             diagnostic_preview: None,
+            diagnostics: DiagnosticsScreen::default(),
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
             tabs: TabsState::default(),

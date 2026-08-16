@@ -126,3 +126,52 @@ fn open_admin_emits_load_when_session_ready() {
             .any(|effect| matches!(effect, dexo_tui::Effect::LoadAdminSessions { .. }))
     );
 }
+
+fn choose(model: &mut Model, query: &str) {
+    let _ = choose_effects(model, query);
+}
+
+fn choose_effects(model: &mut Model, query: &str) -> Vec<dexo_tui::Effect> {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut effects = update(model, Action::OpenPalette);
+    for ch in query.chars() {
+        effects.extend(update(
+            model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        ));
+    }
+    effects.extend(update(
+        model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    ));
+    effects
+}
+
+fn model_with_local_state() -> Model {
+    let mut model = Model::default();
+    model.recovery.checkpoints = vec![("scratch".into(), "scratch.sql".into(), "select 1".into())];
+    model
+}
+
+#[test]
+fn destructive_local_commands_open_their_owner_before_confirmation() {
+    for (id, visible) in [
+        ("settings.reset", "confirm_reset=true"),
+        ("recovery.discard", "confirm_discard=true"),
+        ("mcp.revoke_all", "confirm revoke all grants"),
+    ] {
+        let mut model = model_with_local_state();
+        choose(&mut model, id);
+        let view = dexo_tui::render::render_to_string(&model, 100, 30);
+        assert!(view.contains(visible), "{id} confirmation is hidden");
+    }
+}
+
+#[test]
+fn diagnostics_command_opens_preview_and_destination_flow() {
+    let mut model = Model::default();
+    choose(&mut model, "diagnostics.export");
+    assert!(model.diagnostics.open);
+    assert!(model.diagnostics.preview.contains("Dexo never uploads"));
+    assert!(!model.diagnostics.writing);
+}

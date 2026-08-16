@@ -31,6 +31,11 @@ impl SqliteGrantLedger {
             .map_err(|error| AppError::new(ErrorCategory::Configuration, error.to_string()))?;
         self.revoke(id)
     }
+
+    pub fn revoke_all(&self) -> anyhow::Result<usize> {
+        let conn = self.conn.lock().expect("sqlite");
+        grant_repo::revoke_all(&conn)
+    }
 }
 
 impl GrantLedger for SqliteGrantLedger {
@@ -231,5 +236,30 @@ mod tests {
                 .is_empty()
         );
         assert!(!ledger.is_revoked(id));
+    }
+
+    #[test]
+    fn revoke_all_clears_active_grants() {
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let ledger = SqliteGrantLedger {
+            conn: std::sync::Mutex::new(conn),
+        };
+        let mut profile = McpProfile::new("assistant");
+        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
+        let grant = Grant::new(
+            &profile,
+            "local",
+            GrantCapability::DataWrite,
+            vec!["data_insert".into()],
+            vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+            0,
+            DEFAULT_TTL_SECS,
+        )
+        .unwrap();
+        ledger.insert_grant(grant).unwrap();
+        assert_eq!(ledger.revoke_all().unwrap(), 1);
+        assert!(ledger.active_grants("assistant", 0).is_empty());
     }
 }
