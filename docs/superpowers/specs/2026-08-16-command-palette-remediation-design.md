@@ -1,7 +1,7 @@
 # Dexo — Design de Correção do Command Palette
 
 **Data:** 2026-08-16  
-**Status:** aprovado em brainstorming; aguardando revisão final do documento  
+**Status:** aprovado pelo usuário após revisão final
 **Auditoria-base:** `docs/audits/2026-08-16-command-palette-audit.md`  
 **Escopo:** as 129 entradas do Command Palette e os fluxos diretamente acionados por elas
 
