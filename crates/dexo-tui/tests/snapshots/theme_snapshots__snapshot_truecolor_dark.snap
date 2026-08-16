@@ -5,4 +5,4 @@ expression: text
 theme=dark kind=Dark depth=TrueColor unicode=true
 production ●PROD color=#dc3232
 error ✗ color=#f04646
-selection ▸ color=#326ed2
+selection ▸ color=#1e5ab4
