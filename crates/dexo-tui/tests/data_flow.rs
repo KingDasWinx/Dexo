@@ -439,3 +439,11 @@ fn copy_json_and_next_page_are_wired() {
             .any(|effect| matches!(effect, dexo_tui::Effect::LoadTableData { .. }))
     );
 }
+
+#[test]
+fn page_without_session_does_not_change_offset_or_loading() {
+    let mut model = Model::default();
+    update(&mut model, Action::NextDataPage);
+    assert_eq!(model.data.page_offset, 0);
+    assert!(!model.data.loading);
+}

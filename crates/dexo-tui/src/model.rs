@@ -31,6 +31,7 @@ use crate::screens::schema_editor::SchemaEditor;
 use crate::screens::secret_prompt::SecretPrompt;
 use crate::screens::security::SecurityScreen;
 use crate::screens::settings::SettingsScreen;
+use crate::screens::transaction_prompt::TransactionPrompt;
 use crate::screens::transfer::TransferScreen;
 use crate::theme::Theme;
 
@@ -946,6 +947,7 @@ pub struct Model {
     pub projects: ProjectsScreen,
     pub config_transfer: ConfigTransferScreen,
     pub secret_prompt: SecretPrompt,
+    pub transaction_prompt: TransactionPrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
@@ -1036,6 +1038,7 @@ impl Default for Model {
             projects: ProjectsScreen::default(),
             config_transfer: ConfigTransferScreen::default(),
             secret_prompt: SecretPrompt::default(),
+            transaction_prompt: TransactionPrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),

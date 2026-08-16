@@ -419,3 +419,48 @@ fn explorer_up_down_moves_selection() {
         "{lines:?}"
     );
 }
+
+fn explorer_fixture_without_session() -> Model {
+    let mut model = Model::default();
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![object(
+            "catalog:db",
+            ObjectKind::Catalog,
+            ("db", "db", "db"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+    model
+}
+
+fn connected_explorer_fixture() -> Model {
+    let mut model = explorer_fixture_without_session();
+    model.connection.ready = true;
+    model.session_generation = 1;
+    model.active_session = Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1)));
+    model.explorer.select(ObjectId::new("catalog:db"));
+    model
+}
+
+#[test]
+fn offline_refresh_preserves_visible_tree() {
+    let mut model = explorer_fixture_without_session();
+    let before = model.explorer.roots.clone();
+    update(&mut model, Action::RefreshCatalogAll);
+    assert_eq!(model.explorer.roots, before);
+}
+
+#[test]
+fn refresh_subtree_does_not_replace_roots() {
+    let mut model = connected_explorer_fixture();
+    let effects = update(&mut model, Action::RefreshCatalogSubtree);
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::LoadCatalogChildren {
+            replace_roots: false,
+            parent: Some(_),
+            ..
+        }]
+    ));
+}

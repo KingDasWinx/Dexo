@@ -333,9 +333,18 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
-        Action::Savepoint => savepoint_named(model, SavepointOp::Create),
-        Action::RollbackSavepoint => savepoint_named(model, SavepointOp::Rollback),
-        Action::ReleaseSavepoint => savepoint_named(model, SavepointOp::Release),
+        Action::Savepoint => open_savepoint_prompt(
+            model,
+            crate::screens::transaction_prompt::SavepointIntent::Create,
+        ),
+        Action::RollbackSavepoint => open_savepoint_prompt(
+            model,
+            crate::screens::transaction_prompt::SavepointIntent::Rollback,
+        ),
+        Action::ReleaseSavepoint => open_savepoint_prompt(
+            model,
+            crate::screens::transaction_prompt::SavepointIntent::Release,
+        ),
         Action::CommitTransaction => {
             if model.transaction == TransactionState::Active {
                 if let Some(session) = model.active_session {
@@ -390,7 +399,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ExplorerExpand => expand_or_open_selected(model),
         Action::RefreshCatalogNode => refresh_catalog(model, false),
-        Action::RefreshCatalogSubtree | Action::RefreshCatalogAll => refresh_catalog(model, true),
+        Action::RefreshCatalogSubtree => refresh_catalog(model, false),
+        Action::RefreshCatalogAll => refresh_catalog(model, true),
         Action::CatalogLoaded {
             session,
             generation,
@@ -1281,6 +1291,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.secret_prompt.open {
         return handle_secret_prompt_key(model, key);
     }
+    if model.transaction_prompt.open {
+        return handle_transaction_prompt_key(model, key);
+    }
+    if model.data.query_prompt.open {
+        return handle_data_query_prompt_key(model, key);
+    }
     if model.projects.open {
         return handle_projects_key(model, key);
     }
@@ -1770,6 +1786,66 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
             }
         }
         None => Vec::new(),
+    }
+}
+
+fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.transaction_prompt.open = false;
+            model.transaction_prompt.error = None;
+            Vec::new()
+        }
+        KeyCode::Enter => submit_savepoint_prompt(model),
+        KeyCode::Backspace => {
+            model.transaction_prompt.name.pop();
+            Vec::new()
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            model.transaction_prompt.name.push(ch);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn handle_data_query_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.data.query_prompt.open = false;
+            model.data.query_prompt.error = None;
+            Vec::new()
+        }
+        KeyCode::Enter => submit_data_query_prompt(model),
+        KeyCode::Tab => {
+            match model.data.query_prompt.intent {
+                Some(crate::screens::data::DataQueryIntent::Sort) => {
+                    model.data.query_prompt.descending = !model.data.query_prompt.descending;
+                }
+                Some(crate::screens::data::DataQueryIntent::Filter) => {
+                    model.data.query_prompt.focus_value = !model.data.query_prompt.focus_value;
+                }
+                None => {}
+            }
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            if model.data.query_prompt.focus_value {
+                model.data.query_prompt.value.pop();
+            } else {
+                model.data.query_prompt.column.pop();
+            }
+            Vec::new()
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            if model.data.query_prompt.focus_value {
+                model.data.query_prompt.value.push(ch);
+            } else {
+                model.data.query_prompt.column.push(ch);
+            }
+            Vec::new()
+        }
+        _ => Vec::new(),
     }
 }
 
@@ -2357,8 +2433,14 @@ fn open_selected_table(model: &mut Model) -> Vec<Effect> {
 }
 
 fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
+    if model.active_session.is_none() {
+        model
+            .messages
+            .push("connect a session to refresh the catalog".into());
+        return Vec::new();
+    }
     let operation = crate::runtime::OperationId::new();
-    if all || model.explorer.selected.is_none() {
+    if all {
         model.explorer.clear();
         return catalog_load_effect(model, None, operation, true);
     }
@@ -2387,9 +2469,21 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
 }
 
 fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
+    if model.active_session.is_none() {
+        model.data.last_error = Some("connect a session first".into());
+        return Vec::new();
+    }
+    if model.data.target.object().is_empty() {
+        model.data.last_error = Some("open a table first".into());
+        return Vec::new();
+    }
     model.data.page_offset = offset;
     model.data.loading = true;
-    reload_object_data(model)
+    let effects = reload_object_data(model);
+    if effects.is_empty() {
+        model.data.loading = false;
+    }
+    effects
 }
 
 fn apply_remote_query(model: &mut Model) -> Vec<Effect> {
@@ -2871,11 +2965,10 @@ enum SavepointOp {
     Release,
 }
 
-fn savepoint_named(model: &Model, op: SavepointOp) -> Vec<Effect> {
+fn savepoint_named(model: &Model, op: SavepointOp, name: String) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
-    let name = "sp1".into();
     match (op, model.transaction) {
         (SavepointOp::Create, TransactionState::Active) => {
             vec![Effect::Savepoint { session, name }]
@@ -2888,6 +2981,87 @@ fn savepoint_named(model: &Model, op: SavepointOp) -> Vec<Effect> {
         }
         _ => Vec::new(),
     }
+}
+
+fn open_savepoint_prompt(
+    model: &mut Model,
+    intent: crate::screens::transaction_prompt::SavepointIntent,
+) -> Vec<Effect> {
+    model.transaction_prompt.open = true;
+    model.transaction_prompt.intent = Some(intent);
+    model.transaction_prompt.name.clear();
+    model.transaction_prompt.error = None;
+    Vec::new()
+}
+
+fn submit_savepoint_prompt(model: &mut Model) -> Vec<Effect> {
+    let name = model.transaction_prompt.name.trim();
+    if name.is_empty() {
+        model.transaction_prompt.error = Some("savepoint name is required".into());
+        return Vec::new();
+    }
+    let name = name.to_string();
+    let op = match model.transaction_prompt.intent {
+        Some(crate::screens::transaction_prompt::SavepointIntent::Create) => SavepointOp::Create,
+        Some(crate::screens::transaction_prompt::SavepointIntent::Rollback) => {
+            SavepointOp::Rollback
+        }
+        Some(crate::screens::transaction_prompt::SavepointIntent::Release) => SavepointOp::Release,
+        None => return Vec::new(),
+    };
+    let effects = savepoint_named(model, op, name);
+    if effects.is_empty() {
+        model.transaction_prompt.error = Some("no active transaction".into());
+        return Vec::new();
+    }
+    model.transaction_prompt.open = false;
+    model.transaction_prompt.error = None;
+    effects
+}
+
+fn open_data_query_prompt(
+    model: &mut Model,
+    intent: crate::screens::data::DataQueryIntent,
+) -> Vec<Effect> {
+    model.data.query_prompt = crate::screens::data::DataQueryPrompt {
+        open: true,
+        intent: Some(intent),
+        ..crate::screens::data::DataQueryPrompt::default()
+    };
+    Vec::new()
+}
+
+fn submit_data_query_prompt(model: &mut Model) -> Vec<Effect> {
+    let column = model.data.query_prompt.column.trim().to_string();
+    if column.is_empty()
+        || !model
+            .data
+            .table
+            .columns
+            .iter()
+            .any(|col| col.name == column)
+    {
+        model.data.query_prompt.error = Some("unknown column".into());
+        return Vec::new();
+    }
+    match model.data.query_prompt.intent {
+        Some(crate::screens::data::DataQueryIntent::Sort) => {
+            model.data.sort = vec![dexo_driver_api::Sort {
+                column: dexo_driver_api::ColumnId(column),
+                descending: model.data.query_prompt.descending,
+            }];
+        }
+        Some(crate::screens::data::DataQueryIntent::Filter) => {
+            model.data.filter = Some(dexo_driver_api::Filter::Eq(
+                dexo_driver_api::ColumnId(column),
+                dexo_driver_api::DbValue::Text(model.data.query_prompt.value.clone()),
+            ));
+        }
+        None => return Vec::new(),
+    }
+    model.data.query_prompt.open = false;
+    model.data.query_prompt.error = None;
+    apply_remote_query(model)
 }
 
 fn explain_effect(model: &Model, analyze: bool) -> Vec<Effect> {
@@ -3438,19 +3612,23 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::ProjectDelete) => {
             open_project_intent(model, crate::screens::projects::ProjectIntent::Delete)
         }
-        // ponytail: domain tasks replace these with prepared screens; keep current actions until then.
-        PaletteInvocation::OpenFlow(FlowIntent::SavepointCreate) => {
-            update(model, Action::Savepoint)
+        PaletteInvocation::OpenFlow(FlowIntent::SavepointCreate) => open_savepoint_prompt(
+            model,
+            crate::screens::transaction_prompt::SavepointIntent::Create,
+        ),
+        PaletteInvocation::OpenFlow(FlowIntent::SavepointRollback) => open_savepoint_prompt(
+            model,
+            crate::screens::transaction_prompt::SavepointIntent::Rollback,
+        ),
+        PaletteInvocation::OpenFlow(FlowIntent::SavepointRelease) => open_savepoint_prompt(
+            model,
+            crate::screens::transaction_prompt::SavepointIntent::Release,
+        ),
+        PaletteInvocation::OpenFlow(FlowIntent::DataSort) => {
+            open_data_query_prompt(model, crate::screens::data::DataQueryIntent::Sort)
         }
-        PaletteInvocation::OpenFlow(FlowIntent::SavepointRollback) => {
-            update(model, Action::RollbackSavepoint)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::SavepointRelease) => {
-            update(model, Action::ReleaseSavepoint)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::DataSort) => update(model, Action::ApplyRemoteSort),
         PaletteInvocation::OpenFlow(FlowIntent::DataFilter) => {
-            update(model, Action::ApplyRemoteFilter)
+            open_data_query_prompt(model, crate::screens::data::DataQueryIntent::Filter)
         }
         PaletteInvocation::OpenFlow(FlowIntent::DataReview) => update(model, Action::OpenReview),
         PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
@@ -3594,21 +3772,39 @@ mod tests {
 
     #[test]
     fn rollback_savepoint_emits_effect() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
         use dexo_driver_api::TransactionState;
         let mut model = Model {
             transaction: TransactionState::Active,
             active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
             ..Model::default()
         };
-        let effects = update(&mut model, Action::RollbackSavepoint);
+        assert!(update(&mut model, Action::RollbackSavepoint).is_empty());
+        assert!(model.transaction_prompt.open);
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+        );
+        let effects = update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
         assert!(matches!(
             &effects[..],
-            [Effect::RollbackToSavepoint { name, .. }] if name == "sp1"
+            [Effect::RollbackToSavepoint { name, .. }] if name == "x"
         ));
-        let effects = update(&mut model, Action::ReleaseSavepoint);
+        update(&mut model, Action::ReleaseSavepoint);
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+        );
+        let effects = update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
         assert!(matches!(
             &effects[..],
-            [Effect::ReleaseSavepoint { name, .. }] if name == "sp1"
+            [Effect::ReleaseSavepoint { name, .. }] if name == "x"
         ));
     }
 

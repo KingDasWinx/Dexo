@@ -149,6 +149,24 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             popup,
         );
     }
+    if model.transaction_prompt.open {
+        let popup = centered(frame.area(), 56, 8);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.transaction_prompt.lines().join("\n"))
+                .block(Block::bordered().title("Savepoint")),
+            popup,
+        );
+    }
+    if model.data.query_prompt.open {
+        let popup = centered(frame.area(), 56, 8);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.data.query_prompt.lines().join("\n"))
+                .block(Block::bordered().title("Query")),
+            popup,
+        );
+    }
     if model.connection_form.open {
         let popup = centered(frame.area(), 64, 16);
         frame.render_widget(Clear, popup);

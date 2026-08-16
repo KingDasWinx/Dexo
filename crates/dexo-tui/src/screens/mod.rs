@@ -18,6 +18,7 @@ pub mod schema_editor;
 pub mod secret_prompt;
 pub mod security;
 pub mod settings;
+pub mod transaction_prompt;
 pub mod transfer;
 pub mod value_viewer;
 pub mod workbench;

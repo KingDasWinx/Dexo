@@ -80,3 +80,21 @@ fn connection_delete_opens_browser_and_never_hides_confirmation() {
     assert_eq!(model.connections.intent, Some(ConnectionIntent::Delete));
     assert!(model.connections.delete_target.is_none());
 }
+
+fn active_transaction_model() -> Model {
+    use dexo_driver_api::TransactionState;
+    Model {
+        focus: Focus::Editor,
+        transaction: TransactionState::Active,
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        ..Model::default()
+    }
+}
+
+#[test]
+fn savepoint_asks_for_a_name_instead_of_using_sp1() {
+    let mut model = active_transaction_model();
+    choose(&mut model, "transaction.savepoint");
+    assert!(model.transaction_prompt.open);
+    assert!(model.transaction_prompt.name.is_empty());
+}

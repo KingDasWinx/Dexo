@@ -5,6 +5,45 @@ use dexo_app::data::{
 use dexo_driver_api::{DbValue, QualifiedName};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DataQueryIntent {
+    Sort,
+    Filter,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct DataQueryPrompt {
+    pub open: bool,
+    pub intent: Option<DataQueryIntent>,
+    pub column: String,
+    pub value: String,
+    pub descending: bool,
+    pub error: Option<String>,
+    pub focus_value: bool,
+}
+
+impl DataQueryPrompt {
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = match self.intent {
+            Some(DataQueryIntent::Sort) => vec![
+                "sort column".into(),
+                format!("column: {}", self.column),
+                format!("descending: {}", self.descending),
+            ],
+            Some(DataQueryIntent::Filter) => vec![
+                "filter column".into(),
+                format!("column: {}", self.column),
+                format!("value: {}", self.value),
+            ],
+            None => vec!["query".into()],
+        };
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
+        }
+        lines
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ReviewStatus {
     Pending,
     Applied,
@@ -44,6 +83,7 @@ pub struct DataScreen {
     pub filter: Option<dexo_driver_api::Filter>,
     pub sort: Vec<dexo_driver_api::Sort>,
     pub last_error: Option<String>,
+    pub query_prompt: DataQueryPrompt,
 }
 
 impl Default for DataScreen {
@@ -72,6 +112,7 @@ impl Default for DataScreen {
             filter: None,
             sort: Vec::new(),
             last_error: None,
+            query_prompt: DataQueryPrompt::default(),
         }
     }
 }
