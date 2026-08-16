@@ -1120,6 +1120,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             adjust_explorer_width(model, -2);
             Vec::new()
         }
+        Action::GrowInspector => {
+            adjust_inspector_width(model, 2);
+            Vec::new()
+        }
+        Action::ShrinkInspector => {
+            adjust_inspector_width(model, -2);
+            Vec::new()
+        }
         Action::Quit => {
             let mut effects = checkpoint_dirty(model);
             effects.push(persist_layout_effect(model));
@@ -1911,6 +1919,15 @@ fn adjust_explorer_width(model: &mut Model, delta: i16) {
     let next = (model.panes.explorer_width as i16 + delta).max(8) as u16;
     model.panes.explorer_visible = true;
     model.panes.explorer_width = next;
+    model.panes = model.panes.clamp(model.width, model.height);
+    model.sync_grid_viewport();
+    model.layout_dirty = true;
+}
+
+fn adjust_inspector_width(model: &mut Model, delta: i16) {
+    let next = (model.panes.inspector_width as i16 + delta).max(8) as u16;
+    model.panes.inspector_visible = true;
+    model.panes.inspector_width = next;
     model.panes = model.panes.clamp(model.width, model.height);
     model.sync_grid_viewport();
     model.layout_dirty = true;

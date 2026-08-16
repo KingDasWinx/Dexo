@@ -272,6 +272,22 @@ pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
             action: || Action::ShrinkExplorer,
         },
         PaletteEntry {
+            id: "layout.inspector_grow",
+            title: "Grow Inspector Pane",
+            keywords: &["split", "width"],
+            shortcut: Some("Alt+="),
+            disabled_reason: None,
+            action: || Action::GrowInspector,
+        },
+        PaletteEntry {
+            id: "layout.inspector_shrink",
+            title: "Shrink Inspector Pane",
+            keywords: &["split", "width"],
+            shortcut: Some("Alt+-"),
+            disabled_reason: None,
+            action: || Action::ShrinkInspector,
+        },
+        PaletteEntry {
             id: "data.copy.csv",
             title: "Copy as CSV",
             keywords: &["clipboard", "grid"],

@@ -288,6 +288,8 @@ pub enum Action {
     ShrinkResults,
     GrowExplorer,
     ShrinkExplorer,
+    GrowInspector,
+    ShrinkInspector,
     RefreshSqlIntelligence,
     FormatSql,
     AcceptCompletion,
