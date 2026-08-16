@@ -69,6 +69,20 @@ pub struct ExplorerNode {
 }
 
 impl ExplorerNode {
+    pub fn can_expand(&self) -> bool {
+        if !self.children.is_empty() {
+            return true;
+        }
+        matches!(
+            self.kind,
+            ObjectKind::Catalog
+                | ObjectKind::Schema
+                | ObjectKind::Table
+                | ObjectKind::View
+                | ObjectKind::MaterializedView
+        )
+    }
+
     pub fn from_object(object: CatalogObject) -> Self {
         Self {
             id: object.id,
@@ -180,6 +194,26 @@ impl ExplorerState {
             }
             Self::mark_stale_in(&mut node.children);
         }
+    }
+
+    pub fn collapse(&mut self, id: &ObjectId) -> bool {
+        Self::collapse_in(&mut self.roots, id)
+    }
+
+    fn collapse_in(nodes: &mut [ExplorerNode], id: &ObjectId) -> bool {
+        for node in nodes {
+            if node.id == *id {
+                if !node.expanded {
+                    return false;
+                }
+                node.expanded = false;
+                return true;
+            }
+            if Self::collapse_in(&mut node.children, id) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn expand(&mut self, id: &ObjectId) -> bool {
@@ -573,7 +607,9 @@ mod tests {
             "{lines:?}"
         );
         assert!(
-            lines.iter().any(|line| line.contains("Enter abre a table")),
+            !lines
+                .iter()
+                .any(|line| line.contains("actions:") || line.contains("selected:")),
             "{lines:?}"
         );
         assert!(super::opens_table_data(&ObjectKind::View));

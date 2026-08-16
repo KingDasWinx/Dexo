@@ -2244,6 +2244,17 @@ fn catalog_load_effect(
 }
 
 fn expand_or_open_selected(model: &mut Model) -> Vec<Effect> {
+    let Some(id) = model.explorer.selected.clone() else {
+        return Vec::new();
+    };
+    if model
+        .explorer
+        .selected_node()
+        .is_some_and(|node| node.expanded)
+    {
+        model.explorer.collapse(&id);
+        return Vec::new();
+    }
     if model
         .explorer
         .selected_node()
@@ -3439,6 +3450,20 @@ mod tests {
             !effects
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadTableData { .. }))
+        );
+        assert!(
+            model
+                .explorer
+                .selected_node()
+                .is_some_and(|node| node.expanded)
+        );
+        let again = update(&mut model, Action::ExplorerExpand);
+        assert!(again.is_empty());
+        assert!(
+            model
+                .explorer
+                .selected_node()
+                .is_some_and(|node| !node.expanded)
         );
     }
 

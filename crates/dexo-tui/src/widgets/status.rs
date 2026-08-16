@@ -74,7 +74,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 crate::screens::explorer::opens_table_data(&node.kind)
                     .then_some("Enter abre a table")
             })
-            .unwrap_or("Enter expande");
+            .unwrap_or("Enter expande/recolhe");
         spans.push(Span::raw(format!("  {hint}")));
     }
     if let Some(message) = model.messages.last() {
