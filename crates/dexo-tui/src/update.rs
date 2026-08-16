@@ -9,7 +9,16 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
         Action::Key(key) => handle_key(model, key),
         Action::Mouse(_) if !model.mouse => Vec::new(),
-        Action::Mouse(_) => Vec::new(),
+        Action::Mouse(mouse) => {
+            use crossterm::event::MouseEventKind;
+            if !matches!(mouse.kind, MouseEventKind::Down(_)) {
+                return Vec::new();
+            }
+            match crate::mouse::mouse_action(mouse.column, mouse.row, &model.hits) {
+                Some(action) => update(model, action),
+                None => Vec::new(),
+            }
+        }
         Action::Resize { width, height } => {
             model.apply_size(width, height);
             model.layout_dirty = true;
@@ -273,7 +282,26 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::PaletteSelect => palette_select(model),
-        Action::ExecuteQuery => start_query(model),
+        Action::ExecuteQuery => {
+            crate::screens::workbench::execute_document(model);
+            start_query(model)
+        }
+        Action::ExecuteStatement => {
+            if model.active_document().selection().is_some() {
+                crate::screens::workbench::execute_selection(model);
+            } else {
+                crate::screens::workbench::execute_current_statement(model);
+            }
+            start_query(model)
+        }
+        Action::ExecuteSelection => {
+            crate::screens::workbench::execute_selection(model);
+            start_query(model)
+        }
+        Action::ExecuteDocument => {
+            crate::screens::workbench::execute_document(model);
+            start_query(model)
+        }
         Action::CancelQuery => cancel_query(model),
         Action::BeginTransaction => {
             if model.connection.read_only {
@@ -293,20 +321,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
-        Action::Savepoint => {
-            if model.transaction == TransactionState::Active {
-                if let Some(session) = model.active_session {
-                    vec![Effect::Savepoint {
-                        session,
-                        name: "sp1".into(),
-                    }]
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
+        Action::Savepoint => savepoint_named(model, SavepointOp::Create),
+        Action::RollbackSavepoint => savepoint_named(model, SavepointOp::Rollback),
+        Action::ReleaseSavepoint => savepoint_named(model, SavepointOp::Release),
         Action::CommitTransaction => {
             if model.transaction == TransactionState::Active {
                 if let Some(session) = model.active_session {
@@ -394,6 +411,118 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::OpenObjectData => open_object_data(model),
+        Action::OpenDependencies => {
+            let effects = open_inspector(model);
+            model.inspector.tab = crate::screens::object_inspector::InspectorTab::Dependencies;
+            effects
+        }
+        Action::OpenDependents => {
+            let effects = open_inspector(model);
+            model.inspector.tab = crate::screens::object_inspector::InspectorTab::Dependencies;
+            model.messages.push("dependents".into());
+            effects
+        }
+        Action::ExplorerUp => {
+            model.explorer.move_selection(-1);
+            Vec::new()
+        }
+        Action::ExplorerDown => {
+            model.explorer.move_selection(1);
+            Vec::new()
+        }
+        Action::SwitchTab { index } => {
+            if index < model.tabs.titles.len() {
+                model.tabs.active = index;
+            }
+            Vec::new()
+        }
+        Action::NextTab => {
+            if !model.tabs.titles.is_empty() {
+                model.tabs.active = (model.tabs.active + 1) % model.tabs.titles.len();
+            }
+            Vec::new()
+        }
+        Action::NextDocument => {
+            if !model.documents.is_empty() {
+                model.active_document = (model.active_document + 1) % model.documents.len();
+            }
+            Vec::new()
+        }
+        Action::NewDocument => {
+            model
+                .documents
+                .push(crate::model::EditorDocument::scratch());
+            model.active_document = model.documents.len() - 1;
+            Vec::new()
+        }
+        Action::SelectGridRow => {
+            if let Some((row, _)) = model.results.selection() {
+                model.results.select_row(row);
+            }
+            Vec::new()
+        }
+        Action::SelectGridColumn => {
+            if let Some((_, col)) = model.results.selection() {
+                model.results.select_column(col);
+            }
+            Vec::new()
+        }
+        Action::NextResultTab => {
+            if !model.results.tabs.is_empty() {
+                model.results.active = (model.results.active + 1) % model.results.tabs.len();
+            }
+            Vec::new()
+        }
+        Action::PrevResultTab => {
+            if !model.results.tabs.is_empty() {
+                model.results.active = model
+                    .results
+                    .active
+                    .checked_sub(1)
+                    .unwrap_or(model.results.tabs.len() - 1);
+            }
+            Vec::new()
+        }
+        Action::SelectResultTab { index } => {
+            if index < model.results.tabs.len() {
+                model.results.active = index;
+            }
+            model.focus = Focus::Results;
+            Vec::new()
+        }
+        Action::InspectorNextTab => {
+            model.inspector.tab = model.inspector.tab.next();
+            Vec::new()
+        }
+        Action::NextDataPage => {
+            let offset = model
+                .data
+                .page_offset
+                .saturating_add(u64::from(model.data.page_limit));
+            change_data_page(model, offset)
+        }
+        Action::PrevDataPage => {
+            let offset = model
+                .data
+                .page_offset
+                .saturating_sub(u64::from(model.data.page_limit));
+            change_data_page(model, offset)
+        }
+        Action::SaveActiveDocument => save_active_document(model),
+        Action::OpenDocument => {
+            model.file_picker.open = true;
+            model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Open;
+            model.file_picker.refresh();
+            Vec::new()
+        }
+        Action::CycleTheme => cycle_theme(model),
+        Action::CycleKeymap => cycle_keymap(model),
+        Action::ToggleMouse => {
+            model.mouse = !model.mouse;
+            model.settings.mouse = model.mouse;
+            persist_settings(model);
+            Vec::new()
+        }
         Action::ChangeDataPage { offset } => change_data_page(model, offset),
         Action::ApplyRemoteSort | Action::ApplyRemoteFilter => apply_remote_query(model),
         Action::DataPageLoaded {
@@ -550,18 +679,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
         Action::DataNavBack => data_nav_back(model),
-        Action::OpenDdlPreview => {
-            open_ddl_preview(model);
-            Vec::new()
-        }
+        Action::OpenDdlPreview => open_ddl_preview(model),
         Action::ConfirmDdl => {
             model.schema_editor.confirm_typed();
             Vec::new()
         }
-        Action::ApplyDdl => {
-            apply_ddl(model);
-            Vec::new()
-        }
+        Action::ApplyDdl => apply_ddl(model),
         Action::ApplyRawDdl => {
             let sql = model.active_document().text();
             if !sql.trim().is_empty() {
@@ -617,7 +740,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenExplain => {
             model.tabs.active = 4;
-            Vec::new()
+            explain_effect(model, false)
         }
         Action::ExplainViewTree => {
             model.explain.view = crate::screens::explain::ExplainView::Tree;
@@ -633,11 +756,18 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConfirmExplainAnalyze => {
             model.explain.analyze_confirmed = true;
-            Vec::new()
+            explain_effect(model, true)
         }
         Action::OpenAdmin => {
             model.admin.open = true;
-            Vec::new()
+            model
+                .active_session
+                .map(|session| Effect::LoadAdminSessions {
+                    session,
+                    generation: model.session_generation,
+                })
+                .into_iter()
+                .collect()
         }
         Action::AdminPause => {
             model.admin.pause();
@@ -649,29 +779,44 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConfirmAdmin => {
             model.admin.confirmed = true;
-            model.admin.confirm_target = model
-                .admin
-                .sessions
-                .first()
-                .map(|session| session.id.clone())
-                .unwrap_or_default();
-            Vec::new()
+            if model.admin.confirm_target.is_empty() {
+                model.admin.confirm_target = model
+                    .admin
+                    .sessions
+                    .first()
+                    .map(|session| session.id.clone())
+                    .unwrap_or_default();
+            }
+            match model.active_session {
+                Some(session) if !model.admin.confirm_target.is_empty() => {
+                    vec![Effect::AdminTerminate {
+                        session,
+                        target: model.admin.confirm_target.clone(),
+                    }]
+                }
+                _ => Vec::new(),
+            }
         }
         Action::OpenMcpProfiles => {
             model.mcp_profiles.open = true;
-            Vec::new()
+            vec![Effect::LoadMcpProfiles]
         }
         Action::ConfirmMcpEnable => {
             model.mcp_profiles.confirm_enable();
-            Vec::new()
+            vec![Effect::EnableMcpProfile {
+                name: model.mcp_profiles.name.clone(),
+            }]
         }
         Action::RevokeAllMcpGrants => {
             model.mcp_profiles.revoke_all();
             model.mcp_audit.revoke_all();
-            Vec::new()
+            vec![Effect::RevokeMcpGrants {
+                profile: model.mcp_profiles.name.clone(),
+            }]
         }
         Action::OpenSettings => {
             model.settings.open = true;
+            model.settings.mouse = model.mouse;
             Vec::new()
         }
         Action::ConfirmResetSettings => {
@@ -687,6 +832,19 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ConfirmRecover => {
+            let checkpoints = model.recovery.restore_documents();
+            if !checkpoints.is_empty() {
+                model.documents = checkpoints
+                    .into_iter()
+                    .map(|(id, title, content)| {
+                        let mut document = crate::model::EditorDocument::with_text(&content);
+                        document.id = id;
+                        document.title = title;
+                        document
+                    })
+                    .collect();
+                model.active_document = 0;
+            }
             model.recovery.recover();
             Vec::new()
         }
@@ -700,12 +858,22 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenMcpAudit => {
             model.mcp_audit.open = true;
-            Vec::new()
+            vec![Effect::LoadMcpAudit]
         }
         Action::OpenDiagnostics => {
-            model
-                .messages
-                .push("diagnostic preview ready; never uploaded".into());
+            let bundle = dexo_app::diagnostic_service::DiagnosticBundle::assemble(
+                env!("CARGO_PKG_VERSION").into(),
+                format!("{:?}", model.capabilities),
+                format!("theme={} mouse={}", model.settings.theme, model.mouse),
+                String::new(),
+            );
+            let manager = crate::runtime::diagnostic_manager::DiagnosticManager {
+                preview: Some(bundle),
+            };
+            model.diagnostic_preview = manager.preview.as_ref().map(|item| item.preview.clone());
+            if let Some(preview) = &model.diagnostic_preview {
+                model.messages.push(preview.clone());
+            }
             Vec::new()
         }
         Action::RefreshSqlIntelligence => {
@@ -728,18 +896,102 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             crate::screens::editor::submit_parameters(model);
             start_query(model)
         }
-        Action::SearchHistory => vec![Effect::LoadHistory {
-            connection_id: None,
-        }],
+        Action::SearchHistory => {
+            model.editor.history_open = true;
+            model.editor.history_selected = 0;
+            vec![Effect::LoadHistory {
+                connection_id: None,
+            }]
+        }
         Action::ClearHistory => vec![Effect::ClearHistory {
             connection_id: model.connection.name.clone(),
         }],
         Action::HistoryLoaded(entries) => {
             model.editor.history = entries;
+            model.editor.history_open = true;
+            model.editor.history_selected = 0;
             Vec::new()
+        }
+        Action::HistoryPick => {
+            if crate::screens::editor::pick_history(model) {
+                crate::screens::workbench::execute_document(model);
+                start_query(model)
+            } else {
+                Vec::new()
+            }
         }
         Action::SnippetsLoaded(snippets) => {
             model.editor.snippets = snippets;
+            Vec::new()
+        }
+        Action::SnippetPick => {
+            crate::screens::editor::insert_snippet_at(model, model.editor.snippet_selected);
+            Vec::new()
+        }
+        Action::DdlPreviewed {
+            sql,
+            confirmation,
+            warnings,
+        } => {
+            let preview = dexo_app::schema::DdlPreview {
+                plan: {
+                    let mut plan = dexo_driver_api::DdlPlan::default();
+                    if !sql.is_empty() {
+                        plan.push(sql, false);
+                    }
+                    plan.warnings = warnings;
+                    plan
+                },
+                risk: dexo_driver_api::ChangeRisk::default(),
+                dependents: Vec::new(),
+                grants: Vec::new(),
+                confirmation,
+                warnings: Vec::new(),
+            };
+            model.schema_editor.open_preview(preview);
+            Vec::new()
+        }
+        Action::SchemaApplied { message } => {
+            model.messages.push(message);
+            model.schema_editor.preview = None;
+            Vec::new()
+        }
+        Action::ExplainLoaded { plan } => {
+            let previous = model.explain.plan.clone();
+            model.explain.set_plan(*plan, previous.as_ref());
+            model.tabs.active = 4;
+            Vec::new()
+        }
+        Action::AdminSessionsLoaded {
+            sessions,
+            captured_at,
+            blocking,
+        } => {
+            model.admin.sessions = sessions;
+            model.admin.captured_at = captured_at;
+            model.admin.blocking = blocking;
+            model.admin.open = true;
+            Vec::new()
+        }
+        Action::DiagnosticsReady { preview } => {
+            model.diagnostic_preview = Some(preview.clone());
+            model.messages.push(preview);
+            Vec::new()
+        }
+        Action::McpProfilesLoaded {
+            name,
+            enabled,
+            scopes,
+            tools,
+        } => {
+            model.mcp_profiles.name = name;
+            model.mcp_profiles.enabled = enabled;
+            model.mcp_profiles.scopes = scopes;
+            model.mcp_profiles.tools = tools;
+            Vec::new()
+        }
+        Action::McpAuditLoaded { events } => {
+            model.mcp_audit.events = events;
             Vec::new()
         }
         Action::DocumentLoaded { document, content } => {
@@ -937,16 +1189,33 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.connection_form.open {
         return handle_connection_form_key(model, key);
     }
+    if model.file_picker.open {
+        return handle_file_picker_key(model, key);
+    }
+    if model.editor.history_open {
+        return handle_history_overlay(model, key);
+    }
+    if model.editor.snippet_open {
+        crate::screens::editor::handle_snippet_key(model, key);
+        return Vec::new();
+    }
+    if model.editor.parameter_prompt {
+        crate::screens::editor::handle_parameter_key(model, key);
+        if !model.editor.parameter_prompt {
+            return start_query(model);
+        }
+        return Vec::new();
+    }
+    if model.admin.open {
+        return handle_admin_key(model, key);
+    }
     if model.schema_editor.preview.is_some() {
         return match key.code {
             KeyCode::Esc => {
                 model.schema_editor.preview = None;
                 Vec::new()
             }
-            KeyCode::Enter => {
-                apply_ddl(model);
-                Vec::new()
-            }
+            KeyCode::Enter => apply_ddl(model),
             KeyCode::Char(ch) => {
                 if let Some(preview) = &mut model.schema_editor.preview {
                     preview.typed.push(ch);
@@ -999,6 +1268,23 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.transfer.open = false;
                 Vec::new()
             }
+            KeyCode::Enter => run_transfer(model),
+            KeyCode::Backspace => {
+                model.transfer.path.pop();
+                Vec::new()
+            }
+            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                model.file_picker.open = true;
+                model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Transfer;
+                model.file_picker.refresh();
+                Vec::new()
+            }
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                model.transfer.path.push(ch);
+                Vec::new()
+            }
             _ => Vec::new(),
         };
     }
@@ -1008,10 +1294,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.data.review = None;
                 Vec::new()
             }
-            KeyCode::Enter => {
-                model.data.apply();
-                Vec::new()
-            }
+            KeyCode::Enter => update(model, Action::ApplyChanges),
             KeyCode::Char('y') => {
                 model.data.confirm_production();
                 Vec::new()
@@ -1039,6 +1322,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
+            KeyCode::Char('t') => update(model, Action::CycleTheme),
+            KeyCode::Char('k') => update(model, Action::CycleKeymap),
+            KeyCode::Char('m') => update(model, Action::ToggleMouse),
             _ => Vec::new(),
         };
     }
@@ -1519,6 +1805,18 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     if state.recovery.needs_recovery() {
         model.recovery.open = true;
         model.recovery.transaction = state.recovery.transaction;
+        model.recovery.checkpoints = state
+            .recovery
+            .documents
+            .iter()
+            .map(|document| {
+                (
+                    document.id.clone(),
+                    document.title.clone(),
+                    document.content.clone(),
+                )
+            })
+            .collect();
         model.recovery.documents = state
             .recovery
             .documents
@@ -1527,6 +1825,8 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
             .collect();
     }
     model.connections.load_profiles(state.connections);
+    model.editor.snippets = state.snippets;
+    apply_saved_settings(model);
 }
 
 fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::EditorDocument {
@@ -2137,61 +2437,327 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
     }
 }
 
-fn open_ddl_preview(model: &mut Model) {
+fn open_ddl_preview(model: &mut Model) -> Vec<Effect> {
     if !model.schema_editor.validate() {
-        return;
+        return Vec::new();
     }
     let Ok(change) = model.schema_editor.to_change() else {
-        return;
+        return Vec::new();
     };
-    let sql = format!(
-        "{} {}",
-        match &change {
-            dexo_driver_api::SchemaChange::CreateTable { .. } => "CREATE TABLE",
-            dexo_driver_api::SchemaChange::AlterTable { .. } => "ALTER TABLE",
-            dexo_driver_api::SchemaChange::CreateView { .. } => "CREATE VIEW",
-            dexo_driver_api::SchemaChange::AlterRoutine { .. } => "ALTER ROUTINE",
-            dexo_driver_api::SchemaChange::CreateIndex { .. } => "CREATE INDEX",
-            dexo_driver_api::SchemaChange::DropObject { .. } => "DROP",
-            dexo_driver_api::SchemaChange::RenameObject { .. } => "RENAME",
-            dexo_driver_api::SchemaChange::Grant { .. } => "GRANT",
-            dexo_driver_api::SchemaChange::Revoke { .. } => "REVOKE",
-        },
-        change.target().display_unquoted()
-    );
-    let plan = dexo_driver_api::DdlPlan {
-        statements: vec![dexo_driver_api::DdlStatement {
-            sql,
-            implicit_commit: false,
-        }],
-        rollback: vec![],
-        warnings: vec![],
-        transactional: true,
-        ..dexo_driver_api::DdlPlan::default()
+    let Some(session) = model.active_session else {
+        let sql = format!(
+            "{} {}",
+            match &change {
+                dexo_driver_api::SchemaChange::CreateTable { .. } => "CREATE TABLE",
+                dexo_driver_api::SchemaChange::AlterTable { .. } => "ALTER TABLE",
+                dexo_driver_api::SchemaChange::CreateView { .. } => "CREATE VIEW",
+                dexo_driver_api::SchemaChange::AlterRoutine { .. } => "ALTER ROUTINE",
+                dexo_driver_api::SchemaChange::CreateIndex { .. } => "CREATE INDEX",
+                dexo_driver_api::SchemaChange::DropObject { .. } => "DROP",
+                dexo_driver_api::SchemaChange::RenameObject { .. } => "RENAME",
+                dexo_driver_api::SchemaChange::Grant { .. } => "GRANT",
+                dexo_driver_api::SchemaChange::Revoke { .. } => "REVOKE",
+            },
+            change.target().display_unquoted()
+        );
+        let mut plan = dexo_driver_api::DdlPlan {
+            transactional: true,
+            ..dexo_driver_api::DdlPlan::default()
+        };
+        plan.push(sql, false);
+        let preview = dexo_app::schema::preview_change(
+            &change,
+            plan,
+            Vec::new(),
+            Vec::new(),
+            &dexo_app::schema::production_policy(),
+        );
+        model.schema_editor.open_preview(preview);
+        return Vec::new();
     };
-    let preview = dexo_app::schema::preview_change(
-        &change,
-        plan,
-        Vec::new(),
-        Vec::new(),
-        &dexo_app::schema::production_policy(),
-    );
-    model.schema_editor.open_preview(preview);
+    vec![Effect::PreviewDdl {
+        change,
+        session,
+        generation: model.session_generation,
+    }]
 }
 
-fn apply_ddl(model: &mut Model) {
+fn apply_ddl(model: &mut Model) -> Vec<Effect> {
     let Some(preview) = &model.schema_editor.preview else {
-        return;
+        return Vec::new();
     };
     if matches!(
         preview.confirmation,
         dexo_app::schema::Confirmation::TypeTarget(_)
     ) && !preview.confirmed
     {
-        return;
+        return Vec::new();
     }
+    let typed = preview.typed.clone();
+    let Ok(change) = model.schema_editor.to_change() else {
+        return Vec::new();
+    };
+    let Some(session) = model.active_session else {
+        model.messages.push("ddl queued".into());
+        model.schema_editor.preview = None;
+        return Vec::new();
+    };
     model.schema_editor.preview = None;
-    model.messages.push("ddl queued".into());
+    vec![Effect::ApplyDdlChange {
+        change,
+        typed,
+        session,
+        generation: model.session_generation,
+    }]
+}
+
+enum SavepointOp {
+    Create,
+    Rollback,
+    Release,
+}
+
+fn savepoint_named(model: &Model, op: SavepointOp) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    let name = "sp1".into();
+    match (op, model.transaction) {
+        (SavepointOp::Create, TransactionState::Active) => {
+            vec![Effect::Savepoint { session, name }]
+        }
+        (SavepointOp::Release, TransactionState::Active) => {
+            vec![Effect::ReleaseSavepoint { session, name }]
+        }
+        (SavepointOp::Rollback, TransactionState::Active | TransactionState::Failed) => {
+            vec![Effect::RollbackToSavepoint { session, name }]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn explain_effect(model: &Model, analyze: bool) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    vec![Effect::RunExplain {
+        sql: model.active_document().text(),
+        analyze,
+        session,
+        generation: model.session_generation,
+    }]
+}
+
+fn save_active_document(model: &mut Model) -> Vec<Effect> {
+    let doc = model.active_document();
+    match &doc.path {
+        Some(path) => vec![Effect::SaveDocument(crate::action::DocumentIoRequest {
+            document: doc.id.clone(),
+            path: path.clone(),
+            content: doc.text(),
+            expected_fingerprint: None,
+        })],
+        None => {
+            model.file_picker.open = true;
+            model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Save;
+            model.file_picker.refresh();
+            Vec::new()
+        }
+    }
+}
+
+fn cycle_theme(model: &mut Model) -> Vec<Effect> {
+    let (name, theme) = match model.settings.theme.as_str() {
+        "light" => ("low-color", crate::theme::builtin_low_color()),
+        "low-color" | "high-contrast" => ("dark", crate::theme::builtin_dark()),
+        _ => ("light", crate::theme::builtin_light()),
+    };
+    model.settings.theme = name.into();
+    model.theme = theme;
+    persist_settings(model);
+    Vec::new()
+}
+
+fn cycle_keymap(model: &mut Model) -> Vec<Effect> {
+    model.keymap = match model.keymap.name.as_str() {
+        "vim" => crate::keymap::Keymap::emacs_profile(),
+        "emacs" => crate::keymap::Keymap::default_profile(),
+        _ => crate::keymap::Keymap::vim_profile(),
+    };
+    model.settings.keymap = model.keymap.name.clone();
+    persist_settings(model);
+    Vec::new()
+}
+
+fn persist_settings(model: &Model) {
+    let Ok(paths) = dexo_storage::AppPaths::discover() else {
+        return;
+    };
+    let mut manager = crate::runtime::settings_manager::SettingsManager::load(&paths.data_dir);
+    let next = dexo_app::settings::SettingsFile {
+        theme: if model.settings.theme == "high-contrast" || model.settings.theme == "low-color" {
+            dexo_app::settings::ThemeId::HighContrast
+        } else {
+            dexo_app::settings::ThemeId::Dark
+        },
+        mouse: model.mouse,
+        animation: model.animation,
+        unicode: if model.capabilities.unicode {
+            dexo_app::settings::UnicodeMode::Unicode
+        } else {
+            dexo_app::settings::UnicodeMode::Ascii
+        },
+        keymap: dexo_app::settings::KeymapConfig {
+            run_statement: "Ctrl+Enter".into(),
+        },
+        ..manager.active.clone()
+    };
+    let _ = manager.save(&paths.data_dir, next);
+}
+
+fn apply_saved_settings(model: &mut Model) {
+    let Ok(paths) = dexo_storage::AppPaths::discover() else {
+        return;
+    };
+    let manager = crate::runtime::settings_manager::SettingsManager::load(&paths.data_dir);
+    model.mouse = manager.active.mouse;
+    model.settings.mouse = manager.active.mouse;
+    model.animation = manager.active.animation;
+    match manager.active.theme {
+        dexo_app::settings::ThemeId::HighContrast => {
+            model.settings.theme = "high-contrast".into();
+            model.theme = crate::theme::builtin_low_color();
+        }
+        dexo_app::settings::ThemeId::Dark => {
+            model.settings.theme = "dark".into();
+            model.theme = crate::theme::builtin_dark();
+        }
+    }
+    model.settings.keymap = manager.active.keymap.run_statement.clone();
+}
+
+fn run_transfer(model: &mut Model) -> Vec<Effect> {
+    if model.transfer.path.is_empty() {
+        model.file_picker.open = true;
+        model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Transfer;
+        model.file_picker.refresh();
+        return Vec::new();
+    }
+    let path = std::path::PathBuf::from(&model.transfer.path);
+    let columns: Vec<String> = model
+        .results
+        .columns()
+        .iter()
+        .map(|column| column.name.clone())
+        .collect();
+    let rows = model.results.rows().to_vec();
+    let format = match model.transfer.format.as_str() {
+        "json" => dexo_app::transfer::TransferFormat::Json,
+        "tsv" => dexo_app::transfer::TransferFormat::Tsv,
+        _ => dexo_app::transfer::TransferFormat::Csv,
+    };
+    match dexo_app::transfer::export_rows(
+        &path,
+        format,
+        &dexo_app::transfer::FormatOptions::default(),
+        &columns,
+        rows,
+        &std::sync::atomic::AtomicBool::new(false),
+        |_| {},
+    ) {
+        Ok(progress) => {
+            model.transfer.progress = progress;
+            model.transfer.running = false;
+            model.messages.push(format!("exported {}", path.display()));
+        }
+        Err(error) => model.messages.push(format!("{error:?}")),
+    }
+    Vec::new()
+}
+
+fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if key.code == KeyCode::Enter {
+        return update(model, Action::HistoryPick);
+    }
+    crate::screens::editor::handle_history_key(model, key);
+    Vec::new()
+}
+
+fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.admin.open = false;
+            Vec::new()
+        }
+        KeyCode::Char('p') => update(model, Action::AdminPause),
+        KeyCode::Char('r') => update(model, Action::AdminResume),
+        KeyCode::Enter => update(model, Action::ConfirmAdmin),
+        _ => Vec::new(),
+    }
+}
+
+fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.file_picker.open = false;
+            Vec::new()
+        }
+        KeyCode::Up => {
+            model.file_picker.selected = model.file_picker.selected.saturating_sub(1);
+            Vec::new()
+        }
+        KeyCode::Down => {
+            if model.file_picker.selected + 1 < model.file_picker.entries.len() {
+                model.file_picker.selected += 1;
+            }
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            model.file_picker.parent();
+            Vec::new()
+        }
+        KeyCode::Char('h') => {
+            model.file_picker.toggle_hidden();
+            Vec::new()
+        }
+        KeyCode::Enter => file_picker_enter(model),
+        _ => Vec::new(),
+    }
+}
+
+fn file_picker_enter(model: &mut Model) -> Vec<Effect> {
+    let Some(path) = model.file_picker.selected_path() else {
+        return Vec::new();
+    };
+    if path.is_dir() {
+        let _ = model.file_picker.enter_path(path);
+        return Vec::new();
+    }
+    model.file_picker.open = false;
+    match model.file_picker_mode {
+        crate::screens::file_picker::FilePickerMode::Open => {
+            vec![Effect::LoadDocument(crate::action::DocumentIoRequest {
+                document: model.active_document().id.clone(),
+                path,
+                content: String::new(),
+                expected_fingerprint: None,
+            })]
+        }
+        crate::screens::file_picker::FilePickerMode::Save => {
+            let doc = model.active_document_mut();
+            doc.path = Some(path.clone());
+            vec![Effect::SaveDocument(crate::action::DocumentIoRequest {
+                document: doc.id.clone(),
+                path,
+                content: doc.text(),
+                expected_fingerprint: None,
+            })]
+        }
+        crate::screens::file_picker::FilePickerMode::Transfer => {
+            model.transfer.path = path.display().to_string();
+            run_transfer(model)
+        }
+    }
 }
 
 fn switch_project(model: &mut Model, name: String) -> Vec<Effect> {
@@ -2490,5 +3056,32 @@ mod tests {
                 .is_empty()
         );
         assert!(!format!("{:?}", model.connection_form).contains("SUPER_SECRET_SENTINEL"));
+    }
+
+    #[test]
+    fn rollback_savepoint_emits_effect() {
+        use dexo_driver_api::TransactionState;
+        let mut model = Model {
+            transaction: TransactionState::Active,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        let effects = update(&mut model, Action::RollbackSavepoint);
+        assert!(matches!(
+            &effects[..],
+            [Effect::RollbackToSavepoint { name, .. }] if name == "sp1"
+        ));
+        let effects = update(&mut model, Action::ReleaseSavepoint);
+        assert!(matches!(
+            &effects[..],
+            [Effect::ReleaseSavepoint { name, .. }] if name == "sp1"
+        ));
+    }
+
+    #[test]
+    fn save_document_without_path_opens_picker() {
+        let mut model = Model::default();
+        update(&mut model, Action::SaveActiveDocument);
+        assert!(model.file_picker.open);
     }
 }
