@@ -532,6 +532,7 @@ pub enum Effect {
         target: String,
     },
     LoadMcpProfiles,
+    LoadConnectionProfiles,
     LoadMcpAudit,
     EnableMcpProfile {
         name: String,

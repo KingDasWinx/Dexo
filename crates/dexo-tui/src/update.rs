@@ -1643,9 +1643,11 @@ fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
             model.connections.open = false;
+            model.connections.intent = None;
+            model.connections.error = None;
             Vec::new()
         }
-        KeyCode::Enter => connect_selected(model),
+        KeyCode::Enter => choose_connection_intent(model),
         KeyCode::Up => {
             if model.connections.selected_profile > 0 {
                 model.connections.selected_profile -= 1;
@@ -3228,18 +3230,10 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Esc => {
                 model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
                 model.projects.name_input.clear();
+                model.projects.error = None;
                 Vec::new()
             }
-            KeyCode::Enter => {
-                let name = std::mem::take(&mut model.projects.name_input);
-                let create = model.projects.mode == crate::screens::projects::ProjectsMode::Create;
-                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
-                if create {
-                    update(model, Action::CreateProject { name })
-                } else {
-                    update(model, Action::RenameProject { name })
-                }
-            }
+            KeyCode::Enter => submit_project_name(model),
             KeyCode::Backspace => {
                 model.projects.name_input.pop();
                 Vec::new()
@@ -3257,16 +3251,11 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     return update(model, Action::CancelProjectSwitch);
                 }
                 model.projects.open = false;
+                model.projects.intent = None;
+                model.projects.error = None;
                 Vec::new()
             }
-            KeyCode::Enter => {
-                let name = model
-                    .projects
-                    .selected()
-                    .map(|project| project.name.clone())
-                    .unwrap_or_default();
-                update(model, Action::SwitchProject { name })
-            }
+            KeyCode::Enter => choose_project_intent(model),
             KeyCode::Up => {
                 if model.projects.selected > 0 {
                     model.projects.selected -= 1;
@@ -3335,6 +3324,99 @@ fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+fn open_project_intent(
+    model: &mut Model,
+    intent: crate::screens::projects::ProjectIntent,
+) -> Vec<Effect> {
+    model.projects.open = true;
+    model.projects.intent = Some(intent);
+    model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+    model.projects.error = None;
+    vec![Effect::ListProjects]
+}
+
+fn open_connection_intent(
+    model: &mut Model,
+    intent: crate::screens::connections::ConnectionIntent,
+) -> Vec<Effect> {
+    model.connections.open = true;
+    model.connections.intent = Some(intent);
+    model.connections.error = None;
+    if model.connections.profiles.is_empty() {
+        vec![Effect::LoadConnectionProfiles]
+    } else {
+        Vec::new()
+    }
+}
+
+fn submit_project_name(model: &mut Model) -> Vec<Effect> {
+    let name = model.projects.name_input.trim();
+    if name.is_empty() {
+        model.projects.error = Some("project name is required".into());
+        return Vec::new();
+    }
+    let name = name.to_string();
+    model.projects.error = None;
+    match model.projects.mode {
+        crate::screens::projects::ProjectsMode::Create => {
+            update(model, Action::CreateProject { name })
+        }
+        crate::screens::projects::ProjectsMode::Rename => {
+            update(model, Action::RenameProject { name })
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn choose_project_intent(model: &mut Model) -> Vec<Effect> {
+    let Some(project) = model.projects.selected().cloned() else {
+        model.projects.error = Some("select a project first".into());
+        return Vec::new();
+    };
+    match model.projects.intent {
+        Some(crate::screens::projects::ProjectIntent::Switch) => {
+            model.projects.intent = None;
+            update(model, Action::SwitchProject { name: project.name })
+        }
+        Some(crate::screens::projects::ProjectIntent::Rename) => {
+            model.projects.mode = crate::screens::projects::ProjectsMode::Rename;
+            model.projects.name_input = project.name;
+            model.projects.error = None;
+            Vec::new()
+        }
+        Some(crate::screens::projects::ProjectIntent::Delete) => {
+            model.projects.intent = None;
+            update(model, Action::DeleteProject)
+        }
+        None => update(model, Action::SwitchProject { name: project.name }),
+    }
+}
+
+fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
+    if model.connections.selected().is_none() {
+        model.connections.error = Some("select a connection first".into());
+        return Vec::new();
+    }
+    match model.connections.intent {
+        Some(crate::screens::connections::ConnectionIntent::Connect) => {
+            update(model, Action::ConnectSelected)
+        }
+        Some(crate::screens::connections::ConnectionIntent::Duplicate) => {
+            update(model, Action::DuplicateConnection)
+        }
+        Some(crate::screens::connections::ConnectionIntent::Test) => {
+            update(model, Action::TestConnection)
+        }
+        Some(crate::screens::connections::ConnectionIntent::Delete) => {
+            update(model, Action::DeleteConnection)
+        }
+        Some(crate::screens::connections::ConnectionIntent::CloseSession) => {
+            update(model, Action::CloseSelectedSession)
+        }
+        None => connect_selected(model),
+    }
+}
+
 fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocation) -> Vec<Effect> {
     use crate::palette::{FlowIntent, PaletteInvocation};
     match invocation {
@@ -3342,20 +3424,19 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::ProjectCreate) => {
             model.projects.open = true;
             model.projects.mode = crate::screens::projects::ProjectsMode::Create;
+            model.projects.intent = None;
+            model.projects.error = None;
             model.projects.name_input.clear();
             Vec::new()
         }
         PaletteInvocation::OpenFlow(FlowIntent::ProjectSwitch) => {
-            model.projects.open = true;
-            vec![Effect::ListProjects]
+            open_project_intent(model, crate::screens::projects::ProjectIntent::Switch)
         }
         PaletteInvocation::OpenFlow(FlowIntent::ProjectRename) => {
-            model.projects.open = true;
-            vec![Effect::ListProjects]
+            open_project_intent(model, crate::screens::projects::ProjectIntent::Rename)
         }
         PaletteInvocation::OpenFlow(FlowIntent::ProjectDelete) => {
-            model.projects.open = true;
-            vec![Effect::ListProjects]
+            open_project_intent(model, crate::screens::projects::ProjectIntent::Delete)
         }
         // ponytail: domain tasks replace these with prepared screens; keep current actions until then.
         PaletteInvocation::OpenFlow(FlowIntent::SavepointCreate) => {
@@ -3388,21 +3469,24 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         }
         PaletteInvocation::OpenFlow(FlowIntent::Backup) => update(model, Action::OpenBackup),
         PaletteInvocation::OpenFlow(FlowIntent::Restore) => update(model, Action::OpenRestore),
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect) => {
-            update(model, Action::ConnectSelected)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDuplicate) => {
-            update(model, Action::DuplicateConnection)
-        }
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect) => open_connection_intent(
+            model,
+            crate::screens::connections::ConnectionIntent::Connect,
+        ),
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDuplicate) => open_connection_intent(
+            model,
+            crate::screens::connections::ConnectionIntent::Duplicate,
+        ),
         PaletteInvocation::OpenFlow(FlowIntent::ConnectionTest) => {
-            update(model, Action::TestConnection)
+            open_connection_intent(model, crate::screens::connections::ConnectionIntent::Test)
         }
         PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete) => {
-            update(model, Action::DeleteConnection)
+            open_connection_intent(model, crate::screens::connections::ConnectionIntent::Delete)
         }
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionCloseSession) => {
-            update(model, Action::CloseSelectedSession)
-        }
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionCloseSession) => open_connection_intent(
+            model,
+            crate::screens::connections::ConnectionIntent::CloseSession,
+        ),
         PaletteInvocation::OpenFlow(FlowIntent::SettingsReset) => {
             update(model, Action::ConfirmResetSettings)
         }

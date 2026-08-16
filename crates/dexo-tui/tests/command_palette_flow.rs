@@ -1,5 +1,6 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use dexo_tui::screens::projects::ProjectsMode;
+use dexo_tui::screens::connections::ConnectionIntent;
+use dexo_tui::screens::projects::{ProjectIntent, ProjectsMode};
 use dexo_tui::{Action, Effect, Focus, Model, update};
 
 fn press(model: &mut Model, code: KeyCode) -> Vec<Effect> {
@@ -47,4 +48,35 @@ fn palette_renders_registered_shortcut() {
     update(&mut model, Action::OpenPalette);
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
     assert!(view.contains("Ctrl+P"));
+}
+
+#[test]
+fn project_create_preserves_invalid_input() {
+    let mut model = Model::default();
+    choose(&mut model, "project.create");
+    press(&mut model, KeyCode::Enter);
+    assert!(model.projects.open);
+    assert_eq!(model.projects.mode, ProjectsMode::Create);
+    assert_eq!(
+        model.projects.error.as_deref(),
+        Some("project name is required")
+    );
+}
+
+#[test]
+fn project_rename_loads_a_visible_chooser_before_input() {
+    let mut model = Model::default();
+    let effects = choose_effects(&mut model, "project.rename");
+    assert!(model.projects.open);
+    assert_eq!(model.projects.intent, Some(ProjectIntent::Rename));
+    assert!(matches!(effects.as_slice(), [Effect::ListProjects]));
+}
+
+#[test]
+fn connection_delete_opens_browser_and_never_hides_confirmation() {
+    let mut model = Model::default();
+    choose(&mut model, "connection.delete");
+    assert!(model.connections.open);
+    assert_eq!(model.connections.intent, Some(ConnectionIntent::Delete));
+    assert!(model.connections.delete_target.is_none());
 }

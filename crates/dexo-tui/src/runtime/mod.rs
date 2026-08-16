@@ -266,6 +266,12 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
+            crate::Effect::LoadConnectionProfiles => {
+                match self.with_repo(|repo| repo.list().map_err(|error| error.to_string())) {
+                    Ok(profiles) => self.emit(Action::ProfilesLoaded(profiles)).await,
+                    Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+                }
+            }
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
             crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
