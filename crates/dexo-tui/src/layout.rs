@@ -7,6 +7,73 @@ pub enum LayoutMode {
     Compact,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum LayoutPreset {
+    #[default]
+    Normal,
+    ResultsWide,
+    EditorWide,
+    ExplorerWide,
+}
+
+impl LayoutPreset {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::ResultsWide => "results-wide",
+            Self::EditorWide => "editor-wide",
+            Self::ExplorerWide => "explorer-wide",
+        }
+    }
+
+    pub fn next(self) -> Self {
+        match self {
+            Self::Normal => Self::ResultsWide,
+            Self::ResultsWide => Self::EditorWide,
+            Self::EditorWide => Self::ExplorerWide,
+            Self::ExplorerWide => Self::Normal,
+        }
+    }
+
+    pub fn apply(self, width: u16, height: u16) -> PaneLayout {
+        let panes = match self {
+            Self::Normal => PaneLayout {
+                explorer_visible: true,
+                inspector_visible: true,
+                results_visible: true,
+                explorer_width: 28,
+                inspector_width: 28,
+                results_height: 12,
+            },
+            Self::ResultsWide => PaneLayout {
+                explorer_visible: true,
+                inspector_visible: false,
+                results_visible: true,
+                explorer_width: 22,
+                inspector_width: 28,
+                results_height: (height.saturating_mul(55) / 100).max(10),
+            },
+            Self::EditorWide => PaneLayout {
+                explorer_visible: true,
+                inspector_visible: true,
+                results_visible: true,
+                explorer_width: 22,
+                inspector_width: 22,
+                results_height: 5,
+            },
+            Self::ExplorerWide => PaneLayout {
+                explorer_visible: true,
+                inspector_visible: true,
+                results_visible: true,
+                explorer_width: (width.saturating_mul(40) / 100).max(24),
+                inspector_width: 22,
+                results_height: 10,
+            },
+        };
+        panes.clamp(width, height)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct LayoutPlan {
     pub mode: LayoutMode,
@@ -183,7 +250,11 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         body.height,
     );
     let tabs_h = 1.min(center.height);
-    let results_h = center.height.saturating_mul(30) / 100;
+    let results_h = match panes {
+        Some(p) if !p.results_visible => 0,
+        Some(p) => p.results_height.min(center.height.saturating_sub(2)),
+        None => center.height.saturating_mul(30) / 100,
+    };
     let content_h = center.height.saturating_sub(tabs_h + results_h);
     let tabs = Rect::new(center.x, center.y, center.width, tabs_h);
     let content = Rect::new(
@@ -275,5 +346,16 @@ mod tests {
         let compact_plan = LayoutPlan::for_area_with(Rect::new(0, 0, 50, 18), Some(&compact));
         assert_eq!(compact_plan.mode, LayoutMode::Compact);
         assert_eq!(compact_plan.explorer.width, 0);
+    }
+
+    #[test]
+    fn results_wide_hides_inspector_and_grows_results() {
+        use super::{LayoutPlan, LayoutPreset};
+        let panes = LayoutPreset::ResultsWide.apply(160, 50);
+        assert!(!panes.inspector_visible);
+        assert!(panes.results_height >= 12);
+        let plan = LayoutPlan::for_area_with(Rect::new(0, 0, 160, 50), Some(&panes));
+        assert_eq!(plan.inspector.width, 0);
+        assert!(plan.results.height >= plan.content.height);
     }
 }
