@@ -100,7 +100,7 @@ fn json(columns: &[String], rows: &[Vec<DbValue>]) -> Result<String, String> {
             serde_json::Value::Object(map)
         })
         .collect();
-    Ok(serde_json::to_string(&objects).unwrap_or_default())
+    Ok(serde_json::to_string_pretty(&objects).unwrap_or_default())
 }
 
 fn json_value(value: &DbValue) -> serde_json::Value {
@@ -109,8 +109,9 @@ fn json_value(value: &DbValue) -> serde_json::Value {
         DbValue::Bool(v) => serde_json::Value::Bool(*v),
         DbValue::I64(v) => serde_json::json!(*v),
         DbValue::U64(v) => serde_json::json!(*v),
-        DbValue::Decimal(v) | DbValue::Text(v) | DbValue::Json(v) => {
-            serde_json::Value::String(v.clone())
+        DbValue::Decimal(v) | DbValue::Text(v) => serde_json::Value::String(v.clone()),
+        DbValue::Json(v) => {
+            serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.clone()))
         }
         DbValue::Bytes(v) => serde_json::Value::String(display(&DbValue::Bytes(v.clone()))),
         DbValue::Native { text, .. } => serde_json::Value::String(text.clone()),
@@ -238,5 +239,21 @@ mod tests {
         assert!(sql.contains("\"id\""));
         assert!(sql.contains("'O''Reilly'"));
         assert!(!sql.contains("'O'Reilly'"));
+    }
+
+    #[test]
+    fn copy_json_embeds_json_columns() {
+        let json = copy_selection(
+            &["items".into()],
+            &[vec![DbValue::Json(
+                r#"[{"product_id":"abc","quantity":1}]"#.into(),
+            )]],
+            CopyFormat::Json,
+            SqlDialect::Postgres,
+        )
+        .unwrap();
+        assert!(json.contains("\"product_id\": \"abc\""));
+        assert!(json.contains("\"quantity\": 1"));
+        assert!(!json.contains("\\\"product_id\\\""));
     }
 }
