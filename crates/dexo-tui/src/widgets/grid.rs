@@ -1,55 +1,125 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::Style;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::{Block, Paragraph};
+use ratatui::widgets::Paragraph;
 
-use crate::model::{Model, format_value, truncate_cell};
+use crate::model::{Focus, Model, format_value, truncate_cell};
+use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     if area.width < 2 || area.height < 2 {
-        frame.render_widget(Paragraph::new(preview_lines(model, area)), area);
+        frame.render_widget(Paragraph::new(preview_lines(model, area, hits)), area);
         return;
     }
+    let extra = result_banner(model);
     let title = if model.results.truncated() {
-        format!("Results ({}) …", model.results.row_count())
+        format!("Results ({}) …{extra}", model.results.row_count())
     } else {
-        format!("Results ({})", model.results.row_count())
+        format!("Results ({}){extra}", model.results.row_count())
     };
-    let block = Block::bordered().title(title);
+    let focused = model.focus == Focus::Results;
+    let block = crate::render::pane_block(model, &title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    frame.render_widget(Paragraph::new(preview_lines(model, inner)), inner);
+    let tab_h = if model.results.tabs.len() > 1 { 1 } else { 0 };
+    if tab_h > 0 {
+        let tabs = Rect::new(inner.x, inner.y, inner.width, 1);
+        let mut x = tabs.x;
+        for (index, tab) in model.results.tabs.iter().enumerate() {
+            let label = format!(" {} ", tab.title);
+            let width = label.len() as u16;
+            let rect = Rect::new(
+                x,
+                tabs.y,
+                width.min(tabs.width.saturating_sub(x.saturating_sub(tabs.x))),
+                1,
+            );
+            hits.register(HitTarget::ResultTab(index), rect);
+            x = x.saturating_add(width);
+        }
+        frame.render_widget(
+            Paragraph::new(
+                model
+                    .results
+                    .tabs
+                    .iter()
+                    .enumerate()
+                    .map(|(index, tab)| {
+                        if index == model.results.active {
+                            format!("[{}]", tab.title)
+                        } else {
+                            format!(" {} ", tab.title)
+                        }
+                    })
+                    .collect::<Vec<_>>()
+                    .join(""),
+            ),
+            tabs,
+        );
+    }
+    let body = Rect::new(
+        inner.x,
+        inner.y.saturating_add(tab_h),
+        inner.width,
+        inner.height.saturating_sub(tab_h),
+    );
+    frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
 }
 
-fn preview_lines(model: &Model, area: Rect) -> Vec<Line<'static>> {
+fn result_banner(model: &Model) -> String {
+    let mut extra = String::new();
+    if let Some(tab) = model.results.tabs.get(model.results.active) {
+        if !tab.notices.is_empty() {
+            extra.push_str(" !");
+            extra.push_str(tab.notices.last().expect("notice"));
+        }
+        if let Some(reason) = &tab.local_only {
+            extra.push_str(" local-only:");
+            extra.push_str(reason);
+        }
+    }
+    if !model.data.crumbs.is_empty() {
+        extra.push_str(" crumbs:");
+        extra.push_str(&model.data.crumbs.len().to_string());
+    }
+    if model.data.has_more {
+        extra.push_str(" more");
+    }
+    extra
+}
+
+fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'static>> {
     let grid = &model.results;
     let col_indices = grid.visible_column_indices();
     let widths = grid.column_widths();
     let mut header = Vec::new();
     let mut remaining = area.width as usize;
+    let header_style = model.theme.header(model.capabilities);
     for index in col_indices {
         let Some(column) = grid.columns().get(index) else {
             continue;
         };
         if remaining == 0 {
-            header.push(Span::raw("…"));
+            header.push(Span::styled("…", header_style));
             break;
         }
         let width = widths.get(index).copied().unwrap_or(8) as usize;
         let cell_width = width.min(remaining);
-        header.push(Span::raw(format!(
-            "{:width$}",
-            truncate_cell(&column.name, cell_width),
-            width = cell_width
-        )));
+        header.push(Span::styled(
+            format!(
+                "{:width$}",
+                truncate_cell(&column.name, cell_width),
+                width = cell_width
+            ),
+            header_style,
+        ));
         remaining = remaining.saturating_sub(cell_width + 1);
         if remaining > 0 {
             header.push(Span::raw(" "));
@@ -58,15 +128,37 @@ fn preview_lines(model: &Model, area: Rect) -> Vec<Line<'static>> {
     }
     let mut lines = vec![Line::from(header)];
     let body_height = area.height.saturating_sub(1) as usize;
-    let selected = grid.selection();
     let sel_marker = crate::accessibility::marker(Role::Selection, model.capabilities.unicode);
-    let sel_style = model.theme.style(Role::Selection, model.capabilities);
-    for row in grid.visible_slice(grid.viewport().row_offset, body_height) {
+    let active_style = model.theme.active_row(model.capabilities);
+    let selected_style = model.theme.selected_row(model.capabilities);
+    let cursor_row = grid.cursor_row();
+    for (visible_i, row) in grid
+        .visible_slice(grid.viewport().row_offset, body_height)
+        .into_iter()
+        .enumerate()
+    {
+        let hit_y = area.y.saturating_add(1).saturating_add(visible_i as u16);
+        if hit_y < area.y.saturating_add(area.height) {
+            hits.register(
+                HitTarget::GridRow(row.source_index),
+                Rect::new(area.x, hit_y, area.width, 1),
+            );
+        }
         let mut remaining = area.width as usize;
         let mut spans = Vec::new();
-        let is_sel = selected.is_some_and(|(r, _)| r == row.source_index);
-        if is_sel {
-            spans.push(Span::styled(format!("{sel_marker} "), sel_style));
+        let is_active = cursor_row == Some(row.source_index);
+        let is_sel = grid.row_selected(row.source_index);
+        let row_style = if is_active {
+            active_style
+        } else if is_sel {
+            selected_style
+        } else {
+            model
+                .theme
+                .zebra(row.source_index % 2 == 1, model.capabilities)
+        };
+        if is_active || is_sel {
+            spans.push(Span::styled(format!("{sel_marker} "), row_style));
             remaining = remaining.saturating_sub(sel_marker.chars().count() + 1);
         }
         for index in grid.visible_column_indices() {
@@ -74,23 +166,22 @@ fn preview_lines(model: &Model, area: Rect) -> Vec<Line<'static>> {
                 continue;
             };
             if remaining == 0 {
-                spans.push(Span::raw("…"));
+                spans.push(Span::styled("…", row_style));
                 break;
             }
             let width = widths.get(index).copied().unwrap_or(8) as usize;
             let cell_width = width.min(remaining);
-            let style = if is_sel { sel_style } else { Style::default() };
             spans.push(Span::styled(
                 format!(
                     "{:width$}",
                     truncate_cell(&format_value(value), cell_width),
                     width = cell_width
                 ),
-                style,
+                row_style,
             ));
             remaining = remaining.saturating_sub(cell_width + 1);
             if remaining > 0 {
-                spans.push(Span::raw(" "));
+                spans.push(Span::styled(" ", row_style));
                 remaining = remaining.saturating_sub(1);
             }
         }
@@ -156,5 +247,92 @@ mod tests {
         grid.hidden_columns.clear();
         let sql = grid.copy(CopyFormat::Sql, SqlDialect::Mysql).unwrap();
         assert!(sql.contains('`'));
+    }
+
+    #[test]
+    fn cursor_moves_and_shift_extends_range() {
+        use crate::model::GridSelection;
+
+        let mut grid = GridModel::sample_rows(8);
+        grid.set_viewport_size(40, 4);
+        grid.move_cursor_row(2, false);
+        assert_eq!(grid.cursor_row(), Some(2));
+        grid.move_cursor_row(1, true);
+        assert!(matches!(
+            grid.kind,
+            GridSelection::Range {
+                start: (2, _),
+                end: (3, _)
+            }
+        ));
+        assert!(grid.row_selected(2));
+        assert!(grid.row_selected(3));
+        assert!(!grid.row_selected(0));
+    }
+
+    #[test]
+    fn ctrl_pick_copies_noncontiguous_rows() {
+        use dexo_app::data::{CopyFormat, SqlDialect};
+
+        let mut grid = GridModel::sample_rows(6);
+        grid.select_cell(0, 0);
+        grid.toggle_picked_row();
+        grid.move_cursor_row(2, false);
+        grid.toggle_picked_row();
+        assert!(grid.row_selected(0));
+        assert!(grid.row_selected(2));
+        assert!(!grid.picked_rows.contains(&1));
+        let json = grid.copy(CopyFormat::Json, SqlDialect::Postgres).unwrap();
+        assert!(json.contains("\"n\": 0"));
+        assert!(json.contains("\"n\": 2"));
+        assert!(!json.contains("\"n\": 1"));
+    }
+
+    #[test]
+    fn left_right_pans_to_hidden_columns() {
+        use crate::model::GridSelection;
+        use dexo_driver_api::{ColumnMeta, DbValue};
+
+        let mut grid = GridModel::default();
+        grid.set_columns(
+            (0..8)
+                .map(|i| ColumnMeta {
+                    name: format!("wide_column_name_{i:02}"),
+                    type_name: "text".into(),
+                    nullable: true,
+                })
+                .collect(),
+        );
+        grid.append_rows(vec![
+            (0..8).map(|_| DbValue::Text("x".repeat(40))).collect(),
+        ]);
+        grid.set_viewport_size(20, 4);
+        grid.select_row(0);
+        assert_eq!(grid.viewport().column_offset, 0);
+        for expected in 1..=4 {
+            grid.move_cursor_col(1);
+            assert_eq!(
+                grid.viewport().column_offset,
+                expected,
+                "right should increment column_offset every key when columns overflow"
+            );
+            assert!(
+                matches!(grid.kind, GridSelection::Row { row: 0 }),
+                "left/right must keep the row cursor"
+            );
+        }
+        grid.move_cursor_row(1, true);
+        let before = grid.kind.clone();
+        grid.move_cursor_col(1);
+        assert_eq!(
+            std::mem::discriminant(&grid.kind),
+            std::mem::discriminant(&before),
+            "left/right must not extend or collapse a row range"
+        );
+        assert!(grid.viewport().column_offset > 4);
+        while grid.viewport().column_offset > 0 {
+            grid.move_cursor_col(-1);
+        }
+        assert_eq!(grid.viewport().column_offset, 0);
     }
 }

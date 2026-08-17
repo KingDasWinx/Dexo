@@ -85,6 +85,14 @@ pub fn revoke_profile(conn: &Connection, profile: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn revoke_all(conn: &Connection) -> anyhow::Result<usize> {
+    conn.execute(
+        "UPDATE mcp_grants SET remaining_uses = 0, revoked = 1, revision = revision + 1 WHERE revoked = 0",
+        [],
+    )
+    .map_err(Into::into)
+}
+
 pub fn is_revoked(conn: &Connection, id: Uuid) -> anyhow::Result<bool> {
     let revoked: Option<i64> = conn
         .query_row(

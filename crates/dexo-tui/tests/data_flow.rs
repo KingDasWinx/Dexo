@@ -372,3 +372,78 @@ fn foreign_key_composite_loads_destination() {
     update(&mut model, Action::DataNavBack);
     assert!(model.data.crumbs.is_empty());
 }
+
+#[test]
+fn review_enter_emits_apply_changes() {
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
+    model.data.table = dexo_app::data::TableMeta {
+        columns: vec![dexo_app::data::ColumnDef {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+            nullable: false,
+        }],
+    };
+    model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
+    model.data.target = dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "items");
+    model
+        .data
+        .changes
+        .insert(vec![("id".into(), DbValue::I64(1))]);
+    update(&mut model, Action::OpenReview);
+    let effects = update(
+        &mut model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::ApplyMutations { .. }))
+    );
+}
+
+#[test]
+fn copy_json_and_next_page_are_wired() {
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int".into(),
+        nullable: false,
+    }]);
+    model.results.append_rows(vec![vec![DbValue::I64(1)]]);
+    model.results.select_cell(0, 0);
+    let effects = update(
+        &mut model,
+        Action::CopyGrid(dexo_app::data::CopyFormat::Json),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. }))
+    );
+    let effects = update(&mut model, Action::NextDataPage);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadTableData { .. }))
+    );
+}
+
+#[test]
+fn page_without_session_does_not_change_offset_or_loading() {
+    let mut model = Model::default();
+    update(&mut model, Action::NextDataPage);
+    assert_eq!(model.data.page_offset, 0);
+    assert!(!model.data.loading);
+}

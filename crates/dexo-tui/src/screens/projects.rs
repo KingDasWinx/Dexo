@@ -12,6 +12,13 @@ pub enum ProjectsMode {
     DeleteConfirm,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ProjectIntent {
+    Switch,
+    Rename,
+    Delete,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ProjectDeletePrompt {
     pub project: Project,
@@ -30,6 +37,8 @@ pub struct ProjectsScreen {
     pub pending: Option<ProjectSwitch>,
     pub delete: Option<ProjectDeletePrompt>,
     pub recents: Vec<String>,
+    pub intent: Option<ProjectIntent>,
+    pub error: Option<String>,
 }
 
 impl ProjectsScreen {
@@ -104,6 +113,17 @@ impl ProjectsScreen {
                     "detach"
                 }
             ));
+        }
+        if let Some(intent) = self.intent {
+            let action = match intent {
+                ProjectIntent::Switch => "switch",
+                ProjectIntent::Rename => "rename",
+                ProjectIntent::Delete => "delete",
+            };
+            lines.push(format!("choose project to {action}"));
+        }
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
         }
         if let Some(switch) = &self.pending {
             lines.push(format!(

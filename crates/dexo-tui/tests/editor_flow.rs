@@ -41,6 +41,8 @@ fn editor_highlights_formats_completes_and_prompts_for_parameters() {
             .collect::<Vec<_>>(),
         ["id"]
     );
+    model.set_sql("select * from u");
+    update(&mut model, Action::RefreshSqlIntelligence);
     assert!(
         model
             .editor
@@ -48,6 +50,24 @@ fn editor_highlights_formats_completes_and_prompts_for_parameters() {
             .iter()
             .any(|item| item.label == "users")
     );
+}
+
+#[test]
+fn typing_opens_completion_and_tab_replaces_token() {
+    let mut model = Model::default();
+    model.focus = dexo_tui::model::Focus::Editor;
+    send_text(&mut model, "sel");
+    assert!(model.editor.completion_open);
+    assert!(
+        model
+            .editor
+            .completions
+            .iter()
+            .any(|item| item.label == "select")
+    );
+    update(&mut model, key(KeyCode::Tab));
+    assert_eq!(model.active_document().text(), "select");
+    assert!(!model.editor.completion_open);
 }
 
 #[test]
@@ -197,4 +217,65 @@ async fn save_is_atomic_and_external_change_requires_resolution() {
         .unwrap_err();
     assert!(matches!(error, DocumentIoError::ExternalConflict { .. }));
     assert_eq!(tokio::fs::read_to_string(path).await.unwrap(), "select 2");
+}
+
+#[test]
+fn completion_popup_accepts_selected_item() {
+    let mut model = model_with_sql("select * from ");
+    update(&mut model, Action::RefreshSqlIntelligence);
+    assert!(model.editor.completion_open);
+    assert!(!model.editor.completions.is_empty());
+    model.editor.completion_selected = model
+        .editor
+        .completions
+        .iter()
+        .position(|item| item.label == "users")
+        .unwrap_or(0);
+    update(&mut model, Action::AcceptCompletion);
+    assert!(model.active_document().text().contains("users"));
+}
+
+#[test]
+fn history_overlay_enter_reruns() {
+    let mut model = Model::default();
+    model.editor.history = vec!["select 9".into()];
+    update(&mut model, Action::HistoryLoaded(vec!["select 9".into()]));
+    assert!(model.editor.history_open);
+    update(&mut model, Action::HistoryPick);
+    assert_eq!(model.active_document().text(), "select 9");
+    assert!(!model.editor.history_open);
+}
+
+fn choose_effects(model: &mut Model, query: &str) -> Vec<dexo_tui::Effect> {
+    let mut effects = update(model, Action::OpenPalette);
+    for ch in query.chars() {
+        effects.extend(update(model, key(KeyCode::Char(ch))));
+    }
+    effects.extend(update(model, key(KeyCode::Enter)));
+    effects
+}
+
+fn connected_model_with_sql(sql: &str) -> Model {
+    let mut model = model_with_sql(sql);
+    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
+    model
+}
+
+#[test]
+fn insert_snippet_loads_storage_before_opening_picker() {
+    let mut model = Model::default();
+    let effects = choose_effects(&mut model, "editor.snippet");
+    assert!(model.editor.snippet_pending);
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::LoadSnippets]
+    ));
+}
+
+#[test]
+fn submit_parameters_outside_prompt_never_executes_query() {
+    let mut model = connected_model_with_sql("select 1");
+    let effects = update(&mut model, Action::SubmitParameters);
+    assert!(effects.is_empty());
+    assert!(model.active_operation.is_none());
 }

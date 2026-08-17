@@ -2,7 +2,11 @@ use crossterm::event::{KeyEvent, MouseEvent};
 use dexo_app::{ConnectionProfile, NewConnection, ScriptPolicy};
 use dexo_driver_api::{ColumnMeta, DbValue, TransactionMode, TransactionState};
 
+use std::path::PathBuf;
+use std::sync::Arc;
+
 use crate::runtime::{OperationId, OperationKey, SessionId};
+use crate::screens::transfer::TransferMode;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum Action {
@@ -20,6 +24,7 @@ pub enum Action {
         generation: u64,
         token: u64,
         read_only: bool,
+        driver: String,
     },
     OpenConnectionForm,
     ConnectionFormError {
@@ -104,9 +109,14 @@ pub enum Action {
     PaletteQuery(String),
     PaletteSelect,
     ExecuteQuery,
+    ExecuteStatement,
+    ExecuteSelection,
+    ExecuteDocument,
     CancelQuery,
     BeginTransaction,
     Savepoint,
+    RollbackSavepoint,
+    ReleaseSavepoint,
     CommitTransaction,
     RollbackTransaction,
     Focus(FocusTarget),
@@ -134,6 +144,31 @@ pub enum Action {
     OpenObjectInspector,
     OpenObjectDdl,
     OpenObjectData,
+    OpenDependencies,
+    OpenDependents,
+    ExplorerUp,
+    ExplorerDown,
+    SwitchTab {
+        index: usize,
+    },
+    NextTab,
+    NextDocument,
+    NewDocument,
+    SelectGridRow,
+    SelectGridColumn,
+    NextResultTab,
+    PrevResultTab,
+    SelectResultTab {
+        index: usize,
+    },
+    InspectorNextTab,
+    NextDataPage,
+    PrevDataPage,
+    SaveActiveDocument,
+    OpenDocument,
+    CycleTheme,
+    CycleKeymap,
+    ToggleMouse,
     ChangeDataPage {
         offset: u64,
     },
@@ -217,9 +252,37 @@ pub enum Action {
     SchemaDiffToggleChanged,
     ConfirmSchemaDiff,
     ApplySchemaDiff,
+    SchemaDiffLoaded {
+        from_label: String,
+        to_label: String,
+        ordered: Vec<dexo_app::schema_diff::OrderedChange>,
+    },
+    SchemaDiffFailed {
+        message: String,
+    },
+    SecurityLoaded {
+        principals: Vec<String>,
+        grants: Vec<dexo_driver_api::GrantRecord>,
+    },
+    SecurityFailed {
+        message: String,
+    },
     OpenTransfer,
     OpenBackup,
     OpenRestore,
+    TransferProgress {
+        operation: OperationId,
+        rows: u64,
+        bytes: u64,
+    },
+    TransferFinished {
+        operation: OperationId,
+        message: String,
+    },
+    TransferFailed {
+        operation: OperationId,
+        message: String,
+    },
     OpenExplain,
     ExplainViewTree,
     ExplainViewTable,
@@ -232,6 +295,12 @@ pub enum Action {
     OpenMcpProfiles,
     ConfirmMcpEnable,
     RevokeAllMcpGrants,
+    McpGrantsRevoked {
+        count: usize,
+    },
+    McpRevokeFailed {
+        message: String,
+    },
     OpenSettings,
     ConfirmResetSettings,
     OpenRecovery,
@@ -239,6 +308,12 @@ pub enum Action {
     ConfirmDiscardRecovery,
     OpenMcpAudit,
     OpenDiagnostics,
+    DiagnosticsWritten {
+        path: std::path::PathBuf,
+    },
+    DiagnosticsFailed {
+        message: String,
+    },
     ResultsUp,
     ResultsDown,
     ResultsLeft,
@@ -246,6 +321,21 @@ pub enum Action {
     ResultsPageUp,
     ResultsPageDown,
     ResultsTop,
+    OpenResultsMenu,
+    ToggleResultsPick,
+    ResultsExtendUp,
+    ResultsExtendDown,
+    ToggleHelp,
+    CycleLayout,
+    ResetLayout,
+    HideInspector,
+    LayoutResultsFocus,
+    GrowResults,
+    ShrinkResults,
+    GrowExplorer,
+    ShrinkExplorer,
+    GrowInspector,
+    ShrinkInspector,
     RefreshSqlIntelligence,
     FormatSql,
     AcceptCompletion,
@@ -254,7 +344,34 @@ pub enum Action {
     SearchHistory,
     ClearHistory,
     HistoryLoaded(Vec<String>),
+    HistoryPick,
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
+    SnippetPick,
+    DdlPreviewed {
+        sql: String,
+        confirmation: dexo_app::schema::Confirmation,
+        warnings: Vec<String>,
+    },
+    SchemaApplied {
+        message: String,
+    },
+    ExplainLoaded {
+        plan: Box<dexo_driver_api::ExplainPlan>,
+    },
+    AdminSessionsLoaded {
+        sessions: Vec<dexo_driver_api::SessionInfo>,
+        captured_at: String,
+        blocking: Vec<dexo_driver_api::BlockingEdge>,
+    },
+    DiagnosticsReady {
+        preview: String,
+    },
+    McpProfilesLoaded {
+        profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
+    },
+    McpAuditLoaded {
+        events: Vec<String>,
+    },
     DocumentLoaded {
         document: String,
         content: String,
@@ -355,6 +472,63 @@ pub struct PersistHistoryRequest {
 }
 
 #[derive(Clone, Debug)]
+pub enum TransferRequest {
+    Export {
+        operation: OperationId,
+        path: PathBuf,
+        format: dexo_app::transfer::TransferFormat,
+        columns: Vec<String>,
+        rows: Arc<Vec<Vec<DbValue>>>,
+    },
+    Import {
+        operation: OperationId,
+        path: PathBuf,
+        format: dexo_app::transfer::TransferFormat,
+        target: dexo_driver_api::QualifiedName,
+        strategy: dexo_app::transfer::ErrorStrategy,
+        session: SessionId,
+    },
+    Backup {
+        operation: OperationId,
+        path: PathBuf,
+        session: SessionId,
+    },
+    Restore {
+        operation: OperationId,
+        path: PathBuf,
+        session: SessionId,
+    },
+}
+
+impl TransferRequest {
+    pub fn restore(path: PathBuf, session: SessionId) -> Self {
+        Self::Restore {
+            operation: OperationId::new(),
+            path,
+            session,
+        }
+    }
+
+    pub fn mode(&self) -> TransferMode {
+        match self {
+            Self::Export { .. } => TransferMode::Export,
+            Self::Import { .. } => TransferMode::Import,
+            Self::Backup { .. } => TransferMode::Backup,
+            Self::Restore { .. } => TransferMode::Restore,
+        }
+    }
+
+    pub fn operation(&self) -> OperationId {
+        match self {
+            Self::Export { operation, .. }
+            | Self::Import { operation, .. }
+            | Self::Backup { operation, .. }
+            | Self::Restore { operation, .. } => *operation,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
 pub struct FlushedDocument {
     pub id: String,
     pub title: String,
@@ -431,6 +605,58 @@ pub enum Effect {
     },
     LoadDocument(DocumentIoRequest),
     SaveDocument(DocumentIoRequest),
+    PreviewDdl {
+        change: dexo_driver_api::SchemaChange,
+        session: SessionId,
+        generation: u64,
+    },
+    LoadSchemaDiff {
+        session: SessionId,
+        left: dexo_app::schema_diff::DiffSource,
+        right: dexo_app::schema_diff::DiffSource,
+        generation: u64,
+    },
+    LoadSecurity {
+        session: SessionId,
+        generation: u64,
+    },
+    ApplyDdlChange {
+        change: dexo_driver_api::SchemaChange,
+        typed: String,
+        session: SessionId,
+        generation: u64,
+    },
+    RunExplain {
+        sql: String,
+        cursor: usize,
+        analyze: bool,
+        session: SessionId,
+        generation: u64,
+    },
+    LoadAdminSessions {
+        session: SessionId,
+        generation: u64,
+    },
+    AdminTerminate {
+        session: SessionId,
+        target: String,
+    },
+    LoadMcpProfiles,
+    LoadConnectionProfiles,
+    LoadMcpAudit,
+    EnableMcpProfile {
+        name: String,
+    },
+    RevokeMcpGrants {
+        profile: String,
+    },
+    RevokeAllMcpGrants,
+    WriteDiagnostics {
+        path: std::path::PathBuf,
+        bundle: dexo_app::diagnostic_service::DiagnosticBundle,
+    },
+    RunTransfer(TransferRequest),
+    LoadSnippets,
     CheckpointRecovery(RecoveryCheckpointRequest),
     PersistHistory(PersistHistoryRequest),
     LoadHistory {

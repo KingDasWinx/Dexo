@@ -214,6 +214,16 @@ impl SchemaEditor {
         }
     }
 
+    pub fn focus_prev(&mut self) {
+        if !self.fields.is_empty() {
+            self.focus = if self.focus == 0 {
+                self.fields.len() - 1
+            } else {
+                self.focus - 1
+            };
+        }
+    }
+
     pub fn validate(&mut self) -> bool {
         self.errors.clear();
         if self.field("target").trim().is_empty() {

@@ -1,9 +1,10 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 160
 expression: "render_to_string(&model, 60, 20)"
 ---
 demo  local  public                                         
-┌Schema────────────────────────────────────────────────────┐
+┌▸ DDL─────────────────────────────────────────────────────┐
 ┌DDL preview───────────────────────────────────────────────┐
 │target: public.orders                                     │
 │risk: destructive=false lock=AccessExclusive              │
@@ -21,4 +22,4 @@ demo  local  public
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-connected:local  tx:idle  rows:0  ctrl+p palette
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows

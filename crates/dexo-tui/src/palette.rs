@@ -1,6 +1,61 @@
-use crate::action::{Action, FocusTarget};
+use crate::action::Action;
 use crate::model::Model;
-use dexo_driver_api::TransactionState;
+
+mod registry;
+pub use registry::{command_spec, palette_entries};
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FlowIntent {
+    SavepointCreate,
+    SavepointRollback,
+    SavepointRelease,
+    DataSort,
+    DataFilter,
+    DataReview,
+    SchemaPreview,
+    SchemaRaw,
+    SchemaDiff,
+    Security,
+    TransferExport,
+    TransferImport,
+    Backup,
+    Restore,
+    ConnectionConnect,
+    ConnectionDuplicate,
+    ConnectionTest,
+    ConnectionDelete,
+    ConnectionCloseSession,
+    ProjectCreate,
+    ProjectSwitch,
+    ProjectRename,
+    ProjectDelete,
+    SettingsReset,
+    RecoveryRestore,
+    RecoveryDiscard,
+    McpRevokeAll,
+    InsertSnippet,
+    SubmitParameters,
+    ClearHistory,
+    DiagnosticsExport,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CommandSpec {
+    pub id: &'static str,
+    pub title: &'static str,
+    pub keywords: &'static [&'static str],
+    pub shortcut: Option<&'static str>,
+    pub requirements: &'static [Requirement],
+    pub invocation: PaletteInvocation,
+}
+
+// ponytail: Action is ~344B; Box<Action> if PaletteInvocation is cloned on a hot path.
+#[derive(Clone, Debug, PartialEq)]
+#[allow(clippy::large_enum_variant)]
+pub enum PaletteInvocation {
+    Dispatch(Action),
+    OpenFlow(FlowIntent),
+}
 
 #[derive(Clone, Debug)]
 pub struct PaletteEntry {
@@ -8,647 +63,65 @@ pub struct PaletteEntry {
     pub title: &'static str,
     pub keywords: &'static [&'static str],
     pub shortcut: Option<&'static str>,
-    pub disabled_reason: Option<&'static str>,
-    pub action: fn() -> Action,
+    pub requirements: &'static [Requirement],
+    pub disabled_reason: Option<String>,
+    pub invocation: PaletteInvocation,
 }
 
-pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
-    vec![
-        PaletteEntry {
-            id: "workbench.quit",
-            title: "Quit",
-            keywords: &["exit", "close"],
-            shortcut: Some("Ctrl+Q"),
-            disabled_reason: None,
-            action: || Action::Quit,
-        },
-        PaletteEntry {
-            id: "palette.open",
-            title: "Command Palette",
-            keywords: &["commands", "search"],
-            shortcut: Some("Ctrl+P"),
-            disabled_reason: None,
-            action: || Action::OpenPalette,
-        },
-        PaletteEntry {
-            id: "query.execute",
-            title: "Execute Query",
-            keywords: &["run", "sql"],
-            shortcut: Some("F5"),
-            disabled_reason: if model.active_document().text().trim().is_empty() {
-                Some("editor is empty")
-            } else {
-                None
-            },
-            action: || Action::ExecuteQuery,
-        },
-        PaletteEntry {
-            id: "query.cancel",
-            title: "Cancel Query",
-            keywords: &["stop", "abort"],
-            shortcut: Some("Ctrl+C"),
-            disabled_reason: if model.active_query.is_none() {
-                Some("no running query")
-            } else {
-                None
-            },
-            action: || Action::CancelQuery,
-        },
-        PaletteEntry {
-            id: "transaction.begin",
-            title: "Begin Transaction",
-            keywords: &["tx", "begin", "start"],
-            shortcut: None,
-            disabled_reason: if model.active_session.is_some()
-                && model.transaction == TransactionState::Idle
-            {
-                None
-            } else {
-                Some("session is not idle")
-            },
-            action: || Action::BeginTransaction,
-        },
-        PaletteEntry {
-            id: "transaction.savepoint",
-            title: "Create Savepoint",
-            keywords: &["tx", "savepoint"],
-            shortcut: None,
-            disabled_reason: if model.transaction == TransactionState::Active {
-                None
-            } else {
-                Some("no active transaction")
-            },
-            action: || Action::Savepoint,
-        },
-        PaletteEntry {
-            id: "transaction.commit",
-            title: "Commit Transaction",
-            keywords: &["tx", "commit"],
-            shortcut: None,
-            disabled_reason: if model.transaction == TransactionState::Active {
-                None
-            } else {
-                Some("no active transaction")
-            },
-            action: || Action::CommitTransaction,
-        },
-        PaletteEntry {
-            id: "transaction.rollback",
-            title: "Rollback Transaction",
-            keywords: &["tx", "abort"],
-            shortcut: None,
-            disabled_reason: if matches!(
-                model.transaction,
-                TransactionState::Active | TransactionState::Failed
-            ) {
-                None
-            } else {
-                Some("no active transaction")
-            },
-            action: || Action::RollbackTransaction,
-        },
-        PaletteEntry {
-            id: "focus.explorer",
-            title: "Focus Explorer",
-            keywords: &["sidebar", "tree"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::Focus(FocusTarget::Explorer),
-        },
-        PaletteEntry {
-            id: "focus.editor",
-            title: "Focus Editor",
-            keywords: &["sql", "query"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::Focus(FocusTarget::Editor),
-        },
-        PaletteEntry {
-            id: "focus.results",
-            title: "Focus Results",
-            keywords: &["grid", "rows"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::Focus(FocusTarget::Results),
-        },
-        PaletteEntry {
-            id: "focus.inspector",
-            title: "Focus Inspector",
-            keywords: &["details", "side"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::Focus(FocusTarget::Inspector),
-        },
-        PaletteEntry {
-            id: "data.copy.csv",
-            title: "Copy as CSV",
-            keywords: &["clipboard", "grid"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::CopyGrid(dexo_app::data::CopyFormat::Csv),
-        },
-        PaletteEntry {
-            id: "data.review",
-            title: "Review Changes",
-            keywords: &["apply", "edit"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenReview,
-        },
-        PaletteEntry {
-            id: "data.related",
-            title: "Open Related",
-            keywords: &["foreign", "key"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenRelated,
-        },
-        PaletteEntry {
-            id: "data.inspect",
-            title: "Inspect Value",
-            keywords: &["viewer", "json"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::InspectValue,
-        },
-        PaletteEntry {
-            id: "schema.preview",
-            title: "Preview DDL",
-            keywords: &["schema", "ddl", "form"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenDdlPreview,
-        },
-        PaletteEntry {
-            id: "schema.raw",
-            title: "Apply Raw DDL",
-            keywords: &["sql", "escape"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ApplyRawDdl,
-        },
-        PaletteEntry {
-            id: "schema.diff",
-            title: "Compare Schema",
-            keywords: &["diff", "migration", "snapshot"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenSchemaDiff,
-        },
-        PaletteEntry {
-            id: "transfer.export",
-            title: "Export Data",
-            keywords: &["csv", "json", "file"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenTransfer,
-        },
-        PaletteEntry {
-            id: "transfer.import",
-            title: "Import Data",
-            keywords: &["csv", "json", "file"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenTransfer,
-        },
-        PaletteEntry {
-            id: "backup.dump",
-            title: "Native Backup",
-            keywords: &["pg_dump", "mysqldump"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenBackup,
-        },
-        PaletteEntry {
-            id: "backup.restore",
-            title: "Native Restore",
-            keywords: &["pg_restore", "mysql"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenRestore,
-        },
-        PaletteEntry {
-            id: "schema.security",
-            title: "Manage Grants",
-            keywords: &["role", "user", "grant"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenSecurity,
-        },
-        PaletteEntry {
-            id: "explain.open",
-            title: "Explain Plan",
-            keywords: &["analyze", "plan", "cost"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenExplain,
-        },
-        PaletteEntry {
-            id: "admin.sessions",
-            title: "Inspect Sessions",
-            keywords: &["locks", "cancel", "terminate"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenAdmin,
-        },
-        PaletteEntry {
-            id: "mcp.profiles",
-            title: "MCP Profiles",
-            keywords: &["mcp", "allowlist", "policy", "grant"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenMcpProfiles,
-        },
-        PaletteEntry {
-            id: "explorer.expand",
-            title: "Expand Explorer Node",
-            keywords: &["tree", "open"],
-            shortcut: Some("Enter"),
-            disabled_reason: None,
-            action: || Action::ExplorerExpand,
-        },
-        PaletteEntry {
-            id: "explorer.refresh",
-            title: "Refresh Catalog Node",
-            keywords: &["reload", "tree"],
-            shortcut: Some("r"),
-            disabled_reason: None,
-            action: || Action::RefreshCatalogNode,
-        },
-        PaletteEntry {
-            id: "explorer.refresh_all",
-            title: "Refresh Catalog",
-            keywords: &["reload", "tree"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::RefreshCatalogAll,
-        },
-        PaletteEntry {
-            id: "explorer.inspect",
-            title: "Inspect Object",
-            keywords: &["properties", "ddl"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenObjectInspector,
-        },
-        PaletteEntry {
-            id: "explorer.data",
-            title: "Open Object Data",
-            keywords: &["rows", "table"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenObjectData,
-        },
-        PaletteEntry {
-            id: "editor.goto",
-            title: "Go To Definition",
-            keywords: &["navigate", "catalog"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::GoToDefinition,
-        },
-        PaletteEntry {
-            id: "explorer.copy_name",
-            title: "Copy Object Name",
-            keywords: &["clipboard", "tree"],
-            shortcut: Some("c"),
-            disabled_reason: None,
-            action: || Action::ExplorerCopyName,
-        },
-        PaletteEntry {
-            id: "explorer.copy_simple",
-            title: "Copy Simple Name",
-            keywords: &["clipboard", "tree"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::CopySimpleName,
-        },
-        PaletteEntry {
-            id: "explorer.copy_ddl",
-            title: "Copy DDL",
-            keywords: &["clipboard", "create"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::CopyDdl,
-        },
-        PaletteEntry {
-            id: "explorer.favorite",
-            title: "Toggle Favorite",
-            keywords: &["star", "pin"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ToggleFavorite,
-        },
-        PaletteEntry {
-            id: "explorer.favorites_only",
-            title: "Show Favorites Only",
-            keywords: &["filter", "star"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ToggleFavoritesOnly,
-        },
-        PaletteEntry {
-            id: "explorer.system_objects",
-            title: "Toggle System Objects",
-            keywords: &["filter", "pg_catalog", "mysql"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ToggleSystemObjects,
-        },
-        PaletteEntry {
-            id: "results.up",
-            title: "Results Up",
-            keywords: &["grid", "scroll"],
-            shortcut: Some("Up"),
-            disabled_reason: None,
-            action: || Action::ResultsUp,
-        },
-        PaletteEntry {
-            id: "results.down",
-            title: "Results Down",
-            keywords: &["grid", "scroll"],
-            shortcut: Some("Down"),
-            disabled_reason: None,
-            action: || Action::ResultsDown,
-        },
-        PaletteEntry {
-            id: "results.left",
-            title: "Results Left",
-            keywords: &["grid", "scroll"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ResultsLeft,
-        },
-        PaletteEntry {
-            id: "results.right",
-            title: "Results Right",
-            keywords: &["grid", "scroll"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ResultsRight,
-        },
-        PaletteEntry {
-            id: "results.pageup",
-            title: "Results Page Up",
-            keywords: &["grid", "scroll"],
-            shortcut: Some("PageUp"),
-            disabled_reason: None,
-            action: || Action::ResultsPageUp,
-        },
-        PaletteEntry {
-            id: "results.pagedown",
-            title: "Results Page Down",
-            keywords: &["grid", "scroll"],
-            shortcut: Some("PageDown"),
-            disabled_reason: None,
-            action: || Action::ResultsPageDown,
-        },
-        PaletteEntry {
-            id: "results.top",
-            title: "Results Top",
-            keywords: &["grid", "home"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ResultsTop,
-        },
-        PaletteEntry {
-            id: "connection.add",
-            title: "Add Connection",
-            keywords: &["database", "postgres", "mysql", "connect"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenConnectionForm,
-        },
-        PaletteEntry {
-            id: "connection.browse",
-            title: "Browse Connections",
-            keywords: &["database", "sessions", "profiles"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenConnections,
-        },
-        PaletteEntry {
-            id: "connection.connect",
-            title: "Connect Selected",
-            keywords: &["session"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ConnectSelected,
-        },
-        PaletteEntry {
-            id: "connection.duplicate",
-            title: "Duplicate Connection",
-            keywords: &["copy", "profile"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::DuplicateConnection,
-        },
-        PaletteEntry {
-            id: "connection.test",
-            title: "Test Connection",
-            keywords: &["ping"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::TestConnection,
-        },
-        PaletteEntry {
-            id: "connection.delete",
-            title: "Delete Connection",
-            keywords: &["remove"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::DeleteConnection,
-        },
-        PaletteEntry {
-            id: "connection.close_session",
-            title: "Close Session",
-            keywords: &["disconnect"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::CloseSelectedSession,
-        },
-        PaletteEntry {
-            id: "project.browse",
-            title: "Browse Projects",
-            keywords: &["workspace", "switch"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenProjects,
-        },
-        PaletteEntry {
-            id: "project.switch",
-            title: "Switch Project",
-            keywords: &["workspace", "open"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::SwitchProject {
-                name: String::new(),
-            },
-        },
-        PaletteEntry {
-            id: "project.create",
-            title: "Create Project",
-            keywords: &["workspace", "new"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::CreateProject {
-                name: String::new(),
-            },
-        },
-        PaletteEntry {
-            id: "project.rename",
-            title: "Rename Project",
-            keywords: &["workspace"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::RenameProject {
-                name: String::new(),
-            },
-        },
-        PaletteEntry {
-            id: "project.delete",
-            title: "Delete Project",
-            keywords: &["workspace"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::DeleteProject,
-        },
-        PaletteEntry {
-            id: "config.transfer",
-            title: "Import/Export Config",
-            keywords: &["portable", "toml"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenConfigTransfer,
-        },
-        PaletteEntry {
-            id: "settings.open",
-            title: "Open Settings",
-            keywords: &["theme", "keymap", "mouse"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenSettings,
-        },
-        PaletteEntry {
-            id: "settings.reset",
-            title: "Reset Settings",
-            keywords: &["defaults"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ConfirmResetSettings,
-        },
-        PaletteEntry {
-            id: "recovery.open",
-            title: "Session Recovery",
-            keywords: &["crash", "restore"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenRecovery,
-        },
-        PaletteEntry {
-            id: "recovery.restore",
-            title: "Recover Session",
-            keywords: &["crash"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ConfirmRecover,
-        },
-        PaletteEntry {
-            id: "recovery.discard",
-            title: "Discard Recovery",
-            keywords: &["crash"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ConfirmDiscardRecovery,
-        },
-        PaletteEntry {
-            id: "mcp.audit",
-            title: "MCP Audit Log",
-            keywords: &["mcp", "grant", "revoke"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenMcpAudit,
-        },
-        PaletteEntry {
-            id: "mcp.revoke_all",
-            title: "Revoke All MCP Grants",
-            keywords: &["mcp", "grant"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::RevokeAllMcpGrants,
-        },
-        PaletteEntry {
-            id: "editor.complete",
-            title: "Trigger Completion",
-            keywords: &["intellisense", "suggest"],
-            shortcut: Some("Ctrl+Space"),
-            disabled_reason: None,
-            action: || Action::RefreshSqlIntelligence,
-        },
-        PaletteEntry {
-            id: "editor.format",
-            title: "Format SQL",
-            keywords: &["pretty", "indent"],
-            shortcut: Some("Ctrl+Shift+I"),
-            disabled_reason: None,
-            action: || Action::FormatSql,
-        },
-        PaletteEntry {
-            id: "editor.accept_completion",
-            title: "Accept Completion",
-            keywords: &["complete"],
-            shortcut: Some("Tab"),
-            disabled_reason: None,
-            action: || Action::AcceptCompletion,
-        },
-        PaletteEntry {
-            id: "editor.snippet",
-            title: "Insert Snippet",
-            keywords: &["snippet", "template"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::InsertSnippet,
-        },
-        PaletteEntry {
-            id: "editor.parameters",
-            title: "Submit Parameters",
-            keywords: &["bind", "params"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::SubmitParameters,
-        },
-        PaletteEntry {
-            id: "editor.history",
-            title: "Search History",
-            keywords: &["rerun", "sql"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::SearchHistory,
-        },
-        PaletteEntry {
-            id: "editor.history.clear",
-            title: "Clear History",
-            keywords: &["history", "delete"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::ClearHistory,
-        },
-        PaletteEntry {
-            id: "diagnostics.export",
-            title: "Export Diagnostics",
-            keywords: &["logs", "support"],
-            shortcut: None,
-            disabled_reason: None,
-            action: || Action::OpenDiagnostics,
-        },
-    ]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Requirement {
+    ActiveSession,
+    Results,
+    RowSelection,
+    ExplorerNode,
+    LoadedDdl,
+    PendingChanges,
+    Breadcrumb,
+    ActiveQuery,
+    Completion,
+    Parameters,
+    History,
+    Recovery,
 }
 
-pub fn action_by_id(id: &str) -> Option<Action> {
-    palette_entries(&Model::default())
+impl Requirement {
+    pub const fn reason(self) -> &'static str {
+        match self {
+            Self::ActiveSession => "connect a session first",
+            Self::Results => "no results available",
+            Self::RowSelection => "select a result row or cell first",
+            Self::ExplorerNode => "select an explorer object first",
+            Self::LoadedDdl => "load DDL first",
+            Self::PendingChanges => "no pending changes",
+            Self::Breadcrumb => "no previous data location",
+            Self::ActiveQuery => "no query is running",
+            Self::Completion => "no completion available",
+            Self::Parameters => "no query parameters",
+            Self::History => "history is empty",
+            Self::Recovery => "no recovery checkpoint",
+        }
+    }
+}
+
+pub fn invocation_by_id(model: &Model, id: &str) -> Option<PaletteInvocation> {
+    palette_entries(model)
         .into_iter()
         .find(|entry| entry.id == id)
-        .map(|entry| (entry.action)())
+        .map(|entry| entry.invocation)
+}
+
+pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
+    &[
+        ("copy-row-csv", "Copy row as CSV"),
+        ("copy-cell", "Copy cell"),
+        ("data.copy.json", "Copy as JSON"),
+        ("data.copy.csv", "Copy as CSV"),
+        ("data.copy.markdown", "Copy as Markdown"),
+        ("data.copy.sql", "Copy as SQL"),
+        ("data.inspect", "Inspect value"),
+        ("data.filter", "Apply remote filter"),
+        ("data.related", "Open related"),
+    ]
 }
 
 /// Popup list rows for a terminal height. Matches `render_palette` (height clamp 5..=12, minus border+query).
@@ -725,12 +198,17 @@ mod tests {
 
     #[test]
     fn palette_explains_disabled_commit() {
-        let entries = palette_entries(&Model::fixture(TransactionState::Idle));
+        let mut model = Model::fixture(TransactionState::Idle);
+        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
+        let entries = palette_entries(&model);
         let commit = entries
             .iter()
             .find(|e| e.id == "transaction.commit")
             .unwrap();
-        assert_eq!(commit.disabled_reason, Some("no active transaction"));
+        assert_eq!(
+            commit.disabled_reason.as_deref(),
+            Some("no active transaction")
+        );
     }
 
     #[test]
@@ -780,23 +258,67 @@ mod tests {
 
     #[test]
     fn every_current_action_is_in_palette() {
-        let ids: Vec<_> = palette_entries(&Model::default())
-            .iter()
-            .map(|entry| entry.id)
-            .collect();
-        for id in [
-            "workbench.quit",
-            "palette.open",
-            "query.execute",
-            "query.cancel",
-            "transaction.commit",
-            "transaction.rollback",
-            "focus.explorer",
-            "focus.editor",
-            "focus.results",
-            "focus.inspector",
-        ] {
-            assert!(ids.contains(&id), "missing {id}");
-        }
+        let entries = palette_entries(&Model::default());
+        let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
+        assert_eq!(entries.len(), 129);
+        assert_eq!(ids.len(), 129);
+    }
+
+    #[test]
+    fn help_layout_and_results_menu_actions() {
+        use crate::action::{Action, FocusTarget};
+        use crate::layout::LayoutPreset;
+        use crate::model::GridSelection;
+        use crate::update::update;
+
+        let mut model = Model::default();
+        update(&mut model, Action::ToggleHelp);
+        assert!(model.help.open);
+        let view = crate::render::render_to_string(&model, 100, 40);
+        assert!(view.contains("Keybindings"));
+        assert!(view.contains("Editor"));
+        update(&mut model, Action::ToggleHelp);
+        assert!(!model.help.open);
+
+        update(&mut model, Action::CycleLayout);
+        assert_eq!(model.layout_preset, LayoutPreset::ResultsWide);
+        assert!(!model.panes.inspector_visible);
+        update(&mut model, Action::ResetLayout);
+        assert_eq!(model.layout_preset, LayoutPreset::Normal);
+        assert!(model.panes.inspector_visible);
+
+        update(&mut model, Action::Focus(FocusTarget::Results));
+        model.results = crate::model::ResultsState::default();
+        *model.results = crate::model::GridModel::sample_rows(6);
+        update(&mut model, Action::ResultsDown);
+        assert_eq!(model.results.cursor_row(), Some(1));
+        update(&mut model, Action::ResultsExtendDown);
+        assert!(matches!(
+            model.results.kind,
+            GridSelection::Range {
+                start: (1, _),
+                end: (2, _)
+            }
+        ));
+        update(&mut model, Action::ToggleResultsPick);
+        assert!(!model.results_menu.open);
+        assert!(model.results.picked_rows.contains(&2));
+        update(&mut model, Action::OpenResultsMenu);
+        assert!(model.results_menu.open);
+        let view = crate::render::render_to_string(&model, 80, 24);
+        assert!(view.contains("Row actions"));
+        update(
+            &mut model,
+            Action::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert!(!model.results_menu.open);
+
+        update(&mut model, Action::Focus(FocusTarget::Editor));
+        let view = crate::render::render_to_string(&model, 100, 40);
+        assert!(view.contains("FOCUS: Editor"));
+        assert!(view.contains("▸ SQL") || view.contains("> SQL"));
     }
 }

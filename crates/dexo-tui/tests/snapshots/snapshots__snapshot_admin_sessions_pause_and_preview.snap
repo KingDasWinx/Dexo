@@ -1,15 +1,16 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 214
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector─────────────────┐
-│[offline]                 │┌SQL · scratch.sql─────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
-│▾ local                   ││   1▸select 1                                                                                         ││                          │
-│  ▸ public                ││                                                                                                      ││                          │
-│  ▸ mysql.users [restricte││                                                                                                      ││                          │
-│actions: properties DDL da││                                                                                                      ││                          │
-│selected: local.public    ││                                                                                                      ││                          │
+┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
+│[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+│ ▾ local                  ││   1▸select 1                                                                                         ││                          │
+│>  ▸ public               ││                                                                                                      ││                          │
+│     mysql.users [restrict││                                                                                                      ││                          │
+│                          ││                                                                                                      ││                          │
+│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -39,7 +40,7 @@ demo  local  public
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────┘│                          │
-│                          │┌Results (0)───────────────────────────────────────────────────────────────────────────────────────────┐│                          │
+│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────┐│                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -51,4 +52,4 @@ demo  local  public
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-connected:local  tx:idle  rows:0  ctrl+p palette
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help

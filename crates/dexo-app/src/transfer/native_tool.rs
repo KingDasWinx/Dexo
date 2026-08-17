@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
+use std::process::Stdio;
 use std::sync::Mutex;
+
+use secrecy::{ExposeSecret, SecretString};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum NativeToolKind {
@@ -64,27 +67,53 @@ pub fn parse_major(version: &str) -> Option<u32> {
         .and_then(|part| part.parse().ok())
 }
 
+#[derive(Clone, Debug)]
+pub struct NativeToolRequest {
+    pub kind: NativeToolKind,
+    pub host: String,
+    pub port: u16,
+    pub database: String,
+    pub username: String,
+    pub path: PathBuf,
+    pub secret: SecretString,
+    pub expected_major: u32,
+}
+
+fn sibling_part_file(path: &Path) -> PathBuf {
+    let mut name = path
+        .file_name()
+        .map(|name| name.to_os_string())
+        .unwrap_or_else(|| "dump".into());
+    name.push(".part");
+    path.with_file_name(name)
+}
+
 pub fn prepare(
-    kind: NativeToolKind,
-    secret: &str,
+    request: &NativeToolRequest,
     version: &str,
-    expected_major: u32,
     dir: &Path,
 ) -> Result<PreparedTool, NativeToolError> {
-    let found = parse_major(version).unwrap_or(0);
-    if found != expected_major {
-        return Err(NativeToolError::VersionMismatch {
-            found: version.into(),
-            expected: expected_major,
-        });
+    // ponytail: expected_major 0 skips the check until Session exposes server version.
+    if request.expected_major != 0 {
+        let found = parse_major(version).unwrap_or(0);
+        if found != request.expected_major {
+            return Err(NativeToolError::VersionMismatch {
+                found: version.into(),
+                expected: request.expected_major,
+            });
+        }
     }
-    let passfile = dir.join(match kind {
+    let secret = request.secret.expose_secret();
+    let passfile = dir.join(match request.kind {
         NativeToolKind::PgDump | NativeToolKind::PgRestore => "pgpass",
         NativeToolKind::MysqlDump | NativeToolKind::MysqlRestore => "my.cnf",
     });
-    let contents = match kind {
+    let contents = match request.kind {
         NativeToolKind::PgDump | NativeToolKind::PgRestore => {
-            format!("localhost:5432:*:dexo:{secret}\n")
+            format!(
+                "{}:{}:*:{}:{secret}\n",
+                request.host, request.port, request.username
+            )
         }
         NativeToolKind::MysqlDump | NativeToolKind::MysqlRestore => {
             format!("[client]\npassword={secret}\n")
@@ -96,19 +125,39 @@ pub fn prepare(
         use std::os::unix::fs::PermissionsExt;
         let _ = std::fs::set_permissions(&passfile, std::fs::Permissions::from_mode(0o600));
     }
-    let (program, args, env): (String, Vec<String>, Vec<(String, String)>) = match kind {
+    let path = request.path.display().to_string();
+    let port = request.port.to_string();
+    let (program, args, env): (String, Vec<String>, Vec<(String, String)>) = match request.kind {
         NativeToolKind::PgDump => (
             "pg_dump".into(),
             vec![
                 "--no-password".into(),
+                "--host".into(),
+                request.host.clone(),
+                "--port".into(),
+                port,
+                "--username".into(),
+                request.username.clone(),
                 "--file".into(),
-                "backup.dump".into(),
+                path,
+                request.database.clone(),
             ],
             vec![("PGPASSFILE".into(), passfile.display().to_string())],
         ),
         NativeToolKind::PgRestore => (
             "pg_restore".into(),
-            vec!["--no-password".into(), "backup.dump".into()],
+            vec![
+                "--no-password".into(),
+                "--host".into(),
+                request.host.clone(),
+                "--port".into(),
+                port,
+                "--username".into(),
+                request.username.clone(),
+                "--dbname".into(),
+                request.database.clone(),
+                path,
+            ],
             vec![("PGPASSFILE".into(), passfile.display().to_string())],
         ),
         NativeToolKind::MysqlDump => (
@@ -116,6 +165,13 @@ pub fn prepare(
             vec![
                 "--defaults-extra-file".into(),
                 passfile.display().to_string(),
+                "--host".into(),
+                request.host.clone(),
+                "--port".into(),
+                port,
+                "--user".into(),
+                request.username.clone(),
+                request.database.clone(),
             ],
             vec![],
         ),
@@ -124,6 +180,13 @@ pub fn prepare(
             vec![
                 "--defaults-extra-file".into(),
                 passfile.display().to_string(),
+                "--host".into(),
+                request.host.clone(),
+                "--port".into(),
+                port,
+                "--user".into(),
+                request.username.clone(),
+                request.database.clone(),
             ],
             vec![],
         ),
@@ -146,6 +209,8 @@ pub struct ProcessSpec {
     pub program: String,
     pub args: Vec<String>,
     pub env: Vec<(String, String)>,
+    pub stdin: Option<PathBuf>,
+    pub stdout: Option<PathBuf>,
 }
 
 #[async_trait::async_trait]
@@ -170,17 +235,29 @@ impl<R: ProcessRunner> NativeToolRunner<R> {
 
     pub async fn start(
         &self,
-        kind: NativeToolKind,
-        secret: &str,
+        request: NativeToolRequest,
         version: &str,
-        expected_major: u32,
         dir: &Path,
     ) -> Result<NativeHandle, NativeToolError> {
-        let prepared = prepare(kind, secret, version, expected_major, dir)?;
+        let stdout_persist = match request.kind {
+            NativeToolKind::MysqlDump => {
+                let tmp = sibling_part_file(&request.path);
+                Some((tmp, request.path.clone()))
+            }
+            _ => None,
+        };
+        let stdin = match request.kind {
+            NativeToolKind::MysqlRestore => Some(request.path.clone()),
+            _ => None,
+        };
+        let stdout = stdout_persist.as_ref().map(|(tmp, _)| tmp.clone());
+        let prepared = prepare(&request, version, dir)?;
         let spec = ProcessSpec {
             program: prepared.program.clone(),
             args: prepared.args.clone(),
             env: prepared.env.clone(),
+            stdin,
+            stdout,
         };
         let child = self.process.spawn(spec).await?;
         Ok(NativeHandle {
@@ -192,6 +269,7 @@ impl<R: ProcessRunner> NativeToolRunner<R> {
             child: Mutex::new(Some(child)),
             cancelled: Mutex::new(false),
             prepared,
+            stdout_persist,
         })
     }
 }
@@ -203,6 +281,7 @@ pub struct NativeHandle {
     cancelled: Mutex<bool>,
     #[allow(dead_code)]
     prepared: PreparedTool,
+    stdout_persist: Option<(PathBuf, PathBuf)>,
 }
 
 impl NativeHandle {
@@ -237,6 +316,15 @@ impl NativeHandle {
             NativeStatus::Failed
         };
         self.cleanup_secret();
+        if cancelled {
+            if let Some((tmp, _)) = &self.stdout_persist {
+                let _ = std::fs::remove_file(tmp);
+            }
+        } else if status == NativeStatus::Succeeded
+            && let Some((tmp, dest)) = &self.stdout_persist
+        {
+            std::fs::rename(tmp, dest).map_err(|error| NativeToolError::Io(error.to_string()))?;
+        }
         Ok(NativeRunResult {
             command_line: self.command_line.clone(),
             sanitized_log: format!("status={status:?} {}", self.command_line),
@@ -266,8 +354,19 @@ impl ProcessRunner for TokioProcessRunner {
             command.env(key, value);
         }
         command.kill_on_drop(true);
-        command.stdout(std::process::Stdio::piped());
-        command.stderr(std::process::Stdio::piped());
+        if let Some(path) = &spec.stdin {
+            let file = std::fs::File::open(path)
+                .map_err(|error| NativeToolError::Io(error.to_string()))?;
+            command.stdin(Stdio::from(file));
+        }
+        if let Some(path) = &spec.stdout {
+            let file = std::fs::File::create(path)
+                .map_err(|error| NativeToolError::Io(error.to_string()))?;
+            command.stdout(Stdio::from(file));
+        } else {
+            command.stdout(Stdio::piped());
+        }
+        command.stderr(Stdio::piped());
         let child = command
             .spawn()
             .map_err(|error| NativeToolError::Io(error.to_string()))?;
@@ -303,11 +402,25 @@ impl RunningProcess for TokioChild {
 #[cfg(test)]
 mod tests {
     use super::{
-        NativeStatus, NativeToolError, NativeToolKind, NativeToolRunner, ProcessRunner,
-        ProcessSpec, RunningProcess, prepare,
+        NativeStatus, NativeToolError, NativeToolKind, NativeToolRequest, NativeToolRunner,
+        ProcessRunner, ProcessSpec, RunningProcess, prepare,
     };
+    use secrecy::SecretString;
     use std::path::{Path, PathBuf};
     use std::sync::{Arc, Mutex};
+
+    fn dump_request(secret: &str, path: PathBuf) -> NativeToolRequest {
+        NativeToolRequest {
+            kind: NativeToolKind::PgDump,
+            host: "localhost".into(),
+            port: 5432,
+            database: "dexo".into(),
+            username: "dexo".into(),
+            path,
+            secret: SecretString::from(secret),
+            expected_major: 16,
+        }
+    }
 
     struct RecordingRunner {
         cancelled: Arc<Mutex<bool>>,
@@ -359,10 +472,8 @@ mod tests {
         });
         let handle = runner
             .start(
-                NativeToolKind::PgDump,
-                "SUPER_SECRET_SENTINEL",
+                dump_request("SUPER_SECRET_SENTINEL", dir.path().join("out.dump")),
                 "16.9",
-                16,
                 dir.path(),
             )
             .await
@@ -382,7 +493,11 @@ mod tests {
             secret: dir.path().join("pgpass"),
         });
         let handle = runner
-            .start(NativeToolKind::PgDump, "SECRET", "16.9", 16, dir.path())
+            .start(
+                dump_request("SECRET", dir.path().join("out.dump")),
+                "16.9",
+                dir.path(),
+            )
             .await
             .unwrap();
         handle.cancel().await.unwrap();
@@ -394,9 +509,28 @@ mod tests {
     #[test]
     fn version_mismatch_and_mysql_option_file() {
         let dir = tempfile::tempdir().unwrap();
-        let error = prepare(NativeToolKind::PgDump, "x", "15.4", 16, dir.path()).unwrap_err();
+        let error = prepare(
+            &dump_request("x", dir.path().join("out.dump")),
+            "15.4",
+            dir.path(),
+        )
+        .unwrap_err();
         assert!(matches!(error, NativeToolError::VersionMismatch { .. }));
-        let mysql = prepare(NativeToolKind::MysqlDump, "SECRET", "8.4", 8, dir.path()).unwrap();
+        let mysql = prepare(
+            &NativeToolRequest {
+                kind: NativeToolKind::MysqlDump,
+                host: "localhost".into(),
+                port: 3306,
+                database: "dexo".into(),
+                username: "dexo".into(),
+                path: dir.path().join("out.sql"),
+                secret: SecretString::from("SECRET"),
+                expected_major: 8,
+            },
+            "8.4",
+            dir.path(),
+        )
+        .unwrap();
         assert!(!mysql.command_line.contains("SECRET"));
         assert!(
             mysql
@@ -404,5 +538,32 @@ mod tests {
                 .iter()
                 .any(|arg| arg.contains("defaults-extra-file"))
         );
+    }
+
+    #[test]
+    fn dump_and_restore_use_request_path_not_hardcoded_backup() {
+        let dir = tempfile::tempdir().unwrap();
+        let dest = dir.path().join("orders.dump");
+        let dump = prepare(&dump_request("SECRET", dest.clone()), "16.9", dir.path()).unwrap();
+        assert!(dump.args.iter().any(|arg| arg == dest.to_str().unwrap()));
+        assert!(!dump.args.iter().any(|arg| arg == "backup.dump"));
+        let restore = prepare(
+            &NativeToolRequest {
+                kind: NativeToolKind::PgRestore,
+                host: "db.example".into(),
+                port: 5433,
+                database: "app".into(),
+                username: "owner".into(),
+                path: dest.clone(),
+                secret: SecretString::from("SECRET"),
+                expected_major: 16,
+            },
+            "16.9",
+            dir.path(),
+        )
+        .unwrap();
+        assert!(restore.args.iter().any(|arg| arg == dest.to_str().unwrap()));
+        assert!(restore.args.iter().any(|arg| arg == "db.example"));
+        assert!(!restore.command_line.contains("SECRET"));
     }
 }

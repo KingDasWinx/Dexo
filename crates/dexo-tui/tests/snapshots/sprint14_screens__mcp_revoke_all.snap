@@ -1,10 +1,11 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 37
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌Inspector─────────────────┐
-│No connection             │┌SQL · scratch.sql─────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
+│No connection             │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │                          ││   1                                                                                                  ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -14,18 +15,18 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
-│                          ││               ┌MCP audit─────────────────────────────────────────────────────────────┐               ││                          │
-│                          ││               │mcp audit confirm_revoke=false                                        │               ││                          │
-│                          ││               │audit empty                                                           │               ││                          │
+│                          ││               ┌MCP profiles──────────────────────────────────────────────────────────┐               ││                          │
+│                          ││               │mcp profile=assistant enabled=false confirm=false                     │               ││                          │
+│                          ││               │scope allow db.public.*                                               │               ││                          │
+│                          ││               │scope deny db.public.secrets                                          │               ││                          │
+│                          ││               │tool catalog_search                                                   │               ││                          │
+│                          ││               │tool object_describe                                                  │               ││                          │
+│                          ││               │resource db.public.items                                              │               ││                          │
+│                          ││               │grant data_write data_insert 900s                                     │               ││                          │
+│                          ││               │diff profile db.public.* -> grant db.public.items                     │               ││                          │
+│                          ││               │confirm revoke all grants                                             │               ││                          │
 │                          ││               │                                                                      │               ││                          │
 │                          ││               │                                                                      │               ││                          │
-│                          ││               │                                                                      │               ││                          │
-│                          ││               │                                                                      │               ││                          │
-│                          ││               │                                                                      │               ││                          │
-│                          ││               │                                                                      │               ││                          │
-│                          ││               │                                                                      │               ││                          │
-│                          ││               │                                                                      │               ││                          │
-│                          ││               └──────────────────────────────────────────────────────────────────────┘               ││                          │
 │                          ││               │                                                                      │               ││                          │
 │                          ││               └──────────────────────────────────────────────────────────────────────┘               ││                          │
 │                          ││                                                                                                      ││                          │
@@ -39,7 +40,7 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────┘│                          │
-│                          │┌Results (0)───────────────────────────────────────────────────────────────────────────────────────────┐│                          │
+│                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────┐│                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -51,4 +52,4 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-disconnected  tx:idle  rows:0  ctrl+p palette
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help

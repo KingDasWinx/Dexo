@@ -1,48 +1,53 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::text::Span;
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
+use crate::mouse::{HitMap, HitTarget};
 use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 
-pub fn render(frame: &mut Frame, model: &Model) {
+pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    hits.clear();
     let plan = LayoutPlan::for_area_with(frame.area(), Some(&model.panes));
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
-        crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model),
+        crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model, hits),
         _ => {
+            hits.register(HitTarget::Explorer, plan.explorer);
             render_panel(
                 frame,
                 plan.explorer,
+                model,
                 "Explorer",
-                crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
+                model.focus == Focus::Explorer,
+                explorer_body(model, plan.explorer),
             );
             crate::widgets::tabs::render(frame, plan.tabs, model);
-            if model.tabs.active == 2 {
-                render_panel(
-                    frame,
-                    plan.content,
-                    "Schema",
-                    crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
-                );
-            } else if model.tabs.active == 4 {
-                render_panel(
-                    frame,
-                    plan.content,
-                    "Explain",
-                    model.explain.lines().join("\n"),
-                );
-            } else {
-                crate::widgets::editor::render(frame, plan.content, model);
-            }
-            crate::widgets::grid::render(frame, plan.results, model);
-            render_panel(frame, plan.inspector, "Inspector", inspector_body(model));
+            hits.register(HitTarget::Editor, plan.content);
+            render_editor_content(frame, plan.content, model);
+            hits.register(HitTarget::Grid, plan.results);
+            crate::widgets::grid::render(frame, plan.results, model, hits);
+            render_panel(
+                frame,
+                plan.inspector,
+                model,
+                &inspector_title(model),
+                model.focus == Focus::Inspector,
+                inspector_body(model),
+            );
         }
     }
     crate::widgets::status::render(frame, plan.status, model);
     if model.palette.open {
         render_palette(frame, model);
+    }
+    if model.help.open {
+        render_help(frame, model);
+    }
+    if model.results_menu.open {
+        render_results_menu(frame, model);
     }
     if let Some(review) = &model.data.review {
         render_review(frame, review);
@@ -78,7 +83,9 @@ pub fn render(frame: &mut Frame, model: &Model) {
         render_panel(
             frame,
             centered(frame.area(), 40, 12),
+            model,
             "Security",
+            true,
             model.security.lines().join("\n"),
         );
     }
@@ -142,6 +149,24 @@ pub fn render(frame: &mut Frame, model: &Model) {
             popup,
         );
     }
+    if model.transaction_prompt.open {
+        let popup = centered(frame.area(), 56, 8);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.transaction_prompt.lines().join("\n"))
+                .block(Block::bordered().title("Savepoint")),
+            popup,
+        );
+    }
+    if model.data.query_prompt.open {
+        let popup = centered(frame.area(), 56, 8);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.data.query_prompt.lines().join("\n"))
+                .block(Block::bordered().title("Query")),
+            popup,
+        );
+    }
     if model.connection_form.open {
         let popup = centered(frame.area(), 64, 16);
         frame.render_widget(Clear, popup);
@@ -169,6 +194,15 @@ pub fn render(frame: &mut Frame, model: &Model) {
             popup,
         );
     }
+    if model.diagnostics.open {
+        let popup = centered(frame.area(), 72, 16);
+        frame.render_widget(Clear, popup);
+        frame.render_widget(
+            Paragraph::new(model.diagnostics.lines().join("\n"))
+                .block(Block::bordered().title("Diagnostics")),
+            popup,
+        );
+    }
     if model.mcp_audit.open {
         let popup = centered(frame.area(), 72, 12);
         frame.render_widget(Clear, popup);
@@ -178,32 +212,73 @@ pub fn render(frame: &mut Frame, model: &Model) {
             popup,
         );
     }
+    if model.file_picker.open {
+        render_file_picker(frame, model);
+    }
+    if model.editor.completion_open {
+        render_completion(frame, model);
+    }
+    if model.editor.parameter_prompt {
+        render_parameters(frame, model);
+    }
+    if model.editor.history_open {
+        if model.editor.history_confirm_clear {
+            let target = if model.connection.name.is_empty() {
+                "all"
+            } else {
+                model.connection.name.as_str()
+            };
+            render_list_overlay(frame, &format!("clear history for {target}?"), &[], 0, 0);
+        } else {
+            render_list_overlay(
+                frame,
+                "History",
+                &model.editor.history,
+                model.editor.history_selected,
+                0,
+            );
+        }
+    }
+    if model.editor.snippet_open {
+        let names: Vec<String> = model
+            .editor
+            .snippets
+            .iter()
+            .map(|snippet| snippet.name.clone())
+            .collect();
+        render_list_overlay(frame, "Snippets", &names, model.editor.snippet_selected, 0);
+    }
 }
 
-fn render_compact(frame: &mut Frame, area: Rect, model: &Model) {
+fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     match model.focus {
-        Focus::Explorer => render_panel(
+        Focus::Explorer => {
+            hits.register(HitTarget::Explorer, area);
+            render_panel(
+                frame,
+                area,
+                model,
+                "Explorer",
+                true,
+                explorer_body(model, area),
+            );
+        }
+        Focus::Editor | Focus::Palette => {
+            hits.register(HitTarget::Editor, area);
+            render_editor_content(frame, area, model);
+        }
+        Focus::Results => {
+            hits.register(HitTarget::Grid, area);
+            crate::widgets::grid::render(frame, area, model, hits);
+        }
+        Focus::Inspector => render_panel(
             frame,
             area,
-            "Explorer",
-            crate::widgets::object_tree::render_lines(&model.explorer).join("\n"),
+            model,
+            &inspector_title(model),
+            true,
+            inspector_body(model),
         ),
-        Focus::Editor | Focus::Palette => {
-            if model.tabs.active == 2 {
-                render_panel(
-                    frame,
-                    area,
-                    "Schema",
-                    crate::widgets::form::render_lines(&model.schema_editor).join("\n"),
-                );
-            } else if model.tabs.active == 4 {
-                render_panel(frame, area, "Explain", model.explain.lines().join("\n"));
-            } else {
-                crate::widgets::editor::render(frame, area, model);
-            }
-        }
-        Focus::Results => crate::widgets::grid::render(frame, area, model),
-        Focus::Inspector => render_panel(frame, area, "Inspector", inspector_body(model)),
     }
 }
 
@@ -224,9 +299,145 @@ fn context_line(model: &Model) -> String {
     )
 }
 
+fn inspector_title(model: &Model) -> String {
+    format!("Inspector · {}", model.inspector.tab.label())
+}
+
+fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model) {
+    if model.tabs.active == 0 {
+        crate::widgets::editor::render(frame, area, model);
+        return;
+    }
+    let (title, body) = editor_tab_view(model);
+    render_panel_scrolled(
+        frame,
+        area,
+        model,
+        title,
+        model.focus == Focus::Editor,
+        body,
+        model.tabs.scroll,
+    );
+}
+
+fn editor_tab_view(model: &Model) -> (&'static str, String) {
+    match model.tabs.active {
+        1 => ("Data", data_tab_body(model)),
+        2 => ("DDL", ddl_tab_body(model)),
+        3 => ("Properties", properties_tab_body(model)),
+        4 => ("Explain", model.explain.lines().join("\n")),
+        _ => ("Data", data_tab_body(model)),
+    }
+}
+
+fn data_tab_body(model: &Model) -> String {
+    let mut lines = Vec::new();
+    let target = model.data.target.display_unquoted();
+    if !target.is_empty() && target != "tbl" {
+        lines.push(format!("table: {target}"));
+    }
+    if let Some(filter) = &model.data.filter {
+        lines.push(format!("filter: {filter:?}"));
+    }
+    lines.push(format!(
+        "rows: {}  page: {}  limit: {}",
+        model.results.row_count(),
+        model.data.page_offset,
+        model.data.page_limit
+    ));
+    if model.results.columns().is_empty() {
+        lines.push("Open a table or run a query. Rows stay in Results.".into());
+    } else {
+        lines.push("columns:".into());
+        for column in model.results.columns() {
+            let null = if column.nullable { "null" } else { "not null" };
+            lines.push(format!("  {} {} {null}", column.name, column.type_name));
+        }
+    }
+    lines.join("\n")
+}
+
+fn ddl_tab_body(model: &Model) -> String {
+    if let Some(ddl) = &model.inspector.ddl {
+        let name = if model.inspector.qualified_name.is_empty() {
+            "DDL"
+        } else {
+            model.inspector.qualified_name.as_str()
+        };
+        format!("{name}\n\n{ddl}")
+    } else {
+        crate::widgets::form::render_lines(&model.schema_editor).join("\n")
+    }
+}
+
+fn properties_tab_body(model: &Model) -> String {
+    if model.inspector.qualified_name.is_empty() && model.inspector.object.is_none() {
+        return "Select an object in Explorer.".into();
+    }
+    let mut lines = Vec::new();
+    if !model.inspector.qualified_name.is_empty() {
+        lines.push(model.inspector.qualified_name.clone());
+    }
+    if let Some(error) = &model.inspector.error {
+        lines.push(format!("error: {error}"));
+    }
+    for restriction in &model.inspector.restrictions {
+        lines.push(format!("restricted: {restriction}"));
+    }
+    if let Some(object) = &model.inspector.object {
+        lines.push(format!("kind: {}", object.kind.as_str()));
+    }
+    if !model.inspector.dependencies.is_empty() {
+        lines.push(format!(
+            "deps: {}",
+            model
+                .inspector
+                .dependencies
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !model.inspector.dependents.is_empty() {
+        lines.push(format!(
+            "dependents: {}",
+            model
+                .inspector
+                .dependents
+                .iter()
+                .map(|id| id.as_str())
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    }
+    if !model.inspector.effective_privileges.is_empty() {
+        lines.push(format!(
+            "privileges: {}",
+            model.inspector.effective_privileges.join(", ")
+        ));
+    }
+    if !model.results.columns().is_empty() {
+        lines.push("columns:".into());
+        for column in model.results.columns() {
+            let null = if column.nullable { "null" } else { "not null" };
+            lines.push(format!("  {} {} {null}", column.name, column.type_name));
+        }
+    }
+    lines.join("\n")
+}
+
 fn inspector_body(model: &Model) -> String {
     if model.inspector.open {
-        return describe_object_inspector(&model.inspector);
+        let mut body = describe_object_inspector(&model.inspector);
+        if !model.results.columns().is_empty() {
+            body.push('\n');
+            for column in model.results.columns() {
+                let null = if column.nullable { "null" } else { "not null" };
+                body.push_str(&format!("{} {} {null}\n", column.name, column.type_name));
+            }
+        }
+        return body;
     }
     if let Some(view) = &model.data.viewer {
         return crate::widgets::viewer::describe(view);
@@ -262,38 +473,84 @@ fn describe_object_inspector(
     if let Some(object) = &inspector.object {
         lines.push(format!("kind: {}", object.kind.as_str()));
     }
-    if let Some(ddl) = &inspector.ddl {
-        lines.push(ddl.clone());
-    }
-    if !inspector.dependencies.is_empty() {
-        lines.push(format!(
-            "deps: {}",
-            inspector
-                .dependencies
-                .iter()
-                .map(|id| id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !inspector.dependents.is_empty() {
-        lines.push(format!(
-            "dependents: {}",
-            inspector
-                .dependents
-                .iter()
-                .map(|id| id.as_str())
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !inspector.effective_privileges.is_empty() {
-        lines.push(format!(
-            "privileges: {}",
-            inspector.effective_privileges.join(", ")
-        ));
+    match inspector.tab {
+        crate::screens::object_inspector::InspectorTab::Ddl => {
+            if let Some(ddl) = &inspector.ddl {
+                lines.push(ddl.clone());
+            }
+        }
+        crate::screens::object_inspector::InspectorTab::Dependencies => {
+            if !inspector.dependencies.is_empty() {
+                lines.push(format!(
+                    "deps: {}",
+                    inspector
+                        .dependencies
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !inspector.dependents.is_empty() {
+                lines.push(format!(
+                    "dependents: {}",
+                    inspector
+                        .dependents
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+        }
+        crate::screens::object_inspector::InspectorTab::Privileges => {
+            if !inspector.effective_privileges.is_empty() {
+                lines.push(format!(
+                    "privileges: {}",
+                    inspector.effective_privileges.join(", ")
+                ));
+            }
+        }
+        crate::screens::object_inspector::InspectorTab::Properties => {
+            if let Some(ddl) = &inspector.ddl {
+                lines.push(ddl.clone());
+            }
+            if !inspector.dependencies.is_empty() {
+                lines.push(format!(
+                    "deps: {}",
+                    inspector
+                        .dependencies
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !inspector.dependents.is_empty() {
+                lines.push(format!(
+                    "dependents: {}",
+                    inspector
+                        .dependents
+                        .iter()
+                        .map(|id| id.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ));
+            }
+            if !inspector.effective_privileges.is_empty() {
+                lines.push(format!(
+                    "privileges: {}",
+                    inspector.effective_privileges.join(", ")
+                ));
+            }
+        }
     }
     lines.join("\n")
+}
+
+fn explorer_body(model: &Model, area: Rect) -> String {
+    let rows = area.height.saturating_sub(2) as usize;
+    crate::widgets::object_tree::render_visible(&model.explorer, Some(rows.max(1))).join("\n")
 }
 
 fn render_bar(frame: &mut Frame, area: Rect, text: String) {
@@ -303,18 +560,67 @@ fn render_bar(frame: &mut Frame, area: Rect, text: String) {
     frame.render_widget(Paragraph::new(text), area);
 }
 
-fn render_panel(frame: &mut Frame, area: Rect, title: &str, body: String) {
+fn render_panel(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    title: &str,
+    focused: bool,
+    body: String,
+) {
+    render_panel_scrolled(frame, area, model, title, focused, body, 0);
+}
+
+fn render_panel_scrolled(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    title: &str,
+    focused: bool,
+    body: String,
+    scroll: u16,
+) {
     if area.width == 0 || area.height == 0 {
         return;
     }
     if area.width < 2 || area.height < 2 {
-        frame.render_widget(Paragraph::new(body), area);
+        frame.render_widget(Paragraph::new(body).scroll((scroll, 0)), area);
         return;
     }
     frame.render_widget(
-        Paragraph::new(body).block(Block::bordered().title(title)),
+        Paragraph::new(body)
+            .scroll((scroll, 0))
+            .block(pane_block(model, title, focused)),
         area,
     );
+}
+
+pub fn pane_title(title: &str, focused: bool, unicode: bool) -> String {
+    let mark = if focused {
+        if unicode { "▸ " } else { "> " }
+    } else {
+        "  "
+    };
+    format!("{mark}{title}")
+}
+
+pub fn pane_block(model: &Model, title: &str, focused: bool) -> Block<'static> {
+    let caps = model.capabilities;
+    Block::bordered()
+        .title(Span::styled(
+            pane_title(title, focused, caps.unicode),
+            model.theme.pane_title(focused, caps),
+        ))
+        .border_style(model.theme.pane_border(focused, caps))
+}
+
+fn overlay_block(model: &Model, title: &str) -> Block<'static> {
+    Block::bordered()
+        .title(Span::styled(
+            title.to_string(),
+            model.theme.overlay(model.capabilities),
+        ))
+        .border_style(model.theme.overlay(model.capabilities))
 }
 
 fn render_palette(frame: &mut Frame, model: &Model) {
@@ -344,14 +650,75 @@ fn render_palette(frame: &mut Frame, model: &Model) {
         } else {
             " "
         };
+        let shortcut = entry
+            .shortcut
+            .map(|value| format!(" [{value}]"))
+            .unwrap_or_default();
         let disabled = entry
             .disabled_reason
+            .as_deref()
             .map(|reason| format!(" ({reason})"))
             .unwrap_or_default();
-        lines.push(format!("{marker} {}{disabled}", entry.title));
+        lines.push(format!("{marker} {}{shortcut}{disabled}", entry.title));
     }
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(Block::bordered().title("Command Palette")),
+        Paragraph::new(lines.join("\n")).block(overlay_block(model, "Command Palette")),
+        popup,
+    );
+}
+
+fn render_help(frame: &mut Frame, model: &Model) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 76, area.height.saturating_sub(2).max(12));
+    frame.render_widget(Clear, popup);
+    let mut lines = Vec::new();
+    for (section, rows) in model.keymap.help_sections() {
+        lines.push(format!("[{section}]"));
+        for (chord, command) in rows {
+            let title = palette_entries(model)
+                .iter()
+                .find(|entry| entry.id == command)
+                .map(|entry| entry.title)
+                .unwrap_or(command.as_str());
+            lines.push(format!("  {chord:<16} {title}"));
+        }
+        lines.push(String::new());
+    }
+    if lines.is_empty() {
+        lines.push("no bindings".into());
+    }
+    let inner_h = popup.height.saturating_sub(2) as usize;
+    let max_scroll = lines.len().saturating_sub(inner_h.max(1));
+    let scroll = (model.help.scroll as usize).min(max_scroll) as u16;
+    frame.render_widget(
+        Paragraph::new(lines.join("\n"))
+            .scroll((scroll, 0))
+            .block(overlay_block(model, "Keybindings  Esc to close")),
+        popup,
+    );
+}
+
+fn render_results_menu(frame: &mut Frame, model: &Model) {
+    let items = crate::palette::results_menu_items();
+    let labels: Vec<String> = items
+        .iter()
+        .enumerate()
+        .map(|(index, (_, title))| {
+            let marker = if index == model.results_menu.selected {
+                ">"
+            } else {
+                " "
+            };
+            format!("{marker} {title}")
+        })
+        .collect();
+    let popup = centered(frame.area(), 48, 14);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(labels.join("\n")).block(overlay_block(model, "Row actions  Esc to close")),
         popup,
     );
 }
@@ -392,10 +759,171 @@ fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
+fn render_completion(frame: &mut Frame, model: &Model) {
+    let labels: Vec<String> = model
+        .editor
+        .completions
+        .iter()
+        .map(|item| match &item.detail {
+            Some(detail) => format!("{}  {detail}", item.label),
+            None => item.label.clone(),
+        })
+        .collect();
+    let popup = completion_popup_rect(frame.area(), model, &labels);
+    if popup.width < 4 || popup.height < 2 {
+        return;
+    }
+    frame.render_widget(Clear, popup);
+    let rows = (popup.height.saturating_sub(2) as usize).max(1);
+    let offset = scroll_to_selection(
+        model.editor.completion_selected,
+        model.editor.completion_offset,
+        labels.len(),
+        rows,
+    );
+    let mut lines = Vec::new();
+    for (index, item) in labels.iter().enumerate().skip(offset).take(rows) {
+        let marker = if index == model.editor.completion_selected {
+            ">"
+        } else {
+            " "
+        };
+        lines.push(format!("{marker} {item}"));
+    }
+    if lines.is_empty() {
+        lines.push("(empty)".into());
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(Block::bordered()),
+        popup,
+    );
+}
+
+/// Vim/Neovim pum: align with the cursor, prefer below, flip above if it does not fit.
+fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
+    let plan = LayoutPlan::for_area_with(area, Some(&model.panes));
+    let inner = Block::bordered().inner(plan.content);
+    let doc = model.active_document();
+    let (line, col) = crate::screens::editor::line_col_of(&doc.text(), doc.cursor());
+    let gutter = 5u16;
+    let cursor_x = inner
+        .x
+        .saturating_add(gutter)
+        .saturating_add(col.saturating_sub(doc.viewport_column) as u16);
+    let cursor_y = inner
+        .y
+        .saturating_add(line.saturating_sub(doc.viewport_line) as u16);
+    let width = items
+        .iter()
+        .map(|item| item.chars().count().saturating_add(4))
+        .max()
+        .unwrap_or(16)
+        .clamp(12, 42) as u16;
+    let width = width.min(area.width.max(1));
+    let height = (items.len().clamp(1, 8) as u16)
+        .saturating_add(2)
+        .min(area.height.max(1));
+    let x = if cursor_x.saturating_add(width) > area.width {
+        area.width.saturating_sub(width)
+    } else {
+        cursor_x
+    };
+    let below = area.height.saturating_sub(cursor_y.saturating_add(1));
+    let y = if below >= height {
+        cursor_y.saturating_add(1)
+    } else {
+        cursor_y.saturating_sub(height)
+    };
+    Rect::new(x, y, width, height)
+}
+
+fn render_parameters(frame: &mut Frame, model: &Model) {
+    let name = model
+        .editor
+        .parameters
+        .get(model.editor.parameter_index)
+        .map(|parameter| parameter.name.as_str())
+        .unwrap_or("param");
+    let popup = centered(frame.area(), 48, 6);
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(format!("{name} = {}", model.editor.parameter_draft))
+            .block(Block::bordered().title("Parameters")),
+        popup,
+    );
+}
+
+fn render_list_overlay(
+    frame: &mut Frame,
+    title: &str,
+    items: &[String],
+    selected: usize,
+    offset: usize,
+) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 48, 12);
+    frame.render_widget(Clear, popup);
+    let rows = (popup.height.saturating_sub(2) as usize).max(1);
+    let offset = scroll_to_selection(selected, offset, items.len(), rows);
+    let mut lines = Vec::new();
+    for (index, item) in items.iter().enumerate().skip(offset).take(rows) {
+        let marker = if index == selected { ">" } else { " " };
+        lines.push(format!("{marker} {item}"));
+    }
+    if lines.is_empty() {
+        lines.push("(empty)".into());
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(Block::bordered().title(title)),
+        popup,
+    );
+}
+
+fn render_file_picker(frame: &mut Frame, model: &Model) {
+    let popup = centered(frame.area(), 64, 16);
+    frame.render_widget(Clear, popup);
+    let mut lines = vec![model.file_picker.cwd.display().to_string()];
+    let rows = popup.height.saturating_sub(3) as usize;
+    let offset = crate::palette::scroll_to_selection(
+        model.file_picker.selected,
+        model.file_picker.offset,
+        model.file_picker.entries.len(),
+        rows.max(1),
+    );
+    for (index, path) in model
+        .file_picker
+        .entries
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(rows.max(1))
+    {
+        let marker = if index == model.file_picker.selected {
+            ">"
+        } else {
+            " "
+        };
+        lines.push(format!("{marker} {}", path.display()));
+    }
+    if let Some(error) = &model.file_picker.error {
+        lines.push(error.clone());
+    }
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(Block::bordered().title("File")),
+        popup,
+    );
+}
+
 pub fn render_to_string(model: &Model, width: u16, height: u16) -> String {
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height))
         .expect("test backend");
-    terminal.draw(|frame| render(frame, model)).expect("render");
+    let mut hits = HitMap::default();
+    terminal
+        .draw(|frame| render(frame, model, &mut hits))
+        .expect("render");
     buffer_view(terminal.backend().buffer())
 }
 
@@ -419,5 +947,42 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    #[test]
+    fn editor_tabs_are_not_all_sql() {
+        let mut model = Model {
+            width: 100,
+            height: 40,
+            ..Model::default()
+        };
+        model.tabs.active = 1;
+        let data = render_to_string(&model, 100, 40);
+        assert!(data.contains("Open a table or run a query"));
+        model.tabs.active = 3;
+        let props = render_to_string(&model, 100, 40);
+        assert!(props.contains("Select an object in Explorer"));
+        model.tabs.active = 2;
+        let ddl = render_to_string(&model, 100, 40);
+        assert!(ddl.contains("schema table") || ddl.contains("target:"));
+    }
+
+    #[test]
+    fn completion_popup_sits_under_cursor_not_centered() {
+        let mut model = Model::default();
+        model.set_sql("select ");
+        model.width = 160;
+        model.height = 50;
+        let area = ratatui::layout::Rect::new(0, 0, 160, 50);
+        let popup = super::completion_popup_rect(area, &model, &["select".into(), "from".into()]);
+        let center_x = area.width / 2;
+        assert!(
+            popup.x < center_x.saturating_sub(10),
+            "expected cursor-aligned popup, got {popup:?}"
+        );
+        assert!(
+            popup.y > 2,
+            "expected below the editor cursor, got {popup:?}"
+        );
     }
 }

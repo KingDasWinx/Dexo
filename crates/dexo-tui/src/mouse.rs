@@ -7,10 +7,11 @@ pub enum HitTarget {
     Explorer,
     Editor,
     Grid,
+    GridRow(usize),
     ModalButton,
 }
 
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct HitMap {
     targets: Vec<(HitTarget, Rect)>,
 }
@@ -18,6 +19,10 @@ pub struct HitMap {
 impl HitMap {
     pub fn register(&mut self, target: HitTarget, rect: Rect) {
         self.targets.push((target, rect));
+    }
+
+    pub fn clear(&mut self) {
+        self.targets.clear();
     }
 
     pub fn at(&self, x: u16, y: u16) -> Option<HitTarget> {
@@ -44,9 +49,9 @@ impl HitMap {
 
 pub fn mouse_action(x: u16, y: u16, map: &HitMap) -> Option<Action> {
     match map.at(x, y)? {
-        HitTarget::ResultTab(_) | HitTarget::Grid => {
-            Some(Action::Focus(crate::action::FocusTarget::Results))
-        }
+        HitTarget::ResultTab(index) => Some(Action::SelectResultTab { index }),
+        HitTarget::Grid => Some(Action::Focus(crate::action::FocusTarget::Results)),
+        HitTarget::GridRow(_) => Some(Action::Focus(crate::action::FocusTarget::Results)),
         HitTarget::Explorer => Some(Action::Focus(crate::action::FocusTarget::Explorer)),
         HitTarget::Editor => Some(Action::Focus(crate::action::FocusTarget::Editor)),
         HitTarget::ModalButton => None,

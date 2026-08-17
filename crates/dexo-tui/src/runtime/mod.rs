@@ -12,6 +12,7 @@ use uuid::Uuid;
 
 use crate::action::{
     Action, DocumentIoRequest, PersistHistoryRequest, RecoveryCheckpointRequest, ScriptRequest,
+    TransferRequest,
 };
 
 pub mod admin_manager;
@@ -130,6 +131,7 @@ pub struct WorkbenchRuntime {
     secrets: SessionSecrets,
     query: QueryService,
     live: Arc<tokio::sync::Mutex<Option<query_runner::LiveQuery>>>,
+    transfer: transfer_manager::TransferManager,
 }
 
 impl WorkbenchRuntime {
@@ -146,6 +148,7 @@ impl WorkbenchRuntime {
             secrets: SessionSecrets::default(),
             query: QueryService::new(Arc::new(TaskRegistry::default())),
             live: Arc::new(tokio::sync::Mutex::new(None)),
+            transfer: transfer_manager::TransferManager::default(),
         }
     }
 
@@ -200,6 +203,123 @@ impl WorkbenchRuntime {
             }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
+            crate::Effect::PreviewDdl {
+                change,
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    schema_manager::preview_live(
+                        Arc::clone(&active.session),
+                        session.0.to_string(),
+                        change,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::ApplyDdlChange {
+                change,
+                typed,
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    schema_manager::apply_live(
+                        Arc::clone(&active.session),
+                        session.0.to_string(),
+                        change,
+                        typed,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadSchemaDiff {
+                session,
+                left,
+                right,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    schema_manager::diff_live(
+                        Arc::clone(&active.session),
+                        session.0.to_string(),
+                        left,
+                        right,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadSecurity {
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    Self::load_security_session(
+                        Arc::clone(&active.session),
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::RunExplain {
+                sql,
+                cursor,
+                analyze,
+                session,
+                generation: _,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    explain_manager::run_live(
+                        Arc::clone(&active.session),
+                        &sql,
+                        cursor,
+                        analyze,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadAdminSessions { session, .. } => {
+                if let Some(active) = self.sessions.get(session) {
+                    admin_manager::load_live(Arc::clone(&active.session), self.action_tx.clone())
+                        .await;
+                }
+            }
+            crate::Effect::AdminTerminate { session, target } => {
+                if let Some(active) = self.sessions.get(session) {
+                    admin_manager::terminate_live(
+                        Arc::clone(&active.session),
+                        target,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
+            crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
+            crate::Effect::LoadConnectionProfiles => {
+                match self.with_repo(|repo| repo.list().map_err(|error| error.to_string())) {
+                    Ok(profiles) => self.emit(Action::ProfilesLoaded(profiles)).await,
+                    Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+                }
+            }
+            crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
+            crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
+            crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
+            crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
+            crate::Effect::WriteDiagnostics { path, bundle } => {
+                diagnostic_manager::write(bundle, path, self.action_tx.clone()).await;
+            }
+            crate::Effect::RunTransfer(request) => self.dispatch_transfer(request).await,
+            crate::Effect::LoadSnippets => {
+                if let Some(storage) = &self.storage
+                    && let Ok(snippets) = storage.list_snippets().await
+                {
+                    self.emit(Action::SnippetsLoaded(snippets)).await;
+                }
+            }
             crate::Effect::CheckpointRecovery(request) => self.checkpoint_recovery(request).await,
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
             crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
@@ -363,8 +483,97 @@ impl WorkbenchRuntime {
         }
     }
 
+    async fn dispatch_transfer(&mut self, request: TransferRequest) {
+        let operation = request.operation();
+        let access = match &request {
+            TransferRequest::Export { .. } => transfer_manager::RuntimeAccess {
+                action_tx: self.action_tx.clone(),
+                session: None,
+                driver: None,
+                host: None,
+                port: None,
+                database: None,
+                username: None,
+                secret: None,
+            },
+            TransferRequest::Import { session, .. }
+            | TransferRequest::Backup { session, .. }
+            | TransferRequest::Restore { session, .. } => match self.transfer_access(*session) {
+                Ok(access) => access,
+                Err(message) => {
+                    self.emit(Action::TransferFailed { operation, message })
+                        .await;
+                    return;
+                }
+            },
+        };
+        let _ = self.transfer.run_with(request, Some(&access)).await;
+    }
+
+    fn transfer_access(
+        &self,
+        session: SessionId,
+    ) -> Result<transfer_manager::RuntimeAccess, String> {
+        let active = self
+            .sessions
+            .get(session)
+            .ok_or_else(|| "session is closed".to_string())?;
+        let session_arc = Arc::clone(&active.session);
+        let name = active.connection.clone();
+        let profile = self.with_repo(|repo| {
+            repo.list()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .find(|profile| profile.name == name)
+                .ok_or_else(|| "connection profile not found".into())
+        })?;
+        let secret = self
+            .secrets
+            .get(profile.secret_ref.as_str())
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "secret is missing for this connection".to_string())?;
+        transfer_manager::RuntimeAccess::from_profile(
+            self.action_tx.clone(),
+            session_arc,
+            &profile,
+            secret,
+        )
+    }
+
     async fn emit(&self, action: Action) {
         let _ = self.action_tx.send(action).await;
+    }
+
+    async fn load_security_session(
+        session: Arc<dyn dexo_driver_api::Session>,
+        tx: tokio::sync::mpsc::Sender<Action>,
+    ) {
+        let Some(admin) = session.security() else {
+            let _ = tx
+                .send(Action::SecurityFailed {
+                    message: "this driver does not offer security admin".into(),
+                })
+                .await;
+            return;
+        };
+        match admin.list_grants(None).await {
+            Ok(grants) => {
+                let mut principals: Vec<String> = grants
+                    .iter()
+                    .map(|grant| grant.principal.object().to_string())
+                    .collect();
+                principals.sort();
+                principals.dedup();
+                let _ = tx.send(Action::SecurityLoaded { principals, grants }).await;
+            }
+            Err(error) => {
+                let _ = tx
+                    .send(Action::SecurityFailed {
+                        message: error.to_string(),
+                    })
+                    .await;
+            }
+        }
     }
 
     async fn create_connection(&mut self, input: NewConnection, password: String) {
@@ -452,6 +661,7 @@ impl WorkbenchRuntime {
                         generation,
                         token,
                         read_only,
+                        driver: profile.driver,
                     })
                     .await;
                 }
@@ -620,6 +830,13 @@ impl WorkbenchRuntime {
     }
 
     pub async fn cancel(&mut self, id: OperationId) {
+        if self.transfer.cancel(id).await {
+            let _ = self
+                .action_tx
+                .send(Action::OperationCancelled(OperationKey::new(id, "", "", 0)))
+                .await;
+            return;
+        }
         query_runner::cancel_live(&self.query, &self.live, id).await;
         let _ = self
             .action_tx
@@ -1067,6 +1284,108 @@ impl WorkbenchRuntime {
             &object_id,
             favorite,
         );
+    }
+
+    async fn load_mcp_profiles(&self) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let Ok(profiles) = dexo_storage::McpProfileRepository::new(db.connection()).list() else {
+            return;
+        };
+        let profiles = profiles
+            .into_iter()
+            .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
+                name: profile.name,
+                enabled: profile.enabled,
+                scopes: profile
+                    .selectors
+                    .iter()
+                    .map(|rule| format!("{rule:?}"))
+                    .collect(),
+                tools: profile
+                    .tool_rules
+                    .iter()
+                    .map(|rule| rule.tool.clone())
+                    .collect(),
+            })
+            .collect();
+        self.emit(Action::McpProfilesLoaded { profiles }).await;
+    }
+
+    async fn load_mcp_audit(&self) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            return;
+        };
+        use dexo_app::mcp::GrantLedger;
+        let events = ledger
+            .audits()
+            .into_iter()
+            .map(|event| format!("{} {} {}", event.profile, event.decision, event.target))
+            .collect();
+        self.emit(Action::McpAuditLoaded { events }).await;
+    }
+
+    async fn enable_mcp_profile(&self, name: String) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(db) = Database::open(&paths.database) else {
+            return;
+        };
+        let repo = dexo_storage::McpProfileRepository::new(db.connection());
+        if let Ok(Some(mut profile)) = repo.get_by_name(&name) {
+            profile.enabled = true;
+            let _ = repo.save(&profile);
+        }
+        self.load_mcp_profiles().await;
+    }
+
+    async fn revoke_mcp(&self, profile: String) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            return;
+        };
+        use dexo_app::mcp::GrantLedger;
+        let _ = ledger.revoke_profile(&profile);
+        self.load_mcp_audit().await;
+    }
+
+    async fn revoke_all_mcp(&self) {
+        let Ok(paths) = AppPaths::discover() else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
+            return;
+        };
+        match ledger.revoke_all() {
+            Ok(count) => {
+                self.emit(Action::McpGrantsRevoked { count }).await;
+                self.load_mcp_audit().await;
+            }
+            Err(error) => {
+                self.emit(Action::McpRevokeFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
     }
 
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {

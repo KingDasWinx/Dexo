@@ -1,3 +1,11 @@
+#[derive(Clone, Debug, PartialEq)]
+pub struct McpProfileSummary {
+    pub name: String,
+    pub enabled: bool,
+    pub scopes: Vec<String>,
+    pub tools: Vec<String>,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GrantLine {
     pub id: String,
@@ -19,6 +27,8 @@ pub struct McpProfilesScreen {
     pub resources: Vec<String>,
     pub grants: Vec<GrantLine>,
     pub preview: String,
+    pub profiles: Vec<McpProfileSummary>,
+    pub selected: usize,
 }
 
 impl McpProfilesScreen {
@@ -40,6 +50,7 @@ impl McpProfilesScreen {
                 diff: "profile db.public.* -> grant db.public.items".into(),
             }],
             preview: "enable requires local confirmation".into(),
+            ..Self::default()
         }
     }
 
@@ -71,7 +82,49 @@ impl McpProfilesScreen {
         self.preview = "revoked all grants".into();
     }
 
+    pub fn load_profiles(&mut self, profiles: Vec<McpProfileSummary>) {
+        self.profiles = profiles;
+        self.selected = 0;
+        self.apply_selected();
+    }
+
+    pub fn select_previous(&mut self) {
+        self.selected = self.selected.saturating_sub(1);
+        self.apply_selected();
+    }
+
+    pub fn select_next(&mut self) {
+        if self.selected + 1 < self.profiles.len() {
+            self.selected += 1;
+        }
+        self.apply_selected();
+    }
+
+    fn apply_selected(&mut self) {
+        match self.profiles.get(self.selected).cloned() {
+            Some(profile) => {
+                self.name = profile.name;
+                self.enabled = profile.enabled;
+                self.scopes = profile.scopes;
+                self.tools = profile.tools;
+            }
+            None => {
+                self.name.clear();
+                self.enabled = false;
+                self.scopes.clear();
+                self.tools.clear();
+            }
+        }
+    }
+
     pub fn lines(&self) -> Vec<String> {
+        if self.profiles.is_empty() && self.name.is_empty() {
+            let mut lines = vec!["no MCP profiles".into()];
+            if !self.preview.is_empty() {
+                lines.push(self.preview.clone());
+            }
+            return lines;
+        }
         let mut lines = vec![format!(
             "mcp profile={} enabled={} confirm={}",
             self.name, self.enabled, self.confirm_enable

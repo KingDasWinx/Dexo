@@ -13,8 +13,59 @@ fn click_on_second_result_tab_selects_that_tab() {
     let (x, y) = map.center(HitTarget::ResultTab(2));
     assert_eq!(
         mouse_action(x, y, &map),
-        Some(Action::Focus(dexo_tui::action::FocusTarget::Results))
+        Some(Action::SelectResultTab { index: 2 })
     );
+    let mut model = Model::default();
+    model.results.tabs = vec![
+        dexo_tui::model::ResultTab::new(
+            dexo_tui::model::ResultKey {
+                operation: dexo_tui::runtime::OperationKey::new(
+                    dexo_tui::runtime::OperationId::new(),
+                    "",
+                    "scratch",
+                    1,
+                ),
+                index: 0,
+            },
+            "r0",
+        ),
+        dexo_tui::model::ResultTab::new(
+            dexo_tui::model::ResultKey {
+                operation: dexo_tui::runtime::OperationKey::new(
+                    dexo_tui::runtime::OperationId::new(),
+                    "",
+                    "scratch",
+                    1,
+                ),
+                index: 1,
+            },
+            "r1",
+        ),
+        dexo_tui::model::ResultTab::new(
+            dexo_tui::model::ResultKey {
+                operation: dexo_tui::runtime::OperationKey::new(
+                    dexo_tui::runtime::OperationId::new(),
+                    "",
+                    "scratch",
+                    1,
+                ),
+                index: 2,
+            },
+            "r2",
+        ),
+    ];
+    model.hits = map;
+    update(
+        &mut model,
+        Action::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: x,
+            row: y,
+            modifiers: crossterm::event::KeyModifiers::NONE,
+        }),
+    );
+    assert_eq!(model.results.active, 2);
+    assert_eq!(model.focus, dexo_tui::model::Focus::Results);
 }
 
 #[test]
@@ -29,4 +80,34 @@ fn keyboard_opens_overlays_without_mouse() {
     assert!(model.admin.open);
     update(&mut model, Action::OpenRecovery);
     assert!(model.recovery.open);
+}
+
+#[test]
+fn shift_click_extends_results_selection() {
+    use dexo_tui::model::{GridModel, GridSelection};
+    use ratatui::layout::Rect;
+
+    let mut model = Model::default();
+    *model.results = GridModel::sample_rows(8);
+    model.results.select_cell(1, 0);
+    model
+        .hits
+        .register(HitTarget::GridRow(4), Rect::new(0, 10, 20, 1));
+    update(
+        &mut model,
+        Action::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            column: 2,
+            row: 10,
+            modifiers: crossterm::event::KeyModifiers::SHIFT,
+        }),
+    );
+    assert_eq!(model.focus, dexo_tui::model::Focus::Results);
+    assert!(matches!(
+        model.results.kind,
+        GridSelection::Range {
+            start: (1, _),
+            end: (4, _)
+        }
+    ));
 }

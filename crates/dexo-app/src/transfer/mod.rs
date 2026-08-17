@@ -12,7 +12,8 @@ pub use export::{ExportError, ExportProgress, RecordingSink, export_row_batches,
 pub use import::{ErrorStrategy, ImportReport, import_rows};
 pub use map::{ColumnMapping, map_columns};
 pub use native_tool::{
-    NativeHandle, NativeRunResult, NativeStatus, NativeToolError, NativeToolKind, NativeToolRunner,
-    ProcessRunner, ProcessSpec, RunningProcess, prepare,
+    NativeHandle, NativeRunResult, NativeStatus, NativeToolError, NativeToolKind,
+    NativeToolRequest, NativeToolRunner, ProcessRunner, ProcessSpec, RunningProcess,
+    TokioProcessRunner, prepare,
 };
 pub use rejects::RejectedRow;

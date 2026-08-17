@@ -23,5 +23,7 @@ mod tests {
                 .iter()
                 .any(|line| line.starts_with("> columns:"))
         );
+        editor.focus_prev();
+        assert_eq!(focused_field(&editor).unwrap().label, "target");
     }
 }

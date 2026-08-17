@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use dexo_app::transfer::{NativeHandle, NativeToolKind, NativeToolRunner, ProcessRunner};
+use dexo_app::transfer::{NativeHandle, NativeToolRequest, NativeToolRunner, ProcessRunner};
 
 pub struct NativeToolManager<R: ProcessRunner> {
     runner: NativeToolRunner<R>,
@@ -15,14 +15,10 @@ impl<R: ProcessRunner> NativeToolManager<R> {
 
     pub async fn start(
         &self,
-        kind: NativeToolKind,
-        secret: &str,
+        request: NativeToolRequest,
         version: &str,
-        expected_major: u32,
         dir: &Path,
     ) -> Result<NativeHandle, dexo_app::transfer::native_tool::NativeToolError> {
-        self.runner
-            .start(kind, secret, version, expected_major, dir)
-            .await
+        self.runner.start(request, version, dir).await
     }
 }

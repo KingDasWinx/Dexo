@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use ratatui::style::{Color, Style};
+use ratatui::style::{Color, Modifier, Style};
 use serde::Deserialize;
 
 use crate::capabilities::{ColorDepth, TerminalCapabilities};
@@ -127,6 +127,63 @@ impl Theme {
             ColorDepth::TrueColor => Some(slot.truecolor),
         }
     }
+
+    pub fn pane_border(&self, focused: bool, caps: TerminalCapabilities) -> Style {
+        if focused {
+            self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
+        } else {
+            self.style(Role::Border, caps).add_modifier(Modifier::DIM)
+        }
+    }
+
+    pub fn pane_title(&self, focused: bool, caps: TerminalCapabilities) -> Style {
+        if focused {
+            self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
+        } else {
+            self.style(Role::Muted, caps)
+        }
+    }
+
+    pub fn header(&self, caps: TerminalCapabilities) -> Style {
+        self.style(Role::Development, caps)
+            .add_modifier(Modifier::BOLD)
+    }
+
+    pub fn active_row(&self, caps: TerminalCapabilities) -> Style {
+        match self.color(Role::Focus, caps) {
+            Some(color) => Style::default().bg(color).fg(Color::Black),
+            None => Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+        }
+    }
+
+    pub fn selected_row(&self, caps: TerminalCapabilities) -> Style {
+        match self.color(Role::Selection, caps) {
+            Some(color) => Style::default().bg(color).fg(Color::White),
+            None => Style::default().add_modifier(Modifier::REVERSED),
+        }
+    }
+
+    pub fn zebra(&self, even: bool, caps: TerminalCapabilities) -> Style {
+        if !even {
+            return Style::default();
+        }
+        match caps.color_depth {
+            ColorDepth::Ansi256 | ColorDepth::TrueColor => Style::default().bg(Color::Indexed(236)),
+            _ => Style::default(),
+        }
+    }
+
+    pub fn gutter(&self, caps: TerminalCapabilities) -> Style {
+        self.style(Role::Muted, caps)
+    }
+
+    pub fn overlay(&self, caps: TerminalCapabilities) -> Style {
+        self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
+    }
+
+    pub fn status_focus(&self, caps: TerminalCapabilities) -> Style {
+        self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
+    }
 }
 
 pub fn builtin_dark() -> Theme {
@@ -136,16 +193,16 @@ pub fn builtin_dark() -> Theme {
         &[
             (Role::Background, named(Color::Black, 235, 18, 18, 18)),
             (Role::Foreground, named(Color::White, 252, 230, 230, 230)),
-            (Role::Border, named(Color::DarkGray, 240, 80, 80, 80)),
-            (Role::Muted, named(Color::Gray, 245, 140, 140, 140)),
+            (Role::Border, named(Color::DarkGray, 239, 70, 72, 78)),
+            (Role::Muted, named(Color::Gray, 245, 140, 148, 160)),
             (Role::Production, named(Color::Red, 160, 220, 50, 50)),
             (Role::Staging, named(Color::Yellow, 178, 200, 160, 40)),
-            (Role::Development, named(Color::Cyan, 81, 40, 180, 180)),
+            (Role::Development, named(Color::Cyan, 81, 3, 169, 244)),
             (Role::Error, named(Color::LightRed, 196, 240, 70, 70)),
             (Role::Warning, named(Color::Yellow, 214, 230, 180, 40)),
             (Role::Success, named(Color::Green, 40, 60, 180, 80)),
-            (Role::Selection, named(Color::Blue, 33, 50, 110, 210)),
-            (Role::Focus, named(Color::Magenta, 135, 180, 80, 200)),
+            (Role::Selection, named(Color::Blue, 33, 30, 90, 180)),
+            (Role::Focus, named(Color::Cyan, 51, 3, 169, 244)),
         ],
     )
 }
@@ -475,5 +532,20 @@ mod tests {
             ),
             Some(ratatui::style::Color::Rgb(204, 0, 0))
         );
+    }
+
+    #[test]
+    fn focused_pane_border_differs_from_idle() {
+        let caps = TerminalCapabilities {
+            color_depth: ColorDepth::TrueColor,
+            unicode: true,
+            mouse: true,
+        };
+        let theme = builtin_dark();
+        assert_ne!(
+            theme.pane_border(true, caps),
+            theme.pane_border(false, caps)
+        );
+        assert_ne!(theme.pane_title(true, caps), theme.pane_title(false, caps));
     }
 }

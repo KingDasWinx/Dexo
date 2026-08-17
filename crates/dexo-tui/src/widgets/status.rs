@@ -51,9 +51,34 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     spans.push(Span::raw(format!("{conn}  ")));
     spans.push(Span::styled(format!("{tx}  "), tx_style));
+    let focus_name = match model.focus {
+        crate::model::Focus::Explorer => "Explorer",
+        crate::model::Focus::Editor | crate::model::Focus::Palette => "Editor",
+        crate::model::Focus::Results => "Results",
+        crate::model::Focus::Inspector => "Inspector",
+    };
+    spans.push(Span::styled(
+        format!("FOCUS: {focus_name}  "),
+        model.theme.status_focus(model.capabilities),
+    ));
     spans.push(Span::raw(format!(
-        "rows:{}  ctrl+p palette",
+        "layout:{}  rows:{}  ctrl+p palette  F1 help",
+        model.layout_preset.label(),
         model.results.row_count()
     )));
+    if model.focus == crate::model::Focus::Explorer {
+        let hint = model
+            .explorer
+            .selected_node()
+            .and_then(|node| {
+                crate::screens::explorer::opens_table_data(&node.kind)
+                    .then_some("Enter abre a table")
+            })
+            .unwrap_or("Enter expande/recolhe");
+        spans.push(Span::raw(format!("  {hint}")));
+    }
+    if let Some(message) = model.messages.last() {
+        spans.push(Span::raw(format!("  {message}")));
+    }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
 }

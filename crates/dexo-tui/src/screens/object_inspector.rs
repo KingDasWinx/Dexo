@@ -14,6 +14,26 @@ pub struct ObjectInspector {
     pub tab: InspectorTab,
 }
 
+impl InspectorTab {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Properties => Self::Ddl,
+            Self::Ddl => Self::Dependencies,
+            Self::Dependencies => Self::Privileges,
+            Self::Privileges => Self::Properties,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Properties => "properties",
+            Self::Ddl => "ddl",
+            Self::Dependencies => "dependencies",
+            Self::Privileges => "privileges",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum InspectorTab {
     #[default]

@@ -1,15 +1,16 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 135
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
-┌Explorer──────────────────┐ SQL │ Data │ DDL │ Properties │ Explain │ demo.public.users            
-│[offline]                 │┌SQL · scratch.sql─────────────────────────────────────────────────────┐
-│▾ local                   ││   1▸select 1                                                         │
-│  ▸ public                ││                                                                      │
-│  ▸ mysql.use┌Review changes────────────────────────────────────────────────────────┐             │
-│actions: prop│target: demo.public.users                                             │             │
-│selected: loc│ops: 1                                                                │             │
+┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain │ demo.public.users            
+│[offline]                 │┌▸ Data────────────────────────────────────────────────────────────────┐
+│ ▾ local                  ││table: demo.public.users                                              │
+│>  ▸ public               ││filter: Eq(ColumnId("id"), I64(1))                                    │
+│     mysql.us┌Review changes────────────────────────────────────────────────────────┐             │
+│             │target: demo.public.users                                             │             │
+│             │ops: 1                                                                │             │
 │             │status: Pending                                                       │             │
 │             │ready                                                                 │             │
 │             │INSERT INTO demo.public.users (id) VALUES ($1)                        │             │
@@ -18,12 +19,12 @@ demo  local  public
 │             │                                                                      │             │
 │             │                                                                      │             │
 │             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
+│             │                                                                      │─────────────┘
+│             │                                                                      │─────────────┐
 │             └──────────────────────────────────────────────────────────────────────┘             │
 │                          ││                                                                      │
-│                          │└──────────────────────────────────────────────────────────────────────┘
-│                          │┌Results (0)───────────────────────────────────────────────────────────┐
+│                          ││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -31,4 +32,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-connected:local  tx:idle  rows:0  ctrl+p palette
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help

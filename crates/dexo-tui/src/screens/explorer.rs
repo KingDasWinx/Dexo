@@ -46,6 +46,13 @@ impl ExplorerAction {
     }
 }
 
+pub fn opens_table_data(kind: &ObjectKind) -> bool {
+    matches!(
+        kind,
+        ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplorerNode {
     pub id: ObjectId,
@@ -62,10 +69,25 @@ pub struct ExplorerNode {
 }
 
 impl ExplorerNode {
+    pub fn can_expand(&self) -> bool {
+        if !self.children.is_empty() {
+            return true;
+        }
+        matches!(
+            self.kind,
+            ObjectKind::Catalog
+                | ObjectKind::Schema
+                | ObjectKind::Table
+                | ObjectKind::View
+                | ObjectKind::MaterializedView
+        )
+    }
+
     pub fn from_object(object: CatalogObject) -> Self {
+        let label = object_label(&object);
         Self {
             id: object.id,
-            label: object.qualified_name.object().to_string(),
+            label,
             kind: object.kind,
             qualified: object.qualified_name.display_unquoted(),
             schema: object.qualified_name.schema().map(str::to_string),
@@ -83,6 +105,15 @@ impl ExplorerNode {
     }
 }
 
+fn object_label(object: &CatalogObject) -> String {
+    let name = object.qualified_name.object();
+    if object.kind == ObjectKind::Column {
+        name.rsplit('.').next().unwrap_or(name).to_string()
+    } else {
+        name.to_string()
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExplorerState {
     pub roots: Vec<ExplorerNode>,
@@ -97,6 +128,7 @@ pub struct ExplorerState {
     pub copied: Option<String>,
     pub include_system: bool,
     pub stale: bool,
+    pub offset: usize,
 }
 
 impl ExplorerState {
@@ -172,6 +204,26 @@ impl ExplorerState {
             }
             Self::mark_stale_in(&mut node.children);
         }
+    }
+
+    pub fn collapse(&mut self, id: &ObjectId) -> bool {
+        Self::collapse_in(&mut self.roots, id)
+    }
+
+    fn collapse_in(nodes: &mut [ExplorerNode], id: &ObjectId) -> bool {
+        for node in nodes {
+            if node.id == *id {
+                if !node.expanded {
+                    return false;
+                }
+                node.expanded = false;
+                return true;
+            }
+            if Self::collapse_in(&mut node.children, id) {
+                return true;
+            }
+        }
+        false
     }
 
     pub fn expand(&mut self, id: &ObjectId) -> bool {
@@ -255,11 +307,7 @@ impl ExplorerState {
     fn apply_in(nodes: &mut [ExplorerNode], parent: &ObjectId, page: CatalogList) {
         for node in nodes {
             if node.id == *parent {
-                node.children = page
-                    .objects
-                    .into_iter()
-                    .map(ExplorerNode::from_object)
-                    .collect();
+                node.children = group_catalog_children(&node.id, &node.kind, page.objects);
                 for restriction in page.restrictions {
                     node.children.push(restriction_node(restriction));
                 }
@@ -344,6 +392,10 @@ impl ExplorerState {
         let mut out = Vec::new();
         fn walk(nodes: &[ExplorerNode], out: &mut Vec<CatalogObject>) {
             for node in nodes {
+                if matches!(&node.kind, ObjectKind::DriverSpecific(kind) if kind == "folder") {
+                    walk(&node.children, out);
+                    continue;
+                }
                 let mut object = CatalogObject::new(
                     node.id.clone(),
                     node.kind.clone(),
@@ -394,6 +446,37 @@ impl ExplorerState {
         self.selected = Some(id);
     }
 
+    pub fn move_selection(&mut self, delta: i32) {
+        let ids = self.visible_ids();
+        if ids.is_empty() {
+            return;
+        }
+        let current = self
+            .selected
+            .as_ref()
+            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+            .unwrap_or(0);
+        let next = (current as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
+        self.selected = Some(ids[next].clone());
+    }
+
+    pub fn selected_index(&self) -> usize {
+        let ids = self.visible_ids();
+        self.selected
+            .as_ref()
+            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+            .unwrap_or(0)
+    }
+
+    pub fn sync_scroll(&mut self, rows: usize) {
+        self.offset = crate::palette::scroll_to_selection(
+            self.selected_index(),
+            self.offset,
+            self.visible_ids().len(),
+            rows,
+        );
+    }
+
     pub fn copy_selected_name(&mut self) {
         if let Some(id) = &self.selected
             && let Some(node) = Self::find(&self.roots, id)
@@ -419,6 +502,143 @@ impl ExplorerState {
             .as_ref()
             .and_then(|id| Self::find(&self.roots, id))
     }
+}
+
+fn group_catalog_children(
+    parent: &ObjectId,
+    kind: &ObjectKind,
+    objects: Vec<CatalogObject>,
+) -> Vec<ExplorerNode> {
+    match kind {
+        ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView => group_by_kind(
+            parent,
+            objects,
+            &[
+                (bucket_column, "Columns"),
+                (bucket_index, "Indexes"),
+                (bucket_constraint, "Constraints"),
+                (bucket_trigger, "Triggers"),
+                (bucket_rls, "RLS"),
+                (bucket_rule, "Rules"),
+                (bucket_partition, "Partitions"),
+            ],
+        ),
+        ObjectKind::Schema => group_schema_children(parent, objects),
+        _ => objects.into_iter().map(ExplorerNode::from_object).collect(),
+    }
+}
+
+fn group_schema_children(parent: &ObjectId, objects: Vec<CatalogObject>) -> Vec<ExplorerNode> {
+    let mut tables = Vec::new();
+    let mut rest = Vec::new();
+    for object in objects {
+        if matches!(
+            object.kind,
+            ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+        ) {
+            tables.push(ExplorerNode::from_object(object));
+        } else {
+            rest.push(object);
+        }
+    }
+    let mut children = tables;
+    children.extend(group_by_kind(
+        parent,
+        rest,
+        &[
+            (bucket_function, "Functions"),
+            (bucket_procedure, "Procedures"),
+            (bucket_sequence, "Sequences"),
+            (bucket_type, "Types"),
+        ],
+    ));
+    children
+}
+
+type KindBucket<'a> = (fn(&ObjectKind) -> bool, &'a str);
+
+fn group_by_kind(
+    parent: &ObjectId,
+    objects: Vec<CatalogObject>,
+    buckets: &[KindBucket<'_>],
+) -> Vec<ExplorerNode> {
+    let mut leftover = objects;
+    let mut folders = Vec::new();
+    for (pred, label) in buckets {
+        let mut taken = Vec::new();
+        leftover.retain(|object| {
+            if pred(&object.kind) {
+                taken.push(ExplorerNode::from_object(object.clone()));
+                false
+            } else {
+                true
+            }
+        });
+        if let Some(folder) = folder_node(parent, label, taken) {
+            folders.push(folder);
+        }
+    }
+    folders
+        .into_iter()
+        .chain(leftover.into_iter().map(ExplorerNode::from_object))
+        .collect()
+}
+
+fn folder_node(
+    parent: &ObjectId,
+    label: &str,
+    children: Vec<ExplorerNode>,
+) -> Option<ExplorerNode> {
+    if children.is_empty() {
+        return None;
+    }
+    Some(ExplorerNode {
+        id: ObjectId::new(format!("folder:{}:{label}", parent.as_str())),
+        label: label.into(),
+        kind: ObjectKind::DriverSpecific("folder".into()),
+        qualified: label.into(),
+        schema: None,
+        state: NodeState::Expanded,
+        expanded: false,
+        favorite: false,
+        children,
+        restriction: None,
+        error: None,
+    })
+}
+
+fn bucket_column(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Column)
+}
+fn bucket_index(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Index)
+}
+fn bucket_constraint(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Constraint)
+}
+fn bucket_trigger(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Trigger)
+}
+fn bucket_rls(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "policy")
+}
+fn bucket_rule(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "rule")
+}
+fn bucket_partition(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "partition")
+}
+fn bucket_function(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Function)
+}
+fn bucket_procedure(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Procedure)
+}
+fn bucket_sequence(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Sequence)
+}
+fn bucket_type(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "enum" || name == "domain")
 }
 
 fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> ExplorerNode {
@@ -509,5 +729,118 @@ mod tests {
                 "copy-name"
             ]
         );
+    }
+
+    #[test]
+    fn enter_hint_only_on_tables() {
+        use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("table:orders"),
+                ObjectKind::Table,
+                QualifiedName::new(Some("db"), Some("public"), "orders"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        explorer.select(ObjectId::new("table:orders"));
+        let lines = crate::widgets::object_tree::render_lines(&explorer);
+        assert!(
+            lines
+                .iter()
+                .any(|line| line.contains('>') && line.contains("orders")),
+            "{lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|line| line.contains("actions:") || line.contains("selected:")),
+            "{lines:?}"
+        );
+        assert!(super::opens_table_data(&ObjectKind::View));
+        assert!(!super::opens_table_data(&ObjectKind::Schema));
+    }
+
+    #[test]
+    fn apply_children_groups_table_and_schema() {
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("schema:public"),
+                ObjectKind::Schema,
+                QualifiedName::new(Some("db"), Some("public"), "public"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        explorer.apply_children(
+            &ObjectId::new("schema:public"),
+            CatalogList {
+                objects: vec![
+                    CatalogObject::new(
+                        ObjectId::new("table:users"),
+                        ObjectKind::Table,
+                        QualifiedName::new(Some("db"), Some("public"), "users"),
+                        Some(ObjectId::new("schema:public")),
+                    ),
+                    CatalogObject::new(
+                        ObjectId::new("fn:armor"),
+                        ObjectKind::Function,
+                        QualifiedName::new(Some("db"), Some("public"), "armor"),
+                        Some(ObjectId::new("schema:public")),
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        {
+            let schema = &explorer.roots[0];
+            assert!(schema.children.iter().any(|n| n.label == "users"));
+            let functions = schema
+                .children
+                .iter()
+                .find(|n| n.label == "Functions")
+                .expect("functions folder");
+            assert!(functions.children.iter().any(|n| n.label == "armor"));
+            assert!(!schema.children.iter().any(|n| n.label == "armor"));
+        }
+
+        explorer.apply_children(
+            &ObjectId::new("table:users"),
+            CatalogList {
+                objects: vec![
+                    CatalogObject::new(
+                        ObjectId::new("col:id"),
+                        ObjectKind::Column,
+                        QualifiedName::new(Some("db"), Some("public"), "users.id"),
+                        Some(ObjectId::new("table:users")),
+                    ),
+                    CatalogObject::new(
+                        ObjectId::new("idx:users_pk"),
+                        ObjectKind::Index,
+                        QualifiedName::new(Some("db"), Some("public"), "users_pk"),
+                        Some(ObjectId::new("table:users")),
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        let table = explorer.roots[0]
+            .children
+            .iter()
+            .find(|n| n.label == "users")
+            .unwrap();
+        assert!(table.children.iter().any(|n| n.label == "Columns"));
+        assert!(table.children.iter().any(|n| n.label == "Indexes"));
+        assert!(!table.children.iter().any(|n| n.kind == ObjectKind::Column));
+        let columns = table
+            .children
+            .iter()
+            .find(|n| n.label == "Columns")
+            .unwrap();
+        assert!(columns.children.iter().any(|n| n.label == "id"));
+        assert!(!columns.children.iter().any(|n| n.label == "users.id"));
     }
 }

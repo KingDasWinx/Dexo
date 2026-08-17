@@ -1,4 +1,6 @@
+use std::collections::BTreeSet;
 use std::ops::Range;
+use std::sync::{Arc, LazyLock};
 
 use dexo_app::event::TaskId;
 use dexo_app::{ExecutionTarget, ScriptPolicy};
@@ -9,15 +11,18 @@ use crate::runtime::{OperationId, OperationKey, SessionId};
 
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
-use crate::layout::{LayoutMode, LayoutPlan, PaneLayout};
+use crate::layout::{LayoutMode, LayoutPlan, LayoutPreset, PaneLayout};
+use crate::mouse::HitMap;
 use crate::screens::admin::AdminScreen;
 use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::connections::ConnectionsScreen;
 use crate::screens::data::DataScreen;
+use crate::screens::diagnostics::DiagnosticsScreen;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
+use crate::screens::file_picker::{FilePicker, FilePickerMode};
 use crate::screens::mcp_audit::McpAuditScreen;
 use crate::screens::mcp_profiles::McpProfilesScreen;
 use crate::screens::object_inspector::ObjectInspector;
@@ -28,6 +33,7 @@ use crate::screens::schema_editor::SchemaEditor;
 use crate::screens::secret_prompt::SecretPrompt;
 use crate::screens::security::SecurityScreen;
 use crate::screens::settings::SettingsScreen;
+use crate::screens::transaction_prompt::TransactionPrompt;
 use crate::screens::transfer::TransferScreen;
 use crate::theme::Theme;
 
@@ -46,6 +52,7 @@ pub struct ConnectionStatus {
     pub ready: bool,
     pub environment: String,
     pub read_only: bool,
+    pub driver: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -54,12 +61,27 @@ pub struct PaletteState {
     pub query: String,
     pub selected: usize,
     pub offset: usize,
+    pub origin_focus: Option<Focus>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HelpState {
+    pub open: bool,
+    pub scroll: u16,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ResultsMenuState {
+    pub open: bool,
+    pub selected: usize,
+    pub offset: usize,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct TabsState {
     pub active: usize,
     pub titles: Vec<String>,
+    pub scroll: u16,
 }
 
 impl Default for TabsState {
@@ -73,6 +95,7 @@ impl Default for TabsState {
                 "Properties".into(),
                 "Explain".into(),
             ],
+            scroll: 0,
         }
     }
 }
@@ -105,7 +128,7 @@ pub struct VisibleRow<'a> {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultBuffer {
     pub columns: Vec<ColumnMeta>,
-    rows: Vec<Vec<DbValue>>,
+    rows: Arc<Vec<Vec<DbValue>>>,
     estimated_bytes: usize,
     truncated: bool,
 }
@@ -122,6 +145,10 @@ impl ResultBuffer {
         &self.rows
     }
 
+    pub fn rows_snapshot(&self) -> Arc<Vec<Vec<DbValue>>> {
+        Arc::clone(&self.rows)
+    }
+
     pub fn estimated_bytes(&self) -> usize {
         self.estimated_bytes
     }
@@ -131,22 +158,23 @@ impl ResultBuffer {
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<DbValue>>) {
+        let storage = Arc::make_mut(&mut self.rows);
         for row in rows {
             let added = estimated_row_bytes(&row);
-            if self.rows.len() >= Self::MAX_ROWS
+            if storage.len() >= Self::MAX_ROWS
                 || self.estimated_bytes.saturating_add(added) > Self::MAX_BYTES
             {
                 self.truncated = true;
                 break;
             }
             self.estimated_bytes += added;
-            self.rows.push(row);
+            storage.push(row);
         }
     }
 
     pub fn clear(&mut self) {
         self.columns.clear();
-        self.rows.clear();
+        self.rows = Arc::default();
         self.estimated_bytes = 0;
         self.truncated = false;
     }
@@ -183,6 +211,7 @@ pub struct GridModel {
     selection: Option<(usize, usize)>,
     column_widths: Vec<u16>,
     pub kind: GridSelection,
+    pub picked_rows: BTreeSet<usize>,
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
     pub cells: std::collections::BTreeMap<(usize, usize), GridCell>,
@@ -253,7 +282,7 @@ impl ResultsState {
         self.tabs
             .get(self.active)
             .map(|tab| &tab.grid)
-            .unwrap_or(&EMPTY_GRID)
+            .unwrap_or_else(|| &*EMPTY_GRID)
     }
 
     fn grid_mut(&mut self) -> &mut GridModel {
@@ -272,26 +301,7 @@ impl ResultsState {
     }
 }
 
-static EMPTY_GRID: GridModel = GridModel {
-    buffer: ResultBuffer {
-        columns: Vec::new(),
-        rows: Vec::new(),
-        estimated_bytes: 0,
-        truncated: false,
-    },
-    viewport: GridViewport {
-        row_offset: 0,
-        column_offset: 0,
-        height: 20,
-        width: 80,
-    },
-    selection: None,
-    column_widths: Vec::new(),
-    kind: GridSelection::Cell { row: 0, col: 0 },
-    frozen_columns: 0,
-    hidden_columns: Vec::new(),
-    cells: std::collections::BTreeMap::new(),
-};
+static EMPTY_GRID: LazyLock<GridModel> = LazyLock::new(GridModel::default);
 
 impl std::ops::Deref for ResultsState {
     type Target = GridModel;
@@ -328,6 +338,7 @@ impl GridModel {
             selection: Some((0, 0)),
             column_widths: vec![8],
             kind: GridSelection::Cell { row: 0, col: 0 },
+            picked_rows: BTreeSet::new(),
             frozen_columns: 0,
             hidden_columns: Vec::new(),
             cells: std::collections::BTreeMap::new(),
@@ -368,6 +379,7 @@ impl GridModel {
     pub fn set_columns(&mut self, columns: Vec<ColumnMeta>) {
         self.buffer.columns = columns;
         self.recompute_column_widths();
+        self.ensure_cursor();
     }
 
     pub fn append_rows(&mut self, rows: Vec<Vec<DbValue>>) {
@@ -384,6 +396,7 @@ impl GridModel {
             self.buffer.append_rows(vec![display]);
         }
         self.recompute_column_widths();
+        self.ensure_cursor();
     }
 
     pub fn clear(&mut self) {
@@ -397,6 +410,7 @@ impl GridModel {
         self.viewport.row_offset = 0;
         self.viewport.column_offset = 0;
         self.selection = None;
+        self.picked_rows.clear();
         self.column_widths.clear();
     }
 
@@ -447,7 +461,99 @@ impl GridModel {
 
     pub fn select_range(&mut self, start: (usize, usize), end: (usize, usize)) {
         self.kind = GridSelection::Range { start, end };
-        self.selection = Some(start);
+        self.selection = Some(end);
+    }
+
+    pub fn ensure_cursor(&mut self) {
+        if self.buffer.row_count() == 0 {
+            self.selection = None;
+            return;
+        }
+        if self.selection.is_none() {
+            self.select_cell(0, 0);
+        }
+    }
+
+    pub fn cursor_row(&self) -> Option<usize> {
+        self.selection.map(|(row, _)| row)
+    }
+
+    pub fn row_selected(&self, row: usize) -> bool {
+        if self.picked_rows.contains(&row) {
+            return true;
+        }
+        match self.kind {
+            GridSelection::Cell { row: r, .. } | GridSelection::Row { row: r } => r == row,
+            GridSelection::Column { .. } => self.selection.is_some_and(|(r, _)| r == row),
+            GridSelection::Range { start, end } => {
+                let lo = start.0.min(end.0);
+                let hi = start.0.max(end.0);
+                row >= lo && row <= hi
+            }
+        }
+    }
+
+    pub fn toggle_picked_row(&mut self) {
+        self.ensure_cursor();
+        let Some(row) = self.cursor_row() else {
+            return;
+        };
+        if !self.picked_rows.remove(&row) {
+            self.picked_rows.insert(row);
+        }
+    }
+
+    pub fn move_cursor_row(&mut self, delta: i32, extend: bool) {
+        self.ensure_cursor();
+        let Some((row, col)) = self.selection else {
+            return;
+        };
+        let last = self.buffer.row_count().saturating_sub(1);
+        let next = (row as i32 + delta).clamp(0, last as i32) as usize;
+        if extend {
+            self.picked_rows.clear();
+            let start = match self.kind {
+                GridSelection::Range { start, .. } => start,
+                GridSelection::Cell { row, col } => (row, col),
+                GridSelection::Row { row } => (row, col),
+                GridSelection::Column { col } => (row, col),
+            };
+            self.select_range(start, (next, col));
+        } else {
+            self.select_cell(next, col);
+        }
+        self.ensure_row_visible(next);
+    }
+
+    pub fn move_cursor_col(&mut self, delta: i32) {
+        match self.kind {
+            // ponytail: H-scroll is column_offset pan (pre-row-cursor). Ceiling: no sticky column cursor. Add one if cell-edit lands.
+            GridSelection::Row { .. } | GridSelection::Range { .. } => self.scroll_columns(delta),
+            GridSelection::Cell { .. } | GridSelection::Column { .. } => {
+                self.ensure_cursor();
+                let Some((row, col)) = self.selection else {
+                    return;
+                };
+                let last = self.buffer.columns.len().saturating_sub(1);
+                let next = (col as i32 + delta).clamp(0, last as i32) as usize;
+                match &mut self.kind {
+                    GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
+                    GridSelection::Row { .. } | GridSelection::Range { .. } => {}
+                }
+                self.selection = Some((row, next));
+                self.scroll_columns(delta);
+            }
+        }
+    }
+
+    fn ensure_row_visible(&mut self, row: usize) {
+        let height = self.viewport.height.max(1);
+        if row < self.viewport.row_offset {
+            self.viewport.row_offset = row;
+        } else if row >= self.viewport.row_offset.saturating_add(height) {
+            self.viewport.row_offset = row.saturating_add(1).saturating_sub(height);
+        }
+        self.clamp_scroll();
     }
 
     pub fn freeze_columns(&mut self, count: usize) {
@@ -481,17 +587,23 @@ impl GridModel {
     }
 
     fn selected_matrix(&self) -> (Vec<String>, Vec<Vec<DbValue>>) {
-        let cols: Vec<usize> = match self.kind {
-            GridSelection::Cell { col, .. } | GridSelection::Column { col } => vec![col],
-            GridSelection::Row { .. } => (0..self.buffer.columns.len())
+        let cols: Vec<usize> = if !self.picked_rows.is_empty() {
+            (0..self.buffer.columns.len())
                 .filter(|index| !self.hidden_columns.contains(index))
-                .collect(),
-            GridSelection::Range { start, end } => {
-                let lo = start.1.min(end.1);
-                let hi = start.1.max(end.1);
-                (lo..=hi)
+                .collect()
+        } else {
+            match self.kind {
+                GridSelection::Cell { col, .. } | GridSelection::Column { col } => vec![col],
+                GridSelection::Row { .. } => (0..self.buffer.columns.len())
                     .filter(|index| !self.hidden_columns.contains(index))
-                    .collect()
+                    .collect(),
+                GridSelection::Range { start, end } => {
+                    let lo = start.1.min(end.1);
+                    let hi = start.1.max(end.1);
+                    (lo..=hi)
+                        .filter(|index| !self.hidden_columns.contains(index))
+                        .collect()
+                }
             }
         };
         let names: Vec<String> = cols
@@ -504,13 +616,17 @@ impl GridModel {
                     .unwrap_or_else(|| index.to_string())
             })
             .collect();
-        let row_idxs: Vec<usize> = match self.kind {
-            GridSelection::Cell { row, .. } | GridSelection::Row { row } => vec![row],
-            GridSelection::Column { .. } => (0..self.buffer.row_count()).collect(),
-            GridSelection::Range { start, end } => {
-                let lo = start.0.min(end.0);
-                let hi = start.0.max(end.0);
-                (lo..=hi).collect()
+        let row_idxs: Vec<usize> = if !self.picked_rows.is_empty() {
+            self.picked_rows.iter().copied().collect()
+        } else {
+            match self.kind {
+                GridSelection::Cell { row, .. } | GridSelection::Row { row } => vec![row],
+                GridSelection::Column { .. } => (0..self.buffer.row_count()).collect(),
+                GridSelection::Range { start, end } => {
+                    let lo = start.0.min(end.0);
+                    let hi = start.0.max(end.0);
+                    (lo..=hi).collect()
+                }
             }
         };
         let rows = row_idxs
@@ -533,6 +649,10 @@ impl GridModel {
 
     pub fn rows(&self) -> &[Vec<DbValue>] {
         self.buffer.rows()
+    }
+
+    pub fn rows_snapshot(&self) -> Arc<Vec<Vec<DbValue>>> {
+        self.buffer.rows_snapshot()
     }
 
     pub fn truncated(&self) -> bool {
@@ -787,6 +907,9 @@ pub struct Model {
     pub results: ResultsState,
     pub tabs: TabsState,
     pub palette: PaletteState,
+    pub help: HelpState,
+    pub results_menu: ResultsMenuState,
+    pub layout_preset: LayoutPreset,
     pub messages: Vec<String>,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
@@ -816,6 +939,7 @@ pub struct Model {
     pub projects: ProjectsScreen,
     pub config_transfer: ConfigTransferScreen,
     pub secret_prompt: SecretPrompt,
+    pub transaction_prompt: TransactionPrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
@@ -828,6 +952,11 @@ pub struct Model {
     pub mouse: bool,
     pub animation: bool,
     pub layout_dirty: bool,
+    pub hits: HitMap,
+    pub file_picker: FilePicker,
+    pub file_picker_mode: FilePickerMode,
+    pub diagnostic_preview: Option<String>,
+    pub diagnostics: DiagnosticsScreen,
 }
 
 impl Default for Model {
@@ -842,6 +971,7 @@ impl Default for Model {
                 ready: false,
                 environment: String::new(),
                 read_only: false,
+                driver: String::new(),
             },
             theme: crate::theme::builtin_dark(),
             capabilities: TerminalCapabilities {
@@ -851,6 +981,9 @@ impl Default for Model {
             },
             keymap: Keymap::default_profile(),
             pending_chord: Chord { keys: Vec::new() },
+            help: HelpState::default(),
+            results_menu: ResultsMenuState::default(),
+            layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,
                 inspector_visible: true,
@@ -862,6 +995,11 @@ impl Default for Model {
             mouse: true,
             animation: true,
             layout_dirty: false,
+            hits: HitMap::default(),
+            file_picker: FilePicker::default(),
+            file_picker_mode: FilePickerMode::Open,
+            diagnostic_preview: None,
+            diagnostics: DiagnosticsScreen::default(),
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
             tabs: TabsState::default(),
@@ -895,6 +1033,7 @@ impl Default for Model {
             projects: ProjectsScreen::default(),
             config_transfer: ConfigTransferScreen::default(),
             secret_prompt: SecretPrompt::default(),
+            transaction_prompt: TransactionPrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
@@ -961,6 +1100,17 @@ impl Model {
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
+        self.sync_grid_viewport();
+    }
+
+    pub fn sync_grid_viewport(&mut self) {
+        let plan = LayoutPlan::for_area_with(
+            ratatui::layout::Rect::new(0, 0, self.width, self.height),
+            Some(&self.panes),
+        );
+        let width = plan.results.width.saturating_sub(2).max(1);
+        let height = plan.results.height.saturating_sub(2).max(1);
+        self.results.set_viewport_size(width, height);
     }
 
     pub fn active_document(&self) -> &EditorDocument {

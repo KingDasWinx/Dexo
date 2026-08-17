@@ -21,4 +21,4 @@ demo  local  public
 └──────────────────────────────────────────────────────────┘
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-connected:local  tx:idle  rows:0  ctrl+p palette
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows

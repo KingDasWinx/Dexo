@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
     CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete, expand_placeholders, format_sql, named_parameters,
+    complete, current_token, expand_placeholders, format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -22,9 +22,19 @@ pub struct EditorState {
     pub completions: Vec<CompletionItem>,
     pub format_preview: Option<String>,
     pub completion_open: bool,
+    pub completion_selected: usize,
+    pub completion_offset: usize,
     pub parameter_prompt: bool,
+    pub parameter_index: usize,
+    pub parameter_draft: String,
     pub snippets: Vec<Snippet>,
+    pub snippet_open: bool,
+    pub snippet_selected: usize,
+    pub snippet_pending: bool,
     pub history: Vec<String>,
+    pub history_open: bool,
+    pub history_selected: usize,
+    pub history_confirm_clear: bool,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
 }
@@ -49,9 +59,19 @@ impl Clone for EditorState {
             completions: self.completions.clone(),
             format_preview: self.format_preview.clone(),
             completion_open: self.completion_open,
+            completion_selected: self.completion_selected,
+            completion_offset: self.completion_offset,
             parameter_prompt: self.parameter_prompt,
+            parameter_index: self.parameter_index,
+            parameter_draft: self.parameter_draft.clone(),
             snippets: self.snippets.clone(),
+            snippet_open: self.snippet_open,
+            snippet_selected: self.snippet_selected,
+            snippet_pending: self.snippet_pending,
             history: self.history.clone(),
+            history_open: self.history_open,
+            history_selected: self.history_selected,
+            history_confirm_clear: self.history_confirm_clear,
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
         }
@@ -85,12 +105,30 @@ impl Default for EditorState {
             completions: Vec::new(),
             format_preview: None,
             completion_open: false,
+            completion_selected: 0,
+            completion_offset: 0,
             parameter_prompt: false,
+            parameter_index: 0,
+            parameter_draft: String::new(),
             snippets: Vec::new(),
+            snippet_open: false,
+            snippet_selected: 0,
+            snippet_pending: false,
             history: Vec::new(),
+            history_open: false,
+            history_selected: 0,
+            history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::table("public.users", ["id", "email"]),
         }
+    }
+}
+
+fn editor_dialect(model: &Model) -> Dialect {
+    if model.connection.driver == "mysql" {
+        Dialect::Mysql
+    } else {
+        Dialect::Postgres
     }
 }
 
@@ -111,26 +149,41 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
         })
         .collect();
     if with_completion {
-        // ponytail: complete after FROM when present so table names survive a trailing :param token.
-        let at = sql
-            .to_ascii_lowercase()
-            .find(" from ")
-            .map(|index| index + 6)
-            .unwrap_or(byte_cursor);
-        let objects = model.explorer.flatten();
-        model.editor.completions = if objects.is_empty() {
-            complete(
-                &sql,
-                at.min(sql.len()),
-                &model.editor.catalog,
-                Dialect::Postgres,
-            )
-        } else {
-            let snapshot = dexo_app::SnapshotCatalog::new(objects);
-            complete(&sql, at.min(sql.len()), &snapshot, Dialect::Postgres)
-        };
-        model.editor.completion_open = true;
+        apply_completions(model, &sql, byte_cursor, false);
     }
+}
+
+fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
+    let at = byte_cursor.min(sql.len());
+    let dialect = editor_dialect(model);
+    let objects = model.explorer.flatten();
+    let items = if objects.is_empty() {
+        complete(sql, at, &model.editor.catalog, dialect)
+    } else {
+        let snapshot = dexo_app::SnapshotCatalog::new(objects);
+        complete(sql, at, &snapshot, dialect)
+    };
+    let prefix = &sql[..at];
+    let token = current_token(prefix);
+    let after_dot = prefix.trim_end().ends_with('.');
+    if items.is_empty() || (live && token.is_empty() && !after_dot) {
+        model.editor.completions.clear();
+        model.editor.completion_open = false;
+        model.editor.completion_selected = 0;
+        model.editor.completion_offset = 0;
+        return;
+    }
+    model.editor.completions = items;
+    model.editor.completion_open = true;
+    model.editor.completion_selected = 0;
+    model.editor.completion_offset = 0;
+}
+
+fn suggest_live(model: &mut Model) {
+    let sql = model.active_document().text();
+    let cursor = model.active_document().cursor();
+    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    apply_completions(model, &sql, byte_cursor, true);
 }
 
 fn is_sensitive_name(name: &str) -> bool {
@@ -140,7 +193,7 @@ fn is_sensitive_name(name: &str) -> bool {
 
 pub fn apply_format(model: &mut Model) {
     let sql = model.active_document().text();
-    match format_sql(&sql, Dialect::Postgres) {
+    match format_sql(&sql, editor_dialect(model)) {
         Ok(formatted) => {
             model.editor.format_preview = Some(formatted.clone());
             model.set_sql(&formatted);
@@ -151,24 +204,90 @@ pub fn apply_format(model: &mut Model) {
 }
 
 pub fn insert_active_snippet(model: &mut Model) {
-    let Some(snippet) = model.editor.snippets.first().cloned() else {
+    if model.editor.snippets.is_empty() {
+        return;
+    }
+    if model.editor.snippets.len() == 1 {
+        insert_snippet_at(model, 0);
+        return;
+    }
+    model.editor.snippet_open = true;
+    model.editor.snippet_selected = 0;
+}
+
+pub fn insert_snippet_at(model: &mut Model, index: usize) {
+    let Some(snippet) = model.editor.snippets.get(index).cloned() else {
         return;
     };
+    model.editor.snippet_open = false;
     insert_text(model, &expand_placeholders(&snippet.body));
     refresh_intelligence(model, false);
 }
 
 pub fn accept_completion(model: &mut Model) {
-    let Some(item) = model.editor.completions.first().cloned() else {
+    let index = model.editor.completion_selected;
+    let Some(item) = model.editor.completions.get(index).cloned() else {
         return;
     };
-    insert_text(model, &item.label);
+    replace_current_token(model, &item.label);
     model.editor.completion_open = false;
+    model.editor.completions.clear();
     refresh_intelligence(model, false);
 }
 
+pub fn move_completion(model: &mut Model, delta: i32) {
+    if model.editor.completions.is_empty() {
+        return;
+    }
+    let max = model.editor.completions.len() as i32 - 1;
+    model.editor.completion_selected =
+        (model.editor.completion_selected as i32 + delta).clamp(0, max) as usize;
+    model.editor.completion_offset = crate::palette::scroll_to_selection(
+        model.editor.completion_selected,
+        model.editor.completion_offset,
+        model.editor.completions.len(),
+        8,
+    );
+}
+
+fn replace_current_token(model: &mut Model, text: &str) {
+    let sql = model.active_document().text();
+    let cursor = model.active_document().cursor();
+    let prefix: String = sql.chars().take(cursor).collect();
+    let token_chars = current_token(&prefix).chars().count();
+    let start = cursor.saturating_sub(token_chars);
+    let doc = model.active_document_mut();
+    if !doc.typing {
+        doc.sql.end_group();
+        doc.sql.begin_group();
+        doc.typing = true;
+    }
+    doc.anchor = None;
+    let _ = doc.sql.replace_chars(start..cursor, text);
+    reveal_cursor(doc);
+}
+
 pub fn submit_parameters(model: &mut Model) {
+    if !model.editor.parameter_draft.is_empty() {
+        let index = model.editor.parameter_index;
+        if let Some(parameter) = model.editor.parameters.get_mut(index) {
+            parameter.value = DbValue::Text(std::mem::take(&mut model.editor.parameter_draft));
+        }
+    }
+    let next = model.editor.parameter_index + 1;
+    if next < model.editor.parameters.len()
+        && model
+            .editor
+            .parameters
+            .iter()
+            .any(|parameter| matches!(parameter.value, DbValue::Null))
+    {
+        model.editor.parameter_index = next;
+        model.editor.parameter_prompt = true;
+        return;
+    }
     model.editor.parameter_prompt = false;
+    model.editor.parameter_index = 0;
 }
 
 pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
@@ -192,6 +311,11 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
         }
         KeyCode::Char(ch) if !ctrl => {
             insert_text(model, &ch.to_string());
+            suggest_live(model);
+            true
+        }
+        KeyCode::Enter if model.editor.completion_open => {
+            accept_completion(model);
             true
         }
         KeyCode::Enter => {
@@ -202,12 +326,25 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             accept_completion(model);
             true
         }
+        KeyCode::Up if model.editor.completion_open => {
+            move_completion(model, -1);
+            true
+        }
+        KeyCode::Down if model.editor.completion_open => {
+            move_completion(model, 1);
+            true
+        }
+        KeyCode::Esc if model.editor.completion_open => {
+            model.editor.completion_open = false;
+            true
+        }
         KeyCode::Tab => {
             insert_text(model, "    ");
             true
         }
         KeyCode::Backspace => {
             backspace(model);
+            suggest_live(model);
             true
         }
         KeyCode::Delete => {
@@ -477,6 +614,87 @@ fn cursor_at(text: &str, line: usize, col: usize) -> usize {
         return text.chars().count();
     }
     text.chars().count()
+}
+
+pub fn handle_history_key(model: &mut Model, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc => {
+            model.editor.history_open = false;
+            true
+        }
+        KeyCode::Up => {
+            model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
+            true
+        }
+        KeyCode::Down => {
+            if model.editor.history_selected + 1 < model.editor.history.len() {
+                model.editor.history_selected += 1;
+            }
+            true
+        }
+        _ => false,
+    }
+}
+
+pub fn pick_history(model: &mut Model) -> bool {
+    let Some(sql) = model
+        .editor
+        .history
+        .get(model.editor.history_selected)
+        .cloned()
+    else {
+        model.editor.history_open = false;
+        return false;
+    };
+    model.editor.history_open = false;
+    model.set_sql(&sql);
+    true
+}
+
+pub fn handle_snippet_key(model: &mut Model, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc => {
+            model.editor.snippet_open = false;
+            true
+        }
+        KeyCode::Up => {
+            model.editor.snippet_selected = model.editor.snippet_selected.saturating_sub(1);
+            true
+        }
+        KeyCode::Down => {
+            if model.editor.snippet_selected + 1 < model.editor.snippets.len() {
+                model.editor.snippet_selected += 1;
+            }
+            true
+        }
+        KeyCode::Enter => {
+            insert_snippet_at(model, model.editor.snippet_selected);
+            true
+        }
+        _ => false,
+    }
+}
+
+pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> bool {
+    match key.code {
+        KeyCode::Esc => {
+            model.editor.parameter_prompt = false;
+            true
+        }
+        KeyCode::Backspace => {
+            model.editor.parameter_draft.pop();
+            true
+        }
+        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            model.editor.parameter_draft.push(ch);
+            true
+        }
+        KeyCode::Enter => {
+            submit_parameters(model);
+            true
+        }
+        _ => false,
+    }
 }
 
 pub fn reveal_cursor(doc: &mut EditorDocument) {

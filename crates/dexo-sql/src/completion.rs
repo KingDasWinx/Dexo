@@ -174,7 +174,7 @@ fn alias_before_dot(prefix: &str) -> Option<&str> {
     if ident.is_empty() { None } else { Some(ident) }
 }
 
-fn current_token(prefix: &str) -> String {
+pub fn current_token(prefix: &str) -> String {
     prefix
         .rsplit(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
         .next()

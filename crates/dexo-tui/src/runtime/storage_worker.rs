@@ -20,6 +20,7 @@ pub struct BootstrapState {
     pub layout: Option<WorkbenchLayout>,
     pub documents: Vec<StoredDocument>,
     pub projects: Vec<Project>,
+    pub snippets: Vec<dexo_sql::Snippet>,
 }
 
 #[derive(Clone, Debug)]
@@ -504,6 +505,11 @@ fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
     SessionRecoveryRepository::new(conn).mark_running()?;
     let layout = LayoutRepository::new(conn).load(&project_id)?;
     let documents = DocumentRepository::new(conn).list_for_project(&project_id)?;
+    let snippets = SnippetRepository::new(conn).list().map(|rows| {
+        rows.into_iter()
+            .map(|(_, name, body)| dexo_sql::Snippet { name, body })
+            .collect()
+    })?;
     let _ = RecentItemsRepository::new(conn).touch(&project_id, "project", &active_project.name);
     Ok(BootstrapState {
         projects: ProjectRepository::new(conn).list()?,
@@ -512,6 +518,7 @@ fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
         recovery,
         layout,
         documents,
+        snippets,
     })
 }
 
