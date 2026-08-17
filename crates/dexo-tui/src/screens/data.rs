@@ -4,6 +4,8 @@ use dexo_app::data::{
 };
 use dexo_driver_api::{DbValue, QualifiedName};
 
+use crate::widgets::form::{FooterFocus, footer_line};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DataQueryIntent {
     Sort,
@@ -19,6 +21,7 @@ pub struct DataQueryPrompt {
     pub descending: bool,
     pub error: Option<String>,
     pub focus_value: bool,
+    pub footer: FooterFocus,
 }
 
 impl DataQueryPrompt {
@@ -39,6 +42,7 @@ impl DataQueryPrompt {
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }
+        lines.push(footer_line("Submit", self.footer));
         lines
     }
 }

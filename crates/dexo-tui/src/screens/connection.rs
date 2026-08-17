@@ -2,6 +2,7 @@ use dexo_app::{ConnectionPolicyOverrides, ConnectionProfile, NewConnection};
 use dexo_driver_api::DriverDescriptor;
 
 use crate::screens::schema_editor::FormField;
+use crate::widgets::form::{FooterFocus, footer_line};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectionForm {
@@ -86,21 +87,45 @@ impl ConnectionForm {
     }
 
     pub fn focus_next(&mut self) {
-        if self.fields.is_empty() {
+        let count = self.item_count();
+        if count == 0 {
             return;
         }
-        self.focus = (self.focus + 1) % self.fields.len();
+        self.focus = (self.focus + 1) % count;
     }
 
     pub fn focus_prev(&mut self) {
-        if self.fields.is_empty() {
+        let count = self.item_count();
+        if count == 0 {
             return;
         }
         self.focus = if self.focus == 0 {
-            self.fields.len() - 1
+            count - 1
         } else {
             self.focus - 1
         };
+    }
+
+    fn item_count(&self) -> usize {
+        self.fields.len() + 2
+    }
+
+    pub fn footer_focus(&self) -> FooterFocus {
+        if self.focus == self.fields.len() {
+            FooterFocus::Submit
+        } else if self.focus == self.fields.len() + 1 {
+            FooterFocus::Cancel
+        } else {
+            FooterFocus::Input
+        }
+    }
+
+    pub fn on_submit(&self) -> bool {
+        self.footer_focus() == FooterFocus::Submit
+    }
+
+    pub fn on_cancel(&self) -> bool {
+        self.footer_focus() == FooterFocus::Cancel
     }
 
     pub fn type_char(&mut self, ch: char) {
@@ -189,12 +214,16 @@ impl ConnectionForm {
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![if self.editing.is_some() {
-            "Edit connection".into()
+    pub fn title(&self) -> &'static str {
+        if self.editing.is_some() {
+            "Edit connection"
         } else {
-            "Add connection".into()
-        }];
+            "Add connection"
+        }
+    }
+
+    fn field_lines(&self) -> Vec<String> {
+        let mut lines = Vec::new();
         for (index, field) in self.fields.iter().enumerate() {
             let marker = if index == self.focus { ">" } else { " " };
             if field.label == "driver" {
@@ -214,6 +243,24 @@ impl ConnectionForm {
         for error in &self.errors {
             lines.push(format!("error: {error}"));
         }
+        lines
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = vec![self.title().into()];
+        lines.extend(self.field_lines());
+        lines.push(footer_line("Submit", self.footer_focus()));
+        lines
+    }
+
+    pub fn visible_lines(&self, rows: usize) -> Vec<String> {
+        let body = self.field_lines();
+        let body_rows = rows.saturating_sub(2).max(1);
+        let focus_line = self.focus.min(self.fields.len().saturating_sub(1));
+        let offset = crate::palette::scroll_to_selection(focus_line, 0, body.len(), body_rows);
+        let mut lines = vec![self.title().into()];
+        lines.extend(body.into_iter().skip(offset).take(body_rows));
+        lines.push(footer_line("Submit", self.footer_focus()));
         lines
     }
 }
@@ -500,5 +547,24 @@ mod tests {
                 .value,
             "postgres"
         );
+    }
+
+    #[test]
+    fn long_form_scrolls_to_focus_and_keeps_actions() {
+        let mut form = ConnectionForm::open();
+        assert!(form.fields.len() > 8);
+        form.focus = form.fields.len() - 1;
+        let last = form.fields.last().unwrap().label.clone();
+        let lines = form.visible_lines(8);
+        assert!(lines.iter().any(|line| line.contains(&last)));
+        assert!(lines.iter().any(|line| line.contains("[Submit]")));
+        assert!(lines.iter().any(|line| line.contains("[Cancel]")));
+        assert!(!lines.iter().any(|line| line.contains("host:")));
+        form.focus_next();
+        assert!(form.on_submit());
+        form.focus_next();
+        assert!(form.on_cancel());
+        form.focus_next();
+        assert_eq!(form.focus, 0);
     }
 }

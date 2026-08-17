@@ -2,6 +2,7 @@ use dexo_app::Project;
 use dexo_storage::ProjectDeletePreview;
 
 use crate::runtime::project_manager::ProjectSwitch;
+use crate::widgets::form::{FooterFocus, footer_line};
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProjectsMode {
@@ -39,6 +40,7 @@ pub struct ProjectsScreen {
     pub recents: Vec<String>,
     pub intent: Option<ProjectIntent>,
     pub error: Option<String>,
+    pub footer: FooterFocus,
 }
 
 impl ProjectsScreen {
@@ -85,8 +87,14 @@ impl ProjectsScreen {
             lines.push(format!("recent: {}", self.recents.join(", ")));
         }
         match self.mode {
-            ProjectsMode::Create => lines.push(format!("create: {}", self.name_input)),
-            ProjectsMode::Rename => lines.push(format!("rename: {}", self.name_input)),
+            ProjectsMode::Create => {
+                lines.push(format!("create: {}", self.name_input));
+                lines.push(footer_line("Submit", self.footer));
+            }
+            ProjectsMode::Rename => {
+                lines.push(format!("rename: {}", self.name_input));
+                lines.push(footer_line("Submit", self.footer));
+            }
             ProjectsMode::Browse => {}
             ProjectsMode::DeleteConfirm => {}
         }

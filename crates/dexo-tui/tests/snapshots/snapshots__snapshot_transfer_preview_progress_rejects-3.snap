@@ -14,7 +14,7 @@ demo  local  public
 │             │preview:                                                              │             │
 │             │preview ready                                                         │             │
 │             │reject line=3 invalid value                                           │             │
-│             │                                                                      │             │
+│             │ [Submit]   [Cancel]                                                  │             │
 │             │                                                                      │             │
 │             │                                                                      │             │
 │             │                                                                      │             │

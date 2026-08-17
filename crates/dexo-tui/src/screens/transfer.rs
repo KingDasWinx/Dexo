@@ -1,5 +1,7 @@
 use dexo_app::transfer::{Detection, ErrorStrategy, ExportProgress, RejectedRow};
 
+use crate::widgets::form::{FooterFocus, footer_line};
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TransferMode {
     #[default]
@@ -35,6 +37,7 @@ pub struct TransferScreen {
     pub error: Option<String>,
     pub message: Option<String>,
     pub confirm_restore: bool,
+    pub footer: FooterFocus,
 }
 
 impl Default for TransferScreen {
@@ -53,6 +56,7 @@ impl Default for TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
         }
     }
 }
@@ -73,6 +77,7 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
         }
     }
 
@@ -94,6 +99,7 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
         }
     }
 
@@ -116,6 +122,7 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
         }
     }
 
@@ -139,6 +146,7 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
         }
     }
 
@@ -171,6 +179,7 @@ impl TransferScreen {
         for reject in &self.rejects {
             lines.push(format!("reject line={} {}", reject.line, reject.safe_error));
         }
+        lines.push(footer_line("Submit", self.footer));
         lines
     }
 }

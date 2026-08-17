@@ -1,5 +1,47 @@
 use crate::screens::schema_editor::{FormField, SchemaEditor};
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FooterFocus {
+    #[default]
+    Input,
+    Submit,
+    Cancel,
+}
+
+impl FooterFocus {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Input => Self::Submit,
+            Self::Submit => Self::Cancel,
+            Self::Cancel => Self::Input,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Input => Self::Cancel,
+            Self::Submit => Self::Input,
+            Self::Cancel => Self::Submit,
+        }
+    }
+}
+
+pub fn footer_line(submit: &str, focus: FooterFocus) -> String {
+    format!(
+        "{}[{submit}]  {}[Cancel]",
+        if focus == FooterFocus::Submit {
+            ">"
+        } else {
+            " "
+        },
+        if focus == FooterFocus::Cancel {
+            ">"
+        } else {
+            " "
+        },
+    )
+}
+
 pub fn render_lines(editor: &SchemaEditor) -> Vec<String> {
     editor.lines()
 }
@@ -10,8 +52,24 @@ pub fn focused_field(editor: &SchemaEditor) -> Option<&FormField> {
 
 #[cfg(test)]
 mod tests {
-    use super::{focused_field, render_lines};
+    use super::{FooterFocus, focused_field, footer_line, render_lines};
     use crate::screens::schema_editor::SchemaEditor;
+
+    #[test]
+    fn footer_marks_the_focused_action() {
+        assert_eq!(
+            footer_line("Submit", FooterFocus::Input),
+            " [Submit]   [Cancel]"
+        );
+        assert_eq!(
+            footer_line("Submit", FooterFocus::Submit),
+            ">[Submit]   [Cancel]"
+        );
+        assert_eq!(
+            footer_line("Save", FooterFocus::Cancel),
+            " [Save]  >[Cancel]"
+        );
+    }
 
     #[test]
     fn focus_stays_on_selected_field() {

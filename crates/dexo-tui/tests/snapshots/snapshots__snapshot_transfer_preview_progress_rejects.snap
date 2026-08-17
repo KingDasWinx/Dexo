@@ -15,7 +15,7 @@ demo  local  public
 │             │id,name                                                               │             │
 │             │1,ok                                                                  │             │
 │             │2,BAD                                                                 │             │
-│             │                                                                      │             │
+│             │ [Submit]   [Cancel]                                                  │             │
 │             │                                                                      │             │
 │             │                                                                      │             │
 │             │                                                                      │             │

@@ -168,11 +168,13 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         );
     }
     if model.connection_form.open {
-        let popup = centered(frame.area(), 64, 16);
+        let area = frame.area();
+        let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
         frame.render_widget(Clear, popup);
+        let rows = popup.height.saturating_sub(2).max(4) as usize;
         frame.render_widget(
-            Paragraph::new(model.connection_form.lines().join("\n"))
-                .block(Block::bordered().title("Add connection")),
+            Paragraph::new(model.connection_form.visible_lines(rows).join("\n"))
+                .block(overlay_block(model, model.connection_form.title())),
             popup,
         );
     }
@@ -883,36 +885,18 @@ fn render_list_overlay(
 }
 
 fn render_file_picker(frame: &mut Frame, model: &Model) {
-    let popup = centered(frame.area(), 64, 16);
+    let area = frame.area();
+    let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
     frame.render_widget(Clear, popup);
-    let mut lines = vec![model.file_picker.cwd.display().to_string()];
-    let rows = popup.height.saturating_sub(3) as usize;
-    let offset = crate::palette::scroll_to_selection(
-        model.file_picker.selected,
-        model.file_picker.offset,
-        model.file_picker.entries.len(),
-        rows.max(1),
-    );
-    for (index, path) in model
-        .file_picker
-        .entries
-        .iter()
-        .enumerate()
-        .skip(offset)
-        .take(rows.max(1))
-    {
-        let marker = if index == model.file_picker.selected {
-            ">"
-        } else {
-            " "
-        };
-        lines.push(format!("{marker} {}", path.display()));
-    }
-    if let Some(error) = &model.file_picker.error {
-        lines.push(error.clone());
-    }
+    let list_rows = popup.height.saturating_sub(5).max(4) as usize;
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(Block::bordered().title("File")),
+        Paragraph::new(
+            model
+                .file_picker
+                .lines(model.file_picker_mode, list_rows)
+                .join("\n"),
+        )
+        .block(overlay_block(model, model.file_picker_mode.title())),
         popup,
     );
 }

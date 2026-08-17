@@ -7,7 +7,7 @@ demo  local  public
 │export out.csv                                            │
 │format=csv strategy=Stop                                  │
 │progress rows=10000 bytes=80000 running=true              │
-│                                                          │
+│ [Submit]   [Cancel]                                      │
 │                                                          │
 │                                                          │
 │                                                          │

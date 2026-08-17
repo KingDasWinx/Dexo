@@ -182,7 +182,12 @@ fn file_picker_parent_hidden_and_absolute() {
         ..FilePicker::default()
     };
     picker.refresh();
-    assert!(picker.entries.iter().any(|path| path.ends_with("a.txt")));
+    assert!(
+        picker
+            .entries
+            .iter()
+            .any(|entry| entry.path.ends_with("a.txt"))
+    );
     let abs = picker.enter_path(dir.path().join("a.txt")).unwrap();
     assert!(abs.is_absolute());
 }

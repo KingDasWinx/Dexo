@@ -560,9 +560,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::SaveActiveDocument => save_active_document(model),
         Action::OpenDocument => {
-            model.file_picker.open = true;
-            model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Open;
-            model.file_picker.refresh();
+            open_file_picker(model, crate::screens::file_picker::FilePickerMode::Open);
             Vec::new()
         }
         Action::CycleTheme => cycle_theme(model),
@@ -1488,19 +1486,34 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.transfer.open = false;
                 Vec::new()
             }
+            KeyCode::Tab => {
+                model.transfer.footer = model.transfer.footer.next();
+                Vec::new()
+            }
+            KeyCode::BackTab => {
+                model.transfer.footer = model.transfer.footer.prev();
+                Vec::new()
+            }
+            KeyCode::Enter
+                if model.transfer.footer == crate::widgets::form::FooterFocus::Cancel =>
+            {
+                model.transfer.open = false;
+                Vec::new()
+            }
             KeyCode::Enter => run_transfer(model),
-            KeyCode::Backspace => {
+            KeyCode::Backspace
+                if model.transfer.footer == crate::widgets::form::FooterFocus::Input =>
+            {
                 model.transfer.path.pop();
                 Vec::new()
             }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                model.file_picker.open = true;
-                model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Transfer;
-                model.file_picker.refresh();
+                open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
                 Vec::new()
             }
             KeyCode::Char(ch)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+                if model.transfer.footer == crate::widgets::form::FooterFocus::Input
+                    && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
             {
                 model.transfer.path.push(ch);
                 Vec::new()
@@ -1698,6 +1711,10 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.connection_form.close();
             Vec::new()
         }
+        KeyCode::Enter if model.connection_form.on_cancel() => {
+            model.connection_form.close();
+            Vec::new()
+        }
         KeyCode::Enter => save_connection(model),
         KeyCode::Tab | KeyCode::Down => {
             model.connection_form.focus_next();
@@ -1705,6 +1722,14 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::BackTab | KeyCode::Up => {
             model.connection_form.focus_prev();
+            Vec::new()
+        }
+        KeyCode::Left if model.connection_form.on_cancel() => {
+            model.connection_form.focus_prev();
+            Vec::new()
+        }
+        KeyCode::Right if model.connection_form.on_submit() => {
+            model.connection_form.focus_next();
             Vec::new()
         }
         KeyCode::Left => {
@@ -1913,12 +1938,32 @@ fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect
             model.transaction_prompt.error = None;
             Vec::new()
         }
+        KeyCode::Tab => {
+            model.transaction_prompt.footer = model.transaction_prompt.footer.next();
+            Vec::new()
+        }
+        KeyCode::BackTab => {
+            model.transaction_prompt.footer = model.transaction_prompt.footer.prev();
+            Vec::new()
+        }
+        KeyCode::Enter
+            if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Cancel =>
+        {
+            model.transaction_prompt.open = false;
+            model.transaction_prompt.error = None;
+            Vec::new()
+        }
         KeyCode::Enter => submit_savepoint_prompt(model),
-        KeyCode::Backspace => {
+        KeyCode::Backspace
+            if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Input =>
+        {
             model.transaction_prompt.name.pop();
             Vec::new()
         }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+        KeyCode::Char(ch)
+            if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Input
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
             model.transaction_prompt.name.push(ch);
             Vec::new()
         }
@@ -1933,7 +1978,22 @@ fn handle_data_query_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect>
             model.data.query_prompt.error = None;
             Vec::new()
         }
+        KeyCode::Enter
+            if model.data.query_prompt.footer == crate::widgets::form::FooterFocus::Cancel =>
+        {
+            model.data.query_prompt.open = false;
+            model.data.query_prompt.error = None;
+            Vec::new()
+        }
         KeyCode::Enter => submit_data_query_prompt(model),
+        KeyCode::Down => {
+            model.data.query_prompt.footer = model.data.query_prompt.footer.next();
+            Vec::new()
+        }
+        KeyCode::Up => {
+            model.data.query_prompt.footer = model.data.query_prompt.footer.prev();
+            Vec::new()
+        }
         KeyCode::Tab => {
             match model.data.query_prompt.intent {
                 Some(crate::screens::data::DataQueryIntent::Sort) => {
@@ -1946,7 +2006,9 @@ fn handle_data_query_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect>
             }
             Vec::new()
         }
-        KeyCode::Backspace => {
+        KeyCode::Backspace
+            if model.data.query_prompt.footer == crate::widgets::form::FooterFocus::Input =>
+        {
             if model.data.query_prompt.focus_value {
                 model.data.query_prompt.value.pop();
             } else {
@@ -1954,7 +2016,10 @@ fn handle_data_query_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect>
             }
             Vec::new()
         }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+        KeyCode::Char(ch)
+            if model.data.query_prompt.footer == crate::widgets::form::FooterFocus::Input
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
             if model.data.query_prompt.focus_value {
                 model.data.query_prompt.value.push(ch);
             } else {
@@ -3212,9 +3277,7 @@ fn save_active_document(model: &mut Model) -> Vec<Effect> {
             expected_fingerprint: None,
         })],
         None => {
-            model.file_picker.open = true;
-            model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Save;
-            model.file_picker.refresh();
+            open_file_picker(model, crate::screens::file_picker::FilePickerMode::Save);
             Vec::new()
         }
     }
@@ -3293,9 +3356,7 @@ fn apply_saved_settings(model: &mut Model) {
 fn run_transfer(model: &mut Model) -> Vec<Effect> {
     let path = std::path::PathBuf::from(model.transfer.path.trim());
     if path.as_os_str().is_empty() {
-        model.file_picker.open = true;
-        model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Transfer;
-        model.file_picker.refresh();
+        open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
         return Vec::new();
     }
     if model.transfer.mode == crate::screens::transfer::TransferMode::Restore
@@ -3535,45 +3596,94 @@ fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-fn file_picker_rows() -> usize {
-    12
+fn file_picker_rows(model: &Model) -> usize {
+    model
+        .height
+        .saturating_sub(2)
+        .min(22)
+        .saturating_sub(5)
+        .max(4) as usize
 }
 
 fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::file_picker::FilePickerFocus;
+    let rows = file_picker_rows(model);
     match key.code {
         KeyCode::Esc => {
             model.file_picker.open = false;
             Vec::new()
         }
-        KeyCode::Up => {
-            model.file_picker.move_selection(-1, file_picker_rows());
+        KeyCode::Tab => {
+            model.file_picker.focus_next();
             Vec::new()
         }
-        KeyCode::Down => {
-            model.file_picker.move_selection(1, file_picker_rows());
+        KeyCode::BackTab => {
+            model.file_picker.focus_prev();
             Vec::new()
         }
-        KeyCode::Backspace => {
+        KeyCode::Up if model.file_picker.focus == FilePickerFocus::List => {
+            model.file_picker.move_selection(-1, rows);
+            Vec::new()
+        }
+        KeyCode::Down if model.file_picker.focus == FilePickerFocus::List => {
+            model.file_picker.move_selection(1, rows);
+            Vec::new()
+        }
+        KeyCode::Left if model.file_picker.focus == FilePickerFocus::List => {
             model.file_picker.parent();
             Vec::new()
         }
-        KeyCode::Char('h') => {
+        KeyCode::Right if model.file_picker.focus == FilePickerFocus::List => {
+            let _ = model.file_picker.activate_selected();
+            Vec::new()
+        }
+        KeyCode::Backspace if model.file_picker.focus == FilePickerFocus::Name => {
+            model.file_picker.name.pop();
+            Vec::new()
+        }
+        KeyCode::Backspace if model.file_picker.focus == FilePickerFocus::List => {
+            model.file_picker.parent();
+            Vec::new()
+        }
+        KeyCode::Char('h') if model.file_picker.focus == FilePickerFocus::List => {
             model.file_picker.toggle_hidden();
             Vec::new()
         }
-        KeyCode::Enter => file_picker_enter(model),
+        KeyCode::Char(ch)
+            if model.file_picker.focus == FilePickerFocus::Name
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            model.file_picker.name.push(ch);
+            Vec::new()
+        }
+        KeyCode::Char(ch)
+            if model.file_picker.focus == FilePickerFocus::List
+                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
+        {
+            model.file_picker.jump_to(ch, rows);
+            Vec::new()
+        }
+        KeyCode::Enter if model.file_picker.focus == FilePickerFocus::Cancel => {
+            model.file_picker.open = false;
+            Vec::new()
+        }
+        KeyCode::Enter if model.file_picker.focus == FilePickerFocus::List => {
+            if model.file_picker.activate_selected().is_some() {
+                file_picker_submit(model)
+            } else {
+                Vec::new()
+            }
+        }
+        KeyCode::Enter => file_picker_submit(model),
         _ => Vec::new(),
     }
 }
 
-fn file_picker_enter(model: &mut Model) -> Vec<Effect> {
-    let Some(path) = model.file_picker.selected_path() else {
+fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
+    let Some(path) = model.file_picker.chosen_path() else {
+        model.file_picker.error = Some("choose a file or type a name".into());
         return Vec::new();
     };
-    if path.is_dir() {
-        let _ = model.file_picker.enter_path(path);
-        return Vec::new();
-    }
     model.file_picker.open = false;
     match model.file_picker_mode {
         crate::screens::file_picker::FilePickerMode::Open => {
@@ -3725,14 +3835,36 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
                 model.projects.name_input.clear();
                 model.projects.error = None;
+                model.projects.footer = crate::widgets::form::FooterFocus::Input;
+                Vec::new()
+            }
+            KeyCode::Tab => {
+                model.projects.footer = model.projects.footer.next();
+                Vec::new()
+            }
+            KeyCode::BackTab => {
+                model.projects.footer = model.projects.footer.prev();
+                Vec::new()
+            }
+            KeyCode::Enter
+                if model.projects.footer == crate::widgets::form::FooterFocus::Cancel =>
+            {
+                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                model.projects.name_input.clear();
+                model.projects.error = None;
+                model.projects.footer = crate::widgets::form::FooterFocus::Input;
                 Vec::new()
             }
             KeyCode::Enter => submit_project_name(model),
-            KeyCode::Backspace => {
+            KeyCode::Backspace
+                if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
+            {
                 model.projects.name_input.pop();
                 Vec::new()
             }
-            KeyCode::Char(ch) => {
+            KeyCode::Char(ch)
+                if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
+            {
                 model.projects.name_input.push(ch);
                 Vec::new()
             }
@@ -3765,6 +3897,7 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Char('n') => {
                 model.projects.mode = crate::screens::projects::ProjectsMode::Create;
                 model.projects.name_input.clear();
+                model.projects.footer = crate::widgets::form::FooterFocus::Input;
                 Vec::new()
             }
             KeyCode::Char('r') => {
@@ -3774,6 +3907,7 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     .selected()
                     .map(|project| project.name.clone())
                     .unwrap_or_default();
+                model.projects.footer = crate::widgets::form::FooterFocus::Input;
                 Vec::new()
             }
             KeyCode::Char('x') => update(model, Action::DeleteProject),
@@ -3971,10 +4105,22 @@ fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::Diagnostic
     )
 }
 
+fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePickerMode) {
+    model.file_picker_mode = mode;
+    model.file_picker.open_browser();
+    if mode == crate::screens::file_picker::FilePickerMode::Save
+        && let Some(path) = model.active_document().path.as_ref()
+        && let Some(name) = path.file_name()
+    {
+        model.file_picker.name = name.to_string_lossy().into();
+    }
+}
+
 fn open_diagnostics_picker(model: &mut Model) -> Vec<Effect> {
-    model.file_picker.open = true;
-    model.file_picker_mode = crate::screens::file_picker::FilePickerMode::Diagnostics;
-    model.file_picker.refresh();
+    open_file_picker(
+        model,
+        crate::screens::file_picker::FilePickerMode::Diagnostics,
+    );
     Vec::new()
 }
 
@@ -3988,6 +4134,7 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
             model.projects.intent = None;
             model.projects.error = None;
             model.projects.name_input.clear();
+            model.projects.footer = crate::widgets::form::FooterFocus::Input;
             Vec::new()
         }
         PaletteInvocation::OpenFlow(FlowIntent::ProjectSwitch) => {
