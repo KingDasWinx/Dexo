@@ -29,7 +29,7 @@ impl ConfigTransferScreen {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec!["Config transfer".into()];
+        let mut lines = Vec::new();
         if !self.path.as_os_str().is_empty() {
             lines.push(format!("path: {}", self.path.display()));
         }

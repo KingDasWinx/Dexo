@@ -1,4 +1,6 @@
+use crate::mouse::{HitMap, HitTarget, register_label};
 use crate::screens::schema_editor::{FormField, SchemaEditor};
+use ratatui::layout::Rect;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FooterFocus {
@@ -40,6 +42,12 @@ pub fn footer_line(submit: &str, focus: FooterFocus) -> String {
             " "
         },
     )
+}
+
+pub fn register_footer(hits: &mut HitMap, line: Rect, text: &str, submit: &str) {
+    let submit_label = format!("[{submit}]");
+    register_label(hits, line, text, &submit_label, HitTarget::FooterSubmit);
+    register_label(hits, line, text, "[Cancel]", HitTarget::FooterCancel);
 }
 
 pub fn render_lines(editor: &SchemaEditor) -> Vec<String> {

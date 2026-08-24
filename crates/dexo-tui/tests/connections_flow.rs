@@ -222,18 +222,26 @@ fn profile_saved_and_deleted_update_the_browser() {
 }
 
 #[test]
-fn two_sessions_for_one_profile_and_close() {
+fn one_session_per_connection_and_switch() {
     let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile()]);
-    let a = SessionId(uuid::Uuid::from_u128(1));
-    let b = SessionId(uuid::Uuid::from_u128(2));
+    let staging = {
+        let mut profile = saved_profile();
+        profile.name = "staging".into();
+        profile.id = ConnectionId(uuid::Uuid::from_u128(2));
+        profile
+    };
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), staging]);
+    let prod = SessionId(uuid::Uuid::from_u128(1));
+    let staging_session = SessionId(uuid::Uuid::from_u128(2));
     let _ = update(
         &mut model,
         Action::ConnectionChanged {
             name: "prod".into(),
             ready: true,
             environment: "local".into(),
-            session: Some(a),
+            session: Some(prod),
             generation: 1,
             token: 0,
             read_only: false,
@@ -246,17 +254,38 @@ fn two_sessions_for_one_profile_and_close() {
             name: "prod".into(),
             ready: true,
             environment: "local".into(),
-            session: Some(b),
-            generation: 1,
+            session: Some(SessionId(uuid::Uuid::from_u128(9))),
+            generation: 2,
             token: 0,
             read_only: false,
             driver: "postgres".into(),
         },
     );
-    assert_eq!(model.connections.sessions.len(), 2);
-    assert_eq!(model.connections.profiles[0].sessions, 2);
-    let _ = update(&mut model, Action::SessionClosed { session: a });
     assert_eq!(model.connections.sessions.len(), 1);
+    assert_eq!(model.connections.profiles[0].sessions, 1);
+    let _ = update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "staging".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(staging_session),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
+    );
+    assert_eq!(model.active_session, Some(staging_session));
+    model.connections.selected_profile = 0;
+    let effects = update(&mut model, Action::ConnectSelected);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadCatalogChildren { .. }]
+    ));
+    assert_eq!(model.connection.name, "prod");
+    assert_eq!(model.connections.sessions.len(), 2);
+    assert!(update(&mut model, Action::ConnectSelected).is_empty());
 }
 
 #[test]
@@ -303,7 +332,7 @@ fn custom_environment_policy_is_visible_on_the_row() {
     model
         .connections
         .load_profiles(vec![custom_policy_profile()]);
-    let lines = model.connections.lines().join("\n");
+    let lines = model.connections.lines(None).join("\n");
     assert!(lines.contains("pci-lab"));
     assert!(lines.contains(" ro"));
 }

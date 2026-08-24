@@ -38,7 +38,7 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     let (action_tx, action_rx) = tokio::sync::mpsc::channel(32);
     let mut runtime = WorkbenchRuntime::new(action_tx, worker, registry);
     let mut guard = TerminalGuard::start(CrosstermTerminal)?;
-    let result = run_loop(bootstrap, &mut runtime, action_rx).await;
+    let result = run_loop(bootstrap, &mut runtime, action_rx, &mut guard).await;
     runtime.dispatch(Effect::Shutdown).await;
     guard.restore();
     result
@@ -48,10 +48,12 @@ async fn run_loop(
     bootstrap: crate::runtime::storage_worker::BootstrapState,
     runtime: &mut WorkbenchRuntime,
     mut action_rx: tokio::sync::mpsc::Receiver<Action>,
+    guard: &mut TerminalGuard<CrosstermTerminal>,
 ) -> Result<(), TuiError> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
     let _ = crate::update::update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
+    guard.set_mouse(model.mouse)?;
     let mut events = EventStream::new();
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -82,6 +84,7 @@ async fn run_loop(
                 }
             }
         }
+        guard.set_mouse(model.mouse)?;
     }
     Ok(())
 }

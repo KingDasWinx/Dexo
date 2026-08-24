@@ -37,7 +37,7 @@ impl DataQueryPrompt {
                 format!("column: {}", self.column),
                 format!("value: {}", self.value),
             ],
-            None => vec!["query".into()],
+            None => Vec::new(),
         };
         if let Some(error) = &self.error {
             lines.push(error.clone());

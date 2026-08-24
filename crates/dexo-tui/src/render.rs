@@ -5,7 +5,10 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
-use crate::mouse::{HitMap, HitTarget};
+use crate::mouse::{
+    HitButton, HitMap, HitTarget, overlay_blocks_workbench, popup_inner, register_label,
+    register_line, register_overlay,
+};
 use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 
 pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
@@ -15,7 +18,10 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     match plan.mode {
         crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model, hits),
         _ => {
-            hits.register(HitTarget::Explorer, plan.explorer);
+            if !overlay_blocks_workbench(model) {
+                hits.register(HitTarget::Explorer, plan.explorer);
+                register_explorer_nodes(hits, plan.explorer, model);
+            }
             render_panel(
                 frame,
                 plan.explorer,
@@ -24,10 +30,15 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 model.focus == Focus::Explorer,
                 explorer_body(model, plan.explorer),
             );
-            crate::widgets::tabs::render(frame, plan.tabs, model);
-            hits.register(HitTarget::Editor, plan.content);
-            render_editor_content(frame, plan.content, model);
-            hits.register(HitTarget::Grid, plan.results);
+            crate::widgets::tabs::render(frame, plan.tabs, model, hits);
+            if !overlay_blocks_workbench(model) {
+                hits.register(HitTarget::Editor, plan.content);
+            }
+            render_editor_content(frame, plan.content, model, hits);
+            if !overlay_blocks_workbench(model) {
+                hits.register(HitTarget::Grid, plan.results);
+                hits.register(HitTarget::Inspector, plan.inspector);
+            }
             crate::widgets::grid::render(frame, plan.results, model, hits);
             render_panel(
                 frame,
@@ -41,221 +52,93 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     crate::widgets::status::render(frame, plan.status, model);
     if model.palette.open {
-        render_palette(frame, model);
+        render_palette(frame, model, hits);
     }
     if model.help.open {
-        render_help(frame, model);
+        render_help(frame, model, hits);
     }
     if model.results_menu.open {
-        render_results_menu(frame, model);
+        render_results_menu(frame, model, hits);
     }
     if let Some(review) = &model.data.review {
-        render_review(frame, review);
+        render_review(frame, review, hits);
     }
     if let Some(preview) = &model.schema_editor.preview {
-        render_ddl_preview(frame, preview);
+        render_ddl_preview(frame, preview, hits);
     }
     if model.schema_diff.open {
-        let area = frame.area();
-        if area.width >= 10 && area.height >= 5 {
-            let popup = centered(area, 80, 18);
-            frame.render_widget(Clear, popup);
-            frame.render_widget(
-                Paragraph::new(model.schema_diff.lines().join("\n"))
-                    .block(Block::bordered().title("Schema diff")),
-                popup,
-            );
-        }
+        render_schema_diff(frame, model, hits);
     }
     if model.transfer.open {
-        let area = frame.area();
-        if area.width >= 10 && area.height >= 5 {
-            let popup = centered(area, 72, 16);
-            frame.render_widget(Clear, popup);
-            frame.render_widget(
-                Paragraph::new(model.transfer.lines().join("\n"))
-                    .block(Block::bordered().title("Transfer")),
-                popup,
-            );
-        }
+        render_transfer(frame, model, hits);
     }
     if model.security.open {
-        render_panel(
-            frame,
-            centered(frame.area(), 40, 12),
-            model,
-            "Security",
-            true,
-            model.security.lines().join("\n"),
-        );
+        render_security(frame, model, hits);
     }
     if model.admin.open {
-        let area = frame.area();
-        if area.width >= 10 && area.height >= 5 {
-            let popup = centered(area, 80, 16);
-            frame.render_widget(Clear, popup);
-            frame.render_widget(
-                Paragraph::new(model.admin.lines().join("\n"))
-                    .block(Block::bordered().title("Sessions")),
-                popup,
-            );
-        }
+        render_admin(frame, model, hits);
     }
     if model.mcp_profiles.open {
-        let area = frame.area();
-        if area.width >= 10 && area.height >= 5 {
-            let popup = centered(area, 72, 14);
-            frame.render_widget(Clear, popup);
-            frame.render_widget(
-                Paragraph::new(model.mcp_profiles.lines().join("\n"))
-                    .block(Block::bordered().title("MCP profiles")),
-                popup,
-            );
-        }
+        render_mcp_profiles(frame, model, hits);
     }
     if model.connections.open {
-        let popup = centered(frame.area(), 72, 18);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.connections.lines().join("\n"))
-                .block(Block::bordered().title("Connections")),
-            popup,
-        );
+        render_connections(frame, model, hits);
     }
     if model.projects.open {
-        let popup = centered(frame.area(), 72, 18);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.projects.lines().join("\n"))
-                .block(Block::bordered().title("Projects")),
-            popup,
-        );
+        render_projects(frame, model, hits);
     }
     if model.config_transfer.open {
-        let popup = centered(frame.area(), 72, 16);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.config_transfer.lines().join("\n"))
-                .block(Block::bordered().title("Config transfer")),
-            popup,
-        );
+        render_config_transfer(frame, model, hits);
     }
     if model.secret_prompt.open {
-        let popup = centered(frame.area(), 56, 8);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.secret_prompt.lines().join("\n"))
-                .block(Block::bordered().title("Secret")),
-            popup,
-        );
+        render_secret(frame, model, hits);
     }
     if model.transaction_prompt.open {
-        let popup = centered(frame.area(), 56, 8);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.transaction_prompt.lines().join("\n"))
-                .block(Block::bordered().title("Savepoint")),
-            popup,
-        );
+        render_transaction_prompt(frame, model, hits);
     }
     if model.data.query_prompt.open {
-        let popup = centered(frame.area(), 56, 8);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.data.query_prompt.lines().join("\n"))
-                .block(Block::bordered().title("Query")),
-            popup,
-        );
+        render_data_query(frame, model, hits);
     }
     if model.connection_form.open {
-        let area = frame.area();
-        let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
-        frame.render_widget(Clear, popup);
-        let rows = popup.height.saturating_sub(2).max(4) as usize;
-        frame.render_widget(
-            Paragraph::new(model.connection_form.visible_lines(rows).join("\n"))
-                .block(overlay_block(model, model.connection_form.title())),
-            popup,
-        );
+        render_connection_form(frame, model, hits);
     }
     if model.settings.open {
-        let popup = centered(frame.area(), 64, 12);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.settings.lines().join("\n"))
-                .block(Block::bordered().title("Settings")),
-            popup,
-        );
+        render_settings(frame, model, hits);
     }
     if model.recovery.open {
-        let popup = centered(frame.area(), 64, 12);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.recovery.lines().join("\n"))
-                .block(Block::bordered().title("Session recovery")),
-            popup,
-        );
+        render_recovery(frame, model, hits);
     }
     if model.diagnostics.open {
-        let popup = centered(frame.area(), 72, 16);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.diagnostics.lines().join("\n"))
-                .block(Block::bordered().title("Diagnostics")),
-            popup,
-        );
+        render_diagnostics(frame, model, hits);
     }
     if model.mcp_audit.open {
-        let popup = centered(frame.area(), 72, 12);
-        frame.render_widget(Clear, popup);
-        frame.render_widget(
-            Paragraph::new(model.mcp_audit.lines().join("\n"))
-                .block(Block::bordered().title("MCP audit")),
-            popup,
-        );
+        render_mcp_audit(frame, model, hits);
     }
     if model.file_picker.open {
-        render_file_picker(frame, model);
+        render_file_picker(frame, model, hits);
     }
     if model.editor.completion_open {
-        render_completion(frame, model);
+        render_completion(frame, model, hits);
     }
     if model.editor.parameter_prompt {
-        render_parameters(frame, model);
+        render_parameters(frame, model, hits);
     }
     if model.editor.history_open {
-        if model.editor.history_confirm_clear {
-            let target = if model.connection.name.is_empty() {
-                "all"
-            } else {
-                model.connection.name.as_str()
-            };
-            render_list_overlay(frame, &format!("clear history for {target}?"), &[], 0, 0);
-        } else {
-            render_list_overlay(
-                frame,
-                "History",
-                &model.editor.history,
-                model.editor.history_selected,
-                0,
-            );
-        }
+        render_history(frame, model, hits);
     }
     if model.editor.snippet_open {
-        let names: Vec<String> = model
-            .editor
-            .snippets
-            .iter()
-            .map(|snippet| snippet.name.clone())
-            .collect();
-        render_list_overlay(frame, "Snippets", &names, model.editor.snippet_selected, 0);
+        render_snippets(frame, model, hits);
     }
 }
 
 fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    let interactive = !overlay_blocks_workbench(model);
     match model.focus {
         Focus::Explorer => {
-            hits.register(HitTarget::Explorer, area);
+            if interactive {
+                hits.register(HitTarget::Explorer, area);
+                register_explorer_nodes(hits, area, model);
+            }
             render_panel(
                 frame,
                 area,
@@ -266,21 +149,30 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             );
         }
         Focus::Editor | Focus::Palette => {
-            hits.register(HitTarget::Editor, area);
-            render_editor_content(frame, area, model);
+            if interactive {
+                hits.register(HitTarget::Editor, area);
+            }
+            render_editor_content(frame, area, model, hits);
         }
         Focus::Results => {
-            hits.register(HitTarget::Grid, area);
+            if interactive {
+                hits.register(HitTarget::Grid, area);
+            }
             crate::widgets::grid::render(frame, area, model, hits);
         }
-        Focus::Inspector => render_panel(
-            frame,
-            area,
-            model,
-            &inspector_title(model),
-            true,
-            inspector_body(model),
-        ),
+        Focus::Inspector => {
+            if interactive {
+                hits.register(HitTarget::Inspector, area);
+            }
+            render_panel(
+                frame,
+                area,
+                model,
+                &inspector_title(model),
+                true,
+                inspector_body(model),
+            );
+        }
     }
 }
 
@@ -305,12 +197,19 @@ fn inspector_title(model: &Model) -> String {
     format!("Inspector · {}", model.inspector.tab.label())
 }
 
-fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model) {
+fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if model.tabs.active == 0 {
         crate::widgets::editor::render(frame, area, model);
         return;
     }
     let (title, body) = editor_tab_view(model);
+    if model.tabs.active == 2 && model.inspector.ddl.is_none() && !overlay_blocks_workbench(model) {
+        register_form_fields(
+            hits,
+            area,
+            &crate::widgets::form::render_lines(&model.schema_editor),
+        );
+    }
     render_panel_scrolled(
         frame,
         area,
@@ -625,7 +524,55 @@ fn overlay_block(model: &Model, title: &str) -> Block<'static> {
         .border_style(model.theme.overlay(model.capabilities))
 }
 
-fn render_palette(frame: &mut Frame, model: &Model) {
+fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let inner = Block::bordered().inner(area);
+    let chrome = crate::widgets::object_tree::chrome_count(&model.explorer);
+    let (offset, ids) =
+        crate::widgets::object_tree::windowed_ids(&model.explorer, inner.height as usize);
+    for (i, _) in ids.iter().enumerate() {
+        let row = chrome + i;
+        register_line(
+            hits,
+            inner,
+            row,
+            HitTarget::ExplorerNode(offset.saturating_add(i)),
+        );
+    }
+}
+
+fn register_form_fields(hits: &mut HitMap, area: Rect, lines: &[String]) {
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let inner = Block::bordered().inner(area);
+    let mut field = 0usize;
+    for (i, line) in lines.iter().enumerate() {
+        if line.contains(": ") && (line.starts_with('>') || line.starts_with(' ')) {
+            register_line(hits, inner, i, HitTarget::FormField(field));
+            field += 1;
+        }
+    }
+}
+
+fn paint_popup(frame: &mut Frame, popup: Rect, block: Block<'static>, body: String) {
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(body).block(block), popup);
+}
+
+fn for_popup_lines(popup: Rect, lines: &[String], mut map: impl FnMut(usize, &str, Rect)) {
+    let inner = popup_inner(popup);
+    for (i, line) in lines.iter().enumerate() {
+        if (i as u16) >= inner.height {
+            break;
+        }
+        map(i, line, crate::mouse::line_rect(inner, i));
+    }
+}
+
+fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
@@ -635,7 +582,6 @@ fn render_palette(frame: &mut Frame, model: &Model) {
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 3;
     let popup = Rect::new(x, y, width, height);
-    frame.render_widget(Clear, popup);
     let entries = palette_entries(model);
     let visible = filter_entries(&entries, &model.palette.query);
     let mut lines = vec![format!("> {}", model.palette.query)];
@@ -663,13 +609,22 @@ fn render_palette(frame: &mut Frame, model: &Model) {
             .unwrap_or_default();
         lines.push(format!("{marker} {}{shortcut}{disabled}", entry.title));
     }
-    frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(overlay_block(model, "Command Palette")),
+    paint_popup(
+        frame,
         popup,
+        overlay_block(model, "Command Palette"),
+        lines.join("\n"),
     );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, _, rect| {
+        if i == 0 {
+            return;
+        }
+        hits.register(HitTarget::ListRow(offset.saturating_add(i - 1)), rect);
+    });
 }
 
-fn render_help(frame: &mut Frame, model: &Model) {
+fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
@@ -701,9 +656,17 @@ fn render_help(frame: &mut Frame, model: &Model) {
             .block(overlay_block(model, "Keybindings  Esc to close")),
         popup,
     );
+    register_overlay(hits, popup);
+    register_label(
+        hits,
+        crate::mouse::line_rect(popup_inner(popup), 0),
+        "Esc to close",
+        "Esc to close",
+        HitTarget::Button(HitButton::Close),
+    );
 }
 
-fn render_results_menu(frame: &mut Frame, model: &Model) {
+fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let items = crate::palette::results_menu_items();
     let labels: Vec<String> = items
         .iter()
@@ -718,39 +681,66 @@ fn render_results_menu(frame: &mut Frame, model: &Model) {
         })
         .collect();
     let popup = centered(frame.area(), 48, 14);
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(labels.join("\n")).block(overlay_block(model, "Row actions  Esc to close")),
+    paint_popup(
+        frame,
         popup,
+        overlay_block(model, "Row actions  Esc to close"),
+        labels.join("\n"),
     );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &labels, |i, _, rect| {
+        hits.register(HitTarget::ListRow(i), rect);
+    });
 }
 
-fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal) {
+fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal, hits: &mut HitMap) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
     }
     let popup = centered(area, 72, 14);
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(crate::screens::data::review_lines(review).join("\n"))
-            .block(Block::bordered().title("Review changes")),
+    let lines = crate::screens::data::review_lines(review);
+    paint_popup(
+        frame,
         popup,
+        Block::bordered().title("Review changes"),
+        lines.join("\n"),
     );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.contains("confirm production") {
+            hits.register(HitTarget::Button(HitButton::ConfirmProduction), rect);
+        } else if line == "ready" {
+            hits.register(HitTarget::Button(HitButton::Apply), rect);
+        }
+    });
 }
 
-fn render_ddl_preview(frame: &mut Frame, preview: &crate::screens::schema_editor::DdlPreviewState) {
+fn render_ddl_preview(
+    frame: &mut Frame,
+    preview: &crate::screens::schema_editor::DdlPreviewState,
+    hits: &mut HitMap,
+) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
     }
     let popup = centered(area, 72, 14);
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(crate::modals::preview_lines(preview).join("\n"))
-            .block(Block::bordered().title("DDL preview")),
+    let lines = crate::modals::preview_lines(preview);
+    paint_popup(
+        frame,
         popup,
+        Block::bordered().title("DDL preview"),
+        lines.join("\n"),
     );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line == "ready" {
+            hits.register(HitTarget::Button(HitButton::Apply), rect);
+        } else if line.contains("confirm") {
+            hits.register(HitTarget::Button(HitButton::Confirm), rect);
+        }
+    });
 }
 
 fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
@@ -761,7 +751,482 @@ fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-fn render_completion(frame: &mut Frame, model: &Model) {
+fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 80, 18);
+    let lines = model.schema_diff.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Schema diff"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("filters ") {
+            register_label(
+                hits,
+                rect,
+                line,
+                "added=",
+                HitTarget::Button(HitButton::ToggleAdded),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "removed=",
+                HitTarget::Button(HitButton::ToggleRemoved),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "changed=",
+                HitTarget::Button(HitButton::ToggleChanged),
+            );
+        } else if line.starts_with("confirm=") {
+            register_label(
+                hits,
+                rect,
+                line,
+                "confirm=",
+                HitTarget::Button(HitButton::ConfirmDiff),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "apply=",
+                HitTarget::Button(HitButton::ApplyDiff),
+            );
+        }
+    });
+}
+
+fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 72, 16);
+    let lines = model.transfer.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Transfer"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if i == 0 {
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
+        if line.contains("confirm restore") {
+            hits.register(HitTarget::Button(HitButton::Confirm), rect);
+        }
+    });
+}
+
+fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 40, 12);
+    let lines = model.security.lines();
+    render_panel(frame, popup, model, "Security", true, lines.join("\n"));
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if (line.starts_with('>') || line.starts_with("  ")) && i < model.security.principals.len()
+        {
+            hits.register(HitTarget::ListRow(i), rect);
+        }
+    });
+}
+
+fn render_admin(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 80, 16);
+    let lines = model.admin.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Sessions"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.contains("paused=") {
+            let button = if model.admin.paused {
+                HitButton::Resume
+            } else {
+                HitButton::Pause
+            };
+            hits.register(HitTarget::Button(button), rect);
+        }
+        if line.contains("confirm-target=") || line.contains("confirmed=") {
+            hits.register(HitTarget::Button(HitButton::Confirm), rect);
+        }
+    });
+}
+
+fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let popup = centered(area, 72, 14);
+    let lines = model.mcp_profiles.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("MCP profiles"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if line.starts_with("mcp profile=") || i < model.mcp_profiles.profiles.len() {
+            hits.register(HitTarget::ListRow(model.mcp_profiles.selected.min(i)), rect);
+        }
+        if line.contains("revoke") {
+            hits.register(HitTarget::Button(HitButton::Revoke), rect);
+        }
+    });
+}
+
+fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 72, 18);
+    let lines = model.connections.lines(model.active_session);
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Connections"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if i < model.connections.profiles.len() {
+            hits.register(HitTarget::ListRow(i), rect);
+        }
+        if line.contains("keep secrets") {
+            register_label(
+                hits,
+                rect,
+                line,
+                "k keep secrets",
+                HitTarget::Button(HitButton::KeepSecrets),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "d delete secrets",
+                HitTarget::Button(HitButton::DeleteSecrets),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "esc cancel",
+                HitTarget::Button(HitButton::Cancel),
+            );
+        }
+        if line.contains(" n new ") || line.contains("n new") {
+            register_label(hits, rect, line, "n new", HitTarget::Button(HitButton::New));
+            register_label(
+                hits,
+                rect,
+                line,
+                "e edit",
+                HitTarget::Button(HitButton::Edit),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "d duplicate",
+                HitTarget::Button(HitButton::Duplicate),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "t test",
+                HitTarget::Button(HitButton::Test),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "x delete",
+                HitTarget::Button(HitButton::Delete),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "c close",
+                HitTarget::Button(HitButton::CloseSession),
+            );
+        }
+    });
+}
+
+fn render_projects(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 72, 18);
+    let lines = model.projects.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Projects"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if i < model.projects.list.len() {
+            hits.register(HitTarget::ListRow(i), rect);
+        }
+        if line.starts_with("create:") || line.starts_with("rename:") {
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
+        if line.contains("connections:") {
+            hits.register(HitTarget::Button(HitButton::ToggleConnections), rect);
+        }
+        if line.contains("delete ") && line.contains('?') {
+            hits.register(HitTarget::Button(HitButton::ConfirmDelete), rect);
+        }
+        if line.contains("switch to ") {
+            hits.register(HitTarget::Button(HitButton::ConfirmDirty), rect);
+        }
+    });
+}
+
+fn render_config_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 72, 16);
+    let lines = model.config_transfer.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Config transfer"),
+        lines.join("\n"),
+    );
+    let conflict_names = model
+        .config_transfer
+        .preview
+        .as_ref()
+        .map(|preview| preview.conflicts.clone())
+        .unwrap_or_default();
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if let Some(name) = line.trim_start().split(':').next()
+            && let Some(index) = conflict_names.iter().position(|item| item == name)
+        {
+            hits.register(HitTarget::ListRow(index), rect);
+        }
+        if line.starts_with("conflicts:") || line.starts_with("path:") {
+            hits.register(HitTarget::Button(HitButton::Apply), rect);
+        }
+    });
+}
+
+fn render_secret(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 56, 8);
+    let lines = model.secret_prompt.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Secret"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        register_label(
+            hits,
+            rect,
+            line,
+            "s session only",
+            HitTarget::Button(HitButton::Session),
+        );
+        register_label(
+            hits,
+            rect,
+            line,
+            "k save to keychain",
+            HitTarget::Button(HitButton::Keychain),
+        );
+        register_label(
+            hits,
+            rect,
+            line,
+            "esc cancel",
+            HitTarget::Button(HitButton::Cancel),
+        );
+    });
+}
+
+fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 56, 8);
+    let lines = model.transaction_prompt.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Savepoint"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("name:") {
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
+    });
+}
+
+fn render_data_query(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 56, 8);
+    let lines = model.data.query_prompt.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Query"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("column:") {
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.starts_with("value:") {
+            hits.register(HitTarget::FormField(1), rect);
+        }
+        if line.starts_with("descending:") {
+            hits.register(HitTarget::Button(HitButton::ToggleDescending), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
+    });
+}
+
+fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
+    let rows = popup.height.saturating_sub(2).max(4) as usize;
+    let lines = model.connection_form.visible_lines(rows);
+    paint_popup(
+        frame,
+        popup,
+        overlay_block(model, model.connection_form.title()),
+        lines.join("\n"),
+    );
+    let body_rows = rows.saturating_sub(1).max(1);
+    let focus_line = model
+        .connection_form
+        .focus
+        .min(model.connection_form.fields.len().saturating_sub(1));
+    let offset = scroll_to_selection(focus_line, 0, model.connection_form.fields.len(), body_rows);
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+            return;
+        }
+        if i < body_rows {
+            hits.register(HitTarget::FormField(offset.saturating_add(i)), rect);
+        }
+        if line.contains("driver:") {
+            hits.register(HitTarget::Button(HitButton::CycleDriver), rect);
+        }
+    });
+}
+
+fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 64, 12);
+    let lines = model.settings.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Settings"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("theme=") {
+            hits.register(HitTarget::Button(HitButton::Theme), rect);
+        } else if line.starts_with("keymap=") {
+            hits.register(HitTarget::Button(HitButton::Keymap), rect);
+        } else if line.starts_with("mouse=") {
+            hits.register(HitTarget::Button(HitButton::Mouse), rect);
+        } else if line.starts_with("confirm_reset=") {
+            hits.register(HitTarget::Button(HitButton::Reset), rect);
+        }
+    });
+}
+
+fn render_recovery(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 64, 12);
+    let lines = model.recovery.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Session recovery"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("recovery open=") {
+            hits.register(HitTarget::Button(HitButton::Recover), rect);
+        }
+        if line.starts_with("confirm_discard=") {
+            hits.register(HitTarget::Button(HitButton::Discard), rect);
+        }
+    });
+}
+
+fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 72, 16);
+    let lines = model.diagnostics.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("Diagnostics"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, _, rect| {
+        hits.register(HitTarget::Button(HitButton::Export), rect);
+    });
+}
+
+fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 72, 12);
+    let lines = model.mcp_audit.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title("MCP audit"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.contains("revoke") {
+            hits.register(HitTarget::Button(HitButton::Revoke), rect);
+        }
+    });
+}
+
+fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let labels: Vec<String> = model
         .editor
         .completions
@@ -799,6 +1264,13 @@ fn render_completion(frame: &mut Frame, model: &Model) {
         Paragraph::new(lines.join("\n")).block(Block::bordered()),
         popup,
     );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, _, rect| {
+        if lines.first().map(String::as_str) == Some("(empty)") {
+            return;
+        }
+        hits.register(HitTarget::ListRow(offset.saturating_add(i)), rect);
+    });
 }
 
 /// Vim/Neovim pum: align with the cursor, prefer below, flip above if it does not fit.
@@ -839,7 +1311,7 @@ fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
     Rect::new(x, y, width, height)
 }
 
-fn render_parameters(frame: &mut Frame, model: &Model) {
+fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let name = model
         .editor
         .parameters
@@ -847,12 +1319,18 @@ fn render_parameters(frame: &mut Frame, model: &Model) {
         .map(|parameter| parameter.name.as_str())
         .unwrap_or("param");
     let popup = centered(frame.area(), 48, 6);
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(format!("{name} = {}", model.editor.parameter_draft))
-            .block(Block::bordered().title("Parameters")),
+    let body = format!("{name} = {}", model.editor.parameter_draft);
+    paint_popup(
+        frame,
         popup,
+        Block::bordered().title("Parameters"),
+        body.clone(),
     );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &[body], |_, _, rect| {
+        hits.register(HitTarget::FormField(0), rect);
+        crate::widgets::form::register_footer(hits, rect, "[Submit]  [Cancel]", "Submit");
+    });
 }
 
 fn render_list_overlay(
@@ -861,13 +1339,13 @@ fn render_list_overlay(
     items: &[String],
     selected: usize,
     offset: usize,
+    hits: &mut HitMap,
 ) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
     }
     let popup = centered(area, 48, 12);
-    frame.render_widget(Clear, popup);
     let rows = (popup.height.saturating_sub(2) as usize).max(1);
     let offset = scroll_to_selection(selected, offset, items.len(), rows);
     let mut lines = Vec::new();
@@ -878,27 +1356,107 @@ fn render_list_overlay(
     if lines.is_empty() {
         lines.push("(empty)".into());
     }
-    frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(Block::bordered().title(title)),
+    paint_popup(
+        frame,
         popup,
+        Block::bordered().title(title.to_string()),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if line == "(empty)" {
+            hits.register(HitTarget::Button(HitButton::Confirm), rect);
+            return;
+        }
+        hits.register(HitTarget::ListRow(offset.saturating_add(i)), rect);
+    });
+}
+
+fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    if model.editor.history_confirm_clear {
+        let target = if model.connection.name.is_empty() {
+            "all"
+        } else {
+            model.connection.name.as_str()
+        };
+        render_list_overlay(
+            frame,
+            &format!("clear history for {target}?"),
+            &[],
+            0,
+            0,
+            hits,
+        );
+    } else {
+        render_list_overlay(
+            frame,
+            "History",
+            &model.editor.history,
+            model.editor.history_selected,
+            0,
+            hits,
+        );
+    }
+}
+
+fn render_snippets(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let names: Vec<String> = model
+        .editor
+        .snippets
+        .iter()
+        .map(|snippet| snippet.name.clone())
+        .collect();
+    render_list_overlay(
+        frame,
+        "Snippets",
+        &names,
+        model.editor.snippet_selected,
+        0,
+        hits,
     );
 }
 
-fn render_file_picker(frame: &mut Frame, model: &Model) {
+fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
-    frame.render_widget(Clear, popup);
     let list_rows = popup.height.saturating_sub(5).max(4) as usize;
-    frame.render_widget(
-        Paragraph::new(
-            model
-                .file_picker
-                .lines(model.file_picker_mode, list_rows)
-                .join("\n"),
-        )
-        .block(overlay_block(model, model.file_picker_mode.title())),
+    let lines = model.file_picker.lines(model.file_picker_mode, list_rows);
+    paint_popup(
+        frame,
         popup,
+        overlay_block(model, model.file_picker_mode.title()),
+        lines.join("\n"),
     );
+    let offset = crate::palette::scroll_to_selection(
+        model.file_picker.selected,
+        model.file_picker.offset,
+        model.file_picker.entries.len(),
+        list_rows.max(1),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if i == 0 {
+            hits.register(HitTarget::Button(HitButton::ParentDir), rect);
+            return;
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(
+                hits,
+                rect,
+                line,
+                model.file_picker_mode.submit_label(),
+            );
+            return;
+        }
+        if line.contains("name:") {
+            hits.register(HitTarget::FormField(0), rect);
+            return;
+        }
+        let index = offset.saturating_add(i.saturating_sub(1));
+        if index < model.file_picker.entries.len() {
+            hits.register(HitTarget::ListRow(index), rect);
+        }
+    });
 }
 
 pub fn render_to_string(model: &Model, width: u16, height: u16) -> String {

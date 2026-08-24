@@ -24,7 +24,11 @@ impl TransactionPrompt {
             Some(SavepointIntent::Release) => "release savepoint",
             None => "savepoint",
         };
-        let mut lines = vec![action.into(), format!("name: {}", self.name)];
+        let mut lines = Vec::new();
+        if action != "savepoint" {
+            lines.push(action.into());
+        }
+        lines.push(format!("name: {}", self.name));
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }

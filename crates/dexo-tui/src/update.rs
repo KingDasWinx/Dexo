@@ -1,36 +1,17 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
 use dexo_app::data::{inspect_value, related_filter};
 use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 
 use crate::action::{Action, Effect, FocusTarget};
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
+use crate::mouse::{HitButton, HitTarget, note_click, overlay_blocks_workbench};
 use ratatui::layout::Rect;
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
         Action::Key(key) => handle_key(model, key),
-        Action::Mouse(_) if !model.mouse => Vec::new(),
-        Action::Mouse(mouse) => {
-            use crossterm::event::MouseEventKind;
-            if !matches!(mouse.kind, MouseEventKind::Down(_)) {
-                return Vec::new();
-            }
-            if let Some(crate::mouse::HitTarget::GridRow(row)) =
-                model.hits.at(mouse.column, mouse.row)
-            {
-                crate::screens::editor::end_typing(model);
-                model.focus = Focus::Results;
-                close_palette(model);
-                let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
-                click_results_row(model, row, extend);
-                return Vec::new();
-            }
-            match crate::mouse::mouse_action(mouse.column, mouse.row, &model.hits) {
-                Some(action) => update(model, action),
-                None => Vec::new(),
-            }
-        }
+        Action::Mouse(mouse) => handle_mouse(model, mouse),
         Action::Resize { width, height } => {
             model.apply_size(width, height);
             model.layout_dirty = true;
@@ -68,6 +49,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                         id,
                         connection: name,
                         transaction: TransactionState::Idle,
+                        generation,
+                        environment: model.connection.environment.clone(),
+                        read_only,
+                        driver: model.connection.driver.clone(),
                     });
                 model.connections.selected_session = Some(id);
             }
@@ -164,6 +149,15 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             generation,
             state,
         } => {
+            if let Some(row) = model
+                .connections
+                .sessions
+                .iter_mut()
+                .find(|row| row.id == session)
+            {
+                row.transaction = state;
+                row.generation = generation;
+            }
             if model.active_session == Some(session) && model.session_generation == generation {
                 model.transaction = state;
             }
@@ -237,7 +231,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             .collect(),
         Action::CloseSelectedSession => model
             .connections
-            .selected_session
+            .selected()
+            .and_then(|profile| {
+                model
+                    .connections
+                    .session_for(&profile.name)
+                    .map(|session| session.id)
+            })
             .or(model.active_session)
             .map(|session| Effect::CloseSession { session })
             .into_iter()
@@ -285,10 +285,18 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SessionClosed { session } => {
             model.connections.remove_session(session);
             if model.active_session == Some(session) {
-                model.active_session = model.connections.selected_session;
-                if model.active_session.is_none() {
-                    model.connection.ready = false;
+                if let Some(next) = model.connections.sessions.first().cloned()
+                    && let Some(profile) = model
+                        .connections
+                        .profiles
+                        .iter()
+                        .find(|row| row.profile.name == next.connection)
+                        .map(|row| row.profile.clone())
+                {
+                    return activate_existing_session(model, &profile, next);
                 }
+                model.active_session = None;
+                model.connection.ready = false;
             }
             Vec::new()
         }
@@ -1325,6 +1333,825 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     }
 }
 
+fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
+    if !model.mouse {
+        return Vec::new();
+    }
+    match mouse.kind {
+        MouseEventKind::Down(_) => handle_mouse_down(model, mouse),
+        MouseEventKind::ScrollUp => handle_mouse_scroll(model, mouse, -1),
+        MouseEventKind::ScrollDown => handle_mouse_scroll(model, mouse, 1),
+        MouseEventKind::ScrollLeft => update(model, Action::ResultsLeft),
+        MouseEventKind::ScrollRight => update(model, Action::ResultsRight),
+        _ => Vec::new(),
+    }
+}
+
+fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
+    let hit = model.hits.at(mouse.column, mouse.row);
+    let doubled = hit.map(|target| note_click(model, target)).unwrap_or(false);
+    if model.palette.open {
+        return mouse_palette(model, hit);
+    }
+    if model.help.open {
+        return mouse_help(model, hit);
+    }
+    if model.results_menu.open {
+        return mouse_results_menu(model, hit);
+    }
+    if model.secret_prompt.open {
+        return mouse_secret(model, hit);
+    }
+    if model.transaction_prompt.open {
+        return mouse_transaction(model, hit);
+    }
+    if model.data.query_prompt.open {
+        return mouse_data_query(model, hit);
+    }
+    if model.projects.open {
+        return mouse_projects(model, hit, doubled);
+    }
+    if model.config_transfer.open {
+        return mouse_config_transfer(model, hit);
+    }
+    if model.connections.open && !model.connection_form.open {
+        return mouse_connections(model, hit, doubled);
+    }
+    if model.connection_form.open {
+        return mouse_connection_form(model, hit);
+    }
+    if model.file_picker.open {
+        return mouse_file_picker(model, hit, doubled);
+    }
+    if model.editor.history_open {
+        return mouse_history(model, hit);
+    }
+    if model.editor.snippet_open {
+        return mouse_snippets(model, hit);
+    }
+    if model.editor.parameter_prompt {
+        return mouse_parameters(model, hit);
+    }
+    if model.admin.open {
+        return mouse_admin(model, hit);
+    }
+    if model.schema_editor.preview.is_some() {
+        return mouse_ddl_preview(model, hit);
+    }
+    if model.schema_diff.open {
+        return mouse_schema_diff(model, hit);
+    }
+    if model.security.open {
+        return mouse_security(model, hit, doubled);
+    }
+    if model.diagnostics.open {
+        return mouse_diagnostics(model, hit);
+    }
+    if model.transfer.open {
+        return mouse_transfer(model, hit);
+    }
+    if model.data.review.is_some() {
+        return mouse_review(model, hit);
+    }
+    if model.mcp_profiles.open {
+        return mouse_mcp_profiles(model, hit);
+    }
+    if model.settings.open {
+        return mouse_settings(model, hit);
+    }
+    if model.recovery.open {
+        return mouse_recovery(model, hit);
+    }
+    if model.mcp_audit.open {
+        return mouse_mcp_audit(model, hit);
+    }
+    if model.editor.completion_open
+        && let Some(HitTarget::ListRow(index)) = hit
+    {
+        model.editor.completion_selected = index;
+        return update(model, Action::AcceptCompletion);
+    }
+    if overlay_blocks_workbench(model) {
+        return Vec::new();
+    }
+    mouse_workbench(model, mouse, hit, doubled)
+}
+
+fn mouse_palette(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            model.palette.selected = index;
+            palette_select(model)
+        }
+        Some(HitTarget::Overlay) => Vec::new(),
+        _ => {
+            close_palette(model);
+            Vec::new()
+        }
+    }
+}
+
+fn mouse_help(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    if matches!(
+        hit,
+        Some(HitTarget::Overlay | HitTarget::Button(HitButton::Close)) | None
+    ) {
+        model.help.open = false;
+        model.help.scroll = 0;
+    }
+    Vec::new()
+}
+
+fn mouse_results_menu(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            model.results_menu.selected = index;
+            pick_results_menu(model)
+        }
+        Some(HitTarget::Overlay) => Vec::new(),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_secret(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::Session)) => update(
+            model,
+            Action::SubmitSecret {
+                kind: crate::screens::secret_prompt::SecretChoiceKind::SessionOnly,
+            },
+        ),
+        Some(HitTarget::Button(HitButton::Keychain)) => update(
+            model,
+            Action::SubmitSecret {
+                kind: crate::screens::secret_prompt::SecretChoiceKind::SaveToKeychain,
+            },
+        ),
+        Some(HitTarget::Button(HitButton::Cancel) | HitTarget::Overlay) => update(
+            model,
+            Action::SubmitSecret {
+                kind: crate::screens::secret_prompt::SecretChoiceKind::Cancel,
+            },
+        ),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_transaction(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(_)) => {
+            model.transaction_prompt.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => submit_savepoint_prompt(model),
+        Some(HitTarget::FooterCancel) => {
+            model.transaction_prompt.open = false;
+            model.transaction_prompt.error = None;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_data_query(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(0)) => {
+            model.data.query_prompt.focus_value = false;
+            model.data.query_prompt.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::FormField(_)) => {
+            model.data.query_prompt.focus_value = true;
+            model.data.query_prompt.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ToggleDescending)) => {
+            model.data.query_prompt.descending = !model.data.query_prompt.descending;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => submit_data_query_prompt(model),
+        Some(HitTarget::FooterCancel) => {
+            model.data.query_prompt.open = false;
+            model.data.query_prompt.error = None;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_projects(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            if index < model.projects.list.len() {
+                model.projects.selected = index;
+            }
+            if doubled {
+                choose_project_intent(model)
+            } else {
+                Vec::new()
+            }
+        }
+        Some(HitTarget::FormField(_)) => {
+            model.projects.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => submit_project_name(model),
+        Some(HitTarget::FooterCancel) => {
+            model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+            model.projects.name_input.clear();
+            model.projects.error = None;
+            model.projects.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ConfirmDelete)) => {
+            update(model, Action::ConfirmProjectDelete)
+        }
+        Some(HitTarget::Button(HitButton::ToggleConnections)) => {
+            if let Some(delete) = &mut model.projects.delete {
+                delete.delete_connections = !delete.delete_connections;
+            }
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ConfirmDirty)) => {
+            update(model, Action::ConfirmSwitchDirty)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_config_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            if let Some(preview) = &model.config_transfer.preview
+                && let Some(name) = preview.conflicts.get(index).cloned()
+            {
+                let next = match model.config_transfer.resolutions.get(&name) {
+                    Some(dexo_storage::ImportResolution::Skip) | None => {
+                        dexo_storage::ImportResolution::Replace
+                    }
+                    Some(dexo_storage::ImportResolution::Replace) => {
+                        dexo_storage::ImportResolution::Rename(format!("{name}-2"))
+                    }
+                    Some(dexo_storage::ImportResolution::Rename(_)) => {
+                        dexo_storage::ImportResolution::Skip
+                    }
+                };
+                model.config_transfer.resolutions.insert(name, next);
+            }
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Apply) | HitTarget::FooterSubmit) => {
+            update(model, Action::ApplyConfigImport)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    if model.connections.delete_target.is_some() {
+        return match hit {
+            Some(HitTarget::Button(HitButton::KeepSecrets)) => update(
+                model,
+                Action::ConfirmDeleteProfile {
+                    decision: crate::screens::secret_prompt::DeleteSecretDecision::KeepSecrets,
+                },
+            ),
+            Some(HitTarget::Button(HitButton::DeleteSecrets)) => update(
+                model,
+                Action::ConfirmDeleteProfile {
+                    decision: crate::screens::secret_prompt::DeleteSecretDecision::DeleteSecrets,
+                },
+            ),
+            Some(HitTarget::Button(HitButton::Cancel)) => {
+                model.connections.delete_target = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            if index < model.connections.profiles.len() {
+                model.connections.selected_profile = index;
+            }
+            if doubled {
+                choose_connection_intent(model)
+            } else {
+                Vec::new()
+            }
+        }
+        Some(HitTarget::Button(HitButton::New)) => update(model, Action::OpenConnectionForm),
+        Some(HitTarget::Button(HitButton::Edit)) => {
+            if let Some(profile) = model.connections.selected().cloned() {
+                model.connection_form =
+                    crate::screens::connection::ConnectionForm::open_edit(&profile);
+            }
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Duplicate)) => update(model, Action::DuplicateConnection),
+        Some(HitTarget::Button(HitButton::Test)) => update(model, Action::TestConnection),
+        Some(HitTarget::Button(HitButton::Delete)) => update(model, Action::DeleteConnection),
+        Some(HitTarget::Button(HitButton::CloseSession)) => {
+            update(model, Action::CloseSelectedSession)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(index)) => {
+            if index < model.connection_form.fields.len() {
+                model.connection_form.focus = index;
+            }
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => save_connection(model),
+        Some(HitTarget::FooterCancel) => {
+            model.connection_form.close();
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::CycleDriver)) => {
+            model.connection_form.cycle_driver(1);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_file_picker(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            if index < model.file_picker.entries.len() {
+                model.file_picker.selected = index;
+                model.file_picker.focus = crate::screens::file_picker::FilePickerFocus::List;
+            }
+            if doubled {
+                if model.file_picker.activate_selected().is_some() {
+                    file_picker_submit(model)
+                } else {
+                    Vec::new()
+                }
+            } else {
+                Vec::new()
+            }
+        }
+        Some(HitTarget::Button(HitButton::ParentDir)) => {
+            model.file_picker.parent();
+            Vec::new()
+        }
+        Some(HitTarget::FormField(_)) => {
+            model.file_picker.focus = crate::screens::file_picker::FilePickerFocus::Name;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => file_picker_submit(model),
+        Some(HitTarget::FooterCancel) => {
+            model.file_picker.open = false;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_history(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    if model.editor.history_confirm_clear {
+        return match hit {
+            Some(HitTarget::Button(HitButton::Confirm) | HitTarget::Overlay) => {
+                confirm_clear_history(model)
+            }
+            _ => Vec::new(),
+        };
+    }
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            model.editor.history_selected = index;
+            update(model, Action::HistoryPick)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_snippets(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            model.editor.snippet_selected = index;
+            update(model, Action::SnippetPick)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_parameters(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FooterSubmit | HitTarget::FormField(_)) => {
+            update(model, Action::SubmitParameters)
+        }
+        Some(HitTarget::FooterCancel) => {
+            model.editor.parameter_prompt = false;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::Pause)) => update(model, Action::AdminPause),
+        Some(HitTarget::Button(HitButton::Resume)) => update(model, Action::AdminResume),
+        Some(HitTarget::Button(HitButton::Confirm)) => update(model, Action::ConfirmAdmin),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(
+            HitTarget::Button(HitButton::Apply | HitButton::Confirm) | HitTarget::FooterSubmit,
+        ) => apply_ddl(model),
+        Some(HitTarget::Button(HitButton::Cancel)) => {
+            model.schema_editor.preview = None;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::ToggleAdded)) => {
+            model.schema_diff.toggle_added();
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ToggleRemoved)) => {
+            model.schema_diff.toggle_removed();
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ToggleChanged)) => {
+            model.schema_diff.toggle_changed();
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ConfirmDiff)) => {
+            model.schema_diff.confirm();
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::ApplyDiff)) => {
+            model.schema_diff.apply();
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_security(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            if index < model.security.principals.len() {
+                model.security.selected = index;
+            }
+            if doubled {
+                open_security_change_preview(model)
+            } else {
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_diagnostics(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::Export) | HitTarget::Overlay)
+            if !model.diagnostics.writing =>
+        {
+            open_diagnostics_picker(model)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(_)) => {
+            model.transfer.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => run_transfer(model),
+        Some(HitTarget::FooterCancel) => {
+            model.transfer.open = false;
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Confirm)) => {
+            model.transfer.confirm_restore = true;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_review(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::ConfirmProduction)) => {
+            model.data.confirm_production();
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Apply) | HitTarget::FooterSubmit) => {
+            update(model, Action::ApplyChanges)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            while model.mcp_profiles.selected > index {
+                model.mcp_profiles.select_previous();
+            }
+            while model.mcp_profiles.selected < index
+                && model.mcp_profiles.selected + 1 < model.mcp_profiles.profiles.len()
+            {
+                model.mcp_profiles.select_next();
+            }
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Revoke)) => {
+            if model.mcp_profiles.confirm_revoke {
+                vec![Effect::RevokeAllMcpGrants]
+            } else {
+                model.mcp_profiles.revoke_all();
+                Vec::new()
+            }
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_settings(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::Theme)) => update(model, Action::CycleTheme),
+        Some(HitTarget::Button(HitButton::Keymap)) => update(model, Action::CycleKeymap),
+        Some(HitTarget::Button(HitButton::Mouse)) => update(model, Action::ToggleMouse),
+        Some(HitTarget::Button(HitButton::Reset)) => update(model, Action::ConfirmResetSettings),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_recovery(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::Recover)) => update(model, Action::ConfirmRecover),
+        Some(HitTarget::Button(HitButton::Discard)) => {
+            update(model, Action::ConfirmDiscardRecovery)
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::Button(HitButton::Revoke)) => update(model, Action::RevokeAllMcpGrants),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_workbench(
+    model: &mut Model,
+    mouse: MouseEvent,
+    hit: Option<HitTarget>,
+    doubled: bool,
+) -> Vec<Effect> {
+    let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
+    let pick = mouse.modifiers.contains(KeyModifiers::CONTROL);
+    match hit {
+        Some(HitTarget::WorkbenchTab(index)) => update(model, Action::SwitchTab { index }),
+        Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
+        Some(HitTarget::Inspector) => update(model, Action::Focus(FocusTarget::Inspector)),
+        Some(HitTarget::Explorer) => update(model, Action::Focus(FocusTarget::Explorer)),
+        Some(HitTarget::ExplorerNode(index)) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Explorer;
+            let ids = model.explorer.visible_ids();
+            if let Some(id) = ids.get(index).cloned() {
+                model.explorer.select(id);
+            }
+            if doubled {
+                expand_or_open_selected(model)
+            } else {
+                Vec::new()
+            }
+        }
+        Some(HitTarget::Editor) => {
+            close_palette(model);
+            model.focus = Focus::Editor;
+            let plan = LayoutPlan::for_area_with(
+                Rect::new(0, 0, model.width, model.height),
+                Some(&model.panes),
+            );
+            if model.tabs.active == 0
+                && let Some(index) = crate::widgets::editor::char_index_at(
+                    model,
+                    plan.content,
+                    mouse.column,
+                    mouse.row,
+                )
+            {
+                let _ = model.active_document_mut().sql.set_cursor(index);
+            }
+            Vec::new()
+        }
+        Some(HitTarget::FormField(index)) => {
+            model.focus = Focus::Editor;
+            if index < model.schema_editor.fields.len() {
+                model.schema_editor.focus = index;
+            }
+            Vec::new()
+        }
+        Some(HitTarget::GridHeader(col)) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Results;
+            model.results.select_column(col);
+            Vec::new()
+        }
+        Some(HitTarget::GridCell { row, col }) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Results;
+            if extend {
+                click_results_row(model, row, true);
+                if let crate::model::GridSelection::Range { start, .. } = model.results.kind {
+                    model.results.select_range(start, (row, col));
+                }
+            } else {
+                model.results.select_cell(row, col);
+            }
+            if pick {
+                update(model, Action::ToggleResultsPick)
+            } else {
+                Vec::new()
+            }
+        }
+        Some(HitTarget::GridRow(row)) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Results;
+            click_results_row(model, row, extend);
+            if pick {
+                update(model, Action::ToggleResultsPick)
+            } else {
+                Vec::new()
+            }
+        }
+        Some(HitTarget::Grid) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Results;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<Effect> {
+    if model.palette.open {
+        move_palette_selection(model, delta as isize);
+        return Vec::new();
+    }
+    if model.help.open {
+        if delta < 0 {
+            model.help.scroll = model.help.scroll.saturating_sub(1);
+        } else {
+            model.help.scroll = model.help.scroll.saturating_add(1);
+        }
+        return Vec::new();
+    }
+    if model.results_menu.open {
+        let count = crate::palette::results_menu_items().len();
+        if count > 0 {
+            if delta < 0 {
+                model.results_menu.selected = model.results_menu.selected.saturating_sub(1);
+            } else {
+                model.results_menu.selected =
+                    (model.results_menu.selected + 1).min(count.saturating_sub(1));
+            }
+        }
+        return Vec::new();
+    }
+    if model.file_picker.open {
+        model
+            .file_picker
+            .move_selection(delta, file_picker_rows(model));
+        return Vec::new();
+    }
+    if model.editor.completion_open {
+        crate::screens::editor::move_completion(model, delta);
+        return Vec::new();
+    }
+    if model.editor.history_open {
+        if delta < 0 {
+            model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
+        } else if !model.editor.history.is_empty() {
+            model.editor.history_selected = (model.editor.history_selected + 1)
+                .min(model.editor.history.len().saturating_sub(1));
+        }
+        return Vec::new();
+    }
+    if model.editor.snippet_open {
+        if delta < 0 {
+            model.editor.snippet_selected = model.editor.snippet_selected.saturating_sub(1);
+        } else if !model.editor.snippets.is_empty() {
+            model.editor.snippet_selected = (model.editor.snippet_selected + 1)
+                .min(model.editor.snippets.len().saturating_sub(1));
+        }
+        return Vec::new();
+    }
+    if model.mcp_profiles.open {
+        if delta < 0 {
+            model.mcp_profiles.select_previous();
+        } else {
+            model.mcp_profiles.select_next();
+        }
+        return Vec::new();
+    }
+    if model.connections.open && !model.connection_form.open {
+        if delta < 0 {
+            model.connections.selected_profile =
+                model.connections.selected_profile.saturating_sub(1);
+        } else if model.connections.selected_profile + 1 < model.connections.profiles.len() {
+            model.connections.selected_profile += 1;
+        }
+        return Vec::new();
+    }
+    if model.projects.open {
+        if delta < 0 {
+            model.projects.selected = model.projects.selected.saturating_sub(1);
+        } else if model.projects.selected + 1 < model.projects.list.len() {
+            model.projects.selected += 1;
+        }
+        return Vec::new();
+    }
+    if overlay_blocks_workbench(model) {
+        return Vec::new();
+    }
+    match model.hits.at(mouse.column, mouse.row) {
+        Some(HitTarget::Explorer | HitTarget::ExplorerNode(_)) => {
+            if delta < 0 {
+                update(model, Action::ExplorerUp)
+            } else {
+                update(model, Action::ExplorerDown)
+            }
+        }
+        Some(
+            HitTarget::Grid
+            | HitTarget::GridRow(_)
+            | HitTarget::GridCell { .. }
+            | HitTarget::GridHeader(_)
+            | HitTarget::ResultTab(_),
+        ) => {
+            if delta < 0 {
+                update(model, Action::ResultsUp)
+            } else {
+                update(model, Action::ResultsDown)
+            }
+        }
+        Some(HitTarget::Editor) => {
+            let doc = model.active_document_mut();
+            if delta < 0 {
+                doc.viewport_line = doc.viewport_line.saturating_sub(1);
+            } else {
+                doc.viewport_line = doc.viewport_line.saturating_add(1);
+            }
+            Vec::new()
+        }
+        _ => match model.focus {
+            Focus::Explorer => {
+                if delta < 0 {
+                    update(model, Action::ExplorerUp)
+                } else {
+                    update(model, Action::ExplorerDown)
+                }
+            }
+            Focus::Results => {
+                if delta < 0 {
+                    update(model, Action::ResultsUp)
+                } else {
+                    update(model, Action::ResultsDown)
+                }
+            }
+            Focus::Editor | Focus::Palette => {
+                let doc = model.active_document_mut();
+                if delta < 0 {
+                    doc.viewport_line = doc.viewport_line.saturating_sub(1);
+                } else {
+                    doc.viewport_line = doc.viewport_line.saturating_add(1);
+                }
+                Vec::new()
+            }
+            Focus::Inspector => Vec::new(),
+        },
+    }
+}
+
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if key.kind != KeyEventKind::Press {
         return Vec::new();
@@ -1881,11 +2708,43 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     let Some(profile) = model.connections.selected().cloned() else {
         return Vec::new();
     };
+    if let Some(session) = model.connections.session_for(&profile.name).cloned() {
+        return activate_existing_session(model, &profile, session);
+    }
     model.connect_token = model.connect_token.saturating_add(1);
     model.connections.pending_connect = Some(model.connect_token);
     vec![Effect::ConnectProfile {
         profile,
         token: model.connect_token,
+    }]
+}
+
+fn activate_existing_session(
+    model: &mut Model,
+    profile: &dexo_app::ConnectionProfile,
+    session: crate::screens::connections::SessionRow,
+) -> Vec<Effect> {
+    if model.active_session == Some(session.id) {
+        return Vec::new();
+    }
+    model.connection.name = profile.name.clone();
+    model.connection.ready = true;
+    model.connection.environment = session.environment.clone();
+    model.connection.read_only = session.read_only;
+    model.connection.driver = session.driver.clone();
+    model.active_session = Some(session.id);
+    model.session_generation = session.generation;
+    model.connections.selected_session = Some(session.id);
+    model.transaction = session.transaction;
+    model.explorer.clear();
+    let operation = crate::runtime::OperationId::new();
+    vec![Effect::LoadCatalogChildren {
+        parent: None,
+        operation,
+        session: session.id,
+        generation: session.generation,
+        replace_roots: true,
+        include_system: model.explorer.include_system,
     }]
 }
 

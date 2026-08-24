@@ -1,5 +1,29 @@
 use crate::palette::scroll_to_selection;
 use crate::screens::explorer::{ExplorerNode, ExplorerState, NodeState};
+use dexo_driver_api::ObjectId;
+
+pub fn chrome_count(state: &ExplorerState) -> usize {
+    let mut n = 0;
+    if state.offline {
+        n += 1;
+    }
+    if !state.search.is_empty() {
+        n += 1;
+    }
+    if !state.filter_name.is_empty() || state.filter_kind.is_some() || state.favorites_only {
+        n += 1;
+    }
+    n
+}
+
+pub fn windowed_ids(state: &ExplorerState, viewport_rows: usize) -> (usize, Vec<ObjectId>) {
+    let ids = state.visible_ids();
+    let chrome = chrome_count(state);
+    let tree_rows = viewport_rows.saturating_sub(chrome).max(1);
+    let offset = scroll_to_selection(state.selected_index(), state.offset, ids.len(), tree_rows);
+    let window = ids.into_iter().skip(offset).take(tree_rows).collect();
+    (offset, window)
+}
 
 pub fn render_lines(state: &ExplorerState) -> Vec<String> {
     render_visible(state, None)

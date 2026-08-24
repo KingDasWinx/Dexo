@@ -639,6 +639,28 @@ impl WorkbenchRuntime {
     }
 
     async fn connect_profile(&mut self, profile: ConnectionProfile, token: u64) {
+        if let Some((id, generation)) = self
+            .sessions
+            .find_by_connection(&profile.name)
+            .map(|active| (active.id, active.generation))
+        {
+            let read_only =
+                dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
+                    .map(|policy| policy.read_only)
+                    .unwrap_or(false);
+            self.emit(Action::ConnectionChanged {
+                name: profile.name,
+                ready: true,
+                environment: profile.environment,
+                session: Some(id),
+                generation,
+                token,
+                read_only,
+                driver: profile.driver,
+            })
+            .await;
+            return;
+        }
         match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
             Err(action) => self.emit(*action).await,
             Ok(_) => match self.open_session(&profile).await {

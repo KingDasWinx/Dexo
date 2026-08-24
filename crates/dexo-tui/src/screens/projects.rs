@@ -68,7 +68,7 @@ impl ProjectsScreen {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec!["Projects".into()];
+        let mut lines = Vec::new();
         for (index, project) in self.list.iter().enumerate() {
             let marker = if index == self.selected { ">" } else { " " };
             let active = if self

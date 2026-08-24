@@ -842,8 +842,8 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "connection.connect",
-            title: "Connect Selected",
-            keywords: &["session"],
+            title: "Connect / Switch Session",
+            keywords: &["session", "switch"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect),

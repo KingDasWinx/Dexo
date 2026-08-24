@@ -101,6 +101,42 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
 }
 
+pub fn char_index_at(model: &Model, area: Rect, x: u16, y: u16) -> Option<usize> {
+    let inner = if area.width < 2 || area.height < 2 {
+        area
+    } else {
+        ratatui::widgets::Block::bordered().inner(area)
+    };
+    if inner.width == 0 || inner.height == 0 {
+        return None;
+    }
+    if x < inner.x || y < inner.y {
+        return None;
+    }
+    let gutter = 5u16;
+    let rel_y = y.saturating_sub(inner.y) as usize;
+    let rel_x = x.saturating_sub(inner.x).saturating_sub(gutter) as usize;
+    let doc = model.active_document();
+    let text = doc.text();
+    let lines: Vec<&str> = if text.is_empty() {
+        vec![""]
+    } else {
+        text.split('\n').collect()
+    };
+    let line_i = doc.viewport_line.saturating_add(rel_y);
+    let line = *lines.get(line_i)?;
+    let mut cols = 0usize;
+    let mut chars = 0usize;
+    for ch in line.chars() {
+        if cols >= doc.viewport_column && cols.saturating_sub(doc.viewport_column) >= rel_x {
+            break;
+        }
+        cols += UnicodeWidthChar::width(ch).unwrap_or(0);
+        chars += 1;
+    }
+    Some(char_index_at_line(&text, line_i) + chars)
+}
+
 struct Visible {
     text: String,
     skip_chars: usize,

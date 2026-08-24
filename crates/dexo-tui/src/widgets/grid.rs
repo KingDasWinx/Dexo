@@ -112,6 +112,13 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
         }
         let width = widths.get(index).copied().unwrap_or(8) as usize;
         let cell_width = width.min(remaining);
+        let header_x = area
+            .x
+            .saturating_add((area.width as usize - remaining) as u16);
+        hits.register(
+            HitTarget::GridHeader(index),
+            Rect::new(header_x, area.y, cell_width as u16, 1),
+        );
         header.push(Span::styled(
             format!(
                 "{:width$}",
@@ -161,6 +168,9 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             spans.push(Span::styled(format!("{sel_marker} "), row_style));
             remaining = remaining.saturating_sub(sel_marker.chars().count() + 1);
         }
+        let mut cell_x = area
+            .x
+            .saturating_add((area.width as usize - remaining) as u16);
         for index in grid.visible_column_indices() {
             let Some(value) = row.cells.get(index) else {
                 continue;
@@ -171,6 +181,13 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             }
             let width = widths.get(index).copied().unwrap_or(8) as usize;
             let cell_width = width.min(remaining);
+            hits.register(
+                HitTarget::GridCell {
+                    row: row.source_index,
+                    col: index,
+                },
+                Rect::new(cell_x, hit_y, cell_width as u16, 1),
+            );
             spans.push(Span::styled(
                 format!(
                     "{:width$}",
@@ -180,6 +197,7 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
                 row_style,
             ));
             remaining = remaining.saturating_sub(cell_width + 1);
+            cell_x = cell_x.saturating_add(cell_width as u16 + 1);
             if remaining > 0 {
                 spans.push(Span::styled(" ", row_style));
                 remaining = remaining.saturating_sub(1);

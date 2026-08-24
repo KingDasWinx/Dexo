@@ -1,8 +1,48 @@
 use dexo_tui::action::Action;
 use dexo_tui::model::Model;
 use dexo_tui::mouse::{HitMap, HitTarget, mouse_action};
+use dexo_tui::terminal::{RecordingTerminal, TerminalControl, TerminalGuard};
 use dexo_tui::update;
 use ratatui::layout::Rect;
+
+fn paint(model: &mut Model) {
+    let width = model.width.max(80);
+    let height = model.height.max(24);
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    let mut hits = HitMap::default();
+    terminal
+        .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+}
+
+fn mouse(
+    kind: crossterm::event::MouseEventKind,
+    column: u16,
+    row: u16,
+    modifiers: crossterm::event::KeyModifiers,
+) -> Action {
+    Action::Mouse(crossterm::event::MouseEvent {
+        kind,
+        column,
+        row,
+        modifiers,
+    })
+}
+
+fn click_target(model: &mut Model, target: HitTarget) {
+    let (x, y) = model.hits.center(target);
+    update(
+        model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+}
 
 #[test]
 fn click_on_second_result_tab_selects_that_tab() {
@@ -57,12 +97,12 @@ fn click_on_second_result_tab_selects_that_tab() {
     model.hits = map;
     update(
         &mut model,
-        Action::Mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: x,
-            row: y,
-            modifiers: crossterm::event::KeyModifiers::NONE,
-        }),
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
     );
     assert_eq!(model.results.active, 2);
     assert_eq!(model.focus, dexo_tui::model::Focus::Results);
@@ -85,7 +125,6 @@ fn keyboard_opens_overlays_without_mouse() {
 #[test]
 fn shift_click_extends_results_selection() {
     use dexo_tui::model::{GridModel, GridSelection};
-    use ratatui::layout::Rect;
 
     let mut model = Model::default();
     *model.results = GridModel::sample_rows(8);
@@ -95,12 +134,12 @@ fn shift_click_extends_results_selection() {
         .register(HitTarget::GridRow(4), Rect::new(0, 10, 20, 1));
     update(
         &mut model,
-        Action::Mouse(crossterm::event::MouseEvent {
-            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
-            column: 2,
-            row: 10,
-            modifiers: crossterm::event::KeyModifiers::SHIFT,
-        }),
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            2,
+            10,
+            crossterm::event::KeyModifiers::SHIFT,
+        ),
     );
     assert_eq!(model.focus, dexo_tui::model::Focus::Results);
     assert!(matches!(
@@ -110,4 +149,128 @@ fn shift_click_extends_results_selection() {
             end: (4, _)
         }
     ));
+}
+
+#[test]
+fn mouse_capture_trait_records_on_and_off() {
+    let backend = RecordingTerminal::default();
+    backend.mouse_capture(true).unwrap();
+    backend.mouse_capture(false).unwrap();
+    assert_eq!(backend.calls(), vec!["mouse_on", "mouse_off"]);
+    let backend = RecordingTerminal::default();
+    {
+        let mut guard = TerminalGuard::start(backend.clone()).unwrap();
+        guard.set_mouse(true).unwrap();
+        guard.set_mouse(false).unwrap();
+    }
+    assert_eq!(
+        backend.calls(),
+        vec![
+            "enter",
+            "raw_on",
+            "mouse_on",
+            "mouse_off",
+            "raw_off",
+            "leave",
+            "cursor_show"
+        ]
+    );
+}
+
+#[test]
+fn click_workbench_tab_switches_tab() {
+    let mut model = Model::default();
+    paint(&mut model);
+    click_target(&mut model, HitTarget::WorkbenchTab(1));
+    assert_eq!(model.tabs.active, 1);
+    click_target(&mut model, HitTarget::WorkbenchTab(2));
+    assert_eq!(model.tabs.active, 2);
+}
+
+#[test]
+fn click_palette_item_runs_command() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenPalette);
+    update(&mut model, Action::PaletteQuery("settings.open".into()));
+    paint(&mut model);
+    click_target(&mut model, HitTarget::ListRow(0));
+    assert!(model.settings.open);
+    assert!(!model.palette.open);
+}
+
+#[test]
+fn overlay_click_does_not_fall_through_to_explorer() {
+    let mut model = Model::default();
+    model.focus = dexo_tui::model::Focus::Editor;
+    update(&mut model, Action::OpenSettings);
+    paint(&mut model);
+    let (x, y) = model.hits.center(HitTarget::Explorer);
+    assert_eq!(
+        (x, y),
+        (0, 0),
+        "workbench hits must not be registered under an overlay"
+    );
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            2,
+            8,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert_eq!(model.focus, dexo_tui::model::Focus::Editor);
+    assert!(model.settings.open);
+}
+
+#[test]
+fn scroll_wheel_moves_palette_selection() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenPalette);
+    paint(&mut model);
+    let before = model.palette.selected;
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::ScrollDown,
+            40,
+            12,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+    assert!(model.palette.selected > before);
+}
+
+#[test]
+fn mouse_ignored_when_disabled() {
+    let mut model = Model {
+        mouse: false,
+        ..Model::default()
+    };
+    paint(&mut model);
+    let active = model.tabs.active;
+    click_target(&mut model, HitTarget::WorkbenchTab(3));
+    assert_eq!(model.tabs.active, active);
+}
+
+#[test]
+fn ctrl_click_toggles_picked_row() {
+    use dexo_tui::model::GridModel;
+
+    let mut model = Model::default();
+    *model.results = GridModel::sample_rows(6);
+    model.results.select_cell(0, 0);
+    model
+        .hits
+        .register(HitTarget::GridRow(2), Rect::new(0, 12, 20, 1));
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            2,
+            12,
+            crossterm::event::KeyModifiers::CONTROL,
+        ),
+    );
+    assert!(model.results.picked_rows.contains(&2));
 }

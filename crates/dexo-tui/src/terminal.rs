@@ -2,6 +2,7 @@ use std::io;
 use std::sync::{Arc, Mutex};
 
 use crossterm::cursor::Show;
+use crossterm::event::{DisableMouseCapture, EnableMouseCapture};
 use crossterm::execute;
 use crossterm::terminal::{
     EnterAlternateScreen, LeaveAlternateScreen, disable_raw_mode, enable_raw_mode,
@@ -17,11 +18,13 @@ pub trait TerminalControl {
     fn raw(&self, on: bool) -> Result<(), TuiError>;
     fn leave(&self) -> Result<(), TuiError>;
     fn show_cursor(&self) -> Result<(), TuiError>;
+    fn mouse_capture(&self, on: bool) -> Result<(), TuiError>;
 }
 
 pub struct TerminalGuard<B: TerminalControl> {
     backend: B,
     restored: bool,
+    mouse: bool,
 }
 
 impl<B: TerminalControl> TerminalGuard<B> {
@@ -35,12 +38,26 @@ impl<B: TerminalControl> TerminalGuard<B> {
         Ok(Self {
             backend,
             restored: false,
+            mouse: false,
         })
+    }
+
+    pub fn set_mouse(&mut self, on: bool) -> Result<(), TuiError> {
+        if self.mouse == on {
+            return Ok(());
+        }
+        self.backend.mouse_capture(on)?;
+        self.mouse = on;
+        Ok(())
     }
 
     pub fn restore(&mut self) {
         if self.restored {
             return;
+        }
+        if self.mouse {
+            let _ = self.backend.mouse_capture(false);
+            self.mouse = false;
         }
         let _ = self.backend.raw(false);
         let _ = self.backend.leave();
@@ -53,7 +70,12 @@ pub fn install_panic_hook() {
     let previous = std::panic::take_hook();
     std::panic::set_hook(Box::new(move |info| {
         let _ = disable_raw_mode();
-        let _ = execute!(io::stdout(), LeaveAlternateScreen, Show);
+        let _ = execute!(
+            io::stdout(),
+            DisableMouseCapture,
+            LeaveAlternateScreen,
+            Show
+        );
         previous(info);
     }));
 }
@@ -82,12 +104,21 @@ impl TerminalControl for CrosstermTerminal {
     }
 
     fn leave(&self) -> Result<(), TuiError> {
-        execute!(io::stdout(), LeaveAlternateScreen)?;
+        execute!(io::stdout(), DisableMouseCapture, LeaveAlternateScreen)?;
         Ok(())
     }
 
     fn show_cursor(&self) -> Result<(), TuiError> {
         execute!(io::stdout(), Show)?;
+        Ok(())
+    }
+
+    fn mouse_capture(&self, on: bool) -> Result<(), TuiError> {
+        if on {
+            execute!(io::stdout(), EnableMouseCapture)?;
+        } else {
+            execute!(io::stdout(), DisableMouseCapture)?;
+        }
         Ok(())
     }
 }
@@ -131,6 +162,11 @@ impl TerminalControl for RecordingTerminal {
 
     fn show_cursor(&self) -> Result<(), TuiError> {
         self.push("cursor_show");
+        Ok(())
+    }
+
+    fn mouse_capture(&self, on: bool) -> Result<(), TuiError> {
+        self.push(if on { "mouse_on" } else { "mouse_off" });
         Ok(())
     }
 }

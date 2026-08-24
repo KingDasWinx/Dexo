@@ -12,7 +12,7 @@ use crate::runtime::{OperationId, OperationKey, SessionId};
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, LayoutPreset, PaneLayout};
-use crate::mouse::HitMap;
+use crate::mouse::{HitMap, LastClick};
 use crate::screens::admin::AdminScreen;
 use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
@@ -950,6 +950,7 @@ pub struct Model {
     pub pending_chord: Chord,
     pub panes: PaneLayout,
     pub mouse: bool,
+    pub last_click: Option<LastClick>,
     pub animation: bool,
     pub layout_dirty: bool,
     pub hits: HitMap,
@@ -993,6 +994,7 @@ impl Default for Model {
                 results_height: 12,
             },
             mouse: true,
+            last_click: None,
             animation: true,
             layout_dirty: false,
             hits: HitMap::default(),

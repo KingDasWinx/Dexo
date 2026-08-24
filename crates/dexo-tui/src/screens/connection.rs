@@ -247,19 +247,21 @@ impl ConnectionForm {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec![self.title().into()];
-        lines.extend(self.field_lines());
+        let mut lines = self.field_lines();
         lines.push(footer_line("Submit", self.footer_focus()));
         lines
     }
 
     pub fn visible_lines(&self, rows: usize) -> Vec<String> {
         let body = self.field_lines();
-        let body_rows = rows.saturating_sub(2).max(1);
+        let body_rows = rows.saturating_sub(1).max(1);
         let focus_line = self.focus.min(self.fields.len().saturating_sub(1));
         let offset = crate::palette::scroll_to_selection(focus_line, 0, body.len(), body_rows);
-        let mut lines = vec![self.title().into()];
-        lines.extend(body.into_iter().skip(offset).take(body_rows));
+        let mut lines = body
+            .into_iter()
+            .skip(offset)
+            .take(body_rows)
+            .collect::<Vec<_>>();
         lines.push(footer_line("Submit", self.footer_focus()));
         lines
     }
@@ -559,7 +561,7 @@ mod tests {
         assert!(lines.iter().any(|line| line.contains(&last)));
         assert!(lines.iter().any(|line| line.contains("[Submit]")));
         assert!(lines.iter().any(|line| line.contains("[Cancel]")));
-        assert!(!lines.iter().any(|line| line.contains("host:")));
+        assert!(!lines.iter().any(|line| line.contains(" name:")));
         form.focus_next();
         assert!(form.on_submit());
         form.focus_next();
