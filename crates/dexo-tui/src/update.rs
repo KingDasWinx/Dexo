@@ -507,11 +507,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::NewDocument => {
-            let connection_id = if model.connection.name.is_empty() {
-                None
-            } else {
-                Some(model.connection.name.clone())
-            };
+            let connection_id = active_connection_uuid(model);
             let title = format!("query-{}.sql", model.documents.len());
             model.documents.push(crate::model::EditorDocument::new_unique(
                 title,
@@ -3100,6 +3096,19 @@ fn adjust_inspector_width(model: &mut Model, delta: i16) {
     model.layout_dirty = true;
 }
 
+fn active_connection_uuid(model: &Model) -> Option<String> {
+    let name = model.connection.name.as_str();
+    if name.is_empty() {
+        return None;
+    }
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == name)
+        .map(|row| row.profile.id.0.to_string())
+}
+
 fn persist_layout_effect(model: &Model) -> Effect {
     Effect::PersistLayout {
         project_id: model.project_id.clone(),
@@ -5211,6 +5220,34 @@ mod tests {
             &effects[..],
             [Effect::ReleaseSavepoint { name, .. }] if name == "x"
         ));
+    }
+
+    #[test]
+    fn new_document_binds_active_connection_uuid() {
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let connection_uuid = uuid::Uuid::from_u128(42);
+        let profile = ConnectionProfile::new(
+            ConnectionId(connection_uuid),
+            None,
+            "prod",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "localhost"}),
+            SecretRef::new("ref-1".into()),
+        );
+        let mut model = Model::default();
+        model.connections.load_profiles(vec![profile]);
+        model.connection.name = "prod".into();
+
+        update(&mut model, Action::NewDocument);
+
+        let doc = model.documents.last().unwrap();
+        assert_eq!(
+            doc.connection_id.as_deref(),
+            Some(connection_uuid.to_string().as_str())
+        );
+        assert_ne!(doc.id, "scratch");
     }
 
     #[test]
