@@ -507,9 +507,17 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::NewDocument => {
-            model
-                .documents
-                .push(crate::model::EditorDocument::scratch());
+            let connection_id = if model.connection.name.is_empty() {
+                None
+            } else {
+                Some(model.connection.name.clone())
+            };
+            let title = format!("query-{}.sql", model.documents.len());
+            model.documents.push(crate::model::EditorDocument::new_unique(
+                title,
+                None,
+                connection_id,
+            ));
             model.active_document = model.documents.len() - 1;
             Vec::new()
         }

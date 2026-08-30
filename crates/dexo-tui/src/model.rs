@@ -822,6 +822,7 @@ pub struct EditorDocument {
     pub id: String,
     pub title: String,
     pub path: Option<std::path::PathBuf>,
+    pub connection_id: Option<String>,
     pub sql: SqlDocument,
     pub saved_revision: u64,
     pub session: Option<SessionId>,
@@ -836,6 +837,7 @@ impl PartialEq for EditorDocument {
         self.id == other.id
             && self.title == other.title
             && self.path == other.path
+            && self.connection_id == other.connection_id
             && self.sql.text() == other.sql.text()
             && self.sql.cursor() == other.sql.cursor()
             && self.saved_revision == other.saved_revision
@@ -853,6 +855,27 @@ impl EditorDocument {
             id: "scratch".into(),
             title: "scratch.sql".into(),
             path: None,
+            connection_id: None,
+            sql: SqlDocument::new(""),
+            saved_revision: 0,
+            session: None,
+            viewport_line: 0,
+            viewport_column: 0,
+            typing: false,
+            anchor: None,
+        }
+    }
+
+    pub fn new_unique(
+        title: impl Into<String>,
+        path: Option<std::path::PathBuf>,
+        connection_id: Option<String>,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: title.into(),
+            path,
+            connection_id,
             sql: SqlDocument::new(""),
             saved_revision: 0,
             session: None,
@@ -1131,5 +1154,19 @@ impl Model {
     pub fn set_sql(&mut self, text: impl AsRef<str>) {
         *self.active_document_mut() = EditorDocument::with_text(text);
         self.editor.reset_parse();
+    }
+}
+
+#[cfg(test)]
+mod editor_document_tests {
+    use super::EditorDocument;
+
+    #[test]
+    fn new_documents_get_unique_ids_and_connection() {
+        let a = EditorDocument::new_unique("console.sql", None, Some("conn-a".into()));
+        let b = EditorDocument::new_unique("q2.sql", None, Some("conn-a".into()));
+        assert_ne!(a.id, b.id);
+        assert_eq!(a.connection_id.as_deref(), Some("conn-a"));
+        assert_eq!(a.title, "console.sql");
     }
 }
