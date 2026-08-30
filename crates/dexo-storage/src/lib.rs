@@ -15,6 +15,7 @@ mod recovery;
 mod schema_snapshot;
 mod session_recovery;
 mod snippet;
+pub mod sql_files;
 
 pub use catalog_cache::{CatalogCache, CatalogSnapshotMetadata};
 pub use connection::{
