@@ -77,6 +77,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
             .unwrap_or("Enter expande/recolhe");
         spans.push(Span::raw(format!("  {hint}")));
     }
+    if model.focus == crate::model::Focus::Editor && model.tabs.active == 0 {
+        spans.push(Span::raw("  Ctrl+W close tab  Ctrl+Tab next"));
+    }
     if let Some(message) = model.messages.last() {
         spans.push(Span::raw(format!("  {message}")));
     }

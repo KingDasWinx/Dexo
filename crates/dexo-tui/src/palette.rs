@@ -260,8 +260,8 @@ mod tests {
     fn every_current_action_is_in_palette() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 129);
-        assert_eq!(ids.len(), 129);
+        assert_eq!(entries.len(), 131);
+        assert_eq!(ids.len(), 131);
     }
 
     #[test]

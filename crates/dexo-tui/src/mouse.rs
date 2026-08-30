@@ -8,6 +8,7 @@ use ratatui::layout::Rect;
 pub enum HitTarget {
     ResultTab(usize),
     WorkbenchTab(usize),
+    DocumentTab(usize),
     Explorer,
     ExplorerNode(usize),
     Editor,
@@ -193,6 +194,7 @@ pub fn mouse_action(x: u16, y: u16, map: &HitMap) -> Option<Action> {
     match map.at(x, y)? {
         HitTarget::ResultTab(index) => Some(Action::SelectResultTab { index }),
         HitTarget::WorkbenchTab(index) => Some(Action::SwitchTab { index }),
+        HitTarget::DocumentTab(index) => Some(Action::SelectDocument { index }),
         HitTarget::Grid | HitTarget::GridRow(_) | HitTarget::GridCell { .. } => {
             Some(Action::Focus(crate::action::FocusTarget::Results))
         }

@@ -13,7 +13,11 @@ use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 
 pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     hits.clear();
-    let plan = LayoutPlan::for_area_with(frame.area(), Some(&model.panes));
+    let plan = LayoutPlan::for_area_with_document_tabs(
+        frame.area(),
+        Some(&model.panes),
+        model.tabs.active == 0,
+    );
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
         crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model, hits),
@@ -31,6 +35,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 explorer_body(model, plan.explorer),
             );
             crate::widgets::tabs::render(frame, plan.tabs, model, hits);
+            if model.tabs.active == 0 {
+                crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
+            }
             if !overlay_blocks_workbench(model) {
                 hits.register(HitTarget::Editor, plan.content);
             }
@@ -1507,6 +1514,22 @@ mod tests {
         model.tabs.active = 2;
         let ddl = render_to_string(&model, 100, 40);
         assert!(ddl.contains("schema table") || ddl.contains("target:"));
+    }
+
+    #[test]
+    fn sql_workbench_renders_document_tabs_with_dirty_marker() {
+        let mut model = Model::default();
+        model.documents = vec![
+            crate::model::EditorDocument::new_unique("console.sql", None, None),
+            crate::model::EditorDocument::new_unique("q2.sql", None, None),
+        ];
+        model.documents[1].sql.insert(0, "select 1").unwrap();
+        model.active_document = 1;
+
+        let frame = render_to_string(&model, 120, 35);
+
+        assert!(frame.contains("console.sql"));
+        assert!(frame.contains("q2.sql*"));
     }
 
     #[test]

@@ -1119,9 +1119,10 @@ impl Model {
     pub fn apply_size(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
-        self.layout_mode = LayoutPlan::for_area_with(
+        self.layout_mode = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, width, height),
             Some(&self.panes.clamp(width, height)),
+            self.tabs.active == 0,
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
@@ -1129,9 +1130,10 @@ impl Model {
     }
 
     pub fn sync_grid_viewport(&mut self) {
-        let plan = LayoutPlan::for_area_with(
+        let plan = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, self.width, self.height),
             Some(&self.panes),
+            self.tabs.active == 0,
         );
         let width = plan.results.width.saturating_sub(2).max(1);
         let height = plan.results.height.saturating_sub(2).max(1);

@@ -152,7 +152,12 @@ pub enum Action {
         index: usize,
     },
     NextTab,
+    SelectDocument {
+        index: usize,
+    },
     NextDocument,
+    PrevDocument,
+    CloseDocument,
     NewDocument,
     SelectGridRow,
     SelectGridColumn,

@@ -80,6 +80,7 @@ pub struct LayoutPlan {
     pub context: Rect,
     pub explorer: Rect,
     pub tabs: Rect,
+    pub document_tabs: Rect,
     pub content: Rect,
     pub results: Rect,
     pub inspector: Rect,
@@ -92,6 +93,14 @@ impl LayoutPlan {
     }
 
     pub fn for_area_with(area: Rect, panes: Option<&PaneLayout>) -> Self {
+        Self::for_area_with_document_tabs(area, panes, false)
+    }
+
+    pub fn for_area_with_document_tabs(
+        area: Rect,
+        panes: Option<&PaneLayout>,
+        show_document_tabs: bool,
+    ) -> Self {
         let mode = if area.width >= 120 && area.height >= 35 {
             LayoutMode::Full
         } else if area.width >= 80 && area.height >= 24 {
@@ -100,8 +109,8 @@ impl LayoutPlan {
             LayoutMode::Compact
         };
         match mode {
-            LayoutMode::Full => full_layout(area, panes),
-            LayoutMode::Reduced => reduced_layout(area, panes),
+            LayoutMode::Full => full_layout(area, panes, show_document_tabs),
+            LayoutMode::Reduced => reduced_layout(area, panes, show_document_tabs),
             LayoutMode::Compact => compact_layout(area),
         }
     }
@@ -136,7 +145,7 @@ impl PaneLayout {
     }
 }
 
-fn full_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
+fn full_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bool) -> LayoutPlan {
     let context_h = 1.min(area.height);
     let status_h = 1.min(area.height.saturating_sub(context_h));
     let body_h = area.height.saturating_sub(context_h + status_h);
@@ -177,22 +186,35 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         body.height,
     );
     let tabs_h = 1.min(center.height);
+    let document_tabs_h = u16::from(show_document_tabs).min(center.height.saturating_sub(tabs_h));
     let results_h = match panes {
         Some(p) if !p.results_visible => 0,
-        Some(p) => p.results_height.min(center.height.saturating_sub(2)),
+        Some(p) => p
+            .results_height
+            .min(center.height.saturating_sub(tabs_h + document_tabs_h)),
         None => center.height.saturating_mul(35) / 100,
     };
-    let content_h = center.height.saturating_sub(tabs_h + results_h);
+    let content_h = center
+        .height
+        .saturating_sub(tabs_h + document_tabs_h + results_h);
     let tabs = Rect::new(center.x, center.y, center.width, tabs_h);
-    let content = Rect::new(
+    let document_tabs = Rect::new(
         center.x,
         center.y.saturating_add(tabs_h),
+        center.width,
+        document_tabs_h,
+    );
+    let content = Rect::new(
+        center.x,
+        center.y.saturating_add(tabs_h + document_tabs_h),
         center.width,
         content_h,
     );
     let results = Rect::new(
         center.x,
-        center.y.saturating_add(tabs_h + content_h),
+        center
+            .y
+            .saturating_add(tabs_h + document_tabs_h + content_h),
         center.width,
         results_h,
     );
@@ -201,6 +223,7 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         context,
         explorer,
         tabs,
+        document_tabs,
         content,
         results,
         inspector,
@@ -222,7 +245,7 @@ fn pane_width(
     }
 }
 
-fn reduced_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
+fn reduced_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bool) -> LayoutPlan {
     let context_h = 1.min(area.height);
     let status_h = 1.min(area.height.saturating_sub(context_h));
     let body_h = area.height.saturating_sub(context_h + status_h);
@@ -250,22 +273,35 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         body.height,
     );
     let tabs_h = 1.min(center.height);
+    let document_tabs_h = u16::from(show_document_tabs).min(center.height.saturating_sub(tabs_h));
     let results_h = match panes {
         Some(p) if !p.results_visible => 0,
-        Some(p) => p.results_height.min(center.height.saturating_sub(2)),
+        Some(p) => p
+            .results_height
+            .min(center.height.saturating_sub(tabs_h + document_tabs_h)),
         None => center.height.saturating_mul(30) / 100,
     };
-    let content_h = center.height.saturating_sub(tabs_h + results_h);
+    let content_h = center
+        .height
+        .saturating_sub(tabs_h + document_tabs_h + results_h);
     let tabs = Rect::new(center.x, center.y, center.width, tabs_h);
-    let content = Rect::new(
+    let document_tabs = Rect::new(
         center.x,
         center.y.saturating_add(tabs_h),
+        center.width,
+        document_tabs_h,
+    );
+    let content = Rect::new(
+        center.x,
+        center.y.saturating_add(tabs_h + document_tabs_h),
         center.width,
         content_h,
     );
     let results = Rect::new(
         center.x,
-        center.y.saturating_add(tabs_h + content_h),
+        center
+            .y
+            .saturating_add(tabs_h + document_tabs_h + content_h),
         center.width,
         results_h,
     );
@@ -275,6 +311,7 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>) -> LayoutPlan {
         context,
         explorer,
         tabs,
+        document_tabs,
         content,
         results,
         inspector: Rect::new(0, 0, 0, 0),
@@ -299,6 +336,7 @@ fn compact_layout(area: Rect) -> LayoutPlan {
         context,
         explorer: Rect::new(0, 0, 0, 0),
         tabs: Rect::new(0, 0, 0, 0),
+        document_tabs: Rect::new(0, 0, 0, 0),
         content: body,
         results: Rect::new(0, 0, 0, 0),
         inspector: Rect::new(0, 0, 0, 0),
@@ -357,5 +395,19 @@ mod tests {
         let plan = LayoutPlan::for_area_with(Rect::new(0, 0, 160, 50), Some(&panes));
         assert_eq!(plan.inspector.width, 0);
         assert!(plan.results.height >= plan.content.height);
+    }
+
+    #[test]
+    fn document_tab_row_is_reserved_only_when_requested() {
+        let area = Rect::new(0, 0, 160, 50);
+        let without_tabs = LayoutPlan::for_area_with(area, None);
+        let with_tabs = LayoutPlan::for_area_with_document_tabs(area, None, true);
+
+        assert_eq!(without_tabs.document_tabs.height, 0);
+        assert_eq!(with_tabs.document_tabs.height, 1);
+        assert_eq!(
+            with_tabs.content.y,
+            without_tabs.content.y.saturating_add(1)
+        );
     }
 }

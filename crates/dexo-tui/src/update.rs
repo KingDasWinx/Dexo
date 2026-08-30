@@ -500,12 +500,31 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::NextDocument => {
-            if !model.documents.is_empty() {
-                model.active_document = (model.active_document + 1) % model.documents.len();
+        Action::SelectDocument { index } => {
+            if index < model.documents.len() {
+                model.active_document = index;
+                model.focus = Focus::Editor;
             }
             Vec::new()
         }
+        Action::NextDocument => {
+            if !model.documents.is_empty() {
+                model.active_document = (model.active_document + 1) % model.documents.len();
+                model.focus = Focus::Editor;
+            }
+            Vec::new()
+        }
+        Action::PrevDocument => {
+            if !model.documents.is_empty() {
+                model.active_document = model
+                    .active_document
+                    .checked_sub(1)
+                    .unwrap_or(model.documents.len() - 1);
+                model.focus = Focus::Editor;
+            }
+            Vec::new()
+        }
+        Action::CloseDocument => close_active_document(model),
         Action::NewDocument => {
             let connection_id = active_connection_uuid(model);
             let title = format!("query-{}.sql", model.documents.len());
@@ -1928,6 +1947,7 @@ fn mouse_workbench(
     match hit {
         Some(HitTarget::WorkbenchTab(index)) => update(model, Action::SwitchTab { index }),
         Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
+        Some(HitTarget::DocumentTab(index)) => update(model, Action::SelectDocument { index }),
         Some(HitTarget::Inspector) => update(model, Action::Focus(FocusTarget::Inspector)),
         Some(HitTarget::Explorer) => update(model, Action::Focus(FocusTarget::Explorer)),
         Some(HitTarget::ExplorerNode(index)) => {
@@ -1947,9 +1967,10 @@ fn mouse_workbench(
         Some(HitTarget::Editor) => {
             close_palette(model);
             model.focus = Focus::Editor;
-            let plan = LayoutPlan::for_area_with(
+            let plan = LayoutPlan::for_area_with_document_tabs(
                 Rect::new(0, 0, model.width, model.height),
                 Some(&model.panes),
+                model.tabs.active == 0,
             );
             if model.tabs.active == 0
                 && let Some(index) = crate::widgets::editor::char_index_at(
@@ -4157,6 +4178,31 @@ fn save_active_document(model: &mut Model) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+fn close_active_document(model: &mut Model) -> Vec<Effect> {
+    let document = model.active_document();
+    if document.is_dirty() && document.path.is_none() {
+        model
+            .messages
+            .push("Save the untitled document before closing it.".into());
+        return Vec::new();
+    }
+    if document.is_dirty() {
+        model
+            .messages
+            .push("Closed dirty file; autosave arrives in Task 6.".into());
+    }
+
+    model.documents.remove(model.active_document);
+    if model.documents.is_empty() {
+        model.documents.push(crate::model::EditorDocument::scratch());
+        model.active_document = 0;
+    } else {
+        model.active_document = model.active_document.min(model.documents.len() - 1);
+    }
+    model.focus = Focus::Editor;
+    Vec::new()
 }
 
 fn cycle_theme(model: &mut Model) -> Vec<Effect> {

@@ -1,3 +1,4 @@
+pub mod document_tabs;
 pub mod editor;
 pub mod form;
 pub mod grid;
