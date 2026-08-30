@@ -75,7 +75,30 @@ fn editing_sidebar_connection_uses_sidebar_cursor() {
     alternate.name = "staging".into();
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile(), alternate]);
+    model.focus = Focus::Explorer;
     model.explorer.connection_cursor = 1;
+
+    let _ = update(&mut model, Action::EditSelectedConnection);
+
+    assert_eq!(
+        model
+            .connection_form
+            .editing
+            .as_ref()
+            .map(|profile| profile.name.as_str()),
+        Some("staging")
+    );
+}
+
+#[test]
+fn editing_from_connections_overlay_uses_overlay_selection() {
+    let mut alternate = saved_profile();
+    alternate.name = "staging".into();
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile(), alternate]);
+    model.connections.open = true;
+    model.connections.selected_profile = 1;
+    model.explorer.connection_cursor = 0;
 
     let _ = update(&mut model, Action::EditSelectedConnection);
 

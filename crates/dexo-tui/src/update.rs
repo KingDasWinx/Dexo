@@ -212,7 +212,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConnectSelected => connect_selected(model),
         Action::EditSelectedConnection => {
-            model.connections.selected_profile = model.explorer.connection_cursor;
+            if !model.connections.open && model.focus == Focus::Explorer {
+                model.connections.selected_profile = model.explorer.connection_cursor;
+            }
             if let Some(profile) = model.connections.selected().cloned() {
                 model.connection_form = crate::screens::connection::ConnectionForm::open_edit(&profile);
             }
