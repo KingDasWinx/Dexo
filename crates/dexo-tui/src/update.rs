@@ -212,6 +212,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConnectSelected => connect_selected(model),
         Action::EditSelectedConnection => {
+            model.connections.selected_profile = model.explorer.connection_cursor;
             if let Some(profile) = model.connections.selected().cloned() {
                 model.connection_form = crate::screens::connection::ConnectionForm::open_edit(&profile);
             }
@@ -2745,7 +2746,10 @@ fn explorer_visible_rows(model: &Model) -> usize {
     } else {
         plan.explorer.height
     };
-    height.saturating_sub(2).max(1) as usize
+    height
+        .saturating_sub(2)
+        .saturating_sub((2 + model.connections.profiles.len()) as u16)
+        .max(1) as usize
 }
 
 fn connect_selected(model: &mut Model) -> Vec<Effect> {
@@ -2778,9 +2782,7 @@ fn move_sidebar_selection(model: &mut Model, delta: i32) {
         (SidebarFocus::Connections, -1) if model.explorer.connection_cursor > 0 => {
             model.explorer.connection_cursor -= 1;
         }
-        (SidebarFocus::Connections, -1) => {
-            model.explorer.sidebar_focus = SidebarFocus::Catalog;
-        }
+        (SidebarFocus::Connections, -1) => {}
         (SidebarFocus::Connections, 1)
             if model.explorer.connection_cursor + 1 < model.connections.profiles.len() =>
         {
@@ -2809,6 +2811,8 @@ fn activate_existing_session(
     profile: &dexo_app::ConnectionProfile,
     session: crate::screens::connections::SessionRow,
 ) -> Vec<Effect> {
+    model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
+    model.focus = Focus::Editor;
     if model.active_session == Some(session.id) {
         return Vec::new();
     }
