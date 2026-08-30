@@ -43,6 +43,7 @@ pub enum Action {
     },
     OpenConnections,
     ConnectSelected,
+    EditSelectedConnection,
     DuplicateConnection,
     TestConnection,
     DeleteConnection,

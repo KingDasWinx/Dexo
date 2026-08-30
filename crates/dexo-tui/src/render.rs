@@ -35,7 +35,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 frame,
                 plan.explorer,
                 model,
-                "Explorer",
+                "Sidebar",
                 model.focus == Focus::Explorer,
                 explorer_body(model, plan.explorer),
             );
@@ -155,7 +155,7 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
                 frame,
                 area,
                 model,
-                "Explorer",
+                "Sidebar",
                 true,
                 explorer_body(model, area),
             );
@@ -463,7 +463,14 @@ fn describe_object_inspector(
 
 fn explorer_body(model: &Model, area: Rect) -> String {
     let rows = area.height.saturating_sub(2) as usize;
-    crate::widgets::object_tree::render_visible(&model.explorer, Some(rows.max(1))).join("\n")
+    crate::widgets::object_tree::render_sidebar(
+        &model.explorer,
+        &model.connections.profiles,
+        &model.connection.name,
+        model.capabilities.unicode,
+        rows.max(1),
+    )
+    .join("\n")
 }
 
 fn render_bar(frame: &mut Frame, area: Rect, text: String) {
@@ -541,11 +548,16 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
         return;
     }
     let inner = Block::bordered().inner(area);
+    let sidebar_rows = 2 + model.connections.profiles.len();
+    for (index, _) in model.connections.profiles.iter().enumerate() {
+        register_line(hits, inner, 1 + index, HitTarget::SidebarConnection(index));
+    }
+    let catalog_rows = inner.height.saturating_sub(sidebar_rows as u16).max(1) as usize;
     let chrome = crate::widgets::object_tree::chrome_count(&model.explorer);
     let (offset, ids) =
-        crate::widgets::object_tree::windowed_ids(&model.explorer, inner.height as usize);
+        crate::widgets::object_tree::windowed_ids(&model.explorer, catalog_rows);
     for (i, _) in ids.iter().enumerate() {
-        let row = chrome + i;
+        let row = sidebar_rows + chrome + i;
         register_line(
             hits,
             inner,

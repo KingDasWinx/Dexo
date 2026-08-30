@@ -1,5 +1,6 @@
 use crate::palette::scroll_to_selection;
-use crate::screens::explorer::{ExplorerNode, ExplorerState, NodeState};
+use crate::screens::connections::ConnectionRow;
+use crate::screens::explorer::{ExplorerNode, ExplorerState, NodeState, SidebarFocus};
 use dexo_driver_api::ObjectId;
 
 pub fn chrome_count(state: &ExplorerState) -> usize {
@@ -27,6 +28,41 @@ pub fn windowed_ids(state: &ExplorerState, viewport_rows: usize) -> (usize, Vec<
 
 pub fn render_lines(state: &ExplorerState) -> Vec<String> {
     render_visible(state, None)
+}
+
+pub fn render_sidebar(
+    state: &ExplorerState,
+    profiles: &[ConnectionRow],
+    active_connection: &str,
+    unicode: bool,
+    viewport_rows: usize,
+) -> Vec<String> {
+    let connected = if unicode { "●" } else { "*" };
+    let offline = if unicode { "○" } else { " " };
+    let mut lines = vec!["Connections".into()];
+    for (index, row) in profiles.iter().enumerate() {
+        let cursor = if state.sidebar_focus == SidebarFocus::Connections
+            && state.connection_cursor == index
+        {
+            ">"
+        } else {
+            " "
+        };
+        let marker = if row.profile.name == active_connection || row.sessions > 0 {
+            connected
+        } else {
+            offline
+        };
+        lines.push(format!("{cursor} {marker} {}", row.profile.name));
+    }
+    lines.push(if state.offline {
+        "Catalog — offline".into()
+    } else {
+        "Catalog".into()
+    });
+    let catalog_rows = viewport_rows.saturating_sub(lines.len()).max(1);
+    lines.extend(render_visible(state, Some(catalog_rows)));
+    lines
 }
 
 pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Vec<String> {

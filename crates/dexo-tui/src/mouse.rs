@@ -11,6 +11,7 @@ pub enum HitTarget {
     DocumentTab(usize),
     Explorer,
     ExplorerNode(usize),
+    SidebarConnection(usize),
     Editor,
     Inspector,
     Grid,
@@ -199,7 +200,7 @@ pub fn mouse_action(x: u16, y: u16, map: &HitMap) -> Option<Action> {
             Some(Action::Focus(crate::action::FocusTarget::Results))
         }
         HitTarget::GridHeader(_) => Some(Action::Focus(crate::action::FocusTarget::Results)),
-        HitTarget::Explorer | HitTarget::ExplorerNode(_) => {
+        HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_) => {
             Some(Action::Focus(crate::action::FocusTarget::Explorer))
         }
         HitTarget::Editor => Some(Action::Focus(crate::action::FocusTarget::Editor)),

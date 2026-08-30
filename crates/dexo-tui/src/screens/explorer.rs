@@ -22,6 +22,13 @@ pub enum ExplorerAction {
     CopyName,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SidebarFocus {
+    Connections,
+    #[default]
+    Catalog,
+}
+
 impl ExplorerAction {
     pub fn all() -> [ExplorerAction; 6] {
         [
@@ -116,6 +123,8 @@ fn object_label(object: &CatalogObject) -> String {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExplorerState {
+    pub sidebar_focus: SidebarFocus,
+    pub connection_cursor: usize,
     pub roots: Vec<ExplorerNode>,
     pub selected: Option<ObjectId>,
     pub offline: bool,

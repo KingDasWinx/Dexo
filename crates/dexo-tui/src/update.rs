@@ -58,6 +58,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             model.explorer.clear();
             if ready {
+                model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
+                model.focus = Focus::Editor;
                 if let Some(session) = session {
                     let operation = crate::runtime::OperationId::new();
                     return vec![Effect::LoadCatalogChildren {
@@ -209,6 +211,12 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ConnectSelected => connect_selected(model),
+        Action::EditSelectedConnection => {
+            if let Some(profile) = model.connections.selected().cloned() {
+                model.connection_form = crate::screens::connection::ConnectionForm::open_edit(&profile);
+            }
+            Vec::new()
+        }
         Action::DuplicateConnection => model
             .connections
             .selected()
@@ -418,7 +426,15 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
-        Action::ExplorerExpand => expand_or_open_selected(model),
+        Action::ExplorerExpand => {
+            if model.explorer.sidebar_focus
+                == crate::screens::explorer::SidebarFocus::Connections
+            {
+                activate_sidebar_connection(model)
+            } else {
+                expand_or_open_selected(model)
+            }
+        }
         Action::RefreshCatalogNode => refresh_catalog(model, false),
         Action::RefreshCatalogSubtree => refresh_catalog(model, false),
         Action::RefreshCatalogAll => refresh_catalog(model, true),
@@ -477,13 +493,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::ExplorerUp => {
-            model.explorer.move_selection(-1);
-            model.explorer.sync_scroll(explorer_visible_rows(model));
+            move_sidebar_selection(model, -1);
             Vec::new()
         }
         Action::ExplorerDown => {
-            model.explorer.move_selection(1);
-            model.explorer.sync_scroll(explorer_visible_rows(model));
+            move_sidebar_selection(model, 1);
             Vec::new()
         }
         Action::SwitchTab { index } => {
@@ -1954,6 +1968,7 @@ fn mouse_workbench(
             crate::screens::editor::end_typing(model);
             close_palette(model);
             model.focus = Focus::Explorer;
+            model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
             let ids = model.explorer.visible_ids();
             if let Some(id) = ids.get(index).cloned() {
                 model.explorer.select(id);
@@ -1963,6 +1978,14 @@ fn mouse_workbench(
             } else {
                 Vec::new()
             }
+        }
+        Some(HitTarget::SidebarConnection(index)) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Explorer;
+            model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Connections;
+            model.explorer.connection_cursor = index;
+            activate_sidebar_connection(model)
         }
         Some(HitTarget::Editor) => {
             close_palette(model);
@@ -2119,7 +2142,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     match model.hits.at(mouse.column, mouse.row) {
-        Some(HitTarget::Explorer | HitTarget::ExplorerNode(_)) => {
+        Some(HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_)) => {
             if delta < 0 {
                 update(model, Action::ExplorerUp)
             } else {
@@ -2672,11 +2695,7 @@ fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Char('n') => update(model, Action::OpenConnectionForm),
         KeyCode::Char('e') => {
-            if let Some(profile) = model.connections.selected().cloned() {
-                model.connection_form =
-                    crate::screens::connection::ConnectionForm::open_edit(&profile);
-            }
-            Vec::new()
+            update(model, Action::EditSelectedConnection)
         }
         KeyCode::Char('d') => update(model, Action::DuplicateConnection),
         KeyCode::Char('t') => update(model, Action::TestConnection),
@@ -2742,6 +2761,47 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
         profile,
         token: model.connect_token,
     }]
+}
+
+fn activate_sidebar_connection(model: &mut Model) -> Vec<Effect> {
+    if model.explorer.connection_cursor >= model.connections.profiles.len() {
+        return Vec::new();
+    }
+    model.connections.selected_profile = model.explorer.connection_cursor;
+    connect_selected(model)
+}
+
+fn move_sidebar_selection(model: &mut Model, delta: i32) {
+    use crate::screens::explorer::SidebarFocus;
+
+    match (model.explorer.sidebar_focus, delta) {
+        (SidebarFocus::Connections, -1) if model.explorer.connection_cursor > 0 => {
+            model.explorer.connection_cursor -= 1;
+        }
+        (SidebarFocus::Connections, -1) => {
+            model.explorer.sidebar_focus = SidebarFocus::Catalog;
+        }
+        (SidebarFocus::Connections, 1)
+            if model.explorer.connection_cursor + 1 < model.connections.profiles.len() =>
+        {
+            model.explorer.connection_cursor += 1;
+        }
+        (SidebarFocus::Connections, 1) => {
+            model.explorer.sidebar_focus = SidebarFocus::Catalog;
+        }
+        (SidebarFocus::Catalog, -1)
+            if model.explorer.selected_index() == 0
+                && !model.connections.profiles.is_empty() =>
+        {
+            model.explorer.sidebar_focus = SidebarFocus::Connections;
+            model.explorer.connection_cursor = model.connections.profiles.len() - 1;
+        }
+        (SidebarFocus::Catalog, _) => {
+            model.explorer.move_selection(delta);
+            model.explorer.sync_scroll(explorer_visible_rows(model));
+        }
+        _ => {}
+    }
 }
 
 fn activate_existing_session(
