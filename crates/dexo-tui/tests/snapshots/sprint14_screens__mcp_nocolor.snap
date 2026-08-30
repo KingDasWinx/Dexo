@@ -1,13 +1,12 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
-assertion_line: 40
 expression: "render_to_string(&model, 100, 30)"
 ---
 default  no connection  —                                                                           
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│No connection             │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
+│No connection             │ scratch.sql                                                            
+│                          │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
 │                          ││   1                                                                  │
-│                          ││                                                                      │
 │             ┌MCP profiles──────────────────────────────────────────────────────────┐             │
 │             │mcp profile=assistant enabled=false confirm=false                     │             │
 │             │scope allow db.public.*                                               │             │
@@ -32,4 +31,4 @@ default  no connection  —
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W close t

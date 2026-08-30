@@ -1,13 +1,12 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
-assertion_line: 37
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
-│No connection             │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+│No connection             │ scratch.sql                                                                                            │No selection              │
+│                          │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│                          │
 │                          ││   1                                                                                                  ││                          │
-│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -52,4 +51,4 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W close tab  Ctrl+Tab next
