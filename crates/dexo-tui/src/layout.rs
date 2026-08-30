@@ -111,7 +111,7 @@ impl LayoutPlan {
         match mode {
             LayoutMode::Full => full_layout(area, panes, show_document_tabs),
             LayoutMode::Reduced => reduced_layout(area, panes, show_document_tabs),
-            LayoutMode::Compact => compact_layout(area),
+            LayoutMode::Compact => compact_layout(area, show_document_tabs),
         }
     }
 }
@@ -319,7 +319,7 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bo
     }
 }
 
-fn compact_layout(area: Rect) -> LayoutPlan {
+fn compact_layout(area: Rect, show_document_tabs: bool) -> LayoutPlan {
     let context_h = 1.min(area.height);
     let status_h = 1.min(area.height.saturating_sub(context_h));
     let body_h = area.height.saturating_sub(context_h + status_h);
@@ -331,13 +331,21 @@ fn compact_layout(area: Rect) -> LayoutPlan {
         status_h,
     );
     let body = Rect::new(area.x, area.y.saturating_add(context_h), area.width, body_h);
+    let document_tabs_h = u16::from(show_document_tabs).min(body.height);
+    let document_tabs = Rect::new(body.x, body.y, body.width, document_tabs_h);
+    let content = Rect::new(
+        body.x,
+        body.y.saturating_add(document_tabs_h),
+        body.width,
+        body.height.saturating_sub(document_tabs_h),
+    );
     LayoutPlan {
         mode: LayoutMode::Compact,
         context,
         explorer: Rect::new(0, 0, 0, 0),
         tabs: Rect::new(0, 0, 0, 0),
-        document_tabs: Rect::new(0, 0, 0, 0),
-        content: body,
+        document_tabs,
+        content,
         results: Rect::new(0, 0, 0, 0),
         inspector: Rect::new(0, 0, 0, 0),
         status,
@@ -409,5 +417,14 @@ mod tests {
             with_tabs.content.y,
             without_tabs.content.y.saturating_add(1)
         );
+    }
+
+    #[test]
+    fn compact_layout_reserves_document_tab_row_when_requested() {
+        let plan = LayoutPlan::for_area_with_document_tabs(Rect::new(0, 0, 60, 20), None, true);
+
+        assert_eq!(plan.mode, LayoutMode::Compact);
+        assert_eq!(plan.document_tabs.height, 1);
+        assert_eq!(plan.content.y, plan.document_tabs.y + 1);
     }
 }

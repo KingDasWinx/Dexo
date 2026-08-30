@@ -4181,18 +4181,22 @@ fn save_active_document(model: &mut Model) -> Vec<Effect> {
 }
 
 fn close_active_document(model: &mut Model) -> Vec<Effect> {
-    let document = model.active_document();
-    if document.is_dirty() && document.path.is_none() {
+    let is_dirty = model.active_document().is_dirty();
+    let has_path = model.active_document().path.is_some();
+    if is_dirty && !has_path {
         model
             .messages
             .push("Save the untitled document before closing it.".into());
         return Vec::new();
     }
-    if document.is_dirty() {
+    let effects = if is_dirty {
         model
             .messages
-            .push("Closed dirty file; autosave arrives in Task 6.".into());
-    }
+            .push("Saving dirty file before closing it.".into());
+        save_active_document(model)
+    } else {
+        Vec::new()
+    };
 
     model.documents.remove(model.active_document);
     if model.documents.is_empty() {
@@ -4202,7 +4206,7 @@ fn close_active_document(model: &mut Model) -> Vec<Effect> {
         model.active_document = model.active_document.min(model.documents.len() - 1);
     }
     model.focus = Focus::Editor;
-    Vec::new()
+    effects
 }
 
 fn cycle_theme(model: &mut Model) -> Vec<Effect> {

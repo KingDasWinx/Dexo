@@ -20,7 +20,12 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
-        crate::layout::LayoutMode::Compact => render_compact(frame, plan.content, model, hits),
+        crate::layout::LayoutMode::Compact => {
+            if model.tabs.active == 0 {
+                crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
+            }
+            render_compact(frame, plan.content, model, hits);
+        }
         _ => {
             if !overlay_blocks_workbench(model) {
                 hits.register(HitTarget::Explorer, plan.explorer);

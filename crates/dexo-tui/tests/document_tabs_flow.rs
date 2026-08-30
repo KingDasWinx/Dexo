@@ -54,12 +54,32 @@ fn closing_dirty_file_document_removes_it_with_autosave_notice() {
         .insert(0, "select 1")
         .unwrap();
 
-    update(&mut model, Action::CloseDocument);
+    let effects = update(&mut model, Action::CloseDocument);
 
     assert_eq!(model.documents.len(), 1);
     assert!(!model.active_document().is_dirty());
+    assert!(effects.iter().any(|effect| {
+        matches!(
+            effect,
+            dexo_tui::Effect::SaveDocument(request)
+                if request.path == std::path::PathBuf::from("query.sql")
+                    && request.content == "select 1"
+        )
+    }));
     assert_eq!(
         model.messages.last().map(String::as_str),
-        Some("Closed dirty file; autosave arrives in Task 6.")
+        Some("Saving dirty file before closing it.")
     );
+}
+
+#[test]
+fn compact_sql_workbench_renders_document_tabs() {
+    let mut model = Model::default();
+    model
+        .documents
+        .push(EditorDocument::new_unique("q2.sql", None, None));
+
+    let frame = dexo_tui::render::render_to_string(&model, 60, 20);
+
+    assert!(frame.contains("q2.sql"));
 }
