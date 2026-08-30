@@ -1,12 +1,11 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 184
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│ ▾ local                  ││   1▸select 1                                                         │
+│[offline]                 │ scratch.sql                                                            
+│ ▾ local                  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │>  ▸ public  ┌Transfer──────────────────────────────────────────────────────────────┐             │
 │     mysql.us│import orders.csv                                                     │             │
 │             │format=csv strategy=RejectFile                                        │             │
@@ -32,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W clos
