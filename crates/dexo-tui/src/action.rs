@@ -388,11 +388,11 @@ pub enum Action {
         document: String,
         content: String,
     },
-    DocumentConflict {
     DocumentAutosaved {
         id: String,
         revision: u64,
     },
+    DocumentConflict {
         path: String,
     },
     OpenProjects,
@@ -624,13 +624,13 @@ pub enum Effect {
     },
     LoadDocument(DocumentIoRequest),
     SaveDocument(DocumentIoRequest),
-    PreviewDdl {
     AutosaveDocument {
         id: String,
         path: PathBuf,
         content: String,
         revision: u64,
     },
+    PreviewDdl {
         change: dexo_driver_api::SchemaChange,
         session: SessionId,
         generation: u64,
