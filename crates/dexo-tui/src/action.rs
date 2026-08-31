@@ -99,6 +99,7 @@ pub enum Action {
         key: crate::runtime::OperationKey,
     },
     CheckpointTick,
+    OnboardingTick,
     TransactionChanged {
         session: crate::runtime::SessionId,
         generation: u64,
@@ -786,6 +787,7 @@ pub enum Effect {
         object_id: String,
         favorite: bool,
     },
+    CompleteOnboarding,
     Shutdown,
     Quit,
 }

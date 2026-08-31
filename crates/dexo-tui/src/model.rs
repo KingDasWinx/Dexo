@@ -70,6 +70,23 @@ pub struct HelpState {
     pub scroll: u16,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnboardingState {
+    pub open: bool,
+    pub logo_frames: Arc<Vec<crate::entrance::LogoFrame>>,
+    pub logo_frame: usize,
+}
+
+impl Default for OnboardingState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            logo_frames: Arc::new(vec![crate::entrance::static_logo_frame()]),
+            logo_frame: 0,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultsMenuState {
     pub open: bool,
@@ -940,6 +957,7 @@ pub struct Model {
     pub tabs: TabsState,
     pub palette: PaletteState,
     pub help: HelpState,
+    pub onboarding: OnboardingState,
     pub results_menu: ResultsMenuState,
     pub layout_preset: LayoutPreset,
     pub messages: Vec<String>,
@@ -1019,6 +1037,7 @@ impl Default for Model {
             keymap: Keymap::default_profile(),
             pending_chord: Chord { keys: Vec::new() },
             help: HelpState::default(),
+            onboarding: OnboardingState::default(),
             results_menu: ResultsMenuState::default(),
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
