@@ -3,11 +3,11 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
-┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
-│No connection             │ scratch.sql                                                                                            │No selection              │
-│                          │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│                          │
-│                          ││   1                                                                                                  ││                          │
-│                          ││                                                                                                      ││                          │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
+│Connections               │ scratch.sql                                                                                            │No selection              │
+│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│                          │
+│Catalog                   ││   1                                                                                                  ││                          │
+│Select a connection       ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -51,4 +51,4 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W close tab  Ctrl+Tab next
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close

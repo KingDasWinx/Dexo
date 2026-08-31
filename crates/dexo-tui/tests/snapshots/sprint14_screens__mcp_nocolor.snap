@@ -3,11 +3,11 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
 default  no connection  —                                                                           
-┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│No connection             │ scratch.sql                                                            
-│                          │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
-│                          ││   1                                                                  │
-│             ┌MCP profiles──────────────────────────────────────────────────────────┐             │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
+│Connections               │ scratch.sql                                                            
+│No connections — press n  │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
+│Catalog                   ││   1                                                                  │
+│Select a conn┌MCP profiles──────────────────────────────────────────────────────────┐             │
 │             │mcp profile=assistant enabled=false confirm=false                     │             │
 │             │scope allow db.public.*                                               │             │
 │             │scope deny db.public.secrets                                          │             │
@@ -31,4 +31,4 @@ default  no connection  —
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W close t
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter run

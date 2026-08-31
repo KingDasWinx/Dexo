@@ -3,13 +3,13 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
-┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │ scratch.sql                                                            
-│ ▾ local                  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│>  ▸ public  ┌Transfer──────────────────────────────────────────────────────────────┐             │
-│     mysql.us│import orders.csv                                                     │             │
-│             │format=csv strategy=RejectFile                                        │             │
-│             │progress rows=0 bytes=0 running=false                                 │             │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
+│Connections               │ scratch.sql                                                            
+│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
+│Catalog — off┌Transfer──────────────────────────────────────────────────────────────┐             │
+│ ▾ local     │import orders.csv                                                     │             │
+│>  ▸ public  │format=csv strategy=RejectFile                                        │             │
+│     mysql.us│progress rows=0 bytes=0 running=false                                 │             │
 │             │preview:                                                              │             │
 │             │id,name                                                               │             │
 │             │1,ok                                                                  │             │
@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W clos
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter

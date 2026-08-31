@@ -3,13 +3,13 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&snapshot_model(), 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
-│[offline]                 │ scratch.sql                                                                                            │No selection              │
-│ ▾ local                  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│                          │
-│>  ▸ public               ││   1▸select 1                                                                                         ││                          │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
+│Connections               │ scratch.sql                                                                                            │No selection              │
+│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│                          │
+│Catalog — offline         ││   1▸select 1                                                                                         ││                          │
+│ ▾ local                  ││                                                                                                      ││                          │
+│>  ▸ public               ││                                                                                                      ││                          │
 │     mysql.users [restrict││                                                                                                      ││                          │
-│                          ││                                                                                                      ││                          │
-│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -51,4 +51,4 @@ demo  local  public
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+W close tab  Ctrl+Tab next
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close
