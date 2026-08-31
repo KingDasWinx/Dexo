@@ -52,13 +52,12 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 hits.register(HitTarget::Inspector, plan.inspector);
             }
             crate::widgets::grid::render(frame, plan.results, model, hits);
-            render_panel(
+            render_inspector_panel(
                 frame,
                 plan.inspector,
                 model,
-                &inspector_title(model),
                 model.focus == Focus::Inspector,
-                inspector_body(model),
+                hits,
             );
         }
     }
@@ -247,14 +246,7 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             if interactive {
                 hits.register(HitTarget::Inspector, area);
             }
-            render_panel(
-                frame,
-                area,
-                model,
-                &inspector_title(model),
-                true,
-                inspector_body(model),
-            );
+            render_inspector_panel(frame, area, model, true, hits);
         }
     }
 }
@@ -276,8 +268,8 @@ fn context_line(model: &Model) -> String {
     )
 }
 
-fn inspector_title(model: &Model) -> String {
-    format!("Inspector · {}", model.inspector.tab.label())
+fn inspector_title() -> String {
+    "Inspector".into()
 }
 
 fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
@@ -411,7 +403,7 @@ fn properties_tab_body(model: &Model) -> String {
     lines.join("\n")
 }
 
-fn inspector_body(model: &Model) -> String {
+pub(crate) fn inspector_body(model: &Model) -> String {
     if model.inspector.open {
         let mut body = describe_object_inspector(&model.inspector);
         if !model.results.columns().is_empty() {
@@ -560,6 +552,84 @@ fn render_panel(
     body: String,
 ) {
     render_panel_scrolled(frame, area, model, title, focused, body, 0);
+}
+
+fn render_inspector_panel(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    focused: bool,
+    hits: &mut HitMap,
+) {
+    if area.width == 0 || area.height == 0 {
+        return;
+    }
+    if area.width < 2 || area.height < 2 {
+        frame.render_widget(
+            Paragraph::new(inspector_body(model)).scroll((model.inspector.scroll, 0)),
+            area,
+        );
+        return;
+    }
+
+    let block = pane_block(model, &inspector_title(), focused);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.height == 0 {
+        return;
+    }
+
+    let tabs = [
+        (
+            "Props",
+            crate::screens::object_inspector::InspectorTab::Properties,
+        ),
+        ("DDL", crate::screens::object_inspector::InspectorTab::Ddl),
+        (
+            "Deps",
+            crate::screens::object_inspector::InspectorTab::Dependencies,
+        ),
+        (
+            "Privs",
+            crate::screens::object_inspector::InspectorTab::Privileges,
+        ),
+    ];
+    let mut tab_line = String::new();
+    let mut x = inner.x;
+    for (index, (label, tab)) in tabs.iter().enumerate() {
+        if index > 0 {
+            tab_line.push(' ');
+            x = x.saturating_add(1);
+        }
+        let text = if model.inspector.tab == *tab {
+            format!("[{label}]")
+        } else {
+            (*label).into()
+        };
+        let width = text.len() as u16;
+        let remaining = inner.x.saturating_add(inner.width).saturating_sub(x);
+        hits.register(
+            HitTarget::InspectorTab(index),
+            Rect::new(x, inner.y, width.min(remaining), 1),
+        );
+        tab_line.push_str(&text);
+        x = x.saturating_add(width);
+    }
+    frame.render_widget(
+        Paragraph::new(tab_line),
+        Rect::new(inner.x, inner.y, inner.width, 1),
+    );
+
+    let body = Rect::new(
+        inner.x,
+        inner.y.saturating_add(1),
+        inner.width,
+        inner.height.saturating_sub(1),
+    );
+    frame.render_widget(
+        Paragraph::new(inspector_body(model)).scroll((model.inspector.scroll, 0)),
+        body,
+    );
 }
 
 fn render_panel_scrolled(

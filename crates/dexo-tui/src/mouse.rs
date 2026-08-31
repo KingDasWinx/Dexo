@@ -15,6 +15,7 @@ pub enum HitTarget {
     SidebarConnection(usize),
     Editor,
     Inspector,
+    InspectorTab(usize),
     Grid,
     GridRow(usize),
     GridCell { row: usize, col: usize },

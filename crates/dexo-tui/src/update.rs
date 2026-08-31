@@ -9,6 +9,7 @@ use crate::mouse::{
     HitButton, HitTarget, OverlayKind, note_click, overlay_blocks_workbench, top_overlay,
 };
 use ratatui::layout::Rect;
+use ratatui::widgets::Block;
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
@@ -2061,6 +2062,14 @@ fn mouse_workbench(
             effects
         }
         Some(HitTarget::DocumentTabNew) => update(model, Action::NewDocument),
+        Some(HitTarget::InspectorTab(index)) => {
+            let effects = update(model, Action::Focus(FocusTarget::Inspector));
+            if let Some(tab) = crate::screens::object_inspector::InspectorTab::from_index(index) {
+                model.inspector.tab = tab;
+                model.inspector.scroll = 0;
+            }
+            effects
+        }
         Some(HitTarget::Inspector) => update(model, Action::Focus(FocusTarget::Inspector)),
         Some(HitTarget::Explorer) => update(model, Action::Focus(FocusTarget::Explorer)),
         Some(HitTarget::ExplorerNode(index)) => {
@@ -2235,6 +2244,10 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     match model.hits.at(mouse.column, mouse.row) {
+        Some(HitTarget::Inspector | HitTarget::InspectorTab(_)) => {
+            scroll_inspector(model, delta);
+            Vec::new()
+        }
         Some(
             HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_),
         ) => {
@@ -2292,6 +2305,27 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             }
             Focus::Inspector => Vec::new(),
         },
+    }
+}
+
+fn scroll_inspector(model: &mut Model, delta: i32) {
+    let plan = LayoutPlan::for_area_with_document_tabs(
+        Rect::new(0, 0, model.width, model.height),
+        Some(&model.panes),
+        model.tabs.active == 0,
+    );
+    let visible_rows = Block::bordered()
+        .inner(plan.inspector)
+        .height
+        .saturating_sub(1) as usize;
+    let max_scroll = crate::render::inspector_body(model)
+        .lines()
+        .count()
+        .saturating_sub(visible_rows) as u16;
+    if delta < 0 {
+        model.inspector.scroll = model.inspector.scroll.saturating_sub(1);
+    } else {
+        model.inspector.scroll = model.inspector.scroll.saturating_add(1).min(max_scroll);
     }
 }
 

@@ -12,9 +12,20 @@ pub struct ObjectInspector {
     pub restrictions: Vec<String>,
     pub error: Option<String>,
     pub tab: InspectorTab,
+    pub scroll: u16,
 }
 
 impl InspectorTab {
+    pub fn from_index(index: usize) -> Option<Self> {
+        match index {
+            0 => Some(Self::Properties),
+            1 => Some(Self::Ddl),
+            2 => Some(Self::Dependencies),
+            3 => Some(Self::Privileges),
+            _ => None,
+        }
+    }
+
     pub fn next(self) -> Self {
         match self {
             Self::Properties => Self::Ddl,
