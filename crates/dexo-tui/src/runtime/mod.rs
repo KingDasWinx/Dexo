@@ -488,6 +488,11 @@ impl WorkbenchRuntime {
                 object_id,
                 favorite,
             } => self.persist_favorite(project_id, connection_id, object_id, favorite),
+            crate::Effect::CompleteOnboarding => {
+                if let Ok(paths) = AppPaths::discover() {
+                    let _ = crate::entrance::mark_complete(&paths.data_dir);
+                }
+            }
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
     }
