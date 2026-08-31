@@ -1182,6 +1182,16 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.messages.push(format!("file changed on disk: {path}"));
             Vec::new()
         }
+        Action::DocumentAutosaved { id, revision } => {
+            if let Some(document) = model
+                .documents
+                .iter_mut()
+                .find(|document| document.id == id)
+            {
+                document.saved_revision = revision;
+            }
+            Vec::new()
+        }
         Action::ResultsUp => {
             model.results.move_cursor_row(-1, false);
             Vec::new()
@@ -1201,16 +1211,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ResultsPageUp => {
             let height = model.results.viewport().height as i32;
             model.results.move_cursor_row(-height.max(1), false);
-        Action::DocumentAutosaved { id, revision } => {
-            if let Some(document) = model
-                .documents
-                .iter_mut()
-                .find(|document| document.id == id)
-            {
-                document.saved_revision = revision;
-            }
-            Vec::new()
-        }
             Vec::new()
         }
         Action::ResultsPageDown => {
@@ -3406,7 +3406,7 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
                     document.title.clone(),
                     document.content.clone(),
                 )
-            }),
+            })
             .collect();
         model.recovery.documents = state
             .recovery
