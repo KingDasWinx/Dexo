@@ -160,14 +160,21 @@ impl SchemaDiffScreen {
 
     pub fn toggle_added(&mut self) {
         self.show_added = !self.show_added;
+        self.clamp_selection();
     }
 
     pub fn toggle_removed(&mut self) {
         self.show_removed = !self.show_removed;
+        self.clamp_selection();
     }
 
     pub fn toggle_changed(&mut self) {
         self.show_changed = !self.show_changed;
+        self.clamp_selection();
+    }
+
+    pub fn clamp_selection(&mut self) {
+        self.selected = self.selected.min(self.filtered().len().saturating_sub(1));
     }
 
     pub fn confirm(&mut self) {
@@ -253,5 +260,15 @@ mod tests {
         screen.confirm();
         screen.apply();
         assert!(screen.applied);
+    }
+
+    #[test]
+    fn filters_clamp_the_selection_to_remaining_entries() {
+        let mut screen = SchemaDiffScreen::fixture();
+        screen.selected = 2;
+
+        screen.toggle_changed();
+
+        assert_eq!(screen.selected, 1);
     }
 }

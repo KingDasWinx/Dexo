@@ -539,6 +539,66 @@ fn wheel_moves_security_selection() {
 }
 
 #[test]
+fn wheel_keeps_schema_diff_and_security_selection_in_the_popup_viewport() {
+    let mut schema_model = Model {
+        schema_diff: dexo_tui::screens::schema_diff::SchemaDiffScreen {
+            open: true,
+            entries: (0..30)
+                .map(|index| dexo_tui::screens::schema_diff::DiffEntry {
+                    kind: "added",
+                    object: format!("table_{index}"),
+                    risk: "safe".into(),
+                })
+                .collect(),
+            ..dexo_tui::screens::schema_diff::SchemaDiffScreen::default()
+        },
+        ..Model::default()
+    };
+    let (x, y) = (schema_model.width / 2, schema_model.height / 2);
+    for _ in 0..20 {
+        update(
+            &mut schema_model,
+            mouse(
+                crossterm::event::MouseEventKind::ScrollDown,
+                x,
+                y,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+    }
+    paint(&mut schema_model);
+    assert_ne!(
+        schema_model
+            .hits
+            .center(HitTarget::ListRow(schema_model.schema_diff.selected)),
+        (0, 0)
+    );
+
+    let mut security_model = Model::default();
+    security_model.security.open = true;
+    security_model.security.principals = (0..30).map(|index| format!("role_{index}")).collect();
+    let (x, y) = (security_model.width / 2, security_model.height / 2);
+    for _ in 0..20 {
+        update(
+            &mut security_model,
+            mouse(
+                crossterm::event::MouseEventKind::ScrollDown,
+                x,
+                y,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+    }
+    paint(&mut security_model);
+    assert_ne!(
+        security_model
+            .hits
+            .center(HitTarget::ListRow(security_model.security.selected)),
+        (0, 0)
+    );
+}
+
+#[test]
 fn wheel_scrolls_transfer_preview_without_changing_focus() {
     let mut model = Model {
         transfer: dexo_tui::screens::transfer::TransferScreen::sample_preview(),

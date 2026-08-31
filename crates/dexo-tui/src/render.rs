@@ -961,14 +961,39 @@ fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     let popup = centered(area, 80, 18);
     let lines = model.schema_diff.lines();
+    let entries = model.schema_diff.filtered();
+    let entry_count = entries.len();
+    let script_lines = model.schema_diff.script.lines().count();
+    let entry_start = lines
+        .len()
+        .saturating_sub(entry_count.saturating_add(script_lines).saturating_add(1));
+    let selected_line = entry_start.saturating_add(
+        model
+            .schema_diff
+            .selected
+            .min(entry_count.saturating_sub(1)),
+    );
+    let offset = scroll_to_selection(
+        selected_line,
+        0,
+        lines.len(),
+        popup_inner(popup).height as usize,
+    );
+    let visible = lines
+        .iter()
+        .skip(offset)
+        .take(popup_inner(popup).height as usize)
+        .cloned()
+        .collect::<Vec<_>>();
     paint_popup(
         frame,
         popup,
         Block::bordered().title("Schema diff"),
-        lines.join("\n"),
+        visible.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
+    for_popup_lines(popup, &visible, |i, line, rect| {
+        let source_index = offset + i;
         if line.starts_with("filters ") {
             register_label(
                 hits,
@@ -1006,6 +1031,9 @@ fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 "apply=",
                 HitTarget::Button(HitButton::ApplyDiff),
             );
+        }
+        if (entry_start..entry_start.saturating_add(entry_count)).contains(&source_index) {
+            hits.register(HitTarget::ListRow(source_index - entry_start), rect);
         }
     });
 }
@@ -1053,12 +1081,26 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let popup = centered(frame.area(), 40, 12);
     let lines = model.security.lines();
-    render_panel(frame, popup, model, "Security", true, lines.join("\n"));
+    let offset = scroll_to_selection(
+        model.security.selected,
+        0,
+        model.security.principals.len(),
+        popup_inner(popup).height as usize,
+    );
+    let visible = lines
+        .iter()
+        .skip(offset)
+        .take(popup_inner(popup).height as usize)
+        .cloned()
+        .collect::<Vec<_>>();
+    render_panel(frame, popup, model, "Security", true, visible.join("\n"));
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if (line.starts_with('>') || line.starts_with("  ")) && i < model.security.principals.len()
+    for_popup_lines(popup, &visible, |i, line, rect| {
+        let source_index = offset + i;
+        if (line.starts_with('>') || line.starts_with("  "))
+            && source_index < model.security.principals.len()
         {
-            hits.register(HitTarget::ListRow(i), rect);
+            hits.register(HitTarget::ListRow(source_index), rect);
         }
     });
 }
