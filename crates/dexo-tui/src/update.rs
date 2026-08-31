@@ -1505,12 +1505,12 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         return Vec::new();
     }
     match mouse.kind {
-        MouseEventKind::Down(_) => handle_mouse_down(model, mouse),
+        MouseEventKind::Down(MouseButton::Left) => handle_mouse_down(model, mouse),
         MouseEventKind::Drag(MouseButton::Left) if model.drag.is_some() => {
             handle_mouse_drag(model, mouse);
             Vec::new()
         }
-        MouseEventKind::Up(_) if model.drag.is_some() => {
+        MouseEventKind::Up(MouseButton::Left) if model.drag.is_some() => {
             model.drag = None;
             Vec::new()
         }

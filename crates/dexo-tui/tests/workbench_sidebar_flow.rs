@@ -122,6 +122,28 @@ fn enter_on_sidebar_connection_emits_connect() {
 }
 
 #[test]
+fn right_clicking_sidebar_connection_does_not_connect() {
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+    paint(&mut model);
+    let (column, row) = model.hits.center(HitTarget::SidebarConnection(0));
+
+    let effects = update(
+        &mut model,
+        Action::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Right),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+
+    assert!(effects.is_empty());
+    assert_eq!(model.explorer.connection_cursor, 0);
+    assert_ne!(model.explorer.sidebar_focus, SidebarFocus::Connections);
+}
+
+#[test]
 fn ready_connection_returns_focus_to_catalog_and_editor() {
     let mut model = Model {
         focus: Focus::Explorer,
