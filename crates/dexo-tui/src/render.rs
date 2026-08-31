@@ -63,6 +63,10 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         }
     }
     crate::widgets::status::render(frame, plan.status, model);
+    if model.onboarding.open {
+        render_onboarding(frame, model, hits);
+        return;
+    }
     if model.palette.open {
         render_palette(frame, model, hits);
     }
@@ -141,6 +145,73 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.editor.snippet_open {
         render_snippets(frame, model, hits);
     }
+}
+
+fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    frame.render_widget(Clear, area);
+    register_overlay(hits, area);
+
+    let compact = area.width < 60 || area.height < 18;
+    let frame_idx = model
+        .onboarding
+        .logo_frame
+        .min(model.onboarding.logo_frames.len().saturating_sub(1));
+    let logo = model
+        .onboarding
+        .logo_frames
+        .get(frame_idx)
+        .cloned()
+        .unwrap_or_else(crate::entrance::static_logo_frame);
+
+    let mut lines: Vec<String> = Vec::new();
+    if compact {
+        lines.push("DEXO".into());
+        lines.push(String::new());
+        lines.push("Welcome".into());
+        lines.push("Ctrl+P  palette".into());
+        lines.push("Ctrl+Enter  run".into());
+        lines.push("F1  help".into());
+        lines.push(String::new());
+        lines.push("[Get started]".into());
+    } else {
+        lines.push("Welcome".into());
+        lines.push(String::new());
+        for row in &logo.rows {
+            lines.push(
+                row.iter()
+                    .map(|cell| cell.symbol.as_str())
+                    .collect::<String>(),
+            );
+        }
+        lines.push(String::new());
+        lines.push("Ctrl+P opens the command palette.".into());
+        lines.push("Ctrl+Enter runs the SQL under the cursor.".into());
+        lines.push("F1 opens help.".into());
+        lines.push(String::new());
+        lines.push("[Get started]".into());
+    }
+
+    let popup = centered(
+        area,
+        if compact { area.width.saturating_sub(2).max(20) } else { 72 },
+        if compact {
+            area.height.saturating_sub(2).max(10)
+        } else {
+            (lines.len() as u16).saturating_add(2).min(area.height)
+        },
+    );
+    paint_popup(
+        frame,
+        popup,
+        overlay_block(model, "DEXO"),
+        lines.join("\n"),
+    );
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.contains("Get started") {
+            hits.register(HitTarget::Button(HitButton::GetStarted), rect);
+        }
+    });
 }
 
 fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
