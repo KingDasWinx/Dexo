@@ -195,14 +195,20 @@ impl StorageWorker {
                         }
                         StorageCommand::SaveDocument(request) => {
                             let repo = DocumentRepository::new(db.connection());
-                            let _ = repo.save(
-                                &request.document,
-                                None,
-                                &request.document,
-                                &request.content,
-                                Some(request.path.to_string_lossy().as_ref()),
-                                None,
-                            );
+                            if repo
+                                .save(
+                                    &request.document,
+                                    None,
+                                    &request.document,
+                                    &request.content,
+                                    Some(request.path.to_string_lossy().as_ref()),
+                                    None,
+                                )
+                                .is_ok()
+                            {
+                                let _ = RecoveryRepository::new(db.connection())
+                                    .clear(&request.document);
+                            }
                         }
                         StorageCommand::FlushDocuments {
                             project_id,
