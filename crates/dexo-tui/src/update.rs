@@ -187,6 +187,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             persist_history_effect(model)
         }
         Action::CheckpointTick => checkpoint_session(model),
+        Action::OnboardingTick => {
+            if model.onboarding.open && model.onboarding.logo_frames.len() > 1 {
+                model.onboarding.logo_frame =
+                    (model.onboarding.logo_frame + 1) % model.onboarding.logo_frames.len();
+            }
+            Vec::new()
+        }
         Action::TransactionChanged {
             session,
             generation,
@@ -1485,6 +1492,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
 }
 
 fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
+    if model.onboarding.open && !matches!(mouse.kind, MouseEventKind::Down(_)) {
+        return Vec::new();
+    }
     if !model.mouse {
         return Vec::new();
     }
@@ -1501,6 +1511,9 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
 fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
     let hit = model.hits.at(mouse.column, mouse.row);
     let doubled = hit.map(|target| note_click(model, target)).unwrap_or(false);
+    if model.onboarding.open {
+        return mouse_onboarding(model, hit);
+    }
     if model.palette.open {
         return mouse_palette(model, hit);
     }
@@ -1807,6 +1820,14 @@ fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
         }
         _ => Vec::new(),
     }
+}
+
+
+fn mouse_onboarding(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    if matches!(hit, Some(HitTarget::Button(HitButton::GetStarted))) {
+        return complete_onboarding(model);
+    }
+    Vec::new()
 }
 
 fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -2323,6 +2344,9 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
 }
 
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if model.onboarding.open {
+        return handle_onboarding_key(model, key);
+    }
     if key.kind != KeyEventKind::Press {
         return Vec::new();
     }
@@ -3155,6 +3179,29 @@ fn move_palette_selection(model: &mut Model, delta: isize) {
         count,
         crate::palette::popup_list_rows(model.height),
     );
+}
+
+
+fn complete_onboarding(model: &mut Model) -> Vec<Effect> {
+    model.onboarding.open = false;
+    vec![Effect::CompleteOnboarding]
+}
+
+fn handle_onboarding_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Enter | KeyCode::Esc | KeyCode::Char(' ') => complete_onboarding(model),
+        KeyCode::F(1) => {
+            let effects = complete_onboarding(model);
+            toggle_help(model);
+            effects
+        }
+        KeyCode::Char('p') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+            let effects = complete_onboarding(model);
+            open_palette(model);
+            effects
+        }
+        _ => Vec::new(),
+    }
 }
 
 fn close_palette(model: &mut Model) {
