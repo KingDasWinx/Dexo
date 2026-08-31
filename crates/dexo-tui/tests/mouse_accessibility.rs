@@ -276,6 +276,27 @@ fn overlay_click_does_not_fall_through_to_explorer() {
 }
 
 #[test]
+fn completion_popup_blocks_workbench_clicks() {
+    let mut model = Model::default();
+    model.focus = dexo_tui::model::Focus::Editor;
+    model.editor.completion_open = true;
+    model
+        .hits
+        .register(HitTarget::Explorer, Rect::new(0, 0, 20, 10));
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            5,
+            5,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_eq!(model.focus, dexo_tui::model::Focus::Editor);
+}
+
+#[test]
 fn scroll_wheel_moves_palette_selection() {
     let mut model = Model::default();
     update(&mut model, Action::OpenPalette);

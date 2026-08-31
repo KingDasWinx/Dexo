@@ -5,7 +5,9 @@ use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 use crate::action::{Action, Effect, FocusTarget};
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
-use crate::mouse::{HitButton, HitTarget, note_click, overlay_blocks_workbench};
+use crate::mouse::{
+    HitButton, HitTarget, OverlayKind, note_click, overlay_blocks_workbench, top_overlay,
+};
 use ratatui::layout::Rect;
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
@@ -1512,94 +1514,43 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
 fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
     let hit = model.hits.at(mouse.column, mouse.row);
     let doubled = hit.map(|target| note_click(model, target)).unwrap_or(false);
-    if model.onboarding.open {
-        return mouse_onboarding(model, hit);
+    match top_overlay(model) {
+        Some(OverlayKind::Onboarding) => mouse_onboarding(model, hit),
+        Some(OverlayKind::Palette) => mouse_palette(model, hit),
+        Some(OverlayKind::Help) => mouse_help(model, hit),
+        Some(OverlayKind::ResultsMenu) => mouse_results_menu(model, hit),
+        Some(OverlayKind::Review) => mouse_review(model, hit),
+        Some(OverlayKind::DdlPreview) => mouse_ddl_preview(model, hit),
+        Some(OverlayKind::SchemaDiff) => mouse_schema_diff(model, hit),
+        Some(OverlayKind::Transfer) => mouse_transfer(model, hit),
+        Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
+        Some(OverlayKind::Admin) => mouse_admin(model, hit),
+        Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
+        Some(OverlayKind::Connections) => mouse_connections(model, hit, doubled),
+        Some(OverlayKind::Projects) => mouse_projects(model, hit, doubled),
+        Some(OverlayKind::ConfigTransfer) => mouse_config_transfer(model, hit),
+        Some(OverlayKind::SecretPrompt) => mouse_secret(model, hit),
+        Some(OverlayKind::TransactionPrompt) => mouse_transaction(model, hit),
+        Some(OverlayKind::DataQueryPrompt) => mouse_data_query(model, hit),
+        Some(OverlayKind::ConnectionForm) => mouse_connection_form(model, hit),
+        Some(OverlayKind::Settings) => mouse_settings(model, hit),
+        Some(OverlayKind::Recovery) => mouse_recovery(model, hit),
+        Some(OverlayKind::Diagnostics) => mouse_diagnostics(model, hit),
+        Some(OverlayKind::McpAudit) => mouse_mcp_audit(model, hit),
+        Some(OverlayKind::FilePicker) => mouse_file_picker(model, hit, doubled),
+        Some(OverlayKind::Completion) => {
+            if let Some(HitTarget::ListRow(index)) = hit {
+                model.editor.completion_selected = index;
+                update(model, Action::AcceptCompletion)
+            } else {
+                Vec::new()
+            }
+        }
+        Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
+        Some(OverlayKind::History) => mouse_history(model, hit),
+        Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
+        None => mouse_workbench(model, mouse, hit, doubled),
     }
-    if model.palette.open {
-        return mouse_palette(model, hit);
-    }
-    if model.help.open {
-        return mouse_help(model, hit);
-    }
-    if model.results_menu.open {
-        return mouse_results_menu(model, hit);
-    }
-    if model.secret_prompt.open {
-        return mouse_secret(model, hit);
-    }
-    if model.transaction_prompt.open {
-        return mouse_transaction(model, hit);
-    }
-    if model.data.query_prompt.open {
-        return mouse_data_query(model, hit);
-    }
-    if model.projects.open {
-        return mouse_projects(model, hit, doubled);
-    }
-    if model.config_transfer.open {
-        return mouse_config_transfer(model, hit);
-    }
-    if model.connections.open && !model.connection_form.open {
-        return mouse_connections(model, hit, doubled);
-    }
-    if model.connection_form.open {
-        return mouse_connection_form(model, hit);
-    }
-    if model.file_picker.open {
-        return mouse_file_picker(model, hit, doubled);
-    }
-    if model.editor.history_open {
-        return mouse_history(model, hit);
-    }
-    if model.editor.snippet_open {
-        return mouse_snippets(model, hit);
-    }
-    if model.editor.parameter_prompt {
-        return mouse_parameters(model, hit);
-    }
-    if model.admin.open {
-        return mouse_admin(model, hit);
-    }
-    if model.schema_editor.preview.is_some() {
-        return mouse_ddl_preview(model, hit);
-    }
-    if model.schema_diff.open {
-        return mouse_schema_diff(model, hit);
-    }
-    if model.security.open {
-        return mouse_security(model, hit, doubled);
-    }
-    if model.diagnostics.open {
-        return mouse_diagnostics(model, hit);
-    }
-    if model.transfer.open {
-        return mouse_transfer(model, hit);
-    }
-    if model.data.review.is_some() {
-        return mouse_review(model, hit);
-    }
-    if model.mcp_profiles.open {
-        return mouse_mcp_profiles(model, hit);
-    }
-    if model.settings.open {
-        return mouse_settings(model, hit);
-    }
-    if model.recovery.open {
-        return mouse_recovery(model, hit);
-    }
-    if model.mcp_audit.open {
-        return mouse_mcp_audit(model, hit);
-    }
-    if model.editor.completion_open
-        && let Some(HitTarget::ListRow(index)) = hit
-    {
-        model.editor.completion_selected = index;
-        return update(model, Action::AcceptCompletion);
-    }
-    if overlay_blocks_workbench(model) {
-        return Vec::new();
-    }
-    mouse_workbench(model, mouse, hit, doubled)
 }
 
 fn mouse_palette(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {

@@ -67,6 +67,37 @@ pub enum HitButton {
     GetStarted,
 }
 
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum OverlayKind {
+    Onboarding,
+    Palette,
+    Help,
+    ResultsMenu,
+    Review,
+    DdlPreview,
+    SchemaDiff,
+    Transfer,
+    Security,
+    Admin,
+    McpProfiles,
+    Connections,
+    Projects,
+    ConfigTransfer,
+    SecretPrompt,
+    TransactionPrompt,
+    DataQueryPrompt,
+    ConnectionForm,
+    Settings,
+    Recovery,
+    Diagnostics,
+    McpAudit,
+    FilePicker,
+    Completion,
+    Parameters,
+    History,
+    Snippets,
+}
+
 #[derive(Clone, Debug)]
 pub struct LastClick {
     pub target: HitTarget,
@@ -118,33 +149,51 @@ impl HitMap {
     }
 }
 
+pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
+    if model.onboarding.open {
+        return Some(OverlayKind::Onboarding);
+    }
+
+    [
+        (model.editor.snippet_open, OverlayKind::Snippets),
+        (model.editor.history_open, OverlayKind::History),
+        (model.editor.parameter_prompt, OverlayKind::Parameters),
+        (model.editor.completion_open, OverlayKind::Completion),
+        (model.file_picker.open, OverlayKind::FilePicker),
+        (model.mcp_audit.open, OverlayKind::McpAudit),
+        (model.diagnostics.open, OverlayKind::Diagnostics),
+        (model.recovery.open, OverlayKind::Recovery),
+        (model.settings.open, OverlayKind::Settings),
+        (model.connection_form.open, OverlayKind::ConnectionForm),
+        (model.data.query_prompt.open, OverlayKind::DataQueryPrompt),
+        (
+            model.transaction_prompt.open,
+            OverlayKind::TransactionPrompt,
+        ),
+        (model.secret_prompt.open, OverlayKind::SecretPrompt),
+        (model.config_transfer.open, OverlayKind::ConfigTransfer),
+        (model.projects.open, OverlayKind::Projects),
+        (model.connections.open, OverlayKind::Connections),
+        (model.mcp_profiles.open, OverlayKind::McpProfiles),
+        (model.admin.open, OverlayKind::Admin),
+        (model.security.open, OverlayKind::Security),
+        (model.transfer.open, OverlayKind::Transfer),
+        (model.schema_diff.open, OverlayKind::SchemaDiff),
+        (
+            model.schema_editor.preview.is_some(),
+            OverlayKind::DdlPreview,
+        ),
+        (model.data.review.is_some(), OverlayKind::Review),
+        (model.results_menu.open, OverlayKind::ResultsMenu),
+        (model.help.open, OverlayKind::Help),
+        (model.palette.open, OverlayKind::Palette),
+    ]
+    .into_iter()
+    .find_map(|(open, kind)| open.then_some(kind))
+}
+
 pub fn overlay_blocks_workbench(model: &Model) -> bool {
-    model.onboarding.open
-        || model.palette.open
-        || model.help.open
-        || model.results_menu.open
-        || model.secret_prompt.open
-        || model.transaction_prompt.open
-        || model.data.query_prompt.open
-        || model.projects.open
-        || model.config_transfer.open
-        || model.connections.open
-        || model.connection_form.open
-        || model.file_picker.open
-        || model.editor.history_open
-        || model.editor.snippet_open
-        || model.editor.parameter_prompt
-        || model.admin.open
-        || model.schema_editor.preview.is_some()
-        || model.schema_diff.open
-        || model.security.open
-        || model.diagnostics.open
-        || model.transfer.open
-        || model.data.review.is_some()
-        || model.mcp_profiles.open
-        || model.settings.open
-        || model.recovery.open
-        || model.mcp_audit.open
+    top_overlay(model).is_some()
 }
 
 pub fn popup_inner(popup: Rect) -> Rect {
