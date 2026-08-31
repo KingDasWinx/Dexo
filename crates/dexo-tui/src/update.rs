@@ -2163,7 +2163,9 @@ fn mouse_workbench(
             } else {
                 model.results.select_cell(row, col);
             }
-            if pick {
+            if doubled {
+                update(model, Action::OpenResultsMenu)
+            } else if pick {
                 update(model, Action::ToggleResultsPick)
             } else {
                 Vec::new()
@@ -2174,7 +2176,9 @@ fn mouse_workbench(
             close_palette(model);
             model.focus = Focus::Results;
             click_results_row(model, row, extend);
-            if pick {
+            if doubled {
+                update(model, Action::OpenResultsMenu)
+            } else if pick {
                 update(model, Action::ToggleResultsPick)
             } else {
                 Vec::new()

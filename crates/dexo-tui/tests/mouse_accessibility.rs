@@ -347,3 +347,56 @@ fn ctrl_click_toggles_picked_row() {
     );
     assert!(model.results.picked_rows.contains(&2));
 }
+
+#[test]
+fn double_clicking_result_cell_opens_results_action_menu() {
+    use dexo_tui::model::GridModel;
+
+    let mut model = Model::default();
+    *model.results = GridModel::sample_rows(6);
+    model.hits.register(
+        HitTarget::GridCell { row: 2, col: 1 },
+        Rect::new(0, 12, 20, 1),
+    );
+
+    for _ in 0..2 {
+        update(
+            &mut model,
+            mouse(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                2,
+                12,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+    }
+
+    assert_eq!(model.results.selection(), Some((2, 1)));
+    assert!(model.results_menu.open);
+}
+
+#[test]
+fn double_clicking_result_row_opens_results_action_menu() {
+    use dexo_tui::model::GridModel;
+
+    let mut model = Model::default();
+    *model.results = GridModel::sample_rows(6);
+    model
+        .hits
+        .register(HitTarget::GridRow(2), Rect::new(0, 12, 20, 1));
+
+    for _ in 0..2 {
+        update(
+            &mut model,
+            mouse(
+                crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                2,
+                12,
+                crossterm::event::KeyModifiers::NONE,
+            ),
+        );
+    }
+
+    assert_eq!(model.results.selection(), Some((2, 0)));
+    assert!(model.results_menu.open);
+}
