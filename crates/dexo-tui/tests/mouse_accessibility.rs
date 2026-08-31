@@ -109,8 +109,10 @@ fn clicking_explorer_pane_uses_focus_action_path() {
     use dexo_tui::action::FocusTarget;
     use dexo_tui::model::Focus;
 
-    let mut model = Model::default();
-    model.focus = Focus::Editor;
+    let mut model = Model {
+        focus: Focus::Editor,
+        ..Model::default()
+    };
     paint(&mut model);
     let (x, y) = model.hits.center(HitTarget::Explorer);
     assert_ne!((x, y), (0, 0));
