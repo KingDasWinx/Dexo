@@ -4,6 +4,10 @@ use dexo_driver_api::DriverDescriptor;
 use crate::screens::schema_editor::FormField;
 use crate::widgets::form::{FooterFocus, footer_line};
 
+const BASIC_FIELDS: &[&str] = &[
+    "name", "driver", "host", "port", "database", "username", "password",
+];
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectionForm {
     pub open: bool,
@@ -11,6 +15,7 @@ pub struct ConnectionForm {
     pub focus: usize,
     pub errors: Vec<String>,
     pub editing: Option<ConnectionProfile>,
+    pub advanced: bool,
 }
 
 impl Default for ConnectionForm {
@@ -21,6 +26,7 @@ impl Default for ConnectionForm {
             focus: 0,
             errors: Vec::new(),
             editing: None,
+            advanced: false,
         }
     }
 }
@@ -40,6 +46,7 @@ impl ConnectionForm {
             focus: 0,
             errors: Vec::new(),
             editing: Some(profile.clone()),
+            advanced: false,
         };
         set_field(&mut form.fields, "name", &profile.name);
         set_field(&mut form.fields, "driver", &profile.driver);
@@ -79,6 +86,8 @@ impl ConnectionForm {
             set_field(&mut form.fields, "group", group);
         }
         form.sync_descriptor_fields();
+        populate_advanced_fields(&mut form.fields, profile);
+        form.advanced = has_advanced_values(&form.fields);
         form
     }
 
@@ -87,27 +96,70 @@ impl ConnectionForm {
     }
 
     pub fn focus_next(&mut self) {
-        let count = self.item_count();
-        if count == 0 {
-            return;
-        }
-        self.focus = (self.focus + 1) % count;
+        self.move_focus(1);
     }
 
     pub fn focus_prev(&mut self) {
-        let count = self.item_count();
-        if count == 0 {
-            return;
-        }
-        self.focus = if self.focus == 0 {
-            count - 1
-        } else {
-            self.focus - 1
-        };
+        self.move_focus(-1);
     }
 
-    fn item_count(&self) -> usize {
+    fn move_focus(&mut self, delta: i32) {
+        let order = self.focus_order();
+        if order.is_empty() {
+            return;
+        }
+        let current = order
+            .iter()
+            .position(|candidate| *candidate == self.focus)
+            .unwrap_or(0);
+        let next = (current as i32 + delta).rem_euclid(order.len() as i32) as usize;
+        self.focus = order[next];
+    }
+
+    fn focus_order(&self) -> Vec<usize> {
+        let mut order = self.basic_field_indices();
+        order.push(self.advanced_focus_index());
+        if self.advanced {
+            order.extend(self.advanced_field_indices());
+        }
+        order.push(self.fields.len());
+        order.push(self.fields.len() + 1);
+        order
+    }
+
+    pub fn advanced_focus_index(&self) -> usize {
         self.fields.len() + 2
+    }
+
+    pub fn on_advanced(&self) -> bool {
+        self.focus == self.advanced_focus_index()
+    }
+
+    pub fn set_advanced(&mut self, open: bool) {
+        self.advanced = open;
+        if !open && self.focused_label().is_some_and(|label| !is_basic(label)) {
+            self.focus = self.advanced_focus_index();
+        }
+    }
+
+    pub fn toggle_advanced(&mut self) {
+        self.set_advanced(!self.advanced);
+    }
+
+    fn basic_field_indices(&self) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| is_basic(&field.label).then_some(index))
+            .collect()
+    }
+
+    fn advanced_field_indices(&self) -> Vec<usize> {
+        self.fields
+            .iter()
+            .enumerate()
+            .filter_map(|(index, field)| (!is_basic(&field.label)).then_some(index))
+            .collect()
     }
 
     pub fn footer_focus(&self) -> FooterFocus {
@@ -168,6 +220,16 @@ impl ConnectionForm {
 
     pub fn sync_descriptor_fields(&mut self) {
         let driver = field(&self.fields, "driver");
+        let old_len = self.fields.len();
+        let special_focus = if self.focus == old_len {
+            Some(FooterFocus::Submit)
+        } else if self.focus == old_len + 1 {
+            Some(FooterFocus::Cancel)
+        } else if self.focus == old_len + 2 {
+            Some(FooterFocus::Input)
+        } else {
+            None
+        };
         let preserved: Vec<(String, String)> = self
             .fields
             .iter()
@@ -182,11 +244,16 @@ impl ConnectionForm {
         for (label, value) in preserved {
             set_field(&mut self.fields, &label, &value);
         }
-        self.focus = self
-            .fields
-            .iter()
-            .position(|field| field.label == focus_label)
-            .unwrap_or(self.focus.min(self.fields.len().saturating_sub(1)));
+        self.focus = match special_focus {
+            Some(FooterFocus::Submit) => self.fields.len(),
+            Some(FooterFocus::Cancel) => self.fields.len() + 1,
+            Some(FooterFocus::Input) => self.advanced_focus_index(),
+            None => self
+                .fields
+                .iter()
+                .position(|field| field.label == focus_label)
+                .unwrap_or(0),
+        };
     }
 
     pub fn submit(&mut self) -> Option<(NewConnection, String)> {
@@ -222,49 +289,85 @@ impl ConnectionForm {
         }
     }
 
-    fn field_lines(&self) -> Vec<String> {
-        let mut lines = Vec::new();
-        for (index, field) in self.fields.iter().enumerate() {
-            let marker = if index == self.focus { ">" } else { " " };
-            if field.label == "driver" {
-                let name = DriverDescriptor::for_id(&field.value)
-                    .map(|item| item.display_name)
-                    .unwrap_or(field.value.as_str());
-                lines.push(format!("{marker} driver: < {name} >  left/right"));
-                continue;
+    fn field_rows(&self) -> Vec<(Option<usize>, String)> {
+        let mut rows = Vec::new();
+        for index in self.basic_field_indices() {
+            rows.push((Some(index), self.render_field(index)));
+        }
+        let advanced = self.advanced_focus_index();
+        let marker = if self.focus == advanced { ">" } else { " " };
+        rows.push((
+            Some(advanced),
+            format!(
+                "{marker} [{}] Advanced options",
+                if self.advanced { "v" } else { ">" }
+            ),
+        ));
+        if self.advanced {
+            for index in self.advanced_field_indices() {
+                rows.push((Some(index), self.render_field(index)));
             }
-            let value = if field.secret && !field.value.is_empty() {
-                "***"
-            } else {
-                field.value.as_str()
-            };
-            lines.push(format!("{marker} {}: {value}", field.label));
         }
         for error in &self.errors {
-            lines.push(format!("error: {error}"));
+            rows.push((None, format!("error: {error}")));
         }
-        lines
+        rows
+    }
+
+    fn render_field(&self, index: usize) -> String {
+        let field = &self.fields[index];
+        let marker = if index == self.focus { ">" } else { " " };
+        if field.label == "driver" {
+            let name = DriverDescriptor::for_id(&field.value)
+                .map(|item| item.display_name)
+                .unwrap_or(field.value.as_str());
+            return format!("{marker} driver: < {name} >  left/right");
+        }
+        let value = if field.secret && !field.value.is_empty() {
+            "***"
+        } else {
+            field.value.as_str()
+        };
+        format!("{marker} {}: {value}", field.label)
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = self.field_lines();
-        lines.push(footer_line("Submit", self.footer_focus()));
-        lines
-    }
-
-    pub fn visible_lines(&self, rows: usize) -> Vec<String> {
-        let body = self.field_lines();
-        let body_rows = rows.saturating_sub(1).max(1);
-        let focus_line = self.focus.min(self.fields.len().saturating_sub(1));
-        let offset = crate::palette::scroll_to_selection(focus_line, 0, body.len(), body_rows);
-        let mut lines = body
+        let mut lines = self
+            .field_rows()
             .into_iter()
-            .skip(offset)
-            .take(body_rows)
+            .map(|(_, line)| line)
             .collect::<Vec<_>>();
         lines.push(footer_line("Submit", self.footer_focus()));
         lines
     }
+
+    pub fn visible_rows(&self, rows: usize) -> Vec<(Option<usize>, String)> {
+        let body = self.field_rows();
+        let body_rows = rows.saturating_sub(1).max(1);
+        let focus_line = body
+            .iter()
+            .position(|(target, _)| *target == Some(self.focus))
+            .unwrap_or_else(|| body.len().saturating_sub(1));
+        let offset = crate::palette::scroll_to_selection(focus_line, 0, body.len(), body_rows);
+        let mut visible = body
+            .into_iter()
+            .skip(offset)
+            .take(body_rows)
+            .collect::<Vec<_>>();
+        visible.push((None, footer_line("Submit", self.footer_focus())));
+        visible
+    }
+
+    pub fn visible_lines(&self, rows: usize) -> Vec<String> {
+        self.visible_rows(rows)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect()
+    }
+}
+
+fn is_basic(label: &str) -> bool {
+    BASIC_FIELDS.contains(&label)
 }
 
 fn drivers() -> [&'static str; 2] {
@@ -290,6 +393,70 @@ fn next_driver(current: &str, delta: i32) -> &'static str {
         .unwrap_or(0);
     let next = (index as i32 + delta).rem_euclid(known.len() as i32) as usize;
     known[next]
+}
+
+fn populate_advanced_fields(fields: &mut [FormField], profile: &ConnectionProfile) {
+    if let Some(tls) = profile.config.get("tls") {
+        set_json_field(fields, "tls_mode", tls.get("mode"));
+        set_json_field(fields, "ca_file", tls.get("ca_file"));
+        set_json_field(fields, "client_cert", tls.get("client_cert"));
+        set_json_field(fields, "client_key", tls.get("client_key"));
+    }
+    if let Some(ssh) = profile.config.get("ssh") {
+        set_json_field(fields, "ssh_host", ssh.get("host"));
+        set_json_field(fields, "ssh_port", ssh.get("port"));
+        set_json_field(fields, "ssh_user", ssh.get("username"));
+        set_json_field(fields, "ssh_key", ssh.get("key_file"));
+    }
+    if let Some(proxy) = profile.config.get("proxy") {
+        set_json_field(fields, "proxy_kind", proxy.get("kind"));
+        set_json_field(fields, "proxy_host", proxy.get("host"));
+        set_json_field(fields, "proxy_port", proxy.get("port"));
+    }
+    set_option_field(fields, "read_only", profile.policy.read_only);
+    set_option_field(
+        fields,
+        "confirm_destructive",
+        profile.policy.confirm_destructive,
+    );
+    set_option_field(
+        fields,
+        "require_verified_tls",
+        profile.policy.require_verified_tls,
+    );
+    if let Some(value) = profile.policy.max_rows {
+        set_field(fields, "max_rows", &value.to_string());
+    }
+    if let Some(value) = profile.policy.timeout_secs {
+        set_field(fields, "timeout_secs", &value.to_string());
+    }
+}
+
+fn set_json_field(fields: &mut [FormField], label: &str, value: Option<&serde_json::Value>) {
+    let Some(value) = value else {
+        return;
+    };
+    let text = value
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| value.to_string());
+    set_field(fields, label, &text);
+}
+
+fn set_option_field(fields: &mut [FormField], label: &str, value: Option<bool>) {
+    if let Some(value) = value {
+        set_field(fields, label, if value { "true" } else { "false" });
+    }
+}
+
+fn has_advanced_values(fields: &[FormField]) -> bool {
+    fields.iter().any(|field| {
+        if is_basic(&field.label) {
+            return false;
+        }
+        let value = field.value.trim();
+        !(value.is_empty() || field.label == "environment" && value == "local")
+    })
 }
 
 fn blank_fields(driver: &str) -> Vec<FormField> {
@@ -492,7 +659,10 @@ mod tests {
         let dump = form.lines().join("\n");
         assert!(dump.contains("password: ***"));
         assert!(!dump.contains("SUPER_SECRET_SENTINEL"));
-        assert!(dump.contains("tls_mode"));
+        assert!(dump.contains("Advanced options"));
+        assert!(!dump.contains("tls_mode"));
+        form.toggle_advanced();
+        assert!(form.lines().join("\n").contains("tls_mode"));
         let (input, password) = form.submit().unwrap();
         assert_eq!(input.name, "local-pg");
         assert_eq!(password, "SUPER_SECRET_SENTINEL");
@@ -512,7 +682,7 @@ mod tests {
         let mut form = ConnectionForm::open();
         let dump = form.lines().join("\n");
         assert!(dump.contains("< PostgreSQL >"));
-        assert!(dump.contains("tls_mode"));
+        assert!(!dump.contains("tls_mode"));
         form.focus = form
             .fields
             .iter()
@@ -552,9 +722,55 @@ mod tests {
     }
 
     #[test]
+    fn advanced_options_are_collapsed_by_default() {
+        let mut form = ConnectionForm::open();
+        let basic = form.lines().join("\n");
+        for label in [
+            "name:",
+            "driver:",
+            "host:",
+            "port:",
+            "database:",
+            "username:",
+            "password:",
+        ] {
+            assert!(basic.contains(label));
+        }
+        assert!(basic.contains("[>] Advanced options"));
+        assert!(!basic.contains("environment:"));
+        assert!(!basic.contains("ssh_host:"));
+
+        form.focus = form.advanced_focus_index();
+        form.toggle_advanced();
+        let advanced = form.lines().join("\n");
+        assert!(advanced.contains("[v] Advanced options"));
+        assert!(advanced.contains("environment:"));
+        assert!(advanced.contains("ssh_host:"));
+    }
+
+    #[test]
+    fn keyboard_focus_skips_collapsed_fields() {
+        let mut form = ConnectionForm::open();
+        form.focus = form
+            .fields
+            .iter()
+            .position(|field| field.label == "password")
+            .unwrap();
+        form.focus_next();
+        assert!(form.on_advanced());
+        form.focus_next();
+        assert!(form.on_submit());
+        form.focus_prev();
+        form.toggle_advanced();
+        form.focus_next();
+        assert_eq!(form.focused_label(), Some("environment"));
+    }
+
+    #[test]
     fn long_form_scrolls_to_focus_and_keeps_actions() {
         let mut form = ConnectionForm::open();
         assert!(form.fields.len() > 8);
+        form.set_advanced(true);
         form.focus = form.fields.len() - 1;
         let last = form.fields.last().unwrap().label.clone();
         let lines = form.visible_lines(8);

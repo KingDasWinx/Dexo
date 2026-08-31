@@ -1166,7 +1166,18 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             crate::widgets::form::register_footer(hits, rect, line, "Submit");
             return;
         }
-        if i < body_rows {
+        if line.contains("Advanced options") {
+            hits.register(HitTarget::Button(HitButton::ToggleAdvanced), rect);
+            return;
+        }
+        if let Some(index) = model
+            .connection_form
+            .visible_rows(rows)
+            .get(i)
+            .and_then(|(field, _)| *field)
+        {
+            hits.register(HitTarget::FormField(index), rect);
+        } else if i < body_rows {
             hits.register(HitTarget::FormField(offset.saturating_add(i)), rect);
         }
         if line.contains("driver:") {

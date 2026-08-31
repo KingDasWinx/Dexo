@@ -1,6 +1,6 @@
 use dexo_tui::action::Action;
 use dexo_tui::model::Model;
-use dexo_tui::mouse::{HitMap, HitTarget, mouse_action};
+use dexo_tui::mouse::{HitButton, HitMap, HitTarget, mouse_action};
 use dexo_tui::terminal::{RecordingTerminal, TerminalControl, TerminalGuard};
 use dexo_tui::update;
 use ratatui::layout::Rect;
@@ -196,6 +196,32 @@ fn click_palette_item_runs_command() {
     click_target(&mut model, HitTarget::ListRow(0));
     assert!(model.settings.open);
     assert!(!model.palette.open);
+}
+
+#[test]
+fn connection_advanced_options_expand_with_the_mouse() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenConnectionForm);
+    assert!(!model.connection_form.advanced);
+    assert!(!model.connection_form.lines().join("\n").contains("tls_mode:"));
+
+    paint(&mut model);
+    click_target(
+        &mut model,
+        HitTarget::Button(HitButton::ToggleAdvanced),
+    );
+    assert!(model.connection_form.advanced);
+    assert!(model.connection_form.lines().join("\n").contains("tls_mode:"));
+
+    paint(&mut model);
+    let environment = model
+        .connection_form
+        .fields
+        .iter()
+        .position(|field| field.label == "environment")
+        .unwrap();
+    click_target(&mut model, HitTarget::FormField(environment));
+    assert_eq!(model.connection_form.focus, environment);
 }
 
 #[test]

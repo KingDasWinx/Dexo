@@ -1789,6 +1789,12 @@ fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
 
 fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
+        Some(HitTarget::Button(HitButton::ToggleAdvanced)) => {
+            model.connection_form.focus = model.connection_form.advanced_focus_index();
+            model.connection_form.toggle_advanced();
+            Vec::new()
+        }
+
         Some(HitTarget::FormField(index)) => {
             if index < model.connection_form.fields.len() {
                 model.connection_form.focus = index;
@@ -2676,6 +2682,19 @@ fn handle_palette_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 
 fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
+        KeyCode::Enter | KeyCode::Char(' ') if model.connection_form.on_advanced() => {
+            model.connection_form.toggle_advanced();
+            Vec::new()
+        }
+
+        KeyCode::Left if model.connection_form.on_advanced() => {
+            model.connection_form.set_advanced(false);
+            Vec::new()
+        }
+        KeyCode::Right if model.connection_form.on_advanced() => {
+            model.connection_form.set_advanced(true);
+            Vec::new()
+        }
         KeyCode::Esc => {
             model.connection_form.close();
             Vec::new()

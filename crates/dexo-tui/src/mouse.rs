@@ -64,6 +64,7 @@ pub enum HitButton {
     ParentDir,
     ToggleDescending,
     CycleDriver,
+    ToggleAdvanced,
 }
 
 #[derive(Clone, Debug)]
