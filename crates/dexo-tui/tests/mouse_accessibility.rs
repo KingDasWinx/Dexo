@@ -315,6 +315,27 @@ fn scroll_wheel_moves_palette_selection() {
 }
 
 #[test]
+fn clicking_outside_palette_closes_it_without_falling_through() {
+    let mut model = Model::default();
+    model.focus = dexo_tui::model::Focus::Editor;
+    update(&mut model, Action::OpenPalette);
+    paint(&mut model);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            0,
+            0,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert!(!model.palette.open);
+    assert_eq!(model.focus, dexo_tui::model::Focus::Editor);
+}
+
+#[test]
 fn mouse_ignored_when_disabled() {
     let mut model = Model {
         mouse: false,
