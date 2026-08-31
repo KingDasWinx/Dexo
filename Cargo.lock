@@ -1075,6 +1075,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "clap_complete"
+version = "4.6.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3be2ad0423bdbbb0e25bc89add796f3559706d4a95e1bc98e4d9662a957b6a19"
+dependencies = [
+ "clap",
+]
+
+[[package]]
 name = "clap_derive"
 version = "4.6.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1904,6 +1913,7 @@ dependencies = [
  "thiserror 2.0.20",
  "tokio",
  "toml",
+ "ttfx",
  "unicode-width",
  "uuid",
 ]
@@ -6454,6 +6464,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "terminal_size"
+version = "0.4.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "230a1b821ccbd75b185820a1f1ff7b14d21da1e442e22c0863ea5f08771a8874"
+dependencies = [
+ "rustix 1.1.4",
+ "windows-sys 0.59.0",
+]
+
+[[package]]
 name = "terminfo"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -7049,6 +7069,16 @@ name = "try-lock"
 version = "0.2.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e421abadd41a4225275504ea4d6566923418b7f05506fbc9c0fe86ba7396114b"
+
+[[package]]
+name = "ttfx"
+version = "0.3.2"
+source = "git+https://github.com/omacom/ttfx?rev=7203e354498462064b7c0a89375051f65cf2ce99#7203e354498462064b7c0a89375051f65cf2ce99"
+dependencies = [
+ "clap",
+ "clap_complete",
+ "terminal_size",
+]
 
 [[package]]
 name = "twox-hash"

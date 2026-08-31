@@ -32,6 +32,9 @@ ratatui-image.workspace = true
 image.workspace = true
 tempfile.workspace = true
 
+[target.'cfg(unix)'.dependencies]
+ttfx.workspace = true
+
 [dev-dependencies]
 insta.workspace = true
 tempfile.workspace = true
