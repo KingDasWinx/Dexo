@@ -1,4 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+use crossterm::event::{
+    KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+};
 use dexo_app::data::{inspect_value, related_filter};
 use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 
@@ -1505,7 +1507,7 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
     match mouse.kind {
         MouseEventKind::Down(_) => handle_mouse_down(model, mouse),
         MouseEventKind::Drag(MouseButton::Left) if model.drag.is_some() => {
-            resize_pane_drag(model, mouse);
+            handle_mouse_drag(model, mouse);
             Vec::new()
         }
         MouseEventKind::Up(_) if model.drag.is_some() => {
@@ -2128,7 +2130,10 @@ fn mouse_workbench(
                     mouse.row,
                 )
             {
-                let _ = model.active_document_mut().sql.set_cursor(index);
+                let doc = model.active_document_mut();
+                doc.anchor = None;
+                let _ = doc.sql.set_cursor(index);
+                start_editor_selection_drag(model, index, mouse);
             }
             effects
         }
@@ -2192,6 +2197,37 @@ fn start_pane_drag(model: &mut Model, edge: PaneEdge, mouse: MouseEvent) {
         origin_y: mouse.row,
         start_value,
     });
+}
+
+fn start_editor_selection_drag(model: &mut Model, anchor: usize, mouse: MouseEvent) {
+    model.drag = Some(DragState {
+        kind: DragKind::EditorSelect { anchor },
+        origin_x: mouse.column,
+        origin_y: mouse.row,
+        start_value: 0,
+    });
+}
+
+fn handle_mouse_drag(model: &mut Model, mouse: MouseEvent) {
+    match model.drag.map(|drag| drag.kind) {
+        Some(DragKind::PaneDivider(_)) => resize_pane_drag(model, mouse),
+        Some(DragKind::EditorSelect { anchor }) => extend_editor_selection(model, anchor, mouse),
+        None => {}
+    }
+}
+
+fn extend_editor_selection(model: &mut Model, anchor: usize, mouse: MouseEvent) {
+    let plan = LayoutPlan::for_area_with_document_tabs(
+        Rect::new(0, 0, model.width, model.height),
+        Some(&model.panes),
+        model.tabs.active == 0,
+    );
+    if let Some(index) =
+        crate::widgets::editor::char_index_at(model, plan.content, mouse.column, mouse.row)
+    {
+        model.active_document_mut().anchor = Some(anchor);
+        crate::screens::editor::extend_selection_to(model, index);
+    }
 }
 
 fn resize_pane_drag(model: &mut Model, mouse: MouseEvent) {

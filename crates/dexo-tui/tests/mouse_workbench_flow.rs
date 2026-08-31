@@ -190,3 +190,56 @@ fn dragging_inspector_divider_left_increases_inspector_width() {
 
     assert_eq!(model.panes.inspector_width, 38);
 }
+
+#[test]
+fn dragging_in_editor_selects_the_text_between_mouse_positions() {
+    let mut model = Model::default();
+    model.set_sql(
+        &(0..40)
+            .map(|_| "0123456789".repeat(20))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    paint(&mut model);
+    let (column, row) = model.hits.center(HitTarget::Editor);
+
+    update(
+        &mut model,
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+    );
+    update(
+        &mut model,
+        mouse(MouseEventKind::Drag(MouseButton::Left), column + 4, row),
+    );
+
+    let selection = model.active_document().selection().unwrap();
+    assert_eq!(selection.end - selection.start, 4);
+    update(
+        &mut model,
+        mouse(MouseEventKind::Up(MouseButton::Left), column + 4, row),
+    );
+    assert_eq!(model.drag, None);
+}
+
+#[test]
+fn clicking_in_editor_moves_caret_and_clears_existing_selection() {
+    let mut model = Model::default();
+    model.set_sql(
+        &(0..40)
+            .map(|_| "0123456789".repeat(20))
+            .collect::<Vec<_>>()
+            .join("\n"),
+    );
+    model.active_document_mut().anchor = Some(0);
+    let _ = model.active_document_mut().sql.set_cursor(6);
+    paint(&mut model);
+    let (column, row) = model.hits.center(HitTarget::Editor);
+
+    update(
+        &mut model,
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+    );
+
+    assert!(model.active_document().selection().is_none());
+    assert_ne!(model.active_document().cursor(), 6);
+}

@@ -49,6 +49,7 @@ pub enum Focus {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DragKind {
     PaneDivider(PaneEdge),
+    EditorSelect { anchor: usize },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

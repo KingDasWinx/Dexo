@@ -514,6 +514,13 @@ fn apply_move(doc: &mut EditorDocument, cursor: usize, shift: bool) {
     }
 }
 
+pub(crate) fn extend_selection_to(model: &mut Model, cursor: usize) {
+    end_typing(model);
+    let doc = model.active_document_mut();
+    apply_move(doc, cursor, true);
+    reveal_cursor(doc);
+}
+
 pub(crate) fn end_typing(model: &mut Model) {
     let doc = model.active_document_mut();
     if doc.typing {
