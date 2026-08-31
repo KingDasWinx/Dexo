@@ -229,24 +229,15 @@ fn connection_advanced_options_expand_with_the_mouse() {
     let mut model = Model::default();
     update(&mut model, Action::OpenConnectionForm);
     assert!(!model.connection_form.advanced);
-    assert!(
-        !model
-            .connection_form
-            .lines()
-            .join("\n")
-            .contains("tls_mode:")
-    );
+    assert!(!model.connection_form.lines().join("\n").contains("tls_mode:"));
 
     paint(&mut model);
-    click_target(&mut model, HitTarget::Button(HitButton::ToggleAdvanced));
-    assert!(model.connection_form.advanced);
-    assert!(
-        model
-            .connection_form
-            .lines()
-            .join("\n")
-            .contains("tls_mode:")
+    click_target(
+        &mut model,
+        HitTarget::Button(HitButton::ToggleAdvanced),
     );
+    assert!(model.connection_form.advanced);
+    assert!(model.connection_form.lines().join("\n").contains("tls_mode:"));
 
     paint(&mut model);
     let environment = model
