@@ -195,7 +195,7 @@ fn dragging_inspector_divider_left_increases_inspector_width() {
 fn dragging_in_editor_selects_the_text_between_mouse_positions() {
     let mut model = Model::default();
     model.set_sql(
-        &(0..40)
+        (0..40)
             .map(|_| "0123456789".repeat(20))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -225,7 +225,7 @@ fn dragging_in_editor_selects_the_text_between_mouse_positions() {
 fn clicking_in_editor_moves_caret_and_clears_existing_selection() {
     let mut model = Model::default();
     model.set_sql(
-        &(0..40)
+        (0..40)
             .map(|_| "0123456789".repeat(20))
             .collect::<Vec<_>>()
             .join("\n"),
@@ -254,8 +254,10 @@ fn clicking_each_workbench_pane_matches_its_alt_focus_shortcut() {
     ];
 
     for (target, key, focus) in cases {
-        let mut mouse_model = Model::default();
-        mouse_model.focus = Focus::Editor;
+        let mut mouse_model = Model {
+            focus: Focus::Editor,
+            ..Model::default()
+        };
         paint(&mut mouse_model);
         let (column, row) = mouse_model.hits.center(target);
         assert_ne!((column, row), (0, 0), "{target:?} must be painted");
@@ -264,8 +266,10 @@ fn clicking_each_workbench_pane_matches_its_alt_focus_shortcut() {
             mouse(MouseEventKind::Down(MouseButton::Left), column, row),
         );
 
-        let mut keyboard_model = Model::default();
-        keyboard_model.focus = Focus::Editor;
+        let mut keyboard_model = Model {
+            focus: Focus::Editor,
+            ..Model::default()
+        };
         update(
             &mut keyboard_model,
             Action::Key(KeyEvent::new(key, KeyModifiers::ALT)),
