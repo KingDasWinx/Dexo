@@ -186,7 +186,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_operation = None;
             persist_history_effect(model)
         }
-        Action::CheckpointTick => checkpoint_dirty(model),
+        Action::CheckpointTick => checkpoint_session(model),
         Action::TransactionChanged {
             session,
             generation,
@@ -1354,6 +1354,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::Quit => {
             let mut effects = checkpoint_dirty(model);
+            effects.push(flush_documents_effect(model));
             effects.push(persist_layout_effect(model));
             effects.push(Effect::Shutdown);
             effects
@@ -3339,6 +3340,31 @@ fn active_connection_uuid(model: &Model) -> Option<String> {
         .map(|row| row.profile.id.0.to_string())
 }
 
+
+fn flush_documents_effect(model: &Model) -> Effect {
+    Effect::FlushDocuments {
+        project_id: model.project_id.clone(),
+        documents: model
+            .documents
+            .iter()
+            .map(|document| crate::action::FlushedDocument {
+                id: document.id.clone(),
+                title: document.title.clone(),
+                content: document.text(),
+                path: document.path.clone(),
+            })
+            .collect(),
+    }
+}
+
+fn checkpoint_session(model: &Model) -> Vec<Effect> {
+    let mut effects = checkpoint_dirty(model);
+    if model.layout_dirty && !model.project_id.is_empty() {
+        effects.push(persist_layout_effect(model));
+    }
+    effects
+}
+
 fn persist_layout_effect(model: &Model) -> Effect {
     Effect::PersistLayout {
         project_id: model.project_id.clone(),
@@ -3475,7 +3501,8 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     model.project_id = state.active_project.id.0.to_string();
     model.projects.load(state.projects);
     model.projects.touch_recent(&state.active_project.name);
-    if !state.documents.is_empty() {
+    let has_stored_documents = !state.documents.is_empty();
+    if has_stored_documents {
         model.documents = state
             .documents
             .into_iter()
@@ -3483,33 +3510,48 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
             .collect();
         model.active_document = 0;
     }
-    apply_layout(model, state.layout);
-    if state.recovery.needs_recovery() {
-        model.recovery.open = true;
-        model.recovery.transaction = state.recovery.transaction;
-        model.recovery.checkpoints = state
-            .recovery
-            .documents
-            .iter()
-            .map(|document| {
-                (
-                    document.id.clone(),
-                    document.title.clone(),
-                    document.content.clone(),
-                )
-            })
-            .collect();
-        model.recovery.documents = state
-            .recovery
-            .documents
-            .into_iter()
-            .map(|document| document.title)
-            .collect();
+    let recovery = state.recovery;
+    // Recovery documents are autosaves. Restore them even if the previous
+    // process managed to mark itself clean before its final document flush.
+    let should_recover = recovery.needs_recovery() || !recovery.documents.is_empty();
+    if should_recover && !recovery.documents.is_empty() {
+        if !has_stored_documents {
+            model.documents.clear();
+        }
+        restore_recovery_documents(model, recovery.documents);
     }
+    let layout = if should_recover {
+        recovery.layout.or(state.layout)
+    } else {
+        state.layout
+    };
+    apply_layout(model, layout);
     model.connections.load_profiles(state.connections);
     model.editor.snippets = state.snippets;
     apply_saved_settings(model);
 }
+
+fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::RecoveryDocument>) {
+    for checkpoint in documents {
+        let mut recovered = crate::model::EditorDocument::with_text(&checkpoint.content);
+        recovered.id = checkpoint.id;
+        recovered.title = checkpoint.title;
+        if let Some(existing) = model
+            .documents
+            .iter_mut()
+            .find(|document| document.id == recovered.id)
+        {
+            recovered.path = existing.path.clone();
+            *existing = recovered;
+        } else {
+            model.documents.push(recovered);
+        }
+    }
+    model.active_document = model
+        .active_document
+        .min(model.documents.len().saturating_sub(1));
+}
+
 
 fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::EditorDocument {
     let mut document = crate::model::EditorDocument::with_text(&stored.content);

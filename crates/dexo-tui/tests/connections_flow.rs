@@ -2,7 +2,7 @@ use dexo_app::{
     ConnectionId, ConnectionPolicyOverrides, ConnectionProfile, Project, ProjectId, SecretRef,
 };
 use dexo_secrets::{SecretError, SecretStore};
-use dexo_storage::SessionRecoveryState;
+use dexo_storage::{RecoveryDocument, SessionRecoveryState};
 use dexo_tui::action::{Action, Effect};
 use dexo_tui::model::Model;
 use dexo_tui::runtime::connection_manager::connect_with_store;
@@ -100,6 +100,41 @@ fn bootstrap_lists_profiles_without_auto_connecting() {
     assert!(!model.connection.ready);
 }
 
+
+#[test]
+fn bootstrap_restores_checkpoints_automatically_without_a_prompt() {
+    let mut model = Model::default();
+    let bootstrap = BootstrapState {
+        active_project: Project {
+            id: ProjectId(uuid::Uuid::nil()),
+            name: "Default".into(),
+            created_at: "now".into(),
+        },
+        connections: Vec::new(),
+        recovery: SessionRecoveryState {
+            clean_shutdown: true,
+            layout: None,
+            documents: vec![RecoveryDocument {
+                id: "scratch".into(),
+                project_id: uuid::Uuid::nil().to_string(),
+                title: "scratch.sql".into(),
+                content: "select 42".into(),
+                updated_at: "now".into(),
+            }],
+            transaction: "idle".into(),
+        },
+        layout: None,
+        documents: Vec::new(),
+        projects: Vec::new(),
+        snippets: Vec::new(),
+    };
+
+    let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
+
+    assert!(!model.recovery.open);
+    assert_eq!(model.documents.len(), 1);
+    assert_eq!(model.documents[0].text(), "select 42");
+}
 #[test]
 fn secret_required_opens_prompt() {
     let mut model = Model::default();
