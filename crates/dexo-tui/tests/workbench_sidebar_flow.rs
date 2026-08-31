@@ -1,7 +1,9 @@
-use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
 use dexo_tui::action::{Action, Effect};
 use dexo_tui::model::{EditorDocument, Focus, Model};
+use dexo_tui::mouse::{HitMap, HitTarget};
 use dexo_tui::runtime::SessionId;
 use dexo_tui::screens::explorer::SidebarFocus;
 use dexo_tui::update;
@@ -311,6 +313,73 @@ fn checkpoint_autosaves_dirty_document_with_path() {
             .iter()
             .any(|effect| matches!(effect, Effect::AutosaveDocument { .. }))
     );
+}
+
+fn catalog_of(names: &[&str]) -> CatalogList {
+    CatalogList {
+        objects: names
+            .iter()
+            .map(|name| {
+                CatalogObject::new(
+                    ObjectId::new(&format!("table:{name}")),
+                    ObjectKind::Table,
+                    QualifiedName::new(Some("db"), Some("public"), *name),
+                    None,
+                )
+            })
+            .collect(),
+        restrictions: vec![],
+    }
+}
+
+/// Every registered catalog hit must land on the screen row that actually draws
+/// that node, otherwise a click selects the neighbouring object.
+fn assert_catalog_hits_land_on_their_row(model: &Model, labels: &[&str]) {
+    let (width, height) = (80u16, 24u16);
+    let mut hits = HitMap::default();
+    let mut terminal =
+        ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, height)).unwrap();
+    terminal
+        .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+        .unwrap();
+    let screen: Vec<String> = dexo_tui::render::render_to_string(model, width, height)
+        .lines()
+        .map(str::to_string)
+        .collect();
+
+    for (index, label) in labels.iter().enumerate() {
+        let (x, y) = hits.center(HitTarget::ExplorerNode(index));
+        assert_eq!(
+            hits.at(x, y),
+            Some(HitTarget::ExplorerNode(index)),
+            "node {label} has no hit target"
+        );
+        assert!(
+            screen[y as usize].contains(label),
+            "hit for node {label} points at row {y}: {:?}",
+            screen[y as usize]
+        );
+    }
+}
+
+#[test]
+fn catalog_hits_match_rendered_rows_without_saved_connections() {
+    let mut model = Model::default();
+    model.connection.name = "prod".into();
+    model.explorer.replace_roots(catalog_of(&["alpha", "beta"]));
+
+    assert_catalog_hits_land_on_their_row(&model, &["alpha", "beta"]);
+}
+
+#[test]
+fn catalog_hits_match_rendered_rows_when_offline_with_cached_catalog() {
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+    model.connection.name = "prod".into();
+    model.explorer.replace_roots(catalog_of(&["alpha", "beta"]));
+    model.explorer.offline = true;
+
+    assert_catalog_hits_land_on_their_row(&model, &["alpha", "beta"]);
 }
 
 #[test]

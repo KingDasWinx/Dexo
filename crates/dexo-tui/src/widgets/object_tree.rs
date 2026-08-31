@@ -3,27 +3,54 @@ use crate::screens::connections::ConnectionRow;
 use crate::screens::explorer::{ExplorerNode, ExplorerState, NodeState, SidebarFocus};
 use dexo_driver_api::ObjectId;
 
-pub fn chrome_count(state: &ExplorerState) -> usize {
-    let mut n = 0;
-    if state.offline {
-        n += 1;
-    }
-    if !state.search.is_empty() {
-        n += 1;
-    }
-    if !state.filter_name.is_empty() || state.filter_kind.is_some() || state.favorites_only {
-        n += 1;
-    }
-    n
+/// Row layout of the sidebar. `render_sidebar` and the mouse hit map both read
+/// it, so a click always lands on the node drawn under the cursor.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SidebarLayout {
+    /// Rows drawn above the catalog body.
+    pub header_rows: usize,
+    /// Chrome rows the catalog body draws before its first node.
+    pub chrome_rows: usize,
+    /// Scroll offset of the first catalog node drawn.
+    pub offset: usize,
+    /// Catalog nodes drawn, top to bottom.
+    pub nodes: Vec<ObjectId>,
 }
 
-pub fn windowed_ids(state: &ExplorerState, viewport_rows: usize) -> (usize, Vec<ObjectId>) {
+impl SidebarLayout {
+    pub fn node_row(&self, index: usize) -> usize {
+        self.header_rows + self.chrome_rows + index
+    }
+}
+
+pub fn sidebar_layout(
+    state: &ExplorerState,
+    profiles: usize,
+    active_connection: &str,
+    viewport_rows: usize,
+) -> SidebarLayout {
+    // `Connections`, one row per profile (or the empty-state hint), `Catalog`.
+    let header_rows = 2 + profiles.max(1);
+    let body_rows = viewport_rows.saturating_sub(header_rows).max(1);
+    // Both placeholder branches of `render_sidebar` draw one line and no nodes.
+    if active_connection.is_empty() || state.roots.is_empty() {
+        return SidebarLayout {
+            header_rows,
+            chrome_rows: 0,
+            offset: 0,
+            nodes: Vec::new(),
+        };
+    }
+    let chrome_rows = chrome_lines(state, false).len();
     let ids = state.visible_ids();
-    let chrome = chrome_count(state);
-    let tree_rows = viewport_rows.saturating_sub(chrome).max(1);
+    let tree_rows = body_rows.saturating_sub(chrome_rows).max(1);
     let offset = scroll_to_selection(state.selected_index(), state.offset, ids.len(), tree_rows);
-    let window = ids.into_iter().skip(offset).take(tree_rows).collect();
-    (offset, window)
+    SidebarLayout {
+        header_rows,
+        chrome_rows,
+        offset,
+        nodes: ids.into_iter().skip(offset).take(tree_rows).collect(),
+    }
 }
 
 pub fn render_lines(state: &ExplorerState) -> Vec<String> {
@@ -37,6 +64,7 @@ pub fn render_sidebar(
     unicode: bool,
     viewport_rows: usize,
 ) -> Vec<String> {
+    let layout = sidebar_layout(state, profiles.len(), active_connection, viewport_rows);
     let connected = if unicode { "●" } else { "*" };
     let offline = if unicode { "○" } else { "o" };
     let mut lines = vec!["Connections".into()];
@@ -51,11 +79,7 @@ pub fn render_sidebar(
             } else {
                 " "
             };
-            let marker = if row.sessions > 0 {
-                connected
-            } else {
-                offline
-            };
+            let marker = if row.sessions > 0 { connected } else { offline };
             lines.push(format!("{cursor} {marker} {}", row.profile.name));
         }
     }
@@ -64,7 +88,7 @@ pub fn render_sidebar(
     } else {
         "Catalog".into()
     });
-    let catalog_rows = viewport_rows.saturating_sub(lines.len()).max(1);
+    debug_assert_eq!(lines.len(), layout.header_rows);
     if active_connection.is_empty() {
         lines.push("Select a connection".into());
     } else if state.roots.is_empty() {
@@ -74,7 +98,18 @@ pub fn render_sidebar(
             "No objects".into()
         });
     } else {
-        lines.extend(render_visible_inner(state, Some(catalog_rows), false));
+        let mut tree = Vec::new();
+        collect(&state.roots, state, 0, &mut tree);
+        let mut body = chrome_lines(state, false);
+        body.extend(
+            tree.into_iter()
+                .skip(layout.offset)
+                .take(layout.nodes.len()),
+        );
+        if body.is_empty() {
+            body.push("No objects".into());
+        }
+        lines.extend(body);
     }
     lines
 }
@@ -83,26 +118,33 @@ pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Ve
     render_visible_inner(state, viewport_rows, true)
 }
 
-fn render_visible_inner(
-    state: &ExplorerState,
-    viewport_rows: Option<usize>,
-    show_offline_chrome: bool,
-) -> Vec<String> {
-    let mut header = Vec::new();
+/// The non-tree rows drawn above the catalog. `show_offline_chrome` is false in
+/// the sidebar, where the `Catalog — offline` header already says it.
+fn chrome_lines(state: &ExplorerState, show_offline_chrome: bool) -> Vec<String> {
+    let mut lines = Vec::new();
     if show_offline_chrome && state.offline {
-        header.push("[offline]".into());
+        lines.push("[offline]".into());
     }
     if !state.search.is_empty() {
-        header.push(format!("search:{}", state.search));
+        lines.push(format!("search:{}", state.search));
     }
     if !state.filter_name.is_empty() || state.filter_kind.is_some() || state.favorites_only {
-        header.push(format!(
+        lines.push(format!(
             "filter:{} kind:{} fav:{}",
             state.filter_name,
             state.filter_kind.as_deref().unwrap_or("-"),
             state.favorites_only
         ));
     }
+    lines
+}
+
+fn render_visible_inner(
+    state: &ExplorerState,
+    viewport_rows: Option<usize>,
+    show_offline_chrome: bool,
+) -> Vec<String> {
+    let header = chrome_lines(state, show_offline_chrome);
     let mut tree = Vec::new();
     collect(&state.roots, state, 0, &mut tree);
     let tree = window_tree(state, &tree, viewport_rows, header.len());
@@ -245,13 +287,7 @@ mod tests {
     #[test]
     fn sidebar_catalog_without_session_prompts_select() {
         let explorer = ExplorerState::default();
-        let lines = super::render_sidebar(
-            &explorer,
-            &[connection_row("prod", 0)],
-            "",
-            true,
-            8,
-        );
+        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 0)], "", true, 8);
         let text = lines.join("\n");
         assert!(text.contains("Select a connection"), "{text}");
         assert!(!text.contains("No connection"), "{text}");
@@ -261,13 +297,7 @@ mod tests {
     fn sidebar_offline_closed_session_shows_disconnected_marker() {
         let mut explorer = ExplorerState::default();
         explorer.offline = true;
-        let lines = super::render_sidebar(
-            &explorer,
-            &[connection_row("prod", 0)],
-            "prod",
-            true,
-            8,
-        );
+        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 0)], "prod", true, 8);
         let text = lines.join("\n");
         assert!(text.contains("○ prod"), "{text}");
         assert!(!text.contains("● prod"), "{text}");
@@ -280,13 +310,7 @@ mod tests {
     fn sidebar_connected_empty_catalog_shows_no_objects() {
         let mut explorer = ExplorerState::default();
         explorer.offline = false;
-        let lines = super::render_sidebar(
-            &explorer,
-            &[connection_row("prod", 1)],
-            "prod",
-            true,
-            8,
-        );
+        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 1)], "prod", true, 8);
         let text = lines.join("\n");
         assert!(text.contains("No objects"), "{text}");
         assert!(!text.contains("Select a connection"), "{text}");
@@ -301,19 +325,16 @@ mod tests {
             false,
             8,
         );
-        assert!(lines.iter().any(|line| line.contains(" o prod")), "{lines:?}");
+        assert!(
+            lines.iter().any(|line| line.contains(" o prod")),
+            "{lines:?}"
+        );
     }
 
     #[test]
     fn sidebar_connected_row_uses_filled_marker() {
         let explorer = ExplorerState::default();
-        let lines = super::render_sidebar(
-            &explorer,
-            &[connection_row("prod", 1)],
-            "prod",
-            true,
-            8,
-        );
+        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 1)], "prod", true, 8);
         let text = lines.join("\n");
         assert!(text.contains("● prod"), "{text}");
     }

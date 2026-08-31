@@ -548,21 +548,21 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
         return;
     }
     let inner = Block::bordered().inner(area);
-    let sidebar_rows = 2 + model.connections.profiles.len();
     for (index, _) in model.connections.profiles.iter().enumerate() {
         register_line(hits, inner, 1 + index, HitTarget::SidebarConnection(index));
     }
-    let catalog_rows = inner.height.saturating_sub(sidebar_rows as u16).max(1) as usize;
-    let chrome = crate::widgets::object_tree::chrome_count(&model.explorer);
-    let (offset, ids) =
-        crate::widgets::object_tree::windowed_ids(&model.explorer, catalog_rows);
-    for (i, _) in ids.iter().enumerate() {
-        let row = sidebar_rows + chrome + i;
+    let layout = crate::widgets::object_tree::sidebar_layout(
+        &model.explorer,
+        model.connections.profiles.len(),
+        &model.connection.name,
+        (inner.height as usize).max(1),
+    );
+    for (index, _) in layout.nodes.iter().enumerate() {
         register_line(
             hits,
             inner,
-            row,
-            HitTarget::ExplorerNode(offset.saturating_add(i)),
+            layout.node_row(index),
+            HitTarget::ExplorerNode(layout.offset.saturating_add(index)),
         );
     }
 }
