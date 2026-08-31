@@ -317,6 +317,37 @@ fn scroll_wheel_moves_palette_selection() {
 }
 
 #[test]
+fn wheel_only_changes_the_topmost_overlay_selection() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenPalette);
+    model.editor.snippet_open = true;
+    model.editor.snippets = vec![
+        dexo_sql::Snippet {
+            name: "first".into(),
+            body: "select 1".into(),
+        },
+        dexo_sql::Snippet {
+            name: "second".into(),
+            body: "select 2".into(),
+        },
+    ];
+    let (x, y) = (model.width / 2, model.height / 2);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::ScrollDown,
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_eq!(model.palette.selected, 0);
+    assert_eq!(model.editor.snippet_selected, 1);
+}
+
+#[test]
 fn clicking_outside_palette_closes_it_without_falling_through() {
     let mut model = Model::default();
     model.focus = dexo_tui::model::Focus::Editor;

@@ -7,9 +7,7 @@ use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 use crate::action::{Action, Effect, FocusTarget};
 use crate::layout::LayoutPlan;
 use crate::model::{DragKind, DragState, Focus, Model};
-use crate::mouse::{
-    HitButton, HitTarget, OverlayKind, PaneEdge, note_click, overlay_blocks_workbench, top_overlay,
-};
+use crate::mouse::{HitButton, HitTarget, OverlayKind, PaneEdge, note_click, top_overlay};
 use ratatui::layout::Rect;
 use ratatui::widgets::Block;
 
@@ -1516,8 +1514,8 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         }
         MouseEventKind::ScrollUp => handle_mouse_scroll(model, mouse, -1),
         MouseEventKind::ScrollDown => handle_mouse_scroll(model, mouse, 1),
-        MouseEventKind::ScrollLeft => update(model, Action::ResultsLeft),
-        MouseEventKind::ScrollRight => update(model, Action::ResultsRight),
+        MouseEventKind::ScrollLeft => handle_mouse_horizontal_scroll(model, Action::ResultsLeft),
+        MouseEventKind::ScrollRight => handle_mouse_horizontal_scroll(model, Action::ResultsRight),
         _ => Vec::new(),
     }
 }
@@ -2258,11 +2256,12 @@ fn resize_pane_drag(model: &mut Model, mouse: MouseEvent) {
 }
 
 fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<Effect> {
-    if model.palette.open {
+    let overlay = top_overlay(model);
+    if overlay == Some(OverlayKind::Palette) {
         move_palette_selection(model, delta as isize);
         return Vec::new();
     }
-    if model.help.open {
+    if overlay == Some(OverlayKind::Help) {
         if delta < 0 {
             model.help.scroll = model.help.scroll.saturating_sub(1);
         } else {
@@ -2270,7 +2269,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.results_menu.open {
+    if overlay == Some(OverlayKind::ResultsMenu) {
         let count = crate::palette::results_menu_items().len();
         if count > 0 {
             if delta < 0 {
@@ -2282,17 +2281,17 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.file_picker.open {
+    if overlay == Some(OverlayKind::FilePicker) {
         model
             .file_picker
             .move_selection(delta, file_picker_rows(model));
         return Vec::new();
     }
-    if model.editor.completion_open {
+    if overlay == Some(OverlayKind::Completion) {
         crate::screens::editor::move_completion(model, delta);
         return Vec::new();
     }
-    if model.editor.history_open {
+    if overlay == Some(OverlayKind::History) {
         if delta < 0 {
             model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
         } else if !model.editor.history.is_empty() {
@@ -2301,7 +2300,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.editor.snippet_open {
+    if overlay == Some(OverlayKind::Snippets) {
         if delta < 0 {
             model.editor.snippet_selected = model.editor.snippet_selected.saturating_sub(1);
         } else if !model.editor.snippets.is_empty() {
@@ -2310,7 +2309,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.connection_form.open {
+    if overlay == Some(OverlayKind::ConnectionForm) {
         if delta < 0 {
             model.connection_form.focus_prev();
         } else {
@@ -2318,7 +2317,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.schema_diff.open {
+    if overlay == Some(OverlayKind::SchemaDiff) {
         let count = model.schema_diff.filtered().len();
         if count > 0 {
             if delta < 0 {
@@ -2329,7 +2328,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.security.open {
+    if overlay == Some(OverlayKind::Security) {
         if delta < 0 {
             model.security.select_previous();
         } else {
@@ -2337,7 +2336,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.transfer.open {
+    if overlay == Some(OverlayKind::Transfer) {
         model.transfer.scroll = if delta < 0 {
             model.transfer.scroll.saturating_sub(1)
         } else {
@@ -2349,7 +2348,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         };
         return Vec::new();
     }
-    if model.mcp_profiles.open {
+    if overlay == Some(OverlayKind::McpProfiles) {
         if delta < 0 {
             model.mcp_profiles.select_previous();
         } else {
@@ -2357,7 +2356,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.connections.open && !model.connection_form.open {
+    if overlay == Some(OverlayKind::Connections) {
         if delta < 0 {
             model.connections.selected_profile =
                 model.connections.selected_profile.saturating_sub(1);
@@ -2366,7 +2365,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if model.projects.open {
+    if overlay == Some(OverlayKind::Projects) {
         if delta < 0 {
             model.projects.selected = model.projects.selected.saturating_sub(1);
         } else if model.projects.selected + 1 < model.projects.list.len() {
@@ -2374,7 +2373,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if overlay_blocks_workbench(model) {
+    if overlay.is_some() {
         return Vec::new();
     }
     match model.hits.at(mouse.column, mouse.row) {
@@ -2439,6 +2438,14 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             }
             Focus::Inspector => Vec::new(),
         },
+    }
+}
+
+fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effect> {
+    if top_overlay(model).is_some() {
+        Vec::new()
+    } else {
+        update(model, action)
     }
 }
 
