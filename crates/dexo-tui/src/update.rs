@@ -640,7 +640,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::InspectorNextTab => {
-            model.inspector.tab = model.inspector.tab.next();
+            select_inspector_tab(model, model.inspector.tab.next());
             Vec::new()
         }
         Action::NextDataPage => {
@@ -2044,6 +2044,11 @@ fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     }
 }
 
+fn select_inspector_tab(model: &mut Model, tab: crate::screens::object_inspector::InspectorTab) {
+    model.inspector.tab = tab;
+    model.inspector.scroll = 0;
+}
+
 fn mouse_workbench(
     model: &mut Model,
     mouse: MouseEvent,
@@ -2065,8 +2070,7 @@ fn mouse_workbench(
         Some(HitTarget::InspectorTab(index)) => {
             let effects = update(model, Action::Focus(FocusTarget::Inspector));
             if let Some(tab) = crate::screens::object_inspector::InspectorTab::from_index(index) {
-                model.inspector.tab = tab;
-                model.inspector.scroll = 0;
+                select_inspector_tab(model, tab);
             }
             effects
         }

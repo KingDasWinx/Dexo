@@ -54,6 +54,28 @@ fn clicking_ddl_inspector_tab_selects_the_same_tab_as_keyboard_cycle() {
 }
 
 #[test]
+fn keyboard_inspector_tab_cycle_resets_scroll_like_mouse_tab_selection() {
+    let mut keyboard = inspector_with_ddl(100);
+    keyboard.inspector.scroll = 50;
+
+    update(&mut keyboard, Action::InspectorNextTab);
+
+    assert_eq!(keyboard.inspector.scroll, 0);
+
+    let mut mouse_model = inspector_with_ddl(100);
+    mouse_model.inspector.scroll = 50;
+    paint(&mut mouse_model);
+    let (column, row) = mouse_model.hits.center(HitTarget::InspectorTab(1));
+    update(
+        &mut mouse_model,
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+    );
+
+    assert_eq!(keyboard.inspector.tab, mouse_model.inspector.tab);
+    assert_eq!(keyboard.inspector.scroll, mouse_model.inspector.scroll);
+}
+
+#[test]
 fn wheel_over_inspector_scrolls_long_content_without_moving_results() {
     let mut model = inspector_with_ddl(100);
     paint(&mut model);
