@@ -183,8 +183,12 @@ impl StorageWorker {
                             layout,
                             reply,
                         } => {
-                            let result =
-                                LayoutRepository::new(db.connection()).save(&project_id, &layout);
+                            let result = (|| {
+                                LayoutRepository::new(db.connection())
+                                    .save(&project_id, &layout)?;
+                                SessionRecoveryRepository::new(db.connection())
+                                    .checkpoint_layout(&layout, "idle")
+                            })();
                             if let Some(reply) = reply {
                                 let _ = reply.send(result);
                             }
