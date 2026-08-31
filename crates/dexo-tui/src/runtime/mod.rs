@@ -201,6 +201,9 @@ impl WorkbenchRuntime {
             crate::Effect::ReleaseSavepoint { session, name } => {
                 self.release_savepoint(session, name).await
             }
+            crate::Effect::EnsureConnectionSql { connection_id } => {
+                self.ensure_connection_sql(connection_id).await
+            }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
             crate::Effect::PreviewDdl {
@@ -954,6 +957,46 @@ impl WorkbenchRuntime {
                 self.emit(Action::OperationFailed {
                     key: OperationKey::new(OperationId::new(), "", request.document, 0),
                     message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn ensure_connection_sql(&self, connection_id: String) {
+        let result = tokio::task::spawn_blocking({
+            let connection_id = connection_id.clone();
+            move || -> Result<_, String> {
+                let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+                let dir =
+                    dexo_storage::sql_files::ensure_connection_sql_dir(&paths, &connection_id)
+                        .map_err(|error| error.to_string())?;
+                let console = dexo_storage::sql_files::ensure_console_sql(&dir)
+                    .map_err(|error| error.to_string())?;
+                let files = dexo_storage::sql_files::list_sql_files(&dir)
+                    .map_err(|error| error.to_string())?;
+                let content =
+                    std::fs::read_to_string(&console).map_err(|error| error.to_string())?;
+                Ok((files, console, content))
+            }
+        })
+        .await
+        .map_err(|error| error.to_string());
+
+        match result {
+            Ok(Ok((files, console, content))) => {
+                self.emit(Action::ConnectionSqlReady {
+                    connection_id,
+                    files,
+                    console,
+                    content,
+                })
+                .await;
+            }
+            Ok(Err(message)) | Err(message) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
+                    message,
                 })
                 .await;
             }

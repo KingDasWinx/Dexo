@@ -60,17 +60,22 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if ready {
                 model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
                 model.focus = Focus::Editor;
+                let mut effects = Vec::new();
                 if let Some(session) = session {
                     let operation = crate::runtime::OperationId::new();
-                    return vec![Effect::LoadCatalogChildren {
+                    effects.push(Effect::LoadCatalogChildren {
                         parent: None,
                         operation,
                         session,
                         generation,
                         replace_roots: true,
                         include_system: model.explorer.include_system,
-                    }];
+                    });
                 }
+                if let Some(connection_id) = active_connection_uuid(model) {
+                    effects.push(Effect::EnsureConnectionSql { connection_id });
+                }
+                return effects;
             } else {
                 model.explorer.offline = true;
                 return vec![Effect::LoadOfflineCatalog {
@@ -79,6 +84,37 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     generation,
                 }];
             }
+            Vec::new()
+        }
+        Action::ConnectionSqlReady {
+            connection_id,
+            files: _,
+            console,
+            content,
+        } => {
+            if let Some(index) = model
+                .documents
+                .iter()
+                .position(|document| document.path.as_deref() == Some(console.as_path()))
+            {
+                model.active_document = index;
+            } else {
+                let title = console
+                    .file_name()
+                    .and_then(|name| name.to_str())
+                    .unwrap_or("console.sql")
+                    .to_owned();
+                let mut document = crate::model::EditorDocument::new_unique(
+                    title,
+                    Some(console),
+                    Some(connection_id),
+                );
+                document.sql = dexo_sql::SqlDocument::new(content);
+                document.saved_revision = document.sql.revision();
+                model.documents.push(document);
+                model.active_document = model.documents.len() - 1;
+            }
+            model.focus = Focus::Editor;
             Vec::new()
         }
         Action::OpenConnectionForm => {

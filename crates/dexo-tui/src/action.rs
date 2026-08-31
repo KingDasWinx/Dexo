@@ -26,6 +26,12 @@ pub enum Action {
         read_only: bool,
         driver: String,
     },
+    ConnectionSqlReady {
+        connection_id: String,
+        files: Vec<PathBuf>,
+        console: PathBuf,
+        content: String,
+    },
     OpenConnectionForm,
     ConnectionFormError {
         message: String,
@@ -608,6 +614,9 @@ pub enum Effect {
     ReleaseSavepoint {
         session: SessionId,
         name: String,
+    },
+    EnsureConnectionSql {
+        connection_id: String,
     },
     LoadDocument(DocumentIoRequest),
     SaveDocument(DocumentIoRequest),

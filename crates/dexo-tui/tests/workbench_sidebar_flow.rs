@@ -57,6 +57,58 @@ fn ready_connection_returns_focus_to_catalog_and_editor() {
 }
 
 #[test]
+fn connect_opens_console_sql_for_connection() {
+    let connection_id = uuid::Uuid::from_u128(42);
+    let console = std::path::PathBuf::from("/tmp/sql/42/console.sql");
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+
+    let _ = update(
+        &mut model,
+        Action::ConnectionSqlReady {
+            connection_id: connection_id.to_string(),
+            files: vec![console.clone()],
+            console: console.clone(),
+            content: "select 1;".into(),
+        },
+    );
+
+    let doc = model.active_document();
+    assert_eq!(doc.path.as_deref(), Some(console.as_path()));
+    assert_eq!(
+        doc.connection_id.as_deref(),
+        Some(connection_id.to_string().as_str())
+    );
+    assert_eq!(doc.text(), "select 1;");
+}
+
+#[test]
+fn ready_connection_ensures_its_console_sql() {
+    let connection_id = uuid::Uuid::nil().to_string();
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+
+    let effects = update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "prod".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(SessionId(uuid::Uuid::nil())),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
+    );
+
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::EnsureConnectionSql { connection_id: id } if id == &connection_id
+    )));
+}
+
+#[test]
 fn up_on_first_sidebar_connection_stays_in_connections() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
