@@ -67,7 +67,7 @@ pub fn render_sidebar(
     let layout = sidebar_layout(state, profiles.len(), active_connection, viewport_rows);
     let connected = if unicode { "●" } else { "*" };
     let offline = if unicode { "○" } else { "o" };
-    let mut lines = vec!["Connections".into()];
+    let mut lines = vec!["Connections  [n]ew [e]dit".into()];
     if profiles.is_empty() {
         lines.push("No connections — press n".into());
     } else {

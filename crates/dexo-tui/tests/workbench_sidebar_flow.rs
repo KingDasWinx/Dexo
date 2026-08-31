@@ -1,4 +1,4 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
 use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
 use dexo_tui::action::{Action, Effect};
@@ -18,6 +18,68 @@ fn saved_profile() -> ConnectionProfile {
         serde_json::json!({"host":"localhost","port":5432,"username":"u","database":"d"}),
         SecretRef::new("ref-1".into()),
     )
+}
+
+fn paint(model: &mut Model) {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+    let mut hits = HitMap::default();
+    terminal
+        .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+}
+
+fn click_target(model: &mut Model, target: HitTarget) {
+    let (column, row) = model.hits.center(target);
+    let _ = update(
+        model,
+        Action::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+}
+
+#[test]
+fn clicking_sidebar_new_opens_the_connection_form() {
+    let mut model = Model::default();
+    paint(&mut model);
+
+    click_target(
+        &mut model,
+        HitTarget::Button(dexo_tui::mouse::HitButton::New),
+    );
+
+    assert!(model.connection_form.open);
+}
+
+#[test]
+fn clicking_sidebar_edit_opens_the_selected_connection() {
+    let mut alternate = saved_profile();
+    alternate.name = "staging".into();
+    let mut model = Model::default();
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), alternate]);
+    model.focus = Focus::Explorer;
+    model.explorer.connection_cursor = 1;
+    paint(&mut model);
+
+    click_target(
+        &mut model,
+        HitTarget::Button(dexo_tui::mouse::HitButton::Edit),
+    );
+
+    assert_eq!(
+        model
+            .connection_form
+            .editing
+            .as_ref()
+            .map(|profile| profile.name.as_str()),
+        Some("staging")
+    );
 }
 
 #[test]

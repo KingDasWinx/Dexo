@@ -689,6 +689,20 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
         return;
     }
     let inner = Block::bordered().inner(area);
+    register_label(
+        hits,
+        crate::mouse::line_rect(inner, 0),
+        "Connections  [n]ew [e]dit",
+        "[n]ew",
+        HitTarget::Button(HitButton::New),
+    );
+    register_label(
+        hits,
+        crate::mouse::line_rect(inner, 0),
+        "Connections  [n]ew [e]dit",
+        "[e]dit",
+        HitTarget::Button(HitButton::Edit),
+    );
     for (index, _) in model.connections.profiles.iter().enumerate() {
         register_line(hits, inner, 1 + index, HitTarget::SidebarConnection(index));
     }

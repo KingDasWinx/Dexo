@@ -2067,6 +2067,8 @@ fn mouse_workbench(
             effects
         }
         Some(HitTarget::DocumentTabNew) => update(model, Action::NewDocument),
+        Some(HitTarget::Button(HitButton::New)) => update(model, Action::OpenConnectionForm),
+        Some(HitTarget::Button(HitButton::Edit)) => update(model, Action::EditSelectedConnection),
         Some(HitTarget::InspectorTab(index)) => {
             let effects = update(model, Action::Focus(FocusTarget::Inspector));
             if let Some(tab) = crate::screens::object_inspector::InspectorTab::from_index(index) {
