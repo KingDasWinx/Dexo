@@ -672,7 +672,9 @@ profile = "overlap"
         ] {
             let chord = parse_chord("n").unwrap();
             assert_eq!(
-                keymap.resolve(&chord, KeyContext::Explorer).expect("resolve"),
+                keymap
+                    .resolve(&chord, KeyContext::Explorer)
+                    .expect("resolve"),
                 Some("connection.new"),
                 "profile {}",
                 keymap.name

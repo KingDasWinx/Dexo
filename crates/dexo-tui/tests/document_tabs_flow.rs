@@ -66,7 +66,11 @@ fn closing_dirty_file_document_waits_for_the_save_to_land() {
 
     let effects = update(&mut model, Action::CloseDocument);
 
-    assert_eq!(model.documents.len(), 2, "the buffer is the only copy so far");
+    assert_eq!(
+        model.documents.len(),
+        2,
+        "the buffer is the only copy so far"
+    );
     assert_eq!(model.active_document().id, id);
     assert!(effects.iter().any(|effect| {
         matches!(

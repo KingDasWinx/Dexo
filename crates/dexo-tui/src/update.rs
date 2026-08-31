@@ -478,9 +478,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
         }
         Action::ExplorerExpand => {
-            if model.explorer.sidebar_focus
-                == crate::screens::explorer::SidebarFocus::Connections
-            {
+            if model.explorer.sidebar_focus == crate::screens::explorer::SidebarFocus::Connections {
                 activate_sidebar_connection(model)
             } else {
                 expand_or_open_selected(model)
@@ -593,11 +591,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::NewDocument => {
             let connection_id = active_connection_uuid(model);
             let title = format!("query-{}.sql", model.documents.len());
-            model.documents.push(crate::model::EditorDocument::new_unique(
-                title,
-                None,
-                connection_id,
-            ));
+            model
+                .documents
+                .push(crate::model::EditorDocument::new_unique(
+                    title,
+                    None,
+                    connection_id,
+                ));
             model.active_document = model.documents.len() - 1;
             Vec::new()
         }
@@ -1185,7 +1185,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::DocumentAutosaved { id, revision } => {
-            if let Some(document) = model.documents.iter_mut().find(|document| document.id == id) {
+            if let Some(document) = model
+                .documents
+                .iter_mut()
+                .find(|document| document.id == id)
+            {
                 document.saved_revision = revision;
             }
             Vec::new()
@@ -2214,7 +2218,9 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     match model.hits.at(mouse.column, mouse.row) {
-        Some(HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_)) => {
+        Some(
+            HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_),
+        ) => {
             if delta < 0 {
                 update(model, Action::ExplorerUp)
             } else {
@@ -2766,9 +2772,7 @@ fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Char('n') => update(model, Action::OpenConnectionForm),
-        KeyCode::Char('e') => {
-            update(model, Action::EditSelectedConnection)
-        }
+        KeyCode::Char('e') => update(model, Action::EditSelectedConnection),
         KeyCode::Char('d') => update(model, Action::DuplicateConnection),
         KeyCode::Char('t') => update(model, Action::TestConnection),
         KeyCode::Char('x') => update(model, Action::DeleteConnection),
@@ -2863,8 +2867,7 @@ fn move_sidebar_selection(model: &mut Model, delta: i32) {
             model.explorer.sidebar_focus = SidebarFocus::Catalog;
         }
         (SidebarFocus::Catalog, -1)
-            if model.explorer.selected_index() == 0
-                && !model.connections.profiles.is_empty() =>
+            if model.explorer.selected_index() == 0 && !model.connections.profiles.is_empty() =>
         {
             model.explorer.sidebar_focus = SidebarFocus::Connections;
             model.explorer.connection_cursor = model.connections.profiles.len() - 1;
@@ -3289,7 +3292,7 @@ fn checkpoint_dirty(model: &Model) -> Vec<Effect> {
                 project_id: model.project_id.clone(),
                 title: document.title.clone(),
                 content: document.text(),
-            })
+            }),
         })
         .collect()
 }
@@ -4350,7 +4353,9 @@ fn remove_document(model: &mut Model, index: usize) {
     }
     model.documents.remove(index);
     if model.documents.is_empty() {
-        model.documents.push(crate::model::EditorDocument::scratch());
+        model
+            .documents
+            .push(crate::model::EditorDocument::scratch());
         model.active_document = 0;
     } else {
         if model.active_document > index {

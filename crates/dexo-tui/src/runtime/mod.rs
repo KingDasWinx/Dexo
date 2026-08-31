@@ -1073,7 +1073,6 @@ impl WorkbenchRuntime {
         }
     }
 
-
     async fn persist_layout(&mut self, project_id: String, layout: dexo_storage::WorkbenchLayout) {
         let Some(storage) = &self.storage else {
             return;
