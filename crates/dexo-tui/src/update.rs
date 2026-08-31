@@ -329,8 +329,28 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 .connections
                 .profiles
                 .retain(|row| row.profile.name != name);
+            let closing: Vec<_> = model
+                .connections
+                .sessions
+                .iter()
+                .filter(|row| row.connection == name)
+                .map(|row| row.id)
+                .collect();
+            let mut effects = Vec::new();
+            for session in closing {
+                model.connections.remove_session(session);
+                effects.push(Effect::CloseSession { session });
+            }
+            if model.connection.name == name {
+                model.active_session = None;
+                model.connection.ready = false;
+                model.connection.name.clear();
+                model.explorer.clear();
+                model.explorer.offline = false;
+                model.explorer.stale = false;
+            }
             model.messages.push(format!("deleted {name}"));
-            Vec::new()
+            effects
         }
         Action::ConnectionTested { name, ok, message } => {
             model.messages.push(if ok {
@@ -355,6 +375,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 }
                 model.active_session = None;
                 model.connection.ready = false;
+                return enter_offline_explorer(model);
             }
             Vec::new()
         }
@@ -2915,6 +2936,20 @@ fn move_sidebar_selection(model: &mut Model, delta: i32) {
     }
 }
 
+
+fn enter_offline_explorer(model: &mut Model) -> Vec<Effect> {
+    model.explorer.clear();
+    model.explorer.offline = true;
+    if model.connection.name.is_empty() {
+        return Vec::new();
+    }
+    vec![Effect::LoadOfflineCatalog {
+        connection_id: model.connection.name.clone(),
+        database_name: catalog_database(model),
+        generation: model.session_generation,
+    }]
+}
+
 fn activate_existing_session(
     model: &mut Model,
     profile: &dexo_app::ConnectionProfile,
@@ -2927,6 +2962,7 @@ fn activate_existing_session(
     }
     model.connection.name = profile.name.clone();
     model.connection.ready = true;
+    model.explorer.offline = false;
     model.connection.environment = session.environment.clone();
     model.connection.read_only = session.read_only;
     model.connection.driver = session.driver.clone();

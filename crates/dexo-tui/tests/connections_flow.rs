@@ -350,3 +350,98 @@ fn connection_tested_does_not_auto_connect() {
     );
     assert!(!model.connection.ready);
 }
+
+#[test]
+fn closing_active_session_clears_live_explorer() {
+    use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+
+    let mut model = Model::default();
+    let session = SessionId(uuid::Uuid::from_u128(7));
+    model.connection.name = "prod".into();
+    model.connection.ready = true;
+    model.active_session = Some(session);
+    model.session_generation = 3;
+    model.connections.upsert_session(dexo_tui::screens::connections::SessionRow {
+        id: session,
+        connection: "prod".into(),
+        transaction: dexo_driver_api::TransactionState::Idle,
+        generation: 3,
+        environment: "local".into(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![CatalogObject::new(
+            ObjectId::new("catalog:db"),
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("db"), Some("db"), "db"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+    assert!(!model.explorer.roots.is_empty());
+
+    let effects = update(&mut model, Action::SessionClosed { session });
+
+    assert!(model.active_session.is_none());
+    assert!(!model.connection.ready);
+    assert!(model.explorer.roots.is_empty());
+    assert!(model.explorer.offline);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadOfflineCatalog { .. })),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn deleting_active_connection_clears_explorer() {
+    use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+
+    let mut model = Model::default();
+    let session = SessionId(uuid::Uuid::from_u128(8));
+    model.connections.load_profiles(vec![saved_profile()]);
+    model.connection.name = "prod".into();
+    model.connection.ready = true;
+    model.active_session = Some(session);
+    model.connections.upsert_session(dexo_tui::screens::connections::SessionRow {
+        id: session,
+        connection: "prod".into(),
+        transaction: dexo_driver_api::TransactionState::Idle,
+        generation: 1,
+        environment: "local".into(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![CatalogObject::new(
+            ObjectId::new("catalog:db"),
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("db"), Some("db"), "db"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+
+    let effects = update(
+        &mut model,
+        Action::ProfileDeleted {
+            name: "prod".into(),
+        },
+    );
+
+    assert!(model.connections.profiles.is_empty());
+    assert!(model.connections.sessions.is_empty());
+    assert!(model.active_session.is_none());
+    assert!(!model.connection.ready);
+    assert!(model.connection.name.is_empty());
+    assert!(model.explorer.roots.is_empty());
+    assert!(!model.explorer.offline);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseSession { .. })),
+        "{effects:?}"
+    );
+}
