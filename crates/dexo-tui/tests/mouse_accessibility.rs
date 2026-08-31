@@ -229,15 +229,24 @@ fn connection_advanced_options_expand_with_the_mouse() {
     let mut model = Model::default();
     update(&mut model, Action::OpenConnectionForm);
     assert!(!model.connection_form.advanced);
-    assert!(!model.connection_form.lines().join("\n").contains("tls_mode:"));
+    assert!(
+        !model
+            .connection_form
+            .lines()
+            .join("\n")
+            .contains("tls_mode:")
+    );
 
     paint(&mut model);
-    click_target(
-        &mut model,
-        HitTarget::Button(HitButton::ToggleAdvanced),
-    );
+    click_target(&mut model, HitTarget::Button(HitButton::ToggleAdvanced));
     assert!(model.connection_form.advanced);
-    assert!(model.connection_form.lines().join("\n").contains("tls_mode:"));
+    assert!(
+        model
+            .connection_form
+            .lines()
+            .join("\n")
+            .contains("tls_mode:")
+    );
 
     paint(&mut model);
     let environment = model
@@ -399,4 +408,163 @@ fn double_clicking_result_row_opens_results_action_menu() {
 
     assert_eq!(model.results.selection(), Some((2, 0)));
     assert!(model.results_menu.open);
+}
+
+#[test]
+fn diagnostics_body_click_does_not_open_the_export_picker() {
+    let mut model = Model::default();
+    model.diagnostics.open = true;
+    model.diagnostics.preview = "connection diagnostics".into();
+    paint(&mut model);
+    let (x, y) = (model.width / 2, model.height / 3);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert!(!model.file_picker.open);
+}
+
+#[test]
+fn wheel_moves_connection_form_focus_between_fields() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenConnectionForm);
+    let first = model.connection_form.focus;
+    let (x, y) = (model.width / 2, model.height / 2);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::ScrollDown,
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_ne!(model.connection_form.focus, first);
+}
+
+#[test]
+fn clicking_parameter_field_only_focuses_it() {
+    let mut model = Model::default();
+    model.editor.parameters = vec![dexo_tui::screens::editor::ParameterValue {
+        name: "limit".into(),
+        value: dexo_driver_api::DbValue::Null,
+        sensitive: false,
+    }];
+    model.editor.parameter_prompt = true;
+    paint(&mut model);
+    click_target(&mut model, HitTarget::FormField(0));
+
+    assert!(model.editor.parameter_prompt);
+}
+
+#[test]
+fn mcp_profile_rows_match_the_profile_index() {
+    let mut model = Model::default();
+    model.mcp_profiles.open = true;
+    model.mcp_profiles.load_profiles(vec![
+        dexo_tui::screens::mcp_profiles::McpProfileSummary {
+            name: "reader".into(),
+            enabled: true,
+            scopes: vec![],
+            tools: vec![],
+        },
+        dexo_tui::screens::mcp_profiles::McpProfileSummary {
+            name: "writer".into(),
+            enabled: false,
+            scopes: vec![],
+            tools: vec![],
+        },
+    ]);
+    paint(&mut model);
+    click_target(&mut model, HitTarget::ListRow(1));
+
+    assert_eq!(model.mcp_profiles.selected, 1);
+    assert_eq!(model.mcp_profiles.name, "writer");
+}
+
+#[test]
+fn label_hits_use_terminal_column_widths() {
+    let mut hits = HitMap::default();
+    dexo_tui::mouse::register_label(
+        &mut hits,
+        Rect::new(0, 0, 20, 1),
+        "x界 label",
+        "label",
+        HitTarget::Button(HitButton::Export),
+    );
+
+    assert_eq!(hits.at(4, 0), Some(HitTarget::Button(HitButton::Export)));
+    assert_eq!(hits.at(9, 0), None);
+}
+
+#[test]
+fn wheel_moves_schema_diff_selection() {
+    let mut model = Model::default();
+    model.schema_diff = dexo_tui::screens::schema_diff::SchemaDiffScreen::fixture();
+    let (x, y) = (model.width / 2, model.height / 2);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::ScrollDown,
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_eq!(model.schema_diff.selected, 1);
+}
+
+#[test]
+fn wheel_moves_security_selection() {
+    let mut model = Model::default();
+    model.security.open = true;
+    model.security.principals = vec!["reader".into(), "writer".into()];
+    let (x, y) = (model.width / 2, model.height / 2);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::ScrollDown,
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_eq!(model.security.selected, 1);
+}
+
+#[test]
+fn wheel_scrolls_transfer_preview_without_changing_focus() {
+    let mut model = Model::default();
+    model.transfer = dexo_tui::screens::transfer::TransferScreen::sample_preview();
+    model.transfer.preview = (0..20).map(|index| format!("row {index}")).collect();
+    let (x, y) = (model.width / 2, model.height / 2);
+
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::ScrollDown,
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_eq!(model.transfer.scroll, 1);
+    assert_eq!(
+        model.transfer.footer,
+        dexo_tui::widgets::form::FooterFocus::Input
+    );
 }

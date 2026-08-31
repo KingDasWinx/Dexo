@@ -38,6 +38,7 @@ pub struct TransferScreen {
     pub message: Option<String>,
     pub confirm_restore: bool,
     pub footer: FooterFocus,
+    pub scroll: usize,
 }
 
 impl Default for TransferScreen {
@@ -57,6 +58,7 @@ impl Default for TransferScreen {
             message: None,
             confirm_restore: false,
             footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 }
@@ -78,6 +80,7 @@ impl TransferScreen {
             message: None,
             confirm_restore: false,
             footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
@@ -100,6 +103,7 @@ impl TransferScreen {
             message: None,
             confirm_restore: false,
             footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
@@ -123,6 +127,7 @@ impl TransferScreen {
             message: None,
             confirm_restore: false,
             footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
@@ -147,6 +152,7 @@ impl TransferScreen {
             message: None,
             confirm_restore: false,
             footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 

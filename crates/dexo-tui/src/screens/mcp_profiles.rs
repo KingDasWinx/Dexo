@@ -125,10 +125,22 @@ impl McpProfilesScreen {
             }
             return lines;
         }
-        let mut lines = vec![format!(
+        let mut lines = self
+            .profiles
+            .iter()
+            .enumerate()
+            .map(|(index, profile)| {
+                let marker = if index == self.selected { ">" } else { " " };
+                format!(
+                    "{marker} profile {} enabled={}",
+                    profile.name, profile.enabled
+                )
+            })
+            .collect::<Vec<_>>();
+        lines.push(format!(
             "mcp profile={} enabled={} confirm={}",
             self.name, self.enabled, self.confirm_enable
-        )];
+        ));
         for scope in &self.scopes {
             lines.push(format!("scope {scope}"));
         }

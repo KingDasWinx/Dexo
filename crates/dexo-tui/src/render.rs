@@ -1017,15 +1017,28 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     let popup = centered(area, 72, 16);
     let lines = model.transfer.lines();
+    let (body, footer) = lines.split_at(lines.len().saturating_sub(1));
+    let body_rows = popup_inner(popup).height.saturating_sub(1) as usize;
+    let offset = model
+        .transfer
+        .scroll
+        .min(body.len().saturating_sub(body_rows));
+    let mut visible = body
+        .iter()
+        .skip(offset)
+        .take(body_rows)
+        .cloned()
+        .collect::<Vec<_>>();
+    visible.extend(footer.iter().cloned());
     paint_popup(
         frame,
         popup,
         Block::bordered().title("Transfer"),
-        lines.join("\n"),
+        visible.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if i == 0 {
+    for_popup_lines(popup, &visible, |i, line, rect| {
+        if offset + i == 0 {
             hits.register(HitTarget::FormField(0), rect);
         }
         if line.contains("[Cancel]") {
@@ -1094,8 +1107,8 @@ fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, line, rect| {
-        if line.starts_with("mcp profile=") || i < model.mcp_profiles.profiles.len() {
-            hits.register(HitTarget::ListRow(model.mcp_profiles.selected.min(i)), rect);
+        if i < model.mcp_profiles.profiles.len() {
+            hits.register(HitTarget::ListRow(i), rect);
         }
         if line.contains("revoke") {
             hits.register(HitTarget::Button(HitButton::Revoke), rect);
@@ -1410,7 +1423,10 @@ fn render_recovery(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let popup = centered(frame.area(), 72, 16);
-    let lines = model.diagnostics.lines();
+    let mut lines = model.diagnostics.lines();
+    if !model.diagnostics.writing {
+        lines.push("[Export]".into());
+    }
     paint_popup(
         frame,
         popup,
@@ -1418,8 +1434,14 @@ fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, _, rect| {
-        hits.register(HitTarget::Button(HitButton::Export), rect);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        register_label(
+            hits,
+            rect,
+            line,
+            "[Export]",
+            HitTarget::Button(HitButton::Export),
+        );
     });
 }
 
@@ -1534,16 +1556,22 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .unwrap_or("param");
     let popup = centered(frame.area(), 48, 6);
     let body = format!("{name} = {}", model.editor.parameter_draft);
+    let footer =
+        crate::widgets::form::footer_line("Submit", crate::widgets::form::FooterFocus::Input);
+    let lines = vec![body, footer];
     paint_popup(
         frame,
         popup,
         Block::bordered().title("Parameters"),
-        body.clone(),
+        lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &[body], |_, _, rect| {
-        hits.register(HitTarget::FormField(0), rect);
-        crate::widgets::form::register_footer(hits, rect, "[Submit]  [Cancel]", "Submit");
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if i == 0 {
+            hits.register(HitTarget::FormField(0), rect);
+        } else {
+            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
     });
 }
 

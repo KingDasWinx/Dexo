@@ -1882,9 +1882,8 @@ fn mouse_snippets(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 fn mouse_parameters(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(HitTarget::FooterSubmit | HitTarget::FormField(_)) => {
-            update(model, Action::SubmitParameters)
-        }
+        Some(HitTarget::FormField(_)) => Vec::new(),
+        Some(HitTarget::FooterSubmit) => update(model, Action::SubmitParameters),
         Some(HitTarget::FooterCancel) => {
             model.editor.parameter_prompt = false;
             Vec::new()
@@ -1959,9 +1958,7 @@ fn mouse_security(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> V
 
 fn mouse_diagnostics(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(HitTarget::Button(HitButton::Export) | HitTarget::Overlay)
-            if !model.diagnostics.writing =>
-        {
+        Some(HitTarget::Button(HitButton::Export)) if !model.diagnostics.writing => {
             open_diagnostics_picker(model)
         }
         _ => Vec::new(),
@@ -2311,6 +2308,45 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             model.editor.snippet_selected = (model.editor.snippet_selected + 1)
                 .min(model.editor.snippets.len().saturating_sub(1));
         }
+        return Vec::new();
+    }
+    if model.connection_form.open {
+        if delta < 0 {
+            model.connection_form.focus_prev();
+        } else {
+            model.connection_form.focus_next();
+        }
+        return Vec::new();
+    }
+    if model.schema_diff.open {
+        let count = model.schema_diff.filtered().len();
+        if count > 0 {
+            if delta < 0 {
+                model.schema_diff.selected = model.schema_diff.selected.saturating_sub(1);
+            } else {
+                model.schema_diff.selected = (model.schema_diff.selected + 1).min(count - 1);
+            }
+        }
+        return Vec::new();
+    }
+    if model.security.open {
+        if delta < 0 {
+            model.security.select_previous();
+        } else {
+            model.security.select_next();
+        }
+        return Vec::new();
+    }
+    if model.transfer.open {
+        model.transfer.scroll = if delta < 0 {
+            model.transfer.scroll.saturating_sub(1)
+        } else {
+            model
+                .transfer
+                .scroll
+                .saturating_add(1)
+                .min(model.transfer.lines().len().saturating_sub(1))
+        };
         return Vec::new();
     }
     if model.mcp_profiles.open {

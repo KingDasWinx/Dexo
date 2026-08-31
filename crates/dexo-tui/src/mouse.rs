@@ -2,6 +2,7 @@ use std::time::{Duration, Instant};
 
 use crate::model::Model;
 use ratatui::layout::Rect;
+use unicode_width::UnicodeWidthStr;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum PaneEdge {
@@ -235,11 +236,17 @@ pub fn register_label(hits: &mut HitMap, line: Rect, text: &str, needle: &str, t
     let Some(pos) = text.find(needle) else {
         return;
     };
-    let x = line.x.saturating_add(pos as u16);
+    let x = line
+        .x
+        .saturating_add(text[..pos].width().try_into().unwrap_or(u16::MAX));
     if x >= line.x.saturating_add(line.width) {
         return;
     }
-    let width = (needle.len() as u16).min(line.width.saturating_sub(x.saturating_sub(line.x)));
+    let width = needle
+        .width()
+        .try_into()
+        .unwrap_or(u16::MAX)
+        .min(line.width.saturating_sub(x.saturating_sub(line.x)));
     hits.register(target, Rect::new(x, line.y, width, 1));
 }
 
