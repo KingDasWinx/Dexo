@@ -257,8 +257,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if !model.connections.open && model.focus == Focus::Explorer {
                 model.connections.selected_profile = model.explorer.connection_cursor;
             }
-            if let Some(profile) = model.connections.selected().cloned() {
-                model.connection_form = crate::screens::connection::ConnectionForm::open_edit(&profile);
+            match model.connections.selected().cloned() {
+                Some(profile) => {
+                    model.connection_form =
+                        crate::screens::connection::ConnectionForm::open_edit(&profile);
+                }
+                None => model
+                    .messages
+                    .push("No saved connection to edit — press n to add one.".into()),
             }
             Vec::new()
         }
