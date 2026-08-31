@@ -217,19 +217,18 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
     let popup = centered(
         area,
-        if compact { area.width.saturating_sub(2).max(20) } else { 72 },
+        if compact {
+            area.width.saturating_sub(2).max(20)
+        } else {
+            72
+        },
         if compact {
             area.height.saturating_sub(2).max(10)
         } else {
             (lines.len() as u16).saturating_add(2).min(area.height)
         },
     );
-    paint_popup(
-        frame,
-        popup,
-        overlay_block(model, "DEXO"),
-        lines.join("\n"),
-    );
+    paint_popup(frame, popup, overlay_block(model, "DEXO"), lines.join("\n"));
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.contains("Get started") {
             hits.register(HitTarget::Button(HitButton::GetStarted), rect);
