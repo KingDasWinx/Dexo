@@ -2055,6 +2055,12 @@ fn mouse_workbench(
         Some(HitTarget::WorkbenchTab(index)) => update(model, Action::SwitchTab { index }),
         Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
         Some(HitTarget::DocumentTab(index)) => update(model, Action::SelectDocument { index }),
+        Some(HitTarget::DocumentTabClose(index)) => {
+            let mut effects = update(model, Action::SelectDocument { index });
+            effects.extend(update(model, Action::CloseDocument));
+            effects
+        }
+        Some(HitTarget::DocumentTabNew) => update(model, Action::NewDocument),
         Some(HitTarget::Inspector) => update(model, Action::Focus(FocusTarget::Inspector)),
         Some(HitTarget::Explorer) => update(model, Action::Focus(FocusTarget::Explorer)),
         Some(HitTarget::ExplorerNode(index)) => {

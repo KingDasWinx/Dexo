@@ -1,5 +1,6 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use dexo_tui::model::EditorDocument;
+use dexo_tui::mouse::{HitMap, HitTarget};
 use dexo_tui::{Action, Focus, Model, update};
 
 fn two_documents() -> Model {
@@ -210,4 +211,63 @@ fn compact_sql_workbench_renders_document_tabs() {
     let frame = dexo_tui::render::render_to_string(&model, 60, 20);
 
     assert!(frame.contains("q2.sql"));
+}
+
+#[test]
+fn document_tabs_render_distinct_close_and_new_controls() {
+    let mut model = Model::default();
+    model
+        .documents
+        .push(EditorDocument::new_unique("q2.sql", None, None));
+
+    let frame = dexo_tui::render::render_to_string(&model, 60, 20);
+
+    assert!(frame.contains("×"), "{frame}");
+    assert!(frame.contains("+"), "{frame}");
+}
+
+fn click_target(model: &mut Model, target: HitTarget) {
+    let (column, row) = model.hits.center(target);
+    update(
+        model,
+        Action::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+}
+
+#[test]
+fn clicking_document_tab_close_closes_that_tab() {
+    let mut model = two_documents();
+    model.active_document = 1;
+    let mut hits = HitMap::default();
+    hits.register(
+        HitTarget::DocumentTabClose(0),
+        ratatui::layout::Rect::new(0, 0, 1, 1),
+    );
+    model.hits = hits;
+
+    click_target(&mut model, HitTarget::DocumentTabClose(0));
+
+    assert_eq!(model.documents.len(), 1);
+    assert_eq!(model.active_document().title, "q2.sql");
+}
+
+#[test]
+fn clicking_document_tab_new_creates_bound_document() {
+    let mut model = Model::default();
+    let mut hits = HitMap::default();
+    hits.register(
+        HitTarget::DocumentTabNew,
+        ratatui::layout::Rect::new(0, 0, 1, 1),
+    );
+    model.hits = hits;
+
+    click_target(&mut model, HitTarget::DocumentTabNew);
+
+    assert_eq!(model.documents.len(), 2);
+    assert_eq!(model.active_document().title, "query-1.sql");
 }

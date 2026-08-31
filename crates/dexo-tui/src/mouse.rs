@@ -8,6 +8,8 @@ pub enum HitTarget {
     ResultTab(usize),
     WorkbenchTab(usize),
     DocumentTab(usize),
+    DocumentTabClose(usize),
+    DocumentTabNew,
     Explorer,
     ExplorerNode(usize),
     SidebarConnection(usize),
