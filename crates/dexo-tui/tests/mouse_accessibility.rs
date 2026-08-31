@@ -499,8 +499,10 @@ fn label_hits_use_terminal_column_widths() {
 
 #[test]
 fn wheel_moves_schema_diff_selection() {
-    let mut model = Model::default();
-    model.schema_diff = dexo_tui::screens::schema_diff::SchemaDiffScreen::fixture();
+    let mut model = Model {
+        schema_diff: dexo_tui::screens::schema_diff::SchemaDiffScreen::fixture(),
+        ..Model::default()
+    };
     let (x, y) = (model.width / 2, model.height / 2);
 
     update(
@@ -538,8 +540,10 @@ fn wheel_moves_security_selection() {
 
 #[test]
 fn wheel_scrolls_transfer_preview_without_changing_focus() {
-    let mut model = Model::default();
-    model.transfer = dexo_tui::screens::transfer::TransferScreen::sample_preview();
+    let mut model = Model {
+        transfer: dexo_tui::screens::transfer::TransferScreen::sample_preview(),
+        ..Model::default()
+    };
     model.transfer.preview = (0..20).map(|index| format!("row {index}")).collect();
     let (x, y) = (model.width / 2, model.height / 2);
 
