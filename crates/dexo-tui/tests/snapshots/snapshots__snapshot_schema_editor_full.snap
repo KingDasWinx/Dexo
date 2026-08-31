@@ -3,9 +3,9 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
-│Connections               │┌▸ DDL─────────────────────────────────────────────────────────────────────────────────────────────────┐│No selection              │
-│No connections — press n  ││schema table                                                                                          ││                          │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector───────────────┐
+│Connections  [n]ew [e]dit │┌▸ DDL─────────────────────────────────────────────────────────────────────────────────────────────────┐│[Props] DDL Deps Privs    │
+│No connections — press n  ││schema table                                                                                          ││No selection              │
 │Catalog — offline         ││> target: public.orders                                                                               ││                          │
 │ ▾ local                  ││  columns:                                                                                            ││                          │
 │>  ▸ public               ││  defaults:                                                                                           ││                          │
@@ -51,4 +51,4 @@ demo  local  public
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close
+connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  click panes · drag edges  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close

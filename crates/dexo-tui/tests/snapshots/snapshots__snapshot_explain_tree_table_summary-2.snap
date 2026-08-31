@@ -4,7 +4,7 @@ expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│Connections               │┌▸ Explain─────────────────────────────────────────────────────────────┐
+│Connections  [n]ew [e]dit │┌▸ Explain─────────────────────────────────────────────────────────────┐
 │No connections — press n  ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
 │Catalog — offline         ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
 │ ▾ local                  ││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │

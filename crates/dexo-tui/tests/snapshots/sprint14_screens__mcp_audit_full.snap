@@ -3,9 +3,9 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector · properties──┐
-│Connections               │ scratch.sql ×  +                                                                                       │No selection              │
-│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│                          │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector───────────────┐
+│Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                       │[Props] DDL Deps Privs    │
+│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
 │Catalog                   ││   1                                                                                                  ││                          │
 │Select a connection       ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
@@ -51,4 +51,4 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close
+disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  click panes · drag edges  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close
