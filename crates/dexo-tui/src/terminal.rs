@@ -24,22 +24,37 @@ pub trait TerminalControl {
 pub struct TerminalGuard<B: TerminalControl> {
     backend: B,
     restored: bool,
+    raw: bool,
     mouse: bool,
 }
 
 impl<B: TerminalControl> TerminalGuard<B> {
     pub fn start(backend: B) -> Result<Self, TuiError> {
+        let mut guard = Self::enter(backend)?;
+        guard.enable_raw()?;
+        Ok(guard)
+    }
+
+    pub fn enter(backend: B) -> Result<Self, TuiError> {
         backend.enter()?;
-        if let Err(error) = backend.raw(true) {
-            let _ = backend.leave();
-            let _ = backend.show_cursor();
-            return Err(error);
-        }
         Ok(Self {
             backend,
             restored: false,
+            raw: false,
             mouse: false,
         })
+    }
+
+    pub fn enable_raw(&mut self) -> Result<(), TuiError> {
+        if self.raw {
+            return Ok(());
+        }
+        if let Err(error) = self.backend.raw(true) {
+            self.restore();
+            return Err(error);
+        }
+        self.raw = true;
+        Ok(())
     }
 
     pub fn set_mouse(&mut self, on: bool) -> Result<(), TuiError> {
@@ -59,7 +74,10 @@ impl<B: TerminalControl> TerminalGuard<B> {
             let _ = self.backend.mouse_capture(false);
             self.mouse = false;
         }
-        let _ = self.backend.raw(false);
+        if self.raw {
+            let _ = self.backend.raw(false);
+            self.raw = false;
+        }
         let _ = self.backend.leave();
         let _ = self.backend.show_cursor();
         self.restored = true;
