@@ -12,7 +12,7 @@ use crate::runtime::{OperationId, OperationKey, SessionId};
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, LayoutPreset, PaneLayout};
-use crate::mouse::{HitMap, LastClick};
+use crate::mouse::{HitMap, LastClick, PaneEdge};
 use crate::screens::admin::AdminScreen;
 use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
@@ -44,6 +44,19 @@ pub enum Focus {
     Results,
     Inspector,
     Palette,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DragKind {
+    PaneDivider(PaneEdge),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DragState {
+    pub kind: DragKind,
+    pub origin_x: u16,
+    pub origin_y: u16,
+    pub start_value: u16,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -1005,6 +1018,7 @@ pub struct Model {
     pub panes: PaneLayout,
     pub mouse: bool,
     pub last_click: Option<LastClick>,
+    pub drag: Option<DragState>,
     pub animation: bool,
     pub layout_dirty: bool,
     pub hits: HitMap,
@@ -1050,6 +1064,7 @@ impl Default for Model {
             },
             mouse: true,
             last_click: None,
+            drag: None,
             animation: true,
             layout_dirty: false,
             hits: HitMap::default(),

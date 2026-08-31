@@ -4,6 +4,13 @@ use crate::model::Model;
 use ratatui::layout::Rect;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum PaneEdge {
+    Explorer,
+    Results,
+    Inspector,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HitTarget {
     ResultTab(usize),
     WorkbenchTab(usize),
@@ -14,6 +21,7 @@ pub enum HitTarget {
     ExplorerNode(usize),
     SidebarConnection(usize),
     Editor,
+    PaneDivider(PaneEdge),
     Inspector,
     InspectorTab(usize),
     Grid,

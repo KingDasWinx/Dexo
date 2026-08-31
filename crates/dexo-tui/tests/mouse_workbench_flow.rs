@@ -99,3 +99,94 @@ fn wheel_over_results_does_not_scroll_inspector() {
     assert_eq!(model.inspector.scroll, 0);
     assert_eq!(model.results.selection(), Some((1, 0)));
 }
+
+#[test]
+fn dragging_explorer_divider_resizes_pane_and_releases_capture() {
+    let mut model = Model::default();
+    let divider_x = model.panes.explorer_width;
+    let divider_y = 10;
+    paint(&mut model);
+
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            divider_x,
+            divider_y,
+        ),
+    );
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            divider_x + 10,
+            divider_y,
+        ),
+    );
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Up(MouseButton::Left),
+            divider_x + 10,
+            divider_y,
+        ),
+    );
+
+    assert_eq!(model.panes.explorer_width, 38);
+    assert!(model.layout_dirty);
+    assert_eq!(model.drag, None);
+}
+
+#[test]
+fn dragging_results_divider_up_increases_results_height() {
+    let mut model = Model::default();
+    let divider_x = 80;
+    let divider_y = 37;
+    paint(&mut model);
+
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            divider_x,
+            divider_y,
+        ),
+    );
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            divider_x,
+            divider_y - 5,
+        ),
+    );
+
+    assert_eq!(model.panes.results_height, 17);
+}
+
+#[test]
+fn dragging_inspector_divider_left_increases_inspector_width() {
+    let mut model = Model::default();
+    let divider_x = model.width - model.panes.inspector_width;
+    let divider_y = 10;
+    paint(&mut model);
+
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Down(MouseButton::Left),
+            divider_x,
+            divider_y,
+        ),
+    );
+    update(
+        &mut model,
+        mouse(
+            MouseEventKind::Drag(MouseButton::Left),
+            divider_x - 10,
+            divider_y,
+        ),
+    );
+
+    assert_eq!(model.panes.inspector_width, 38);
+}

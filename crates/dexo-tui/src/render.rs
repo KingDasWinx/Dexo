@@ -6,7 +6,7 @@ use ratatui::widgets::{Block, Clear, Paragraph};
 use crate::layout::LayoutPlan;
 use crate::model::{Focus, Model};
 use crate::mouse::{
-    HitButton, HitMap, HitTarget, overlay_blocks_workbench, popup_inner, register_label,
+    HitButton, HitMap, HitTarget, PaneEdge, overlay_blocks_workbench, popup_inner, register_label,
     register_line, register_overlay,
 };
 use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
@@ -60,6 +60,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 hits,
             );
         }
+    }
+    if !overlay_blocks_workbench(model) && plan.mode != crate::layout::LayoutMode::Compact {
+        register_pane_dividers(hits, plan);
     }
     crate::widgets::status::render(frame, plan.status, model);
     if model.onboarding.open {
@@ -143,6 +146,27 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     if model.editor.snippet_open {
         render_snippets(frame, model, hits);
+    }
+}
+
+fn register_pane_dividers(hits: &mut HitMap, plan: LayoutPlan) {
+    if plan.explorer.width > 0 {
+        hits.register(
+            HitTarget::PaneDivider(PaneEdge::Explorer),
+            Rect::new(plan.content.x, plan.explorer.y, 1, plan.explorer.height),
+        );
+    }
+    if plan.results.height > 0 {
+        hits.register(
+            HitTarget::PaneDivider(PaneEdge::Results),
+            Rect::new(plan.results.x, plan.results.y, plan.results.width, 1),
+        );
+    }
+    if plan.inspector.width > 0 {
+        hits.register(
+            HitTarget::PaneDivider(PaneEdge::Inspector),
+            Rect::new(plan.inspector.x, plan.inspector.y, 1, plan.inspector.height),
+        );
     }
 }
 

@@ -1,12 +1,12 @@
-use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseEvent, MouseEventKind};
+use crossterm::event::{KeyCode, KeyEvent, KeyEventKind, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
 use dexo_app::data::{inspect_value, related_filter};
 use dexo_driver_api::{DbValue, QueryRequest, TransactionState};
 
 use crate::action::{Action, Effect, FocusTarget};
 use crate::layout::LayoutPlan;
-use crate::model::{Focus, Model};
+use crate::model::{DragKind, DragState, Focus, Model};
 use crate::mouse::{
-    HitButton, HitTarget, OverlayKind, note_click, overlay_blocks_workbench, top_overlay,
+    HitButton, HitTarget, OverlayKind, PaneEdge, note_click, overlay_blocks_workbench, top_overlay,
 };
 use ratatui::layout::Rect;
 use ratatui::widgets::Block;
@@ -1504,6 +1504,14 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
     }
     match mouse.kind {
         MouseEventKind::Down(_) => handle_mouse_down(model, mouse),
+        MouseEventKind::Drag(MouseButton::Left) if model.drag.is_some() => {
+            resize_pane_drag(model, mouse);
+            Vec::new()
+        }
+        MouseEventKind::Up(_) if model.drag.is_some() => {
+            model.drag = None;
+            Vec::new()
+        }
         MouseEventKind::ScrollUp => handle_mouse_scroll(model, mouse, -1),
         MouseEventKind::ScrollDown => handle_mouse_scroll(model, mouse, 1),
         MouseEventKind::ScrollLeft => update(model, Action::ResultsLeft),
@@ -1774,8 +1782,6 @@ fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
         _ => Vec::new(),
     }
 }
-
-
 fn mouse_onboarding(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     if matches!(hit, Some(HitTarget::Button(HitButton::GetStarted))) {
         return complete_onboarding(model);
@@ -2069,6 +2075,12 @@ fn mouse_workbench(
         Some(HitTarget::DocumentTabNew) => update(model, Action::NewDocument),
         Some(HitTarget::Button(HitButton::New)) => update(model, Action::OpenConnectionForm),
         Some(HitTarget::Button(HitButton::Edit)) => update(model, Action::EditSelectedConnection),
+        Some(HitTarget::PaneDivider(edge))
+            if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
+        {
+            start_pane_drag(model, edge, mouse);
+            Vec::new()
+        }
         Some(HitTarget::InspectorTab(index)) => {
             let effects = update(model, Action::Focus(FocusTarget::Inspector));
             if let Some(tab) = crate::screens::object_inspector::InspectorTab::from_index(index) {
@@ -2166,6 +2178,46 @@ fn mouse_workbench(
         Some(HitTarget::Grid) => update(model, Action::Focus(FocusTarget::Results)),
         _ => Vec::new(),
     }
+}
+
+fn start_pane_drag(model: &mut Model, edge: PaneEdge, mouse: MouseEvent) {
+    let start_value = match edge {
+        PaneEdge::Explorer => model.panes.explorer_width,
+        PaneEdge::Results => model.panes.results_height,
+        PaneEdge::Inspector => model.panes.inspector_width,
+    };
+    model.drag = Some(DragState {
+        kind: DragKind::PaneDivider(edge),
+        origin_x: mouse.column,
+        origin_y: mouse.row,
+        start_value,
+    });
+}
+
+fn resize_pane_drag(model: &mut Model, mouse: MouseEvent) {
+    let Some(DragState {
+        kind: DragKind::PaneDivider(edge),
+        origin_x,
+        origin_y,
+        start_value,
+    }) = model.drag
+    else {
+        return;
+    };
+    let delta = match edge {
+        PaneEdge::Explorer => i32::from(mouse.column) - i32::from(origin_x),
+        PaneEdge::Results => i32::from(origin_y) - i32::from(mouse.row),
+        PaneEdge::Inspector => i32::from(origin_x) - i32::from(mouse.column),
+    };
+    let value = (i32::from(start_value) + delta).clamp(0, i32::from(u16::MAX)) as u16;
+    match edge {
+        PaneEdge::Explorer => model.panes.explorer_width = value,
+        PaneEdge::Results => model.panes.results_height = value,
+        PaneEdge::Inspector => model.panes.inspector_width = value,
+    }
+    model.panes = model.panes.clamp(model.width, model.height);
+    model.sync_grid_viewport();
+    model.layout_dirty = true;
 }
 
 fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<Effect> {
@@ -2952,8 +3004,6 @@ fn move_sidebar_selection(model: &mut Model, delta: i32) {
         _ => {}
     }
 }
-
-
 fn enter_offline_explorer(model: &mut Model) -> Vec<Effect> {
     model.explorer.clear();
     model.explorer.offline = true;
@@ -3172,8 +3222,6 @@ fn move_palette_selection(model: &mut Model, delta: isize) {
         crate::palette::popup_list_rows(model.height),
     );
 }
-
-
 fn complete_onboarding(model: &mut Model) -> Vec<Effect> {
     model.onboarding.open = false;
     vec![Effect::CompleteOnboarding]
@@ -3378,8 +3426,6 @@ fn active_connection_uuid(model: &Model) -> Option<String> {
         .find(|row| row.profile.name == name)
         .map(|row| row.profile.id.0.to_string())
 }
-
-
 fn flush_documents_effect(model: &Model) -> Effect {
     Effect::FlushDocuments {
         project_id: model.project_id.clone(),
@@ -3590,8 +3636,6 @@ fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::Re
         .active_document
         .min(model.documents.len().saturating_sub(1));
 }
-
-
 fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::EditorDocument {
     let mut document = crate::model::EditorDocument::with_text(&stored.content);
     document.id = stored.id;
