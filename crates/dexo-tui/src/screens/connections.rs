@@ -114,7 +114,16 @@ impl ConnectionsScreen {
             } else {
                 " "
             };
-            let group = row.profile.group_path.as_deref().unwrap_or("/");
+            let name = match row
+                .profile
+                .group_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|group| !group.is_empty())
+            {
+                Some(group) => format!("{group}/{}", row.profile.name),
+                None => row.profile.name.clone(),
+            };
             let read_only = if row.profile.policy.read_only == Some(true) {
                 " ro"
             } else {
@@ -130,8 +139,8 @@ impl ConnectionsScreen {
                 .map(|session| format!(" {:?}", session.transaction))
                 .unwrap_or_default();
             lines.push(format!(
-                "{marker} {group} {} [{}] {status}{tx}{read_only}",
-                row.profile.name, row.profile.environment
+                "{marker} {name} [{}] {status}{tx}{read_only}",
+                row.profile.environment
             ));
         }
         if let Some(intent) = self.intent {
@@ -144,10 +153,7 @@ impl ConnectionsScreen {
             };
             lines.push(format!("choose connection to {action}"));
         } else {
-            lines.push(
-                "Enter connect/switch  c close  t test  e edit  n new  d duplicate  x delete"
-                    .into(),
-            );
+            lines.push("Enter connect  c close  t test  e edit  n new  d dup  x delete".into());
         }
         if let Some(error) = &self.error {
             lines.push(error.clone());
@@ -216,7 +222,25 @@ mod tests {
         assert_eq!(screen.sessions.len(), 1);
         let dump = screen.lines(Some(screen.sessions[0].id)).join("\n");
         assert!(dump.contains("active"));
-        assert!(dump.contains("Enter connect/switch"));
+        assert!(dump.contains("> prod [local] active"));
+        assert!(!dump.contains("/ prod"));
+        assert!(dump.contains("x delete"));
         assert!(!dump.contains("sessions:"));
+        for line in dump.lines() {
+            assert!(
+                line.chars().count() <= 70,
+                "connections popup inner width is 70; line too long: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_profiles_show_path_prefix() {
+        let mut screen = ConnectionsScreen::default();
+        let mut row = profile("db");
+        row.group_path = Some("lab/pg".into());
+        screen.load_profiles(vec![row]);
+        let dump = screen.lines(None).join("\n");
+        assert!(dump.contains("> lab/pg/db [local] offline"));
     }
 }
