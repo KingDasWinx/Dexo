@@ -552,6 +552,10 @@ fn flush_documents(
             None,
         )?;
     }
+    let recovery = RecoveryRepository::new(db.connection());
+    for document in recovery.list_for_project(project_id)? {
+        recovery.clear(&document.id)?;
+    }
     Ok(())
 }
 
