@@ -620,7 +620,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "document.new",
             title: "New Document",
             keywords: &["editor", "scratch"],
-            shortcut: None,
+            shortcut: Some("Ctrl+N"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::NewDocument),
         },

@@ -67,18 +67,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         model.results.row_count()
     )));
     if model.focus == crate::model::Focus::Explorer {
-        let hint = model
-            .explorer
-            .selected_node()
-            .and_then(|node| {
-                crate::screens::explorer::opens_table_data(&node.kind)
-                    .then_some("Enter abre a table")
-            })
-            .unwrap_or("Enter expande/recolhe");
-        spans.push(Span::raw(format!("  {hint}")));
+        spans.push(Span::raw("  Enter connect  n new  e edit  Tab catalog"));
     }
     if model.focus == crate::model::Focus::Editor && model.tabs.active == 0 {
-        spans.push(Span::raw("  Ctrl+W close tab  Ctrl+Tab next"));
+        spans.push(Span::raw(
+            "  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close",
+        ));
     }
     if let Some(message) = model.messages.last() {
         spans.push(Span::raw(format!("  {message}")));

@@ -1,4 +1,5 @@
 use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_tui::action::{Action, Effect};
 use dexo_tui::model::{EditorDocument, Focus, Model};
 use dexo_tui::runtime::SessionId;
@@ -158,6 +159,30 @@ fn ready_connection_ensures_its_console_sql() {
         effect,
         Effect::EnsureConnectionSql { connection_id: id } if id == &connection_id
     )));
+}
+
+#[test]
+fn ctrl_n_creates_a_document_bound_to_the_active_connection() {
+    let connection_id = uuid::Uuid::from_u128(42);
+    let mut profile = saved_profile();
+    profile.id = ConnectionId(connection_id);
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![profile]);
+    model.connection.name = "prod".into();
+    model.focus = Focus::Editor;
+
+    let _ = update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
+    );
+
+    let document = model.active_document();
+    assert_eq!(
+        document.connection_id.as_deref(),
+        Some(connection_id.to_string().as_str())
+    );
+    assert_ne!(document.id, "scratch");
+    assert!(document.path.is_none());
 }
 
 #[test]
