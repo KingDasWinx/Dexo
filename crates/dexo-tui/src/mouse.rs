@@ -65,6 +65,7 @@ pub enum HitButton {
     ToggleDescending,
     CycleDriver,
     ToggleAdvanced,
+    GetStarted,
 }
 
 #[derive(Clone, Debug)]
@@ -119,7 +120,8 @@ impl HitMap {
 }
 
 pub fn overlay_blocks_workbench(model: &Model) -> bool {
-    model.palette.open
+    model.onboarding.open
+        || model.palette.open
         || model.help.open
         || model.results_menu.open
         || model.secret_prompt.open
