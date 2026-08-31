@@ -1193,13 +1193,30 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::DocumentSaved { document } => {
-            if model.pending_document_close.as_deref() == Some(document.as_str()) {
+        Action::DocumentSaved { document, revision } => {
+            let current_revision = model
+                .documents
+                .iter_mut()
+                .find(|candidate| candidate.id == document)
+                .map(|candidate| {
+                    let current_revision = candidate.sql.revision();
+                    if revision <= current_revision && revision > candidate.saved_revision {
+                        candidate.saved_revision = revision;
+                    }
+                    current_revision
+                });
+
+            if let Some(pending) = &model.pending_document_close
+                && pending.document == document
+            {
+                let should_close =
+                    pending.revision == revision && current_revision == Some(revision);
                 model.pending_document_close = None;
-                if let Some(index) = model
-                    .documents
-                    .iter()
-                    .position(|candidate| candidate.id == document)
+                if should_close
+                    && let Some(index) = model
+                        .documents
+                        .iter()
+                        .position(|candidate| candidate.id == document)
                 {
                     remove_document(model, index);
                 }
@@ -4314,6 +4331,7 @@ fn save_active_document(model: &mut Model) -> Vec<Effect> {
             document: doc.id.clone(),
             path: path.clone(),
             content: doc.text(),
+            revision: doc.sql.revision(),
             expected_fingerprint: None,
         })],
         None => {
@@ -4336,7 +4354,11 @@ fn close_active_document(model: &mut Model) -> Vec<Effect> {
         // The buffer holds the only copy of these edits, so the tab survives
         // until `DocumentSaved` confirms the write. A failed save leaves the
         // tab open with the error in the message log.
-        model.pending_document_close = Some(model.active_document().id.clone());
+        let document = model.active_document();
+        model.pending_document_close = Some(crate::model::PendingDocumentClose {
+            document: document.id.clone(),
+            revision: document.sql.revision(),
+        });
         model
             .messages
             .push("Saving dirty file before closing it.".into());
@@ -4773,6 +4795,7 @@ fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
                 document: model.active_document().id.clone(),
                 path,
                 content: String::new(),
+                revision: 0,
                 expected_fingerprint: None,
             })]
         }
@@ -4783,6 +4806,7 @@ fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
                 document: doc.id.clone(),
                 path,
                 content: doc.text(),
+                revision: doc.sql.revision(),
                 expected_fingerprint: None,
             })]
         }

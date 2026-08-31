@@ -395,6 +395,7 @@ pub enum Action {
     /// A `SaveDocument` write landed on disk, so a tab waiting on it can close.
     DocumentSaved {
         document: String,
+        revision: u64,
     },
     DocumentConflict {
         path: String,
@@ -473,6 +474,7 @@ pub struct DocumentIoRequest {
     pub document: String,
     pub path: std::path::PathBuf,
     pub content: String,
+    pub revision: u64,
     pub expected_fingerprint: Option<String>,
 }
 

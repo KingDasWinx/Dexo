@@ -65,6 +65,13 @@ fn closing_dirty_file_document_waits_for_the_save_to_land() {
     let id = model.active_document().id.clone();
 
     let effects = update(&mut model, Action::CloseDocument);
+    let revision = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::SaveDocument(request) => Some(request.revision),
+            _ => None,
+        })
+        .expect("closing a dirty file saves it");
 
     assert_eq!(
         model.documents.len(),
@@ -85,7 +92,73 @@ fn closing_dirty_file_document_waits_for_the_save_to_land() {
         Some("Saving dirty file before closing it.")
     );
 
-    update(&mut model, Action::DocumentSaved { document: id });
+    update(
+        &mut model,
+        Action::DocumentSaved {
+            document: id,
+            revision,
+        },
+    );
+
+    assert_eq!(model.documents.len(), 1);
+    assert_eq!(model.active_document().title, "q2.sql");
+}
+
+#[test]
+fn stale_save_acknowledgement_does_not_close_newer_dirty_document() {
+    let mut model = dirty_file_document();
+    let id = model.active_document().id.clone();
+
+    let effects = update(&mut model, Action::CloseDocument);
+    let old_revision = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::SaveDocument(request) => Some(request.revision),
+            _ => None,
+        })
+        .expect("closing a dirty file saves it");
+
+    let cursor = model.active_document().cursor();
+    model
+        .active_document_mut()
+        .sql
+        .insert(cursor, " -- newer")
+        .unwrap();
+    let text = model.active_document().text();
+    let current_revision = model.active_document().sql.revision();
+    assert!(current_revision > old_revision);
+
+    update(
+        &mut model,
+        Action::DocumentSaved {
+            document: id.clone(),
+            revision: old_revision,
+        },
+    );
+
+    assert_eq!(model.documents.len(), 2);
+    assert_eq!(model.active_document().id, id);
+    assert_eq!(model.active_document().text(), text);
+    assert!(model.active_document().is_dirty());
+    assert!(model.pending_document_close.is_none());
+
+    let effects = update(&mut model, Action::CloseDocument);
+    let current_save_revision = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::SaveDocument(request) => Some(request.revision),
+            _ => None,
+        })
+        .expect("closing the newer dirty document saves it");
+    assert_eq!(current_save_revision, current_revision);
+
+    update(
+        &mut model,
+        Action::DocumentSaved {
+            document: id,
+            revision: current_save_revision,
+        },
+    );
 
     assert_eq!(model.documents.len(), 1);
     assert_eq!(model.active_document().title, "q2.sql");

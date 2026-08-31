@@ -1028,10 +1028,12 @@ impl WorkbenchRuntime {
         match result {
             Ok(()) => {
                 let document = request.document.clone();
+                let revision = request.revision;
                 if let Some(storage) = &self.storage {
                     let _ = storage.save_document(request);
                 }
-                self.emit(Action::DocumentSaved { document }).await;
+                self.emit(Action::DocumentSaved { document, revision })
+                    .await;
             }
             Err(document_io::DocumentIoError::ExternalConflict { path, .. }) => {
                 self.emit(Action::DocumentConflict {

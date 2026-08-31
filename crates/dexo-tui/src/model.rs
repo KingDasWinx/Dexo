@@ -919,6 +919,12 @@ impl EditorDocument {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingDocumentClose {
+    pub document: String,
+    pub revision: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub focus: Focus,
@@ -936,9 +942,10 @@ pub struct Model {
     pub messages: Vec<String>,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
-    /// Document whose tab closes once its save is acknowledged. The buffer is
-    /// the only copy of the edits until the write lands.
-    pub pending_document_close: Option<String>,
+    /// Document revision whose tab closes once its matching save is
+    /// acknowledged. The buffer is the only copy of the edits until the write
+    /// lands.
+    pub pending_document_close: Option<PendingDocumentClose>,
     pub execution_target: ExecutionTarget,
     pub script_policy: ScriptPolicy,
     pub active_task: Option<TaskId>,
