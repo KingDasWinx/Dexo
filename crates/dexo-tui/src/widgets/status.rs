@@ -77,6 +77,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         model.layout_preset.label(),
         model.results.row_count()
     )));
+    if model.mouse && area.width >= 150 {
+        spans.push(Span::raw("  click panes · drag edges"));
+    }
     if let Some(hint) = footer_hint(model) {
         spans.push(Span::raw(format!("  {hint}")));
     }
@@ -162,5 +165,14 @@ mod tests {
             footer_hint(&model),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")
         );
+    }
+
+    #[test]
+    fn full_status_shows_mouse_hint_only_when_it_fits() {
+        use crate::render::render_to_string;
+
+        let model = Model::default();
+        assert!(render_to_string(&model, 160, 50).contains("click panes · drag edges"));
+        assert!(!render_to_string(&model, 120, 35).contains("click panes · drag edges"));
     }
 }
