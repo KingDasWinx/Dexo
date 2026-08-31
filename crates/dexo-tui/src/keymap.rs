@@ -374,7 +374,6 @@ profile = "default"
 "ctrl+4" = "tab.properties"
 "ctrl+5" = "tab.explain"
 "ctrl+tab" = "tab.next"
-"n" = "connection.new"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
@@ -441,7 +440,6 @@ profile = "vim"
 "f5" = "query.execute"
 "f8" = "query.execute_statement"
 "f10" = "layout.cycle"
-"n" = "connection.new"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
@@ -489,7 +487,6 @@ profile = "emacs"
 "f5" = "query.execute"
 "f8" = "query.execute_statement"
 "f10" = "layout.cycle"
-"n" = "connection.new"
 "ctrl+c ctrl+c" = "query.execute"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
@@ -667,18 +664,25 @@ profile = "overlap"
     }
 
     #[test]
-    fn global_n_opens_connection_form_in_all_profiles() {
+    fn n_opens_connection_form_only_in_the_explorer_context() {
         for keymap in [
             Keymap::default_profile(),
             Keymap::vim_profile(),
             Keymap::emacs_profile(),
         ] {
             let chord = parse_chord("n").unwrap();
-            let command = keymap
-                .resolve(&chord, KeyContext::Editor)
-                .expect("resolve")
-                .expect("binding");
-            assert_eq!(command, "connection.new", "profile {}", keymap.name);
+            assert_eq!(
+                keymap.resolve(&chord, KeyContext::Explorer).expect("resolve"),
+                Some("connection.new"),
+                "profile {}",
+                keymap.name
+            );
+            assert_eq!(
+                keymap.resolve(&chord, KeyContext::Editor).expect("resolve"),
+                None,
+                "`n` must stay typable in the editor, profile {}",
+                keymap.name
+            );
         }
     }
 

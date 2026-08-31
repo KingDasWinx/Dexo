@@ -93,7 +93,7 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
             crate::model::Focus::Editor | crate::model::Focus::Palette
         )
     {
-        return Some("Alt+1 connections  n new");
+        return Some("Alt+1 connections  Ctrl+P commands");
     }
     match model.focus {
         crate::model::Focus::Explorer => match model.explorer.sidebar_focus {
@@ -145,7 +145,10 @@ mod tests {
             layout_mode: LayoutMode::Compact,
             ..Model::default()
         };
-        assert_eq!(footer_hint(&model), Some("Alt+1 connections  n new"));
+        assert_eq!(
+            footer_hint(&model),
+            Some("Alt+1 connections  Ctrl+P commands")
+        );
     }
 
     #[test]

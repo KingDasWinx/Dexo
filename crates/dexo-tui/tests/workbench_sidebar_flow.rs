@@ -19,10 +19,19 @@ fn saved_profile() -> ConnectionProfile {
 }
 
 #[test]
-fn global_n_from_editor_opens_connection_form() {
+fn n_types_in_the_editor_and_only_opens_the_connection_form_from_the_sidebar() {
     let mut model = Model::default();
     model.focus = Focus::Editor;
 
+    let _ = update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty())),
+    );
+
+    assert!(!model.connection_form.open);
+    assert_eq!(model.active_document().text(), "n");
+
+    model.focus = Focus::Explorer;
     let _ = update(
         &mut model,
         Action::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty())),
