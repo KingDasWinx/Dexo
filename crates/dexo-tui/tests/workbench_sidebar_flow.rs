@@ -1,6 +1,6 @@
 use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
 use dexo_tui::action::{Action, Effect};
-use dexo_tui::model::{Focus, Model};
+use dexo_tui::model::{EditorDocument, Focus, Model};
 use dexo_tui::runtime::SessionId;
 use dexo_tui::screens::explorer::SidebarFocus;
 use dexo_tui::update;
@@ -58,10 +58,11 @@ fn ready_connection_returns_focus_to_catalog_and_editor() {
 
 #[test]
 fn connect_opens_console_sql_for_connection() {
-    let connection_id = uuid::Uuid::from_u128(42);
+    let connection_id = uuid::Uuid::nil();
     let console = std::path::PathBuf::from("/tmp/sql/42/console.sql");
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
+    model.connection.name = "prod".into();
 
     let _ = update(
         &mut model,
@@ -80,6 +81,57 @@ fn connect_opens_console_sql_for_connection() {
         Some(connection_id.to_string().as_str())
     );
     assert_eq!(doc.text(), "select 1;");
+}
+
+#[test]
+fn stale_connection_sql_result_leaves_documents_unchanged() {
+    let console = std::path::PathBuf::from("/tmp/sql/stale/console.sql");
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+    model.connection.name = "prod".into();
+
+    let _ = update(
+        &mut model,
+        Action::ConnectionSqlReady {
+            connection_id: uuid::Uuid::from_u128(42).to_string(),
+            files: vec![console.clone()],
+            console,
+            content: "select stale;".into(),
+        },
+    );
+
+    assert_eq!(model.documents.len(), 1);
+    assert_eq!(model.active_document().path, None);
+}
+
+#[test]
+fn ready_console_binds_an_existing_unbound_document() {
+    let connection_id = uuid::Uuid::nil().to_string();
+    let console = std::path::PathBuf::from("/tmp/sql/42/console.sql");
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+    model.connection.name = "prod".into();
+    model.documents = vec![EditorDocument::new_unique(
+        "console.sql",
+        Some(console.clone()),
+        None,
+    )];
+
+    let _ = update(
+        &mut model,
+        Action::ConnectionSqlReady {
+            connection_id: connection_id.clone(),
+            files: vec![console.clone()],
+            console,
+            content: "select 1;".into(),
+        },
+    );
+
+    assert_eq!(model.documents.len(), 1);
+    assert_eq!(
+        model.active_document().connection_id.as_deref(),
+        Some(connection_id.as_str())
+    );
 }
 
 #[test]

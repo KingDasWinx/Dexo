@@ -92,12 +92,18 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             console,
             content,
         } => {
+            if active_connection_uuid(model).as_deref() != Some(connection_id.as_str()) {
+                return Vec::new();
+            }
             if let Some(index) = model
                 .documents
                 .iter()
                 .position(|document| document.path.as_deref() == Some(console.as_path()))
             {
                 model.active_document = index;
+                if model.documents[index].connection_id.is_none() {
+                    model.documents[index].connection_id = Some(connection_id);
+                }
             } else {
                 let title = console
                     .file_name()
