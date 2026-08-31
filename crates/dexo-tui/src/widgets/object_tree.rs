@@ -295,8 +295,10 @@ mod tests {
 
     #[test]
     fn sidebar_offline_closed_session_shows_disconnected_marker() {
-        let mut explorer = ExplorerState::default();
-        explorer.offline = true;
+        let explorer = ExplorerState {
+            offline: true,
+            ..ExplorerState::default()
+        };
         let lines = super::render_sidebar(&explorer, &[connection_row("prod", 0)], "prod", true, 8);
         let text = lines.join("\n");
         assert!(text.contains("○ prod"), "{text}");
@@ -308,8 +310,10 @@ mod tests {
 
     #[test]
     fn sidebar_connected_empty_catalog_shows_no_objects() {
-        let mut explorer = ExplorerState::default();
-        explorer.offline = false;
+        let explorer = ExplorerState {
+            offline: false,
+            ..ExplorerState::default()
+        };
         let lines = super::render_sidebar(&explorer, &[connection_row("prod", 1)], "prod", true, 8);
         let text = lines.join("\n");
         assert!(text.contains("No objects"), "{text}");
@@ -341,9 +345,11 @@ mod tests {
 
     #[test]
     fn sidebar_connection_cursor_only_on_focused_row() {
-        let mut explorer = ExplorerState::default();
-        explorer.sidebar_focus = SidebarFocus::Connections;
-        explorer.connection_cursor = 1;
+        let explorer = ExplorerState {
+            sidebar_focus: SidebarFocus::Connections,
+            connection_cursor: 1,
+            ..ExplorerState::default()
+        };
         let lines = super::render_sidebar(
             &explorer,
             &[connection_row("a", 0), connection_row("b", 0)],

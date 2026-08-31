@@ -22,8 +22,10 @@ fn saved_profile() -> ConnectionProfile {
 
 #[test]
 fn n_types_in_the_editor_and_only_opens_the_connection_form_from_the_sidebar() {
-    let mut model = Model::default();
-    model.focus = Focus::Editor;
+    let mut model = Model {
+        focus: Focus::Editor,
+        ..Model::default()
+    };
 
     let _ = update(
         &mut model,
@@ -59,8 +61,10 @@ fn enter_on_sidebar_connection_emits_connect() {
 
 #[test]
 fn ready_connection_returns_focus_to_catalog_and_editor() {
-    let mut model = Model::default();
-    model.focus = Focus::Explorer;
+    let mut model = Model {
+        focus: Focus::Explorer,
+        ..Model::default()
+    };
     model.explorer.sidebar_focus = SidebarFocus::Connections;
 
     let _ = update(
@@ -321,7 +325,7 @@ fn catalog_of(names: &[&str]) -> CatalogList {
             .iter()
             .map(|name| {
                 CatalogObject::new(
-                    ObjectId::new(&format!("table:{name}")),
+                    ObjectId::new(format!("table:{name}")),
                     ObjectKind::Table,
                     QualifiedName::new(Some("db"), Some("public"), *name),
                     None,

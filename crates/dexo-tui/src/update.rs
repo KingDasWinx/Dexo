@@ -75,16 +75,15 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 if let Some(connection_id) = active_connection_uuid(model) {
                     effects.push(Effect::EnsureConnectionSql { connection_id });
                 }
-                return effects;
+                effects
             } else {
                 model.explorer.offline = true;
-                return vec![Effect::LoadOfflineCatalog {
+                vec![Effect::LoadOfflineCatalog {
                     connection_id: model.connection.name.clone(),
                     database_name: catalog_database(model),
                     generation,
-                }];
+                }]
             }
-            Vec::new()
         }
         Action::ConnectionSqlReady {
             connection_id,

@@ -59,14 +59,17 @@ mod tests {
 
     #[test]
     fn document_tab_labels_mark_dirty_and_active() {
-        let mut model = Model::default();
-        model.documents = vec![
+        let mut documents = vec![
             EditorDocument::new_unique("console.sql", None, None),
             EditorDocument::new_unique("q2.sql", None, None),
         ];
-        model.documents[1].sql = SqlDocument::new("select 1");
-        model.documents[1].sql.insert(0, " ").unwrap();
-        model.active_document = 1;
+        documents[1].sql = SqlDocument::new("select 1");
+        documents[1].sql.insert(0, " ").unwrap();
+        let model = Model {
+            documents,
+            active_document: 1,
+            ..Model::default()
+        };
 
         let labels = labels(&model);
 

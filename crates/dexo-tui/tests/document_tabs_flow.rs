@@ -76,7 +76,7 @@ fn closing_dirty_file_document_waits_for_the_save_to_land() {
         matches!(
             effect,
             dexo_tui::Effect::SaveDocument(request)
-                if request.path == std::path::PathBuf::from("query.sql")
+                if request.path == std::path::Path::new("query.sql")
                     && request.content == "select 1"
         )
     }));
