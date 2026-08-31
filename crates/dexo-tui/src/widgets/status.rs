@@ -66,16 +66,67 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         model.layout_preset.label(),
         model.results.row_count()
     )));
-    if model.focus == crate::model::Focus::Explorer {
-        spans.push(Span::raw("  Enter connect  n new  e edit  Tab catalog"));
-    }
-    if model.focus == crate::model::Focus::Editor && model.tabs.active == 0 {
-        spans.push(Span::raw(
-            "  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close",
-        ));
+    if let Some(hint) = footer_hint(model) {
+        spans.push(Span::raw(format!("  {hint}")));
     }
     if let Some(message) = model.messages.last() {
         spans.push(Span::raw(format!("  {message}")));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+fn footer_hint(model: &Model) -> Option<&'static str> {
+    match model.focus {
+        crate::model::Focus::Explorer => match model.explorer.sidebar_focus {
+            crate::screens::explorer::SidebarFocus::Connections => {
+                Some("Enter connect  n new  e edit  Tab catalog")
+            }
+            crate::screens::explorer::SidebarFocus::Catalog => model
+                .explorer
+                .selected_node()
+                .and_then(|node| {
+                    crate::screens::explorer::opens_table_data(&node.kind)
+                        .then_some("Enter abre a table")
+                })
+                .or(Some("Enter expande/recolhe")),
+        },
+        crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::footer_hint;
+    use crate::model::{Focus, Model};
+    use crate::screens::explorer::SidebarFocus;
+
+    #[test]
+    fn sidebar_footer_tracks_sidebar_focus() {
+        let mut model = Model {
+            focus: Focus::Explorer,
+            ..Model::default()
+        };
+        model.explorer.sidebar_focus = SidebarFocus::Connections;
+        assert_eq!(
+            footer_hint(&model),
+            Some("Enter connect  n new  e edit  Tab catalog")
+        );
+
+        model.explorer.sidebar_focus = SidebarFocus::Catalog;
+        assert_eq!(footer_hint(&model), Some("Enter expande/recolhe"));
+    }
+
+    #[test]
+    fn editor_footer_is_available_on_every_workbench_tab() {
+        let mut model = Model {
+            focus: Focus::Editor,
+            ..Model::default()
+        };
+        model.tabs.active = 1;
+        assert_eq!(
+            footer_hint(&model),
+            Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")
+        );
+    }
 }

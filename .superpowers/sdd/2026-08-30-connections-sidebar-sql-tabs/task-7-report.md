@@ -22,3 +22,17 @@ All targeted tests passed. `cargo test -p dexo-tui` has one unrelated pre-existi
 `palette::tests::every_current_action_is_in_palette` expects 131 registry entries, while the current
 registry has 133. The existing `unreachable pattern` warning in `crates/dexo-tui/src/update.rs`
 also remains unrelated to this task.
+
+## Round 1 corrections
+
+- Scoped connection shortcuts to the sidebar Connections focus.
+- Restored the Catalog footer's contextual table and expand/collapse hints.
+- Made the editor footer available on every workbench tab while the editor has focus.
+- Added focused unit coverage for Connections versus Catalog footer selection and the editor footer.
+
+### Round 1 tests
+
+- `cargo test -p dexo-tui widgets::status::tests`
+- `cargo test -p dexo-tui --test workbench_sidebar_flow ctrl_n_creates_a_document_bound_to_the_active_connection`
+
+Both passed. The full-suite palette entry-count failure and unrelated `update.rs` warning above remain.
