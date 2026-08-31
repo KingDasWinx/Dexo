@@ -1178,18 +1178,29 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::DocumentConflict { path } => {
-            model.messages.push(format!("file changed on disk: {path}"));
-            Vec::new()
-        }
         Action::DocumentAutosaved { id, revision } => {
-            if let Some(document) = model
-                .documents
-                .iter_mut()
-                .find(|document| document.id == id)
-            {
+            if let Some(document) = model.documents.iter_mut().find(|document| document.id == id) {
                 document.saved_revision = revision;
             }
+            Vec::new()
+        }
+        Action::DocumentSaved { document } => {
+            if model.pending_document_close.as_deref() == Some(document.as_str()) {
+                model.pending_document_close = None;
+                if let Some(index) = model
+                    .documents
+                    .iter()
+                    .position(|candidate| candidate.id == document)
+                {
+                    remove_document(model, index);
+                }
+            }
+            Vec::new()
+        }
+        Action::DocumentConflict { path } => {
+            // The write never landed, so any tab waiting on it stays open.
+            model.pending_document_close = None;
+            model.messages.push(format!("file changed on disk: {path}"));
             Vec::new()
         }
         Action::ResultsUp => {
@@ -4313,24 +4324,35 @@ fn close_active_document(model: &mut Model) -> Vec<Effect> {
             .push("Save the untitled document before closing it.".into());
         return Vec::new();
     }
-    let effects = if is_dirty {
+    if is_dirty {
+        // The buffer holds the only copy of these edits, so the tab survives
+        // until `DocumentSaved` confirms the write. A failed save leaves the
+        // tab open with the error in the message log.
+        model.pending_document_close = Some(model.active_document().id.clone());
         model
             .messages
             .push("Saving dirty file before closing it.".into());
-        save_active_document(model)
-    } else {
-        Vec::new()
-    };
+        return save_active_document(model);
+    }
+    remove_document(model, model.active_document);
+    Vec::new()
+}
 
-    model.documents.remove(model.active_document);
+fn remove_document(model: &mut Model, index: usize) {
+    if index >= model.documents.len() {
+        return;
+    }
+    model.documents.remove(index);
     if model.documents.is_empty() {
         model.documents.push(crate::model::EditorDocument::scratch());
         model.active_document = 0;
     } else {
+        if model.active_document > index {
+            model.active_document -= 1;
+        }
         model.active_document = model.active_document.min(model.documents.len() - 1);
     }
     model.focus = Focus::Editor;
-    effects
 }
 
 fn cycle_theme(model: &mut Model) -> Vec<Effect> {

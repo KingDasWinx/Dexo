@@ -392,6 +392,10 @@ pub enum Action {
         id: String,
         revision: u64,
     },
+    /// A `SaveDocument` write landed on disk, so a tab waiting on it can close.
+    DocumentSaved {
+        document: String,
+    },
     DocumentConflict {
         path: String,
     },

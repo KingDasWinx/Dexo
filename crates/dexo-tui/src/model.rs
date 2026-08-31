@@ -936,6 +936,9 @@ pub struct Model {
     pub messages: Vec<String>,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
+    /// Document whose tab closes once its save is acknowledged. The buffer is
+    /// the only copy of the edits until the write lands.
+    pub pending_document_close: Option<String>,
     pub execution_target: ExecutionTarget,
     pub script_policy: ScriptPolicy,
     pub active_task: Option<TaskId>,
@@ -1032,6 +1035,7 @@ impl Default for Model {
             messages: Vec::new(),
             documents: vec![EditorDocument::scratch()],
             active_document: 0,
+            pending_document_close: None,
             execution_target: ExecutionTarget::Document,
             script_policy: ScriptPolicy::StopOnError,
             active_task: None,
