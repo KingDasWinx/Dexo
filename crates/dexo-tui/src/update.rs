@@ -476,34 +476,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 Vec::new()
             }
         }
-        Action::Focus(target) => {
-            crate::screens::editor::end_typing(model);
-            let leaving_editor =
-                model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
-            model.focus = match target {
-                FocusTarget::Explorer => {
-                    model.panes.explorer_visible = true;
-                    Focus::Explorer
-                }
-                FocusTarget::Editor => Focus::Editor,
-                FocusTarget::Results => {
-                    model.panes.results_visible = true;
-                    Focus::Results
-                }
-                FocusTarget::Inspector => {
-                    model.panes.inspector_visible = true;
-                    Focus::Inspector
-                }
-            };
-            model.panes = model.panes.clamp(model.width, model.height);
-            model.sync_grid_viewport();
-            close_palette(model);
-            if leaving_editor {
-                checkpoint_dirty(model)
-            } else {
-                Vec::new()
-            }
-        }
+        Action::Focus(target) => focus_pane(model, target),
         Action::ExplorerExpand => {
             if model.explorer.sidebar_focus == crate::screens::explorer::SidebarFocus::Connections {
                 activate_sidebar_connection(model)
@@ -1491,6 +1464,34 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     }
 }
 
+fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
+    crate::screens::editor::end_typing(model);
+    let leaving_editor = model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
+    model.focus = match target {
+        FocusTarget::Explorer => {
+            model.panes.explorer_visible = true;
+            Focus::Explorer
+        }
+        FocusTarget::Editor => Focus::Editor,
+        FocusTarget::Results => {
+            model.panes.results_visible = true;
+            Focus::Results
+        }
+        FocusTarget::Inspector => {
+            model.panes.inspector_visible = true;
+            Focus::Inspector
+        }
+    };
+    model.panes = model.panes.clamp(model.width, model.height);
+    model.sync_grid_viewport();
+    close_palette(model);
+    if leaving_editor {
+        checkpoint_dirty(model)
+    } else {
+        Vec::new()
+    }
+}
+
 fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
     if model.onboarding.open && !matches!(mouse.kind, MouseEventKind::Down(_)) {
         return Vec::new();
@@ -2129,8 +2130,7 @@ fn mouse_workbench(
             activate_sidebar_connection(model)
         }
         Some(HitTarget::Editor) => {
-            close_palette(model);
-            model.focus = Focus::Editor;
+            let effects = update(model, Action::Focus(FocusTarget::Editor));
             let plan = LayoutPlan::for_area_with_document_tabs(
                 Rect::new(0, 0, model.width, model.height),
                 Some(&model.panes),
@@ -2146,7 +2146,7 @@ fn mouse_workbench(
             {
                 let _ = model.active_document_mut().sql.set_cursor(index);
             }
-            Vec::new()
+            effects
         }
         Some(HitTarget::FormField(index)) => {
             model.focus = Focus::Editor;
@@ -2191,12 +2191,7 @@ fn mouse_workbench(
                 Vec::new()
             }
         }
-        Some(HitTarget::Grid) => {
-            crate::screens::editor::end_typing(model);
-            close_palette(model);
-            model.focus = Focus::Results;
-            Vec::new()
-        }
+        Some(HitTarget::Grid) => update(model, Action::Focus(FocusTarget::Results)),
         _ => Vec::new(),
     }
 }

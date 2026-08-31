@@ -1,6 +1,6 @@
 use dexo_tui::action::Action;
 use dexo_tui::model::Model;
-use dexo_tui::mouse::{HitButton, HitMap, HitTarget, mouse_action};
+use dexo_tui::mouse::{HitButton, HitMap, HitTarget};
 use dexo_tui::terminal::{RecordingTerminal, TerminalControl, TerminalGuard};
 use dexo_tui::update;
 use ratatui::layout::Rect;
@@ -51,10 +51,6 @@ fn click_on_second_result_tab_selects_that_tab() {
     map.register(HitTarget::ResultTab(1), Rect::new(10, 0, 10, 1));
     map.register(HitTarget::ResultTab(2), Rect::new(20, 0, 10, 1));
     let (x, y) = map.center(HitTarget::ResultTab(2));
-    assert_eq!(
-        mouse_action(x, y, &map),
-        Some(Action::SelectResultTab { index: 2 })
-    );
     let mut model = Model::default();
     model.results.tabs = vec![
         dexo_tui::model::ResultTab::new(
@@ -106,6 +102,36 @@ fn click_on_second_result_tab_selects_that_tab() {
     );
     assert_eq!(model.results.active, 2);
     assert_eq!(model.focus, dexo_tui::model::Focus::Results);
+}
+
+#[test]
+fn clicking_explorer_pane_uses_focus_action_path() {
+    use dexo_tui::action::FocusTarget;
+    use dexo_tui::model::Focus;
+
+    let mut model = Model::default();
+    model.focus = Focus::Editor;
+    paint(&mut model);
+    let (x, y) = model.hits.center(HitTarget::Explorer);
+    assert_ne!((x, y), (0, 0));
+
+    let mut expected = model.clone();
+    expected.panes.explorer_visible = false;
+    update(&mut expected, Action::Focus(FocusTarget::Explorer));
+
+    model.panes.explorer_visible = false;
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            x,
+            y,
+            crossterm::event::KeyModifiers::NONE,
+        ),
+    );
+
+    assert_eq!(model.focus, expected.focus);
+    assert_eq!(model.panes, expected.panes);
 }
 
 #[test]

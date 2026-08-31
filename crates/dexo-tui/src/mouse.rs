@@ -1,6 +1,5 @@
 use std::time::{Duration, Instant};
 
-use crate::action::Action;
 use crate::model::Model;
 use ratatui::layout::Rect;
 
@@ -192,29 +191,6 @@ pub fn note_click(model: &mut Model, target: HitTarget) -> bool {
     });
     model.last_click = Some(LastClick { target, at: now });
     doubled
-}
-
-pub fn mouse_action(x: u16, y: u16, map: &HitMap) -> Option<Action> {
-    match map.at(x, y)? {
-        HitTarget::ResultTab(index) => Some(Action::SelectResultTab { index }),
-        HitTarget::WorkbenchTab(index) => Some(Action::SwitchTab { index }),
-        HitTarget::DocumentTab(index) => Some(Action::SelectDocument { index }),
-        HitTarget::Grid | HitTarget::GridRow(_) | HitTarget::GridCell { .. } => {
-            Some(Action::Focus(crate::action::FocusTarget::Results))
-        }
-        HitTarget::GridHeader(_) => Some(Action::Focus(crate::action::FocusTarget::Results)),
-        HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_) => {
-            Some(Action::Focus(crate::action::FocusTarget::Explorer))
-        }
-        HitTarget::Editor => Some(Action::Focus(crate::action::FocusTarget::Editor)),
-        HitTarget::Inspector => Some(Action::Focus(crate::action::FocusTarget::Inspector)),
-        HitTarget::Overlay
-        | HitTarget::ListRow(_)
-        | HitTarget::FormField(_)
-        | HitTarget::FooterSubmit
-        | HitTarget::FooterCancel
-        | HitTarget::Button(_) => None,
-    }
 }
 
 #[cfg(test)]
