@@ -206,6 +206,12 @@ impl WorkbenchRuntime {
             }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
+            crate::Effect::AutosaveDocument {
+                id,
+                path,
+                content,
+                revision,
+            } => self.autosave_document(id, path, content, revision).await,
             crate::Effect::PreviewDdl {
                 change,
                 session,
@@ -1046,6 +1052,25 @@ impl WorkbenchRuntime {
             let _ = storage.checkpoint_recovery(request);
         }
     }
+    async fn autosave_document(
+        &mut self,
+        id: String,
+        path: std::path::PathBuf,
+        content: String,
+        revision: u64,
+    ) {
+        match document_io::save_sql_atomic(&path, &content).await {
+            Ok(()) => self.emit(Action::DocumentAutosaved { id, revision }).await,
+            Err(error) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
 
     async fn persist_layout(&mut self, project_id: String, layout: dexo_storage::WorkbenchLayout) {
         let Some(storage) = &self.storage else {

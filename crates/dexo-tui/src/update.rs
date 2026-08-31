@@ -1201,6 +1201,16 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ResultsPageUp => {
             let height = model.results.viewport().height as i32;
             model.results.move_cursor_row(-height.max(1), false);
+        Action::DocumentAutosaved { id, revision } => {
+            if let Some(document) = model
+                .documents
+                .iter_mut()
+                .find(|document| document.id == id)
+            {
+                document.saved_revision = revision;
+            }
+            Vec::new()
+        }
             Vec::new()
         }
         Action::ResultsPageDown => {
@@ -3250,8 +3260,14 @@ fn checkpoint_dirty(model: &Model) -> Vec<Effect> {
         .documents
         .iter()
         .filter(|document| document.is_dirty())
-        .map(|document| {
-            Effect::CheckpointRecovery(crate::action::RecoveryCheckpointRequest {
+        .map(|document| match &document.path {
+            Some(path) => Effect::AutosaveDocument {
+                id: document.id.clone(),
+                path: path.clone(),
+                content: document.text(),
+                revision: document.sql.revision(),
+            },
+            None => Effect::CheckpointRecovery(crate::action::RecoveryCheckpointRequest {
                 document: document.id.clone(),
                 project_id: model.project_id.clone(),
                 title: document.title.clone(),
@@ -3390,7 +3406,7 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
                     document.title.clone(),
                     document.content.clone(),
                 )
-            })
+            }),
             .collect();
         model.recovery.documents = state
             .recovery

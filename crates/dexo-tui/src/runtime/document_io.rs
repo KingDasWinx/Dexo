@@ -1,4 +1,4 @@
-use std::io::{self, Write};
+use std::io;
 use std::path::{Path, PathBuf};
 
 use dexo_storage::FileFingerprint;
@@ -54,44 +54,8 @@ fn save_sql_atomic_sync(path: &Path, content: &str) -> Result<(), DocumentIoErro
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
     }
-    let part = path
-        .parent()
-        .unwrap_or_else(|| Path::new("."))
-        .join(format!(".dexo-part-{}", uuid::Uuid::new_v4()));
-    {
-        let mut file = std::fs::File::create(&part)?;
-        file.write_all(content.as_bytes())?;
-        file.sync_all()?;
-    }
-    replace_durable(&part, path)?;
+    dexo_storage::sql_files::write_sql_file(path, content)?;
     Ok(())
-}
-
-fn replace_durable(part: &Path, dest: &Path) -> io::Result<()> {
-    #[cfg(unix)]
-    {
-        std::fs::rename(part, dest)
-    }
-    #[cfg(windows)]
-    {
-        // ponytail: Windows rename cannot clobber; keep the original as a sibling until the new file is in place.
-        if !dest.exists() {
-            return std::fs::rename(part, dest);
-        }
-        let bak = dest.with_extension("dexo-prev");
-        let _ = std::fs::remove_file(&bak);
-        std::fs::rename(dest, &bak)?;
-        match std::fs::rename(part, dest) {
-            Ok(()) => {
-                let _ = std::fs::remove_file(&bak);
-                Ok(())
-            }
-            Err(error) => {
-                let _ = std::fs::rename(&bak, dest);
-                Err(error)
-            }
-        }
-    }
 }
 
 fn fingerprint_sync(path: &Path) -> Result<FileFingerprint, DocumentIoError> {

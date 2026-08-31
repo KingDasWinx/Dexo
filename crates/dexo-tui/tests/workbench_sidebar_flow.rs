@@ -242,3 +242,38 @@ fn reactivating_open_sidebar_session_returns_to_editor_and_catalog() {
     assert_eq!(model.explorer.sidebar_focus, SidebarFocus::Catalog);
     assert_eq!(model.focus, Focus::Editor);
 }
+
+#[test]
+fn checkpoint_autosaves_dirty_document_with_path() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("console.sql");
+    std::fs::write(&path, b"").unwrap();
+    let mut model = Model::default();
+    let mut doc = EditorDocument::new_unique("console.sql", Some(path), Some("c".into()));
+    doc.sql.insert(0, "select 1").unwrap();
+    model.documents = vec![doc];
+
+    let effects = update(&mut model, Action::CheckpointTick);
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::AutosaveDocument { .. }))
+    );
+}
+
+#[test]
+fn document_autosaved_marks_matching_revision_saved() {
+    let mut model = Model::default();
+    model
+        .active_document_mut()
+        .sql
+        .insert(0, "select 1")
+        .unwrap();
+    let id = model.active_document().id.clone();
+    let revision = model.active_document().sql.revision();
+
+    let _ = update(&mut model, Action::DocumentAutosaved { id, revision });
+
+    assert!(!model.active_document().is_dirty());
+}
