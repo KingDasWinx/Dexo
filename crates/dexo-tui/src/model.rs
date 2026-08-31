@@ -767,6 +767,58 @@ pub fn format_value(value: &DbValue) -> String {
     }
 }
 
+pub fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + char_width > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(ch);
+        used += char_width;
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+pub fn append_field_detail(lines: &mut Vec<String>, name: &str, value: &str, width: usize) {
+    if width == 0 {
+        lines.push(format!("{name}: {value}"));
+        return;
+    }
+    let label = format!("{name}: ");
+    let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
+    if label_width >= width {
+        lines.extend(wrap_display_text(&format!("{label}{value}"), width));
+        return;
+    }
+    let value_width = width.saturating_sub(label_width);
+    let indent = " ".repeat(label_width);
+    let mut first = true;
+    for segment in value.split('\n') {
+        let wrapped = wrap_display_text(segment, if first { value_width } else { width });
+        for (index, line) in wrapped.into_iter().enumerate() {
+            if first && index == 0 {
+                lines.push(format!("{label}{line}"));
+                first = false;
+            } else {
+                lines.push(format!("{indent}{line}"));
+            }
+        }
+    }
+    if first {
+        lines.push(label);
+    }
+}
+
 pub fn truncate_cell(text: &str, width: usize) -> String {
     let text_width = unicode_width::UnicodeWidthStr::width(text);
     if text_width <= width {

@@ -8,7 +8,7 @@ use crate::action::{Action, Effect, FocusTarget};
 use crate::layout::LayoutPlan;
 use crate::model::{DragKind, DragState, Focus, Model};
 use crate::mouse::{HitButton, HitTarget, OverlayKind, PaneEdge, note_click, top_overlay};
-use ratatui::layout::Rect;
+use ratatui::layout::{Position, Rect};
 use ratatui::widgets::Block;
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
@@ -2270,13 +2270,37 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     if overlay == Some(OverlayKind::ResultsMenu) {
-        let count = crate::palette::results_menu_items().len();
-        if count > 0 {
+        let area = Rect::new(0, 0, model.width, model.height);
+        let layout = crate::render::results_menu_layout(area);
+        let row = model.results.cursor_row().unwrap_or(0);
+        let wrap_width = layout.detail.width.max(1) as usize;
+        let detail_fields = crate::widgets::row_detail::row_detail_fields(&model.results, row);
+        let detail_lines = crate::widgets::row_detail::row_detail_lines(
+            &detail_fields,
+            wrap_width,
+            &model.theme,
+            model.capabilities,
+        );
+        let detail_rows = layout.detail.height.max(1) as usize;
+        let max_detail_offset = detail_lines.len().saturating_sub(detail_rows);
+        if layout
+            .detail
+            .contains(Position::new(mouse.column, mouse.row))
+        {
             if delta < 0 {
-                model.results_menu.selected = model.results_menu.selected.saturating_sub(1);
+                model.results_menu.offset = model.results_menu.offset.saturating_sub(1);
             } else {
-                model.results_menu.selected =
-                    (model.results_menu.selected + 1).min(count.saturating_sub(1));
+                model.results_menu.offset = (model.results_menu.offset + 1).min(max_detail_offset);
+            }
+        } else {
+            let count = crate::palette::results_menu_items().len();
+            if count > 0 {
+                if delta < 0 {
+                    model.results_menu.selected = model.results_menu.selected.saturating_sub(1);
+                } else {
+                    model.results_menu.selected =
+                        (model.results_menu.selected + 1).min(count.saturating_sub(1));
+                }
             }
         }
         return Vec::new();
@@ -3384,6 +3408,19 @@ fn open_results_menu(model: &mut Model) {
 
 fn handle_results_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let count = crate::palette::results_menu_items().len();
+    let area = Rect::new(0, 0, model.width, model.height);
+    let layout = crate::render::results_menu_layout(area);
+    let row = model.results.cursor_row().unwrap_or(0);
+    let wrap_width = layout.detail.width.max(1) as usize;
+    let detail_fields = crate::widgets::row_detail::row_detail_fields(&model.results, row);
+    let detail_lines = crate::widgets::row_detail::row_detail_lines(
+        &detail_fields,
+        wrap_width,
+        &model.theme,
+        model.capabilities,
+    );
+    let detail_rows = layout.detail.height.max(1) as usize;
+    let max_detail_offset = detail_lines.len().saturating_sub(detail_rows);
     match key.code {
         KeyCode::Esc => {
             model.results_menu.open = false;
@@ -3400,6 +3437,15 @@ fn handle_results_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.results_menu.selected =
                     (model.results_menu.selected + 1).min(count.saturating_sub(1));
             }
+            Vec::new()
+        }
+        KeyCode::PageUp => {
+            model.results_menu.offset = model.results_menu.offset.saturating_sub(detail_rows);
+            Vec::new()
+        }
+        KeyCode::PageDown => {
+            model.results_menu.offset =
+                (model.results_menu.offset + detail_rows).min(max_detail_offset);
             Vec::new()
         }
         KeyCode::Enter => pick_results_menu(model),

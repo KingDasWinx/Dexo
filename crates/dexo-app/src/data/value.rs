@@ -99,7 +99,7 @@ fn image_mime(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn pretty_json(text: &str) -> String {
+pub fn pretty_json(text: &str) -> String {
     serde_json::from_str::<serde_json::Value>(text)
         .ok()
         .and_then(|value| serde_json::to_string_pretty(&value).ok())

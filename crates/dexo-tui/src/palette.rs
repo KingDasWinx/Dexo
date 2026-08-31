@@ -306,7 +306,11 @@ mod tests {
         update(&mut model, Action::OpenResultsMenu);
         assert!(model.results_menu.open);
         let view = crate::render::render_to_string(&model, 80, 24);
-        assert!(view.contains("Row actions"));
+        assert!(view.contains("Row 3"));
+        assert!(view.contains("Record"));
+        assert!(view.contains("Actions"));
+        assert!(view.contains("n: 2"));
+        assert!(view.contains("Copy row as CSV"));
         update(
             &mut model,
             Action::Key(crossterm::event::KeyEvent::new(

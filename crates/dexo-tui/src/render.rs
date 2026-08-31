@@ -1,5 +1,5 @@
 use ratatui::Frame;
-use ratatui::layout::Rect;
+use ratatui::layout::{Constraint, Layout, Rect};
 use ratatui::text::Span;
 use ratatui::widgets::{Block, Clear, Paragraph};
 
@@ -868,31 +868,107 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
 }
 
+fn results_menu_popup(area: Rect) -> Rect {
+    let max_width = area.width.saturating_sub(4).clamp(60, 92);
+    let max_height = area
+        .height
+        .saturating_sub(4)
+        .clamp(14, area.height.saturating_sub(2).max(14));
+    centered(area, max_width, max_height)
+}
+
+pub(crate) struct ResultsMenuLayout {
+    pub popup: Rect,
+    pub detail: Rect,
+    pub actions: Rect,
+}
+
+pub(crate) fn results_menu_layout(area: Rect) -> ResultsMenuLayout {
+    let popup = results_menu_popup(area);
+    let outer_inner = Block::bordered().inner(popup);
+    let [detail_area, actions_area] =
+        Layout::horizontal([Constraint::Percentage(58), Constraint::Min(26)]).areas(outer_inner);
+    ResultsMenuLayout {
+        popup,
+        detail: Block::bordered().title("Record").inner(detail_area),
+        actions: Block::bordered().title("Actions").inner(actions_area),
+    }
+}
+
 fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let layout = results_menu_layout(area);
+    let row = model.results.cursor_row().unwrap_or(0);
+    let wrap_width = layout.detail.width.max(1) as usize;
+    let detail_fields = crate::widgets::row_detail::row_detail_fields(&model.results, row);
+    let detail_lines = crate::widgets::row_detail::row_detail_lines(
+        &detail_fields,
+        wrap_width,
+        &model.theme,
+        model.capabilities,
+    );
+    let detail_rows = layout.detail.height.max(1) as usize;
+    let max_detail_offset = detail_lines.len().saturating_sub(detail_rows);
+    let detail_offset = model.results_menu.offset.min(max_detail_offset);
+    let visible_detail = detail_lines
+        .into_iter()
+        .skip(detail_offset)
+        .take(detail_rows)
+        .collect::<Vec<_>>();
+
     let items = crate::palette::results_menu_items();
-    let labels: Vec<String> = items
+    let action_rows = layout.actions.height.max(1) as usize;
+    let action_offset =
+        scroll_to_selection(model.results_menu.selected, 0, items.len(), action_rows);
+    let mut action_lines = Vec::new();
+    for (index, (_, title)) in items
         .iter()
         .enumerate()
-        .map(|(index, (_, title))| {
-            let marker = if index == model.results_menu.selected {
-                ">"
-            } else {
-                " "
-            };
-            format!("{marker} {title}")
-        })
-        .collect();
-    let popup = centered(frame.area(), 48, 14);
-    paint_popup(
-        frame,
-        popup,
-        overlay_block(model, "Row actions  Esc to close"),
-        labels.join("\n"),
+        .skip(action_offset)
+        .take(action_rows)
+    {
+        let marker = if index == model.results_menu.selected {
+            ">"
+        } else {
+            " "
+        };
+        action_lines.push(format!("{marker} {title}"));
+    }
+    if action_lines.is_empty() {
+        action_lines.push("(empty)".into());
+    }
+
+    let title = format!("Row {}  Esc to close", row + 1);
+    let block = overlay_block(model, &title);
+    let outer_inner = block.inner(layout.popup);
+    let [detail_area, actions_area] =
+        Layout::horizontal([Constraint::Percentage(58), Constraint::Min(26)]).areas(outer_inner);
+    frame.render_widget(Clear, layout.popup);
+    frame.render_widget(block, layout.popup);
+    frame.render_widget(
+        Paragraph::new(visible_detail).block(Block::bordered().title("Record")),
+        detail_area,
     );
-    register_overlay(hits, popup);
-    for_popup_lines(popup, &labels, |i, _, rect| {
-        hits.register(HitTarget::ListRow(i), rect);
-    });
+    frame.render_widget(
+        Paragraph::new(action_lines.join("\n")).block(Block::bordered().title("Actions")),
+        actions_area,
+    );
+
+    register_overlay(hits, layout.popup);
+    for (index, _) in action_lines.iter().enumerate() {
+        if action_lines[index] == "(empty)" {
+            continue;
+        }
+        register_line(
+            hits,
+            layout.actions,
+            index,
+            HitTarget::ListRow(action_offset.saturating_add(index)),
+        );
+    }
 }
 
 fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal, hits: &mut HitMap) {
