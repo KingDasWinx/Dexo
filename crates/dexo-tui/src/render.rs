@@ -1516,6 +1516,17 @@ mod tests {
     }
 
     #[test]
+    fn compact_workbench_footer_hints_sidebar_access() {
+        let mut model = Model::default();
+        model.apply_size(60, 20);
+        model.focus = crate::model::Focus::Editor;
+
+        let frame = render_to_string(&model, 60, 20);
+
+        assert!(frame.contains("Alt+1 connections"));
+    }
+
+    #[test]
     fn editor_tabs_are_not_all_sql() {
         let mut model = Model {
             width: 100,

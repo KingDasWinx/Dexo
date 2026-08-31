@@ -19,6 +19,19 @@ fn saved_profile() -> ConnectionProfile {
 }
 
 #[test]
+fn global_n_from_editor_opens_connection_form() {
+    let mut model = Model::default();
+    model.focus = Focus::Editor;
+
+    let _ = update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::empty())),
+    );
+
+    assert!(model.connection_form.open);
+}
+
+#[test]
 fn enter_on_sidebar_connection_emits_connect() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
@@ -203,7 +216,9 @@ fn editing_sidebar_connection_uses_sidebar_cursor() {
     let mut alternate = saved_profile();
     alternate.name = "staging".into();
     let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile(), alternate]);
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), alternate]);
     model.focus = Focus::Explorer;
     model.explorer.connection_cursor = 1;
 
@@ -224,7 +239,9 @@ fn editing_from_connections_overlay_uses_overlay_selection() {
     let mut alternate = saved_profile();
     alternate.name = "staging".into();
     let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile(), alternate]);
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), alternate]);
     model.connections.open = true;
     model.connections.selected_profile = 1;
     model.explorer.connection_cursor = 0;

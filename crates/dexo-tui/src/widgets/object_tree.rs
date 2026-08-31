@@ -40,20 +40,24 @@ pub fn render_sidebar(
     let connected = if unicode { "●" } else { "*" };
     let offline = if unicode { "○" } else { " " };
     let mut lines = vec!["Connections".into()];
-    for (index, row) in profiles.iter().enumerate() {
-        let cursor = if state.sidebar_focus == SidebarFocus::Connections
-            && state.connection_cursor == index
-        {
-            ">"
-        } else {
-            " "
-        };
-        let marker = if row.profile.name == active_connection || row.sessions > 0 {
-            connected
-        } else {
-            offline
-        };
-        lines.push(format!("{cursor} {marker} {}", row.profile.name));
+    if profiles.is_empty() {
+        lines.push("No connections — press n".into());
+    } else {
+        for (index, row) in profiles.iter().enumerate() {
+            let cursor = if state.sidebar_focus == SidebarFocus::Connections
+                && state.connection_cursor == index
+            {
+                ">"
+            } else {
+                " "
+            };
+            let marker = if row.sessions > 0 {
+                connected
+            } else {
+                offline
+            };
+            lines.push(format!("{cursor} {marker} {}", row.profile.name));
+        }
     }
     lines.push(if state.offline {
         "Catalog — offline".into()
@@ -61,13 +65,27 @@ pub fn render_sidebar(
         "Catalog".into()
     });
     let catalog_rows = viewport_rows.saturating_sub(lines.len()).max(1);
-    lines.extend(render_visible(state, Some(catalog_rows)));
+    if active_connection.is_empty() {
+        lines.push("Select a connection".into());
+    } else if state.roots.is_empty() && state.offline {
+        lines.push("No catalog".into());
+    } else {
+        lines.extend(render_visible_inner(state, Some(catalog_rows), false));
+    }
     lines
 }
 
 pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Vec<String> {
+    render_visible_inner(state, viewport_rows, true)
+}
+
+fn render_visible_inner(
+    state: &ExplorerState,
+    viewport_rows: Option<usize>,
+    show_offline_chrome: bool,
+) -> Vec<String> {
     let mut header = Vec::new();
-    if state.offline {
+    if show_offline_chrome && state.offline {
         header.push("[offline]".into());
     }
     if !state.search.is_empty() {
@@ -87,7 +105,7 @@ pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Ve
     let mut lines = header;
     lines.extend(tree);
     if lines.is_empty() {
-        lines.push("No connection".into());
+        lines.push("Select a connection".into());
     }
     lines
 }
@@ -187,6 +205,101 @@ mod tests {
             !tree.iter().any(|line| line.contains("t0")),
             "scroll should hide the top: {window:?}"
         );
+    }
+
+    use crate::screens::connections::ConnectionRow;
+    use crate::screens::explorer::SidebarFocus;
+    use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+    fn profile(name: &str) -> ConnectionProfile {
+        ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::nil()),
+            None,
+            name,
+            "postgres",
+            "local",
+            serde_json::json!({}),
+            SecretRef::new("ref".into()),
+        )
+    }
+
+    fn connection_row(name: &str, sessions: usize) -> ConnectionRow {
+        ConnectionRow {
+            profile: profile(name),
+            sessions,
+        }
+    }
+
+    #[test]
+    fn sidebar_empty_connections_shows_press_n_hint() {
+        let explorer = ExplorerState::default();
+        let lines = super::render_sidebar(&explorer, &[], "", true, 8);
+        let text = lines.join("\n");
+        assert!(text.contains("No connections — press n"), "{text}");
+    }
+
+    #[test]
+    fn sidebar_catalog_without_session_prompts_select() {
+        let explorer = ExplorerState::default();
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("prod", 0)],
+            "",
+            true,
+            8,
+        );
+        let text = lines.join("\n");
+        assert!(text.contains("Select a connection"), "{text}");
+        assert!(!text.contains("No connection"), "{text}");
+    }
+
+    #[test]
+    fn sidebar_offline_closed_session_shows_disconnected_marker() {
+        let mut explorer = ExplorerState::default();
+        explorer.offline = true;
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("prod", 0)],
+            "prod",
+            true,
+            8,
+        );
+        let text = lines.join("\n");
+        assert!(text.contains("○ prod"), "{text}");
+        assert!(!text.contains("● prod"), "{text}");
+        assert!(text.contains("Catalog — offline"), "{text}");
+        assert!(!text.contains("[offline]"), "{text}");
+        assert!(text.contains("No catalog"), "{text}");
+    }
+
+    #[test]
+    fn sidebar_connected_row_uses_filled_marker() {
+        let explorer = ExplorerState::default();
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("prod", 1)],
+            "prod",
+            true,
+            8,
+        );
+        let text = lines.join("\n");
+        assert!(text.contains("● prod"), "{text}");
+    }
+
+    #[test]
+    fn sidebar_connection_cursor_only_on_focused_row() {
+        let mut explorer = ExplorerState::default();
+        explorer.sidebar_focus = SidebarFocus::Connections;
+        explorer.connection_cursor = 1;
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("a", 0), connection_row("b", 0)],
+            "",
+            true,
+            8,
+        );
+        assert!(lines.iter().any(|line| line.starts_with("> ○ b")));
+        assert!(lines.iter().any(|line| line.starts_with("  ○ a")));
     }
 
     #[test]

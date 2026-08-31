@@ -46,6 +46,17 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         Style::default()
     };
     let mut spans = Vec::new();
+    if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
+        spans.push(Span::raw(format!("{conn}  ctrl+p  F1")));
+        if let Some(hint) = footer_hint(model) {
+            spans.push(Span::raw(format!("  {hint}")));
+        }
+        if let Some(message) = model.messages.last() {
+            spans.push(Span::raw(format!("  {message}")));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     if !env.is_empty() {
         spans.push(Span::styled(format!("{env} "), env_style));
     }
@@ -76,6 +87,14 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
 }
 
 fn footer_hint(model: &Model) -> Option<&'static str> {
+    if matches!(model.layout_mode, crate::layout::LayoutMode::Compact)
+        && matches!(
+            model.focus,
+            crate::model::Focus::Editor | crate::model::Focus::Palette
+        )
+    {
+        return Some("Alt+1 connections  n new");
+    }
     match model.focus {
         crate::model::Focus::Explorer => match model.explorer.sidebar_focus {
             crate::screens::explorer::SidebarFocus::Connections => {
@@ -115,6 +134,18 @@ mod tests {
 
         model.explorer.sidebar_focus = SidebarFocus::Catalog;
         assert_eq!(footer_hint(&model), Some("Enter expande/recolhe"));
+    }
+
+    #[test]
+    fn compact_editor_footer_hints_sidebar_access() {
+        use crate::layout::LayoutMode;
+
+        let model = Model {
+            focus: Focus::Editor,
+            layout_mode: LayoutMode::Compact,
+            ..Model::default()
+        };
+        assert_eq!(footer_hint(&model), Some("Alt+1 connections  n new"));
     }
 
     #[test]
