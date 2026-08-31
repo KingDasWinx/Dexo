@@ -38,7 +38,7 @@ pub fn render_sidebar(
     viewport_rows: usize,
 ) -> Vec<String> {
     let connected = if unicode { "●" } else { "*" };
-    let offline = if unicode { "○" } else { " " };
+    let offline = if unicode { "○" } else { "o" };
     let mut lines = vec!["Connections".into()];
     if profiles.is_empty() {
         lines.push("No connections — press n".into());
@@ -67,8 +67,12 @@ pub fn render_sidebar(
     let catalog_rows = viewport_rows.saturating_sub(lines.len()).max(1);
     if active_connection.is_empty() {
         lines.push("Select a connection".into());
-    } else if state.roots.is_empty() && state.offline {
-        lines.push("No catalog".into());
+    } else if state.roots.is_empty() {
+        lines.push(if state.offline {
+            "No catalog".into()
+        } else {
+            "No objects".into()
+        });
     } else {
         lines.extend(render_visible_inner(state, Some(catalog_rows), false));
     }
@@ -105,7 +109,7 @@ fn render_visible_inner(
     let mut lines = header;
     lines.extend(tree);
     if lines.is_empty() {
-        lines.push("Select a connection".into());
+        lines.push("No objects".into());
     }
     lines
 }
@@ -270,6 +274,34 @@ mod tests {
         assert!(text.contains("Catalog — offline"), "{text}");
         assert!(!text.contains("[offline]"), "{text}");
         assert!(text.contains("No catalog"), "{text}");
+    }
+
+    #[test]
+    fn sidebar_connected_empty_catalog_shows_no_objects() {
+        let mut explorer = ExplorerState::default();
+        explorer.offline = false;
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("prod", 1)],
+            "prod",
+            true,
+            8,
+        );
+        let text = lines.join("\n");
+        assert!(text.contains("No objects"), "{text}");
+        assert!(!text.contains("Select a connection"), "{text}");
+    }
+
+    #[test]
+    fn sidebar_ascii_offline_marker_is_visible() {
+        let lines = super::render_sidebar(
+            &ExplorerState::default(),
+            &[connection_row("prod", 0)],
+            "",
+            false,
+            8,
+        );
+        assert!(lines.iter().any(|line| line.contains(" o prod")), "{lines:?}");
     }
 
     #[test]

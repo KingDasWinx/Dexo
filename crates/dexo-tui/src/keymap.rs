@@ -489,6 +489,7 @@ profile = "emacs"
 "f5" = "query.execute"
 "f8" = "query.execute_statement"
 "f10" = "layout.cycle"
+"n" = "connection.new"
 "ctrl+c ctrl+c" = "query.execute"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
@@ -662,6 +663,22 @@ profile = "overlap"
             Keymap::emacs_profile(),
         ] {
             assert_registered(keymap.command_ids());
+        }
+    }
+
+    #[test]
+    fn global_n_opens_connection_form_in_all_profiles() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            let chord = parse_chord("n").unwrap();
+            let command = keymap
+                .resolve(&chord, KeyContext::Editor)
+                .expect("resolve")
+                .expect("binding");
+            assert_eq!(command, "connection.new", "profile {}", keymap.name);
         }
     }
 
