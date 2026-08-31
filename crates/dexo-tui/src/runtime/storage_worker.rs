@@ -117,11 +117,11 @@ pub struct StorageWorker {
 
 impl StorageWorker {
     pub fn start(path: PathBuf) -> anyhow::Result<Self> {
+        let db = Database::open(&path)?;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("dexo-storage".into())
             .spawn(move || {
-                let db = Database::open(path).expect("open local Dexo database");
                 while let Ok(command) = rx.recv() {
                     match command {
                         StorageCommand::Bootstrap { reply } => {
