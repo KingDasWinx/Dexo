@@ -426,6 +426,9 @@ impl GridModel {
         self.viewport.width = width as usize;
         self.viewport.height = height as usize;
         self.clamp_scroll();
+        if let Some(row) = self.cursor_row() {
+            self.ensure_row_visible(row);
+        }
     }
 
     pub fn scroll_rows(&mut self, delta: i32) {
@@ -1147,7 +1150,10 @@ impl Model {
             self.tabs.active == 0,
         );
         let width = plan.results.width.saturating_sub(2).max(1);
-        let height = plan.results.height.saturating_sub(2).max(1);
+        let inner_h = plan.results.height.saturating_sub(2).max(1);
+        // Match widgets/grid.rs: optional tab row, then one column-header row.
+        let tab_h = if self.results.tabs.len() > 1 { 1u16 } else { 0 };
+        let height = inner_h.saturating_sub(tab_h).saturating_sub(1).max(1);
         self.results.set_viewport_size(width, height);
     }
 

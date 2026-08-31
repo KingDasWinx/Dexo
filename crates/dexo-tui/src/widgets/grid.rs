@@ -289,6 +289,48 @@ mod tests {
     }
 
     #[test]
+    fn last_row_stays_visible_when_cursor_reaches_bottom() {
+        let mut grid = GridModel::sample_rows(20);
+        // height here is data rows only (header already reserved by sync_grid_viewport).
+        grid.set_viewport_size(40, 5);
+        grid.select_cell(0, 0);
+        for _ in 0..19 {
+            grid.move_cursor_row(1, false);
+        }
+        assert_eq!(grid.cursor_row(), Some(19));
+        let visible = grid.visible_slice(grid.viewport().row_offset, grid.viewport().height);
+        assert!(
+            visible.iter().any(|row| row.source_index == 19),
+            "last row must remain in the painted data window: offset={} height={} visible={:?}",
+            grid.viewport().row_offset,
+            grid.viewport().height,
+            visible
+                .iter()
+                .map(|row| row.source_index)
+                .collect::<Vec<_>>()
+        );
+    }
+
+    #[test]
+    fn sync_grid_viewport_reserves_header_from_results_pane() {
+        use crate::layout::LayoutPlan;
+        use crate::model::Model;
+
+        let mut model = Model::default();
+        model.apply_size(120, 40);
+        let plan = LayoutPlan::for_area_with(
+            ratatui::layout::Rect::new(0, 0, model.width, model.height),
+            Some(&model.panes),
+        );
+        let inner_h = plan.results.height.saturating_sub(2).max(1);
+        let expected = inner_h.saturating_sub(1).max(1) as usize; // column header
+        assert_eq!(
+            model.results.viewport().height, expected,
+            "viewport height must match painted data rows, not the full pane inner height"
+        );
+    }
+
+    #[test]
     fn ctrl_pick_copies_noncontiguous_rows() {
         use dexo_app::data::{CopyFormat, SqlDialect};
 
