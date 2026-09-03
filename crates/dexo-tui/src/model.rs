@@ -416,6 +416,7 @@ impl GridModel {
 
     pub fn set_columns(&mut self, columns: Vec<ColumnMeta>) {
         self.buffer.columns = columns;
+        self.column_widths.clear();
         self.recompute_column_widths();
         self.ensure_cursor();
     }
@@ -467,12 +468,14 @@ impl GridModel {
         if let Some(row) = self.cursor_row() {
             self.ensure_row_visible(row);
         }
+        self.recompute_column_widths();
     }
 
     pub fn scroll_rows(&mut self, delta: i32) {
         let next = self.viewport.row_offset as i32 + delta;
         self.viewport.row_offset = next.max(0) as usize;
         self.clamp_scroll();
+        self.recompute_column_widths();
     }
 
     pub fn scroll_columns(&mut self, delta: i32) {
@@ -595,6 +598,7 @@ impl GridModel {
             self.viewport.row_offset = row.saturating_add(1).saturating_sub(height);
         }
         self.clamp_scroll();
+        self.recompute_column_widths();
     }
 
     pub fn freeze_columns(&mut self, count: usize) {
@@ -733,6 +737,11 @@ impl GridModel {
                 .map(|rows| rows.iter().map(Vec::len).max().unwrap_or(0))
                 .unwrap_or(0),
         );
+        // Widths only grow while a result set is on screen: a column widened
+        // for a longer value further down must not clip it again once that
+        // row scrolls back into view, and columns must not jitter sideways
+        // on every scroll step.
+        let previous = std::mem::take(&mut self.column_widths);
         self.column_widths = (0..cols)
             .map(|index| {
                 let header = self
@@ -755,7 +764,10 @@ impl GridModel {
                     })
                     .max()
                     .unwrap_or(0);
-                header.max(body).clamp(1, 40)
+                header
+                    .max(body)
+                    .clamp(1, 40)
+                    .max(previous.get(index).copied().unwrap_or(0))
             })
             .collect();
         self.clamp_scroll();

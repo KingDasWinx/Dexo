@@ -259,6 +259,35 @@ mod tests {
     }
 
     #[test]
+    fn scrolling_widens_a_column_for_longer_values_further_down() {
+        use dexo_driver_api::{ColumnMeta, DbValue};
+
+        let mut grid = GridModel::default();
+        grid.set_columns(vec![ColumnMeta {
+            name: "id".into(),
+            type_name: "int8".into(),
+            nullable: false,
+        }]);
+        grid.append_rows((1..=200).map(|id| vec![DbValue::I64(id)]).collect());
+        grid.set_viewport_size(40, 10);
+        assert_eq!(grid.column_widths()[0], 2, "first rows only need two digits");
+
+        grid.scroll_rows(120);
+        assert_eq!(
+            grid.column_widths()[0],
+            3,
+            "three-digit ids must not be clipped once they scroll into view"
+        );
+
+        grid.scroll_rows(-120);
+        assert_eq!(
+            grid.column_widths()[0],
+            3,
+            "widths must not shrink back and make the grid jitter"
+        );
+    }
+
+    #[test]
     fn allocate_column_widths_returns_natural_widths_when_everything_fits() {
         use crate::model::allocate_column_widths;
 
