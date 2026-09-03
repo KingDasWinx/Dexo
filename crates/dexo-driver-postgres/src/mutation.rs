@@ -257,6 +257,49 @@ fn predicate(
 
 #[async_trait::async_trait]
 impl DataMutator for PostgresSession {
+    async fn table_columns(
+        &self,
+        target: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ColumnKeyInfo>, DriverError> {
+        let sql = "
+            SELECT
+                a.attname AS name,
+                EXISTS (
+                    SELECT 1 FROM pg_constraint c
+                    WHERE c.contype = 'p'
+                      AND c.conrelid = a.attrelid
+                      AND a.attnum = ANY (c.conkey)
+                ) AS primary_key,
+                EXISTS (
+                    SELECT 1 FROM pg_constraint c
+                    WHERE c.contype IN ('p', 'u')
+                      AND c.conrelid = a.attrelid
+                      AND array_length(c.conkey, 1) = 1
+                      AND a.attnum = ANY (c.conkey)
+                ) AS is_unique
+            FROM pg_attribute a
+            JOIN pg_class t ON t.oid = a.attrelid
+            JOIN pg_namespace n ON n.oid = t.relnamespace
+            WHERE t.relname = $1
+              AND n.nspname = $2
+              AND a.attnum > 0
+              AND NOT a.attisdropped
+            ORDER BY a.attnum
+        ";
+        let schema = target.schema().unwrap_or("public").to_string();
+        let object = target.object().to_string();
+        let refs: Vec<&(dyn ToSql + Sync)> = vec![&object, &schema];
+        let rows = self.client.query(sql, &refs).await.map_err(map_error)?;
+        Ok(rows
+            .iter()
+            .map(|row| dexo_driver_api::ColumnKeyInfo {
+                name: row.get::<_, String>("name"),
+                primary_key: row.get::<_, bool>("primary_key"),
+                unique: row.get::<_, bool>("is_unique"),
+            })
+            .collect())
+    }
+
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError> {
         let _ = Page::new(request.page.offset, request.page.limit)?;
         request.validate()?;
