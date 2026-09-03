@@ -186,6 +186,8 @@ pub enum Action {
     CycleTheme,
     CycleKeymap,
     ToggleMouse,
+    ToggleAnimation,
+    ToggleUnicode,
     ChangeDataPage {
         offset: u64,
     },

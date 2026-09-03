@@ -158,7 +158,7 @@ fn model_with_local_state() -> Model {
 #[test]
 fn destructive_local_commands_open_their_owner_before_confirmation() {
     for (id, visible) in [
-        ("settings.reset", "confirm_reset=true"),
+        ("settings.reset", "[Confirm reset]"),
         ("recovery.discard", "confirm_discard=true"),
         ("mcp.revoke_all", "confirm revoke all grants"),
     ] {

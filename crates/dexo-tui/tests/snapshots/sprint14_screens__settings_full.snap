@@ -15,14 +15,14 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                   ┌Settings──────────────────────────────────────────────────────┐                   ││                          │
-│                          ││                   │theme=dark                                                    │                   ││                          │
-│                          ││                   │keymap=default                                                │                   ││                          │
-│                          ││                   │mouse=true                                                    │                   ││                          │
-│                          ││                   │animation=true                                                │                   ││                          │
-│                          ││                   │unicode=true                                                  │                   ││                          │
-│                          ││                   │confirm_reset=false                                           │                   ││                          │
-│                          ││                   │diff no changes                                               │                   ││                          │
+│                          ││                   │> Theme      Dark                                             │                   ││                          │
+│                          ││                   │  Keymap     Default                                          │                   ││                          │
+│                          ││                   │  Mouse      On                                               │                   ││                          │
+│                          ││                   │  Animation  On                                               │                   ││                          │
+│                          ││                   │  Unicode    On                                               │                   ││                          │
 │                          ││                   │                                                              │                   ││                          │
+│                          ││                   │  [Reset to defaults]                                         │                   ││                          │
+│                          ││                   │  up/down move  enter change  esc close                       │                   ││                          │
 │                          ││                   │                                                              │                   ││                          │
 │                          ││                   │                                                              │                   ││                          │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                   ││                          │

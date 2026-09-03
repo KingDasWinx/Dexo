@@ -1530,14 +1530,10 @@ fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
-        if line.starts_with("theme=") {
-            hits.register(HitTarget::Button(HitButton::Theme), rect);
-        } else if line.starts_with("keymap=") {
-            hits.register(HitTarget::Button(HitButton::Keymap), rect);
-        } else if line.starts_with("mouse=") {
-            hits.register(HitTarget::Button(HitButton::Mouse), rect);
-        } else if line.starts_with("confirm_reset=") {
+    for_popup_lines(popup, &lines, |index, line, rect| {
+        if index < crate::screens::settings::FIELD_COUNT {
+            hits.register(HitTarget::ListRow(index), rect);
+        } else if line.contains('[') {
             hits.register(HitTarget::Button(HitButton::Reset), rect);
         }
     });

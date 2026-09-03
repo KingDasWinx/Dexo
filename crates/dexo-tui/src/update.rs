@@ -688,6 +688,18 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             persist_settings(model);
             Vec::new()
         }
+        Action::ToggleAnimation => {
+            model.animation = !model.animation;
+            model.settings.animation = model.animation;
+            persist_settings(model);
+            Vec::new()
+        }
+        Action::ToggleUnicode => {
+            model.capabilities.unicode = !model.capabilities.unicode;
+            model.settings.unicode = model.capabilities.unicode;
+            persist_settings(model);
+            Vec::new()
+        }
         Action::ChangeDataPage { offset } => change_data_page(model, offset),
         Action::ApplyRemoteSort | Action::ApplyRemoteFilter => apply_remote_query(model),
         Action::DataPageLoaded {
@@ -1012,7 +1024,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenSettings => {
             model.settings.open = true;
-            model.settings.mouse = model.mouse;
+            model.settings.focus = 0;
+            model.settings.confirm_reset = false;
+            sync_settings_screen(model);
             Vec::new()
         }
         Action::ConfirmResetSettings => {
@@ -2081,10 +2095,15 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
 
 fn mouse_settings(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(HitTarget::Button(HitButton::Theme)) => update(model, Action::CycleTheme),
-        Some(HitTarget::Button(HitButton::Keymap)) => update(model, Action::CycleKeymap),
-        Some(HitTarget::Button(HitButton::Mouse)) => update(model, Action::ToggleMouse),
-        Some(HitTarget::Button(HitButton::Reset)) => update(model, Action::ConfirmResetSettings),
+        Some(HitTarget::ListRow(index)) if index < crate::screens::settings::FIELD_COUNT => {
+            model.settings.focus = index;
+            model.settings.confirm_reset = false;
+            activate_focused_setting(model)
+        }
+        Some(HitTarget::Button(HitButton::Reset)) => {
+            model.settings.focus = crate::screens::settings::RESET_FOCUS;
+            update(model, Action::ConfirmResetSettings)
+        }
         _ => Vec::new(),
     }
 }
@@ -2816,10 +2835,21 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.settings.confirm_reset = false;
                 Vec::new()
             }
-            KeyCode::Enter | KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
+            KeyCode::Up | KeyCode::BackTab => {
+                model.settings.focus_prev();
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                model.settings.focus_next();
+                Vec::new()
+            }
+            KeyCode::Enter | KeyCode::Char(' ') => activate_focused_setting(model),
+            KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
             KeyCode::Char('t') => update(model, Action::CycleTheme),
             KeyCode::Char('k') => update(model, Action::CycleKeymap),
             KeyCode::Char('m') => update(model, Action::ToggleMouse),
+            KeyCode::Char('a') => update(model, Action::ToggleAnimation),
+            KeyCode::Char('u') => update(model, Action::ToggleUnicode),
             _ => Vec::new(),
         };
     }
@@ -5015,6 +5045,17 @@ fn cycle_keymap(model: &mut Model) -> Vec<Effect> {
     model.settings.keymap = model.keymap.name.clone();
     persist_settings(model);
     Vec::new()
+}
+
+fn activate_focused_setting(model: &mut Model) -> Vec<Effect> {
+    match model.settings.focus {
+        0 => update(model, Action::CycleTheme),
+        1 => update(model, Action::CycleKeymap),
+        2 => update(model, Action::ToggleMouse),
+        3 => update(model, Action::ToggleAnimation),
+        4 => update(model, Action::ToggleUnicode),
+        _ => update(model, Action::ConfirmResetSettings),
+    }
 }
 
 /// Resetting has to reach the live state too, or the rows would report

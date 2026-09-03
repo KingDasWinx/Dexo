@@ -5,14 +5,14 @@ expression: "render_to_string(&model, 60, 20)"
 default  no connection  —                                   
  scratch.sql ×  +                                           
 ┌Settings──────────────────────────────────────────────────┐
-│theme=dark                                                │
-│keymap=default                                            │
-│mouse=true                                                │
-│animation=true                                            │
-│unicode=true                                              │
-│confirm_reset=false                                       │
-│diff no changes                                           │
+│> Theme      Dark                                         │
+│  Keymap     Default                                      │
+│  Mouse      On                                           │
+│  Animation  On                                           │
+│  Unicode    On                                           │
 │                                                          │
+│  [Reset to defaults]                                     │
+│  up/down move  enter change  esc close                   │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘

@@ -721,6 +721,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ToggleMouse),
         },
         CommandSpec {
+            id: "settings.animation",
+            title: "Toggle Animation",
+            keywords: &["intro", "splash"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleAnimation),
+        },
+        CommandSpec {
+            id: "settings.unicode",
+            title: "Toggle Unicode Glyphs",
+            keywords: &["ascii", "glyph"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleUnicode),
+        },
+        CommandSpec {
             id: "explorer.data",
             title: "Open Object Data",
             keywords: &["rows", "table"],

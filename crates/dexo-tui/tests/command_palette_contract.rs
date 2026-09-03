@@ -1,6 +1,6 @@
 use dexo_tui::palette::{FlowIntent, PaletteInvocation};
 
-const COMMAND_IDS: [&str; 135] = [
+const COMMAND_IDS: [&str; 137] = [
     "workbench.quit",
     "palette.open",
     "query.execute_statement",
@@ -87,6 +87,8 @@ const COMMAND_IDS: [&str; 135] = [
     "settings.theme",
     "settings.keymap",
     "settings.mouse",
+    "settings.animation",
+    "settings.unicode",
     "explorer.data",
     "editor.goto",
     "explorer.copy_name",
@@ -215,8 +217,8 @@ fn registry_contains_each_command_exactly_once() {
     let entries = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
     let actual: std::collections::BTreeSet<_> = entries.iter().map(|e| e.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.into_iter().collect();
-    assert_eq!(entries.len(), 135);
-    assert_eq!(actual.len(), 135, "duplicate command id");
+    assert_eq!(entries.len(), 137);
+    assert_eq!(actual.len(), 137, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
