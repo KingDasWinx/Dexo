@@ -217,6 +217,17 @@ impl ResultBuffer {
         self.estimated_bytes = 0;
         self.truncated = false;
     }
+
+    pub fn remove_row(&mut self, index: usize) {
+        let storage = Arc::make_mut(&mut self.rows);
+        if index >= storage.len() {
+            return;
+        }
+        let removed = storage.remove(index);
+        self.estimated_bytes = self
+            .estimated_bytes
+            .saturating_sub(estimated_row_bytes(&removed));
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -452,6 +463,32 @@ impl GridModel {
         self.selection = None;
         self.picked_rows.clear();
         self.column_widths.clear();
+    }
+
+    pub fn remove_row(&mut self, index: usize) {
+        let mut shifted = std::collections::BTreeMap::new();
+        for (&(row, col), cell) in self.cells.iter() {
+            if row == index {
+                if let GridCell::Spool { path, .. } = cell {
+                    let _ = std::fs::remove_file(path);
+                }
+                continue;
+            }
+            let new_row = if row > index { row - 1 } else { row };
+            shifted.insert((new_row, col), cell.clone());
+        }
+        self.cells = shifted;
+        self.buffer.remove_row(index);
+        self.picked_rows = self
+            .picked_rows
+            .iter()
+            .filter_map(|&row| match row.cmp(&index) {
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(row - 1),
+                std::cmp::Ordering::Less => Some(row),
+            })
+            .collect();
+        self.ensure_cursor();
     }
 
     pub fn cell_at(&self, row: usize, col: usize) -> Option<&GridCell> {

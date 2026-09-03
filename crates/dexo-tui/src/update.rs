@@ -4324,6 +4324,43 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     catalog_load_effect(model, Some(id), operation, false)
 }
 
+fn row_identity_at(model: &Model, row_index: usize) -> Option<dexo_app::data::RowIdentity> {
+    let identity_cols = dexo_app::data::RowIdentity::from_table(&model.data.table)?;
+    let row = model.results.rows().get(row_index)?;
+    let columns = model.results.columns();
+    let mut values = Vec::with_capacity(identity_cols.len());
+    for name in &identity_cols {
+        let position = columns.iter().position(|column| &column.name == name)?;
+        values.push(row.get(position)?.clone());
+    }
+    Some(dexo_app::data::RowIdentity {
+        columns: identity_cols,
+        values,
+    })
+}
+
+fn row_original_at(
+    model: &Model,
+    row_index: usize,
+) -> Option<Vec<(String, dexo_driver_api::DbValue)>> {
+    let row = model.results.rows().get(row_index)?;
+    let columns = model.results.columns();
+    Some(
+        columns
+            .iter()
+            .zip(row.iter())
+            .map(|(column, value)| (column.name.clone(), value.clone()))
+            .collect(),
+    )
+}
+
+fn find_pending_index(
+    changes: &dexo_app::data::ChangeSet,
+    predicate: impl Fn(&dexo_app::data::PendingChange) -> bool,
+) -> Option<usize> {
+    changes.pending().iter().position(predicate)
+}
+
 fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
     if index >= model.documents.len() {
         return Vec::new();
