@@ -53,6 +53,7 @@ async fn saved_theme_keymap_and_mouse_survive_restart() {
         mouse: false,
         keymap: dexo_app::settings::KeymapConfig {
             run_statement: "Ctrl+Enter".into(),
+            profile: "vim".into(),
         },
         ..dexo_app::settings::SettingsFile::default()
     };
@@ -60,6 +61,7 @@ async fn saved_theme_keymap_and_mouse_survive_restart() {
     let loaded = dexo_app::settings::load_settings(dir.path());
     assert_eq!(loaded.theme, dexo_app::settings::ThemeId::HighContrast);
     assert_eq!(loaded.keymap.run_statement, "Ctrl+Enter");
+    assert_eq!(loaded.keymap.profile, "vim");
     assert!(!loaded.mouse);
 }
 

@@ -9,18 +9,27 @@ pub const SETTINGS_VERSION: u32 = 1;
 pub enum ThemeId {
     #[default]
     Dark,
+    Light,
     HighContrast,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct KeymapConfig {
     pub run_statement: String,
+    /// Settings written before profiles were persisted carry no value here.
+    #[serde(default = "default_keymap_profile")]
+    pub profile: String,
+}
+
+fn default_keymap_profile() -> String {
+    "default".into()
 }
 
 impl Default for KeymapConfig {
     fn default() -> Self {
         Self {
             run_statement: "Ctrl+Enter".into(),
+            profile: default_keymap_profile(),
         }
     }
 }

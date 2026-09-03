@@ -5017,16 +5017,24 @@ fn cycle_keymap(model: &mut Model) -> Vec<Effect> {
     Vec::new()
 }
 
+/// The settings rows mirror live state, which lives outside the screen.
+fn sync_settings_screen(model: &mut Model) {
+    model.settings.mouse = model.mouse;
+    model.settings.animation = model.animation;
+    model.settings.unicode = model.capabilities.unicode;
+    model.settings.keymap = model.keymap.name.clone();
+}
+
 fn persist_settings(model: &Model) {
     let Ok(paths) = dexo_storage::AppPaths::discover() else {
         return;
     };
     let mut manager = crate::runtime::settings_manager::SettingsManager::load(&paths.data_dir);
     let next = dexo_app::settings::SettingsFile {
-        theme: if model.settings.theme == "high-contrast" || model.settings.theme == "low-color" {
-            dexo_app::settings::ThemeId::HighContrast
-        } else {
-            dexo_app::settings::ThemeId::Dark
+        theme: match model.settings.theme.as_str() {
+            "high-contrast" | "low-color" => dexo_app::settings::ThemeId::HighContrast,
+            "light" => dexo_app::settings::ThemeId::Light,
+            _ => dexo_app::settings::ThemeId::Dark,
         },
         mouse: model.mouse,
         animation: model.animation,
@@ -5037,6 +5045,7 @@ fn persist_settings(model: &Model) {
         },
         keymap: dexo_app::settings::KeymapConfig {
             run_statement: "Ctrl+Enter".into(),
+            profile: model.keymap.name.clone(),
         },
         ..manager.active.clone()
     };
@@ -5049,19 +5058,31 @@ fn apply_saved_settings(model: &mut Model) {
     };
     let manager = crate::runtime::settings_manager::SettingsManager::load(&paths.data_dir);
     model.mouse = manager.active.mouse;
-    model.settings.mouse = manager.active.mouse;
     model.animation = manager.active.animation;
+    model.capabilities.unicode = matches!(
+        manager.active.unicode,
+        dexo_app::settings::UnicodeMode::Unicode
+    );
+    model.keymap = match manager.active.keymap.profile.as_str() {
+        "vim" => crate::keymap::Keymap::vim_profile(),
+        "emacs" => crate::keymap::Keymap::emacs_profile(),
+        _ => crate::keymap::Keymap::default_profile(),
+    };
     match manager.active.theme {
         dexo_app::settings::ThemeId::HighContrast => {
             model.settings.theme = "high-contrast".into();
             model.theme = crate::theme::builtin_low_color();
+        }
+        dexo_app::settings::ThemeId::Light => {
+            model.settings.theme = "light".into();
+            model.theme = crate::theme::builtin_light();
         }
         dexo_app::settings::ThemeId::Dark => {
             model.settings.theme = "dark".into();
             model.theme = crate::theme::builtin_dark();
         }
     }
-    model.settings.keymap = manager.active.keymap.run_statement.clone();
+    sync_settings_screen(model);
 }
 
 fn run_transfer(model: &mut Model) -> Vec<Effect> {
