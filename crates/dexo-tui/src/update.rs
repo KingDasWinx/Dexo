@@ -1022,7 +1022,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if !model.settings.confirm_reset {
                 model.settings.confirm_reset = true;
             } else {
-                model.settings.reset();
+                reset_settings_to_defaults(model);
                 persist_settings(model);
             }
             Vec::new()
@@ -5015,6 +5015,18 @@ fn cycle_keymap(model: &mut Model) -> Vec<Effect> {
     model.settings.keymap = model.keymap.name.clone();
     persist_settings(model);
     Vec::new()
+}
+
+/// Resetting has to reach the live state too, or the rows would report
+/// defaults the app is not actually running with.
+fn reset_settings_to_defaults(model: &mut Model) {
+    model.mouse = true;
+    model.animation = true;
+    model.capabilities.unicode = true;
+    model.theme = crate::theme::builtin_dark();
+    model.keymap = crate::keymap::Keymap::default_profile();
+    model.settings.reset();
+    sync_settings_screen(model);
 }
 
 /// The settings rows mirror live state, which lives outside the screen.
