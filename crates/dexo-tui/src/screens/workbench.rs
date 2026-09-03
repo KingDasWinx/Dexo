@@ -44,7 +44,7 @@ mod tests {
     fn script_creates_result_tabs_in_order() {
         let mut model = Model::default();
         model.set_sql("select 1; select 2; select 3;");
-        update(&mut model, Action::ExecuteQuery);
+        update(&mut model, Action::ExecuteDocument);
         assert_eq!(model.results.tabs.len(), 3);
     }
 

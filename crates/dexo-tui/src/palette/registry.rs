@@ -23,14 +23,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenPalette),
         },
         CommandSpec {
-            id: "query.execute",
-            title: "Execute Query",
-            keywords: &["run", "sql"],
-            shortcut: Some("F5"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::ExecuteQuery),
-        },
-        CommandSpec {
             id: "query.execute_statement",
             title: "Execute Statement",
             keywords: &["run", "sql", "cursor"],
@@ -50,7 +42,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "query.execute_document",
             title: "Execute Document",
             keywords: &["run", "sql", "all"],
-            shortcut: Some("F5"),
+            shortcut: Some("Ctrl+Shift+F10"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ExecuteDocument),
         },
@@ -58,7 +50,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "query.cancel",
             title: "Cancel Query",
             keywords: &["stop", "abort"],
-            shortcut: Some("Ctrl+C"),
+            shortcut: Some("Ctrl+F2"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::CancelQuery),
         },
@@ -500,7 +492,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "explorer.ddl",
             title: "Open Object DDL",
             keywords: &["create", "script"],
-            shortcut: Some("d"),
+            shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectDdl),
         },
@@ -1175,8 +1167,7 @@ fn contextual_reason(model: &Model, id: &str) -> Option<String> {
 fn requirements_for(id: &str) -> &'static [Requirement] {
     use Requirement::*;
     match id {
-        "query.execute"
-        | "query.execute_statement"
+        "query.execute_statement"
         | "query.execute_selection"
         | "query.execute_document"
         | "transaction.begin"

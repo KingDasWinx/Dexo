@@ -116,7 +116,6 @@ pub enum Action {
     ClosePalette,
     PaletteQuery(String),
     PaletteSelect,
-    ExecuteQuery,
     ExecuteStatement,
     ExecuteSelection,
     ExecuteDocument,

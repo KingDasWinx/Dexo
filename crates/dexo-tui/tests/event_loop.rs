@@ -8,7 +8,15 @@ fn terminal_guard_restores_once() {
     }
     assert_eq!(
         backend.calls(),
-        vec!["enter", "raw_on", "raw_off", "leave", "cursor_show"]
+        vec![
+            "enter",
+            "raw_on",
+            "keyboard_on",
+            "keyboard_off",
+            "raw_off",
+            "leave",
+            "cursor_show"
+        ]
     );
 }
 
@@ -21,7 +29,15 @@ fn terminal_guard_restores_on_panic() {
     });
     assert_eq!(
         backend.calls(),
-        vec!["enter", "raw_on", "raw_off", "leave", "cursor_show"]
+        vec![
+            "enter",
+            "raw_on",
+            "keyboard_on",
+            "keyboard_off",
+            "raw_off",
+            "leave",
+            "cursor_show"
+        ]
     );
 }
 
@@ -35,6 +51,14 @@ fn terminal_guard_restore_is_idempotent() {
     }
     assert_eq!(
         backend.calls(),
-        vec!["enter", "raw_on", "raw_off", "leave", "cursor_show"]
+        vec![
+            "enter",
+            "raw_on",
+            "keyboard_on",
+            "keyboard_off",
+            "raw_off",
+            "leave",
+            "cursor_show"
+        ]
     );
 }

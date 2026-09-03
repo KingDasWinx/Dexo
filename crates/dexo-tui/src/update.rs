@@ -404,10 +404,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::PaletteSelect => palette_select(model),
-        Action::ExecuteQuery => {
-            crate::screens::workbench::execute_document(model);
-            start_query(model)
-        }
         Action::ExecuteStatement => {
             if model.active_document().selection().is_some() {
                 crate::screens::workbench::execute_selection(model);
