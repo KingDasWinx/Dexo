@@ -376,6 +376,9 @@ profile = "default"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
 "alt+4" = "focus.inspector"
+"alt+e" = "layout.hide_explorer"
+"alt+r" = "layout.hide_results"
+"alt+i" = "layout.hide_inspector"
 "alt+-" = "layout.results_shrink"
 "alt+=" = "layout.results_grow"
 "alt+[" = "layout.explorer_shrink"
@@ -454,6 +457,9 @@ profile = "vim"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
 "alt+4" = "focus.inspector"
+"alt+e" = "layout.hide_explorer"
+"alt+r" = "layout.hide_results"
+"alt+i" = "layout.hide_inspector"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
@@ -514,6 +520,9 @@ profile = "emacs"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
 "alt+4" = "focus.inspector"
+"alt+e" = "layout.hide_explorer"
+"alt+r" = "layout.hide_results"
+"alt+i" = "layout.hide_inspector"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
@@ -669,6 +678,30 @@ mod tests {
                         .unwrap(),
                     Some(command),
                     "profile {} in {context:?}",
+                    keymap.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hide_panel_shortcuts_exist_in_every_profile() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            for (chord, command) in [
+                ("alt+e", "layout.hide_explorer"),
+                ("alt+r", "layout.hide_results"),
+                ("alt+i", "layout.hide_inspector"),
+            ] {
+                assert_eq!(
+                    keymap
+                        .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
+                        .unwrap(),
+                    Some(command),
+                    "profile {}",
                     keymap.name
                 );
             }

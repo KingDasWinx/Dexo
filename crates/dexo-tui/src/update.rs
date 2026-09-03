@@ -1355,6 +1355,26 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.sync_grid_viewport();
             Vec::new()
         }
+        Action::HideExplorer => {
+            model.panes.explorer_visible = !model.panes.explorer_visible;
+            if !model.panes.explorer_visible && model.focus == Focus::Explorer {
+                model.focus = Focus::Editor;
+            }
+            model.panes = model.panes.clamp(model.width, model.height);
+            model.layout_dirty = true;
+            model.sync_grid_viewport();
+            Vec::new()
+        }
+        Action::HideResults => {
+            model.panes.results_visible = !model.panes.results_visible;
+            if !model.panes.results_visible && model.focus == Focus::Results {
+                model.focus = Focus::Editor;
+            }
+            model.panes = model.panes.clamp(model.width, model.height);
+            model.layout_dirty = true;
+            model.sync_grid_viewport();
+            Vec::new()
+        }
         Action::LayoutResultsFocus => {
             apply_layout_preset(model, crate::layout::LayoutPreset::ResultsWide);
             model.focus = Focus::Results;
@@ -6149,6 +6169,94 @@ mod tests {
     use crate::action::{Action, Effect};
     use crate::model::{Focus, Model};
     use crate::runtime::{OperationId, OperationKey};
+
+    #[test]
+    fn alt_e_hides_and_reshows_the_explorer_panel() {
+        let mut model = Model::default();
+        assert!(model.panes.explorer_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT)),
+        );
+        assert!(!model.panes.explorer_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT)),
+        );
+        assert!(model.panes.explorer_visible);
+    }
+
+    #[test]
+    fn hiding_the_focused_explorer_panel_moves_focus_to_the_editor() {
+        let mut model = Model {
+            focus: Focus::Explorer,
+            ..Model::default()
+        };
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::ALT)),
+        );
+
+        assert!(!model.panes.explorer_visible);
+        assert_eq!(model.focus, Focus::Editor);
+    }
+
+    #[test]
+    fn alt_r_hides_and_reshows_the_results_panel() {
+        let mut model = Model::default();
+        assert!(model.panes.results_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)),
+        );
+        assert!(!model.panes.results_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)),
+        );
+        assert!(model.panes.results_visible);
+    }
+
+    #[test]
+    fn refocusing_a_hidden_results_panel_shows_it_again() {
+        let mut model = Model::default();
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::ALT)),
+        );
+        assert!(!model.panes.results_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('3'), KeyModifiers::ALT)),
+        );
+        assert!(model.panes.results_visible);
+        assert_eq!(model.focus, Focus::Results);
+    }
+
+    #[test]
+    fn alt_i_hides_and_reshows_the_inspector_panel() {
+        let mut model = Model::default();
+        assert!(model.panes.inspector_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT)),
+        );
+        assert!(!model.panes.inspector_visible);
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT)),
+        );
+        assert!(model.panes.inspector_visible);
+    }
 
     #[test]
     fn typing_while_help_is_open_appends_to_search_query_and_resets_scroll() {

@@ -348,6 +348,8 @@ pub enum Action {
     CycleLayout,
     ResetLayout,
     HideInspector,
+    HideExplorer,
+    HideResults,
     LayoutResultsFocus,
     GrowResults,
     ShrinkResults,
