@@ -487,7 +487,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if !catalog_generation_matches(model, &session, generation) {
                 return Vec::new();
             }
-            let capture = replace_roots || parent.is_none();
+            let capture = replace_roots
+                || parent.as_ref()
+                    == Some(&crate::screens::explorer::connection_id(&model.connection.name));
             if capture {
                 if let Some(parent) = parent {
                     model.explorer.apply_children(&parent, list);
