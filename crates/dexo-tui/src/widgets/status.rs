@@ -46,6 +46,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         Style::default()
     };
     let mut spans = Vec::new();
+    if !model.mouse {
+        spans.push(Span::styled(
+            "MOUSE OFF · Ctrl+P settings.mouse  ",
+            err_style,
+        ));
+    }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
         spans.push(Span::raw(format!("{conn}  ctrl+p  F1")));
         if let Some(hint) = footer_hint(model) {
@@ -174,5 +180,23 @@ mod tests {
         let model = Model::default();
         assert!(render_to_string(&model, 160, 50).contains("click panes · drag edges"));
         assert!(!render_to_string(&model, 120, 35).contains("click panes · drag edges"));
+    }
+
+    #[test]
+    fn disabled_mouse_status_shows_the_keyboard_recovery_command() {
+        use crate::render::render_to_string;
+
+        for (width, height) in [(160, 50), (60, 20)] {
+            let mut model = Model {
+                mouse: false,
+                ..Model::default()
+            };
+            model.apply_size(width, height);
+            let view = render_to_string(&model, width, height);
+            assert!(
+                view.contains("MOUSE OFF · Ctrl+P settings.mouse"),
+                "missing mouse recovery command at {width}x{height}"
+            );
+        }
     }
 }
