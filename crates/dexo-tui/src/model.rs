@@ -848,6 +848,58 @@ pub fn truncate_cell(text: &str, width: usize) -> String {
     out
 }
 
+/// Fits `natural` column widths into `available` terminal columns.
+///
+/// Narrow columns keep their natural width for as long as possible: when the
+/// row doesn't fit, the widest column is shrunk one character at a time
+/// until it does, instead of greedily truncating whichever column happens to
+/// exhaust the remaining space first. If even one character per column
+/// (plus separators) doesn't fit, trailing columns are dropped and the
+/// second return value is `true`, signaling callers to render an overflow
+/// marker.
+pub fn allocate_column_widths(natural: &[u16], available: usize) -> (Vec<u16>, bool) {
+    let mut widths = natural.to_vec();
+    let mut overflowed = false;
+    while !widths.is_empty() {
+        let n = widths.len();
+        let min_required = n + n.saturating_sub(1);
+        if min_required <= available {
+            break;
+        }
+        widths.pop();
+        overflowed = true;
+    }
+    let Some(&widest) = widths.iter().max() else {
+        return (widths, overflowed);
+    };
+    let separators = widths.len().saturating_sub(1);
+    let budget = available.saturating_sub(separators);
+    let total: usize = widths.iter().map(|&w| w as usize).sum();
+    if total <= budget || widest <= 1 {
+        return (widths, overflowed);
+    }
+    let mut heap: std::collections::BinaryHeap<(u16, std::cmp::Reverse<usize>)> = widths
+        .iter()
+        .enumerate()
+        .map(|(index, &width)| (width, std::cmp::Reverse(index)))
+        .collect();
+    let mut remaining_total = total;
+    while remaining_total > budget {
+        let Some((width, std::cmp::Reverse(index))) = heap.pop() else {
+            break;
+        };
+        if width <= 1 {
+            heap.push((width, std::cmp::Reverse(index)));
+            break;
+        }
+        let shrunk = width - 1;
+        widths[index] = shrunk;
+        remaining_total -= 1;
+        heap.push((shrunk, std::cmp::Reverse(index)));
+    }
+    (widths, overflowed)
+}
+
 fn estimated_row_bytes(row: &[DbValue]) -> usize {
     row.iter()
         .map(|value| match value {

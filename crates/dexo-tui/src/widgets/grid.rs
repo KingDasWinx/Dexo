@@ -3,7 +3,7 @@ use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
 use ratatui::widgets::Paragraph;
 
-use crate::model::{Focus, Model, format_value, truncate_cell};
+use crate::model::{Focus, Model, allocate_column_widths, format_value, truncate_cell};
 use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
 
@@ -99,19 +99,20 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
     let grid = &model.results;
     let col_indices = grid.visible_column_indices();
     let widths = grid.column_widths();
+    let natural_widths: Vec<u16> = col_indices
+        .iter()
+        .map(|&index| widths.get(index).copied().unwrap_or(8))
+        .collect();
+    let (cell_widths, overflowed) =
+        allocate_column_widths(&natural_widths, area.width as usize);
     let mut header = Vec::new();
     let mut remaining = area.width as usize;
     let header_style = model.theme.header(model.capabilities);
-    for index in col_indices {
+    for (&index, &width) in col_indices.iter().zip(cell_widths.iter()) {
         let Some(column) = grid.columns().get(index) else {
             continue;
         };
-        if remaining == 0 {
-            header.push(Span::styled("…", header_style));
-            break;
-        }
-        let width = widths.get(index).copied().unwrap_or(8) as usize;
-        let cell_width = width.min(remaining);
+        let cell_width = (width as usize).min(remaining);
         let header_x = area
             .x
             .saturating_add((area.width as usize - remaining) as u16);
@@ -127,11 +128,14 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             ),
             header_style,
         ));
-        remaining = remaining.saturating_sub(cell_width + 1);
+        remaining = remaining.saturating_sub(cell_width);
         if remaining > 0 {
             header.push(Span::raw(" "));
             remaining = remaining.saturating_sub(1);
         }
+    }
+    if overflowed {
+        header.push(Span::styled("…", header_style));
     }
     let mut lines = vec![Line::from(header)];
     let body_height = area.height.saturating_sub(1) as usize;
@@ -164,23 +168,21 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
                 .theme
                 .zebra(row.source_index % 2 == 1, model.capabilities)
         };
-        if is_active || is_sel {
+        let (row_widths, row_overflowed) = if is_active || is_sel {
             spans.push(Span::styled(format!("{sel_marker} "), row_style));
             remaining = remaining.saturating_sub(sel_marker.chars().count() + 1);
-        }
+            allocate_column_widths(&natural_widths, remaining)
+        } else {
+            (cell_widths.clone(), overflowed)
+        };
         let mut cell_x = area
             .x
             .saturating_add((area.width as usize - remaining) as u16);
-        for index in grid.visible_column_indices() {
+        for (&index, &width) in col_indices.iter().zip(row_widths.iter()) {
             let Some(value) = row.cells.get(index) else {
                 continue;
             };
-            if remaining == 0 {
-                spans.push(Span::styled("…", row_style));
-                break;
-            }
-            let width = widths.get(index).copied().unwrap_or(8) as usize;
-            let cell_width = width.min(remaining);
+            let cell_width = (width as usize).min(remaining);
             hits.register(
                 HitTarget::GridCell {
                     row: row.source_index,
@@ -196,12 +198,16 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
                 ),
                 row_style,
             ));
-            remaining = remaining.saturating_sub(cell_width + 1);
-            cell_x = cell_x.saturating_add(cell_width as u16 + 1);
+            remaining = remaining.saturating_sub(cell_width);
+            cell_x = cell_x.saturating_add(cell_width as u16);
             if remaining > 0 {
                 spans.push(Span::styled(" ", row_style));
                 remaining = remaining.saturating_sub(1);
+                cell_x = cell_x.saturating_add(1);
             }
+        }
+        if row_overflowed {
+            spans.push(Span::styled("…", row_style));
         }
         lines.push(Line::from(spans));
     }
@@ -236,6 +242,40 @@ mod tests {
     #[test]
     fn truncation_marker_when_cell_overflows() {
         assert_eq!(truncate_cell("abcdefghij", 4), "abc…");
+    }
+
+    #[test]
+    fn narrow_columns_are_not_sacrificed_for_wide_ones() {
+        use crate::model::allocate_column_widths;
+
+        // A wide "description" column followed by a short "id" column: the
+        // id must keep its natural width instead of being clipped just
+        // because it comes after a column that doesn't fit.
+        let natural = vec![40u16, 2];
+        let (widths, overflowed) = allocate_column_widths(&natural, 20);
+        assert_eq!(widths[1], 2, "short trailing column must render in full");
+        assert!(widths[0] < 40, "the wide column must absorb the shrinkage");
+        assert!(!overflowed);
+    }
+
+    #[test]
+    fn allocate_column_widths_returns_natural_widths_when_everything_fits() {
+        use crate::model::allocate_column_widths;
+
+        let natural = vec![3u16, 5, 2];
+        let (widths, overflowed) = allocate_column_widths(&natural, 40);
+        assert_eq!(widths, natural);
+        assert!(!overflowed);
+    }
+
+    #[test]
+    fn allocate_column_widths_drops_trailing_columns_when_none_fit() {
+        use crate::model::allocate_column_widths;
+
+        let natural = vec![10u16; 10];
+        let (widths, overflowed) = allocate_column_widths(&natural, 5);
+        assert!(widths.len() < natural.len());
+        assert!(overflowed);
     }
 
     #[test]
