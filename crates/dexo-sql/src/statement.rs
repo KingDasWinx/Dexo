@@ -41,13 +41,23 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
 }
 
 pub fn statement_at(sql: &str, byte_index: usize) -> Option<StatementSpan> {
-    split_statements(sql)
-        .into_iter()
+    let statements = split_statements(sql);
+    statements
+        .iter()
         .find(|span| byte_index >= span.byte_range.start && byte_index <= span.byte_range.end)
+        .cloned()
         .or_else(|| {
-            split_statements(sql)
-                .into_iter()
+            statements
+                .iter()
                 .find(|span| byte_index < span.byte_range.start)
+                .cloned()
+        })
+        .or_else(|| {
+            if byte_index <= sql.len() {
+                statements.last().cloned()
+            } else {
+                None
+            }
         })
 }
 
@@ -289,6 +299,18 @@ mod tests {
     fn dollar_quote_keeps_inner_semicolon() {
         let spans = split_statements("select $tag$ a;b $tag$; select 2");
         assert_eq!(spans.len(), 2);
+    }
+
+    #[test]
+    fn caret_after_the_final_semicolon_uses_the_last_statement() {
+        let sql = "select 1; select 2;";
+        let span = statement_at(sql, sql.len()).unwrap();
+        assert_eq!(&sql[span.byte_range], "select 2");
+    }
+
+    #[test]
+    fn cursor_past_the_document_is_invalid() {
+        assert!(statement_at("select 1;", 100).is_none());
     }
 
     #[test]
