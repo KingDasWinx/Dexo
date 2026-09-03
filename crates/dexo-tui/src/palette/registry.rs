@@ -305,6 +305,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RevertChanges),
         },
         CommandSpec {
+            id: "data.toggle_delete",
+            title: "Toggle Row Delete",
+            keywords: &["remove", "restore", "row"],
+            shortcut: Some("Delete"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleRowDelete),
+        },
+        CommandSpec {
             id: "data.nav_back",
             title: "Data Navigate Back",
             keywords: &["crumb", "related"],
@@ -1266,9 +1274,11 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "results.top"
         | "results.extend_up"
         | "results.extend_down" => &[Results],
-        "data.inspect" | "data.related" | "results.actions" | "results.toggle_pick" => {
-            &[Results, RowSelection]
-        }
+        "data.inspect"
+        | "data.related"
+        | "results.actions"
+        | "results.toggle_pick"
+        | "data.toggle_delete" => &[Results, RowSelection],
         "explorer.expand"
         | "explorer.refresh_subtree"
         | "explorer.copy_name"

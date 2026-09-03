@@ -159,7 +159,13 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
         let mut spans = Vec::new();
         let is_active = cursor_row == Some(row.source_index);
         let is_sel = grid.row_selected(row.source_index);
-        let row_style = if is_active {
+        let is_pending_delete = matches!(
+            model.data.row_changes.get(&row.source_index),
+            Some(dexo_app::data::RowEditState::Deleted)
+        );
+        let row_style = if is_pending_delete {
+            model.theme.style(Role::Error, model.capabilities)
+        } else if is_active {
             active_style
         } else if is_sel {
             selected_style

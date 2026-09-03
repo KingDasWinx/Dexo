@@ -884,6 +884,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.data.revert();
             Vec::new()
         }
+        Action::ToggleRowDelete => toggle_row_delete(model),
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
         Action::DataNavBack => data_nav_back(model),
@@ -4322,6 +4323,67 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     };
     model.explorer.expand_with(&id, operation);
     catalog_load_effect(model, Some(id), operation, false)
+}
+
+fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
+    let Some(row_index) = model.results.cursor_row() else {
+        return Vec::new();
+    };
+    match model.data.row_changes.get(&row_index).copied() {
+        Some(dexo_app::data::RowEditState::Deleted) => {
+            if let Some(identity) = row_identity_at(model, row_index)
+                && let Some(position) = find_pending_index(&model.data.changes, |change| {
+                    matches!(change, dexo_app::data::PendingChange::Delete { identity: existing, .. } if existing == &identity)
+                })
+            {
+                model.data.changes.revert(position);
+            }
+            model.data.row_changes.remove(&row_index);
+        }
+        Some(dexo_app::data::RowEditState::Inserted) => {
+            let Some(original) = row_original_at(model, row_index) else {
+                return Vec::new();
+            };
+            if let Some(position) = find_pending_index(&model.data.changes, |change| {
+                matches!(change, dexo_app::data::PendingChange::Insert { values } if values == &original)
+            }) {
+                model.data.changes.revert(position);
+            }
+            model.results.remove_row(row_index);
+            model.data.row_changes.remove(&row_index);
+            let shifted: std::collections::BTreeMap<usize, dexo_app::data::RowEditState> = model
+                .data
+                .row_changes
+                .iter()
+                .map(|(&index, &state)| {
+                    if index > row_index {
+                        (index - 1, state)
+                    } else {
+                        (index, state)
+                    }
+                })
+                .collect();
+            model.data.row_changes = shifted;
+        }
+        _ => {
+            let Some(identity) = row_identity_at(model, row_index) else {
+                model.messages.push(
+                    "this table has no primary key or unique column, so rows cannot be deleted"
+                        .into(),
+                );
+                return Vec::new();
+            };
+            let Some(original) = row_original_at(model, row_index) else {
+                return Vec::new();
+            };
+            model.data.changes.delete(identity, original);
+            model
+                .data
+                .row_changes
+                .insert(row_index, dexo_app::data::RowEditState::Deleted);
+        }
+    }
+    Vec::new()
 }
 
 fn row_identity_at(model: &Model, row_index: usize) -> Option<dexo_app::data::RowIdentity> {

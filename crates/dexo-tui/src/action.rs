@@ -264,6 +264,7 @@ pub enum Action {
     ApplyChanges,
     FailApply,
     RevertChanges,
+    ToggleRowDelete,
     InspectValue,
     OpenRelated,
     DataNavBack,
