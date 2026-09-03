@@ -60,6 +60,21 @@ pub fn opens_table_data(kind: &ObjectKind) -> bool {
     )
 }
 
+pub fn connection_id(name: &str) -> ObjectId {
+    ObjectId::new(format!("connection:{name}"))
+}
+
+pub fn connection_name(id: &ObjectId) -> Option<&str> {
+    id.as_str().strip_prefix("connection:")
+}
+
+pub fn is_connection_node(node: &ExplorerNode) -> bool {
+    matches!(
+        node.kind,
+        ObjectKind::DriverSpecific(ref kind) if kind == "connection"
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplorerNode {
     pub id: ObjectId,
@@ -76,7 +91,26 @@ pub struct ExplorerNode {
 }
 
 impl ExplorerNode {
+    pub fn connection(name: &str) -> Self {
+        Self {
+            id: connection_id(name),
+            label: name.into(),
+            kind: ObjectKind::DriverSpecific("connection".into()),
+            qualified: name.into(),
+            schema: None,
+            state: NodeState::Collapsed,
+            expanded: false,
+            favorite: false,
+            children: Vec::new(),
+            restriction: None,
+            error: None,
+        }
+    }
+
     pub fn can_expand(&self) -> bool {
+        if is_connection_node(self) {
+            return true;
+        }
         if !self.children.is_empty() {
             return true;
         }
@@ -127,6 +161,7 @@ pub struct ExplorerState {
     pub connection_cursor: usize,
     pub roots: Vec<ExplorerNode>,
     pub selected: Option<ObjectId>,
+    pub selected_connection: Option<String>,
     pub offline: bool,
     pub filter_name: String,
     pub filter_kind: Option<String>,
@@ -197,8 +232,137 @@ impl ExplorerState {
     pub fn clear(&mut self) {
         self.roots.clear();
         self.selected = None;
+        self.selected_connection = None;
         self.last_load = None;
         self.stale = false;
+        self.offline = false;
+    }
+
+    pub fn sync_connection_roots(
+        &mut self,
+        profiles: &[crate::screens::connections::ConnectionRow],
+        active_connection: &str,
+    ) {
+        let mut next = Vec::with_capacity(profiles.len());
+        for row in profiles {
+            let id = connection_id(&row.profile.name);
+            let mut node = self
+                .roots
+                .iter()
+                .find(|node| node.id == id)
+                .cloned()
+                .unwrap_or_else(|| ExplorerNode::connection(&row.profile.name));
+            node.label = row.profile.name.clone();
+            node.qualified = row.profile.name.clone();
+            if row.sessions == 0 {
+                node.children.clear();
+                node.expanded = false;
+                node.state = NodeState::Collapsed;
+            } else if row.profile.name == active_connection {
+                node.expanded = true;
+            }
+            next.push(node);
+        }
+        self.roots = next;
+        if self.selected_node().is_none()
+            && let Some(first) = self.roots.first()
+        {
+            self.selected = Some(first.id.clone());
+            self.selected_connection = connection_name(&first.id).map(str::to_owned);
+        }
+    }
+
+    pub fn connection_name_for(&self, id: &ObjectId) -> Option<&str> {
+        fn contains(node: &ExplorerNode, id: &ObjectId) -> bool {
+            node.id == *id || node.children.iter().any(|child| contains(child, id))
+        }
+
+        if self.selected.as_ref() == Some(id)
+            && let Some(name) = self.selected_connection.as_deref()
+        {
+            return Some(name);
+        }
+
+        if let Some(name) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter()
+                .find(|root| connection_name(&root.id) == Some(name))
+            && contains(root, id)
+        {
+            return Some(name);
+        }
+
+        self.roots
+            .iter()
+            .find(|root| is_connection_node(root) && contains(root, id))
+            .and_then(|root| connection_name(&root.id))
+    }
+
+    pub fn selected_connection_name(&self) -> Option<&str> {
+        let id = self.selected.as_ref()?;
+        self.connection_name_for(id)
+    }
+
+    pub fn replace_connection_catalog(
+        &mut self,
+        connection_name: &str,
+        page: CatalogList,
+        offline: bool,
+    ) {
+        let id = connection_id(connection_name);
+        if let Some(node) = Self::find_mut(&mut self.roots, &id) {
+            node.children = page
+                .objects
+                .into_iter()
+                .map(ExplorerNode::from_object)
+                .collect();
+            for restriction in page.restrictions {
+                node.children.push(restriction_node(restriction));
+            }
+            node.expanded = true;
+            node.state = NodeState::Expanded;
+            self.offline = offline;
+            self.stale = false;
+            self.selected = Some(id);
+            self.selected_connection = Some(connection_name.to_owned());
+        }
+    }
+
+    pub fn expand_local(&mut self, id: &ObjectId) {
+        let owner = self.connection_name_for(id).map(str::to_owned);
+        let root_index = owner.as_deref().and_then(|name| {
+            self.roots
+                .iter()
+                .position(|root| connection_name(&root.id) == Some(name))
+        });
+        let node = match root_index {
+            Some(index) => Self::find_mut(std::slice::from_mut(&mut self.roots[index]), id),
+            None => Self::find_mut(&mut self.roots, id),
+        };
+        if let Some(node) = node {
+            node.expanded = true;
+            if matches!(
+                node.state,
+                NodeState::Collapsed | NodeState::Stale | NodeState::Expanded
+            ) {
+                node.state = NodeState::Expanded;
+            }
+            self.selected = Some(id.clone());
+            self.selected_connection = owner;
+        }
+    }
+
+    fn find_mut<'a>(nodes: &'a mut [ExplorerNode], id: &ObjectId) -> Option<&'a mut ExplorerNode> {
+        for node in nodes {
+            if node.id == *id {
+                return Some(node);
+            }
+            if let Some(found) = Self::find_mut(&mut node.children, id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     pub fn mark_stale(&mut self) {
@@ -216,6 +380,15 @@ impl ExplorerState {
     }
 
     pub fn collapse(&mut self, id: &ObjectId) -> bool {
+        if self.selected.as_ref() == Some(id)
+            && let Some(owner) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter_mut()
+                .find(|root| connection_name(&root.id) == Some(owner))
+        {
+            return Self::collapse_in(std::slice::from_mut(root), id);
+        }
         Self::collapse_in(&mut self.roots, id)
     }
 
@@ -240,6 +413,21 @@ impl ExplorerState {
     }
 
     pub fn expand_with(&mut self, id: &ObjectId, operation: OperationId) -> bool {
+        if self.selected.as_ref() == Some(id)
+            && let Some(owner) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter_mut()
+                .find(|root| connection_name(&root.id) == Some(owner))
+        {
+            return Self::expand_in(
+                std::slice::from_mut(root),
+                id,
+                operation,
+                &mut self.last_load,
+                &mut self.selected,
+            );
+        }
         Self::expand_in(
             &mut self.roots,
             id,
@@ -260,6 +448,15 @@ impl ExplorerState {
             if node.id == *id {
                 node.expanded = true;
                 *selected = Some(id.clone());
+                if !node.children.is_empty()
+                    && matches!(
+                        node.state,
+                        NodeState::Collapsed | NodeState::Expanded | NodeState::Stale
+                    )
+                {
+                    node.state = NodeState::Expanded;
+                    return false;
+                }
                 if matches!(
                     node.state,
                     NodeState::Collapsed
@@ -341,18 +538,31 @@ impl ExplorerState {
     }
 
     pub fn visible_ids(&self) -> Vec<ObjectId> {
+        self.visible_selections()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect()
+    }
+
+    fn visible_selections(&self) -> Vec<(Option<String>, ObjectId)> {
         let mut out = Vec::new();
-        self.collect_visible(&self.roots, &mut out);
+        self.collect_visible(&self.roots, None, &mut out);
         out
     }
 
-    fn collect_visible(&self, nodes: &[ExplorerNode], out: &mut Vec<ObjectId>) {
+    fn collect_visible(
+        &self,
+        nodes: &[ExplorerNode],
+        owner: Option<&str>,
+        out: &mut Vec<(Option<String>, ObjectId)>,
+    ) {
         for node in nodes {
+            let owner = connection_name(&node.id).or(owner);
             if self.matches(node) {
-                out.push(node.id.clone());
+                out.push((owner.map(str::to_owned), node.id.clone()));
             }
             if node.expanded {
-                self.collect_visible(&node.children, out);
+                self.collect_visible(&node.children, owner, out);
             }
         }
     }
@@ -401,6 +611,10 @@ impl ExplorerState {
         let mut out = Vec::new();
         fn walk(nodes: &[ExplorerNode], out: &mut Vec<CatalogObject>) {
             for node in nodes {
+                if is_connection_node(node) {
+                    walk(&node.children, out);
+                    continue;
+                }
                 if matches!(&node.kind, ObjectKind::DriverSpecific(kind) if kind == "folder") {
                     walk(&node.children, out);
                     continue;
@@ -452,28 +666,59 @@ impl ExplorerState {
     }
 
     pub fn select(&mut self, id: ObjectId) {
+        self.selected_connection = self.connection_name_for(&id).map(str::to_owned);
         self.selected = Some(id);
     }
 
+    pub fn select_in_connection(&mut self, connection: &str, id: ObjectId) {
+        fn contains(node: &ExplorerNode, id: &ObjectId) -> bool {
+            node.id == *id || node.children.iter().any(|child| contains(child, id))
+        }
+
+        if self
+            .roots
+            .iter()
+            .find(|root| connection_name(&root.id) == Some(connection))
+            .is_some_and(|root| contains(root, &id))
+        {
+            self.selected = Some(id);
+            self.selected_connection = Some(connection.to_owned());
+        } else {
+            self.select(id);
+        }
+    }
+
+    pub fn select_visible(&mut self, index: usize) {
+        if let Some((connection, id)) = self.visible_selections().get(index).cloned() {
+            self.selected = Some(id);
+            self.selected_connection = connection;
+        }
+    }
+
     pub fn move_selection(&mut self, delta: i32) {
-        let ids = self.visible_ids();
-        if ids.is_empty() {
+        let selections = self.visible_selections();
+        if selections.is_empty() {
             return;
         }
-        let current = self
-            .selected
-            .as_ref()
-            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+        let current = selections
+            .iter()
+            .position(|(connection, id)| {
+                self.selected.as_ref() == Some(id)
+                    && self.selected_connection.as_ref() == connection.as_ref()
+            })
             .unwrap_or(0);
-        let next = (current as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
-        self.selected = Some(ids[next].clone());
+        let next = (current as i32 + delta).clamp(0, selections.len() as i32 - 1) as usize;
+        self.selected_connection = selections[next].0.clone();
+        self.selected = Some(selections[next].1.clone());
     }
 
     pub fn selected_index(&self) -> usize {
-        let ids = self.visible_ids();
-        self.selected
-            .as_ref()
-            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+        self.visible_selections()
+            .iter()
+            .position(|(connection, id)| {
+                self.selected.as_ref() == Some(id)
+                    && self.selected_connection.as_ref() == connection.as_ref()
+            })
             .unwrap_or(0)
     }
 
@@ -487,10 +732,8 @@ impl ExplorerState {
     }
 
     pub fn copy_selected_name(&mut self) {
-        if let Some(id) = &self.selected
-            && let Some(node) = Self::find(&self.roots, id)
-        {
-            self.copied = Some(node.qualified.clone());
+        if let Some(qualified) = self.selected_node().map(|node| node.qualified.clone()) {
+            self.copied = Some(qualified);
         }
     }
 
@@ -507,9 +750,20 @@ impl ExplorerState {
     }
 
     pub fn selected_node(&self) -> Option<&ExplorerNode> {
-        self.selected
-            .as_ref()
-            .and_then(|id| Self::find(&self.roots, id))
+        let id = self.selected.as_ref()?;
+        if let Some(connection) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter()
+                .find(|root| connection_name(&root.id) == Some(connection))
+        {
+            return Self::find(std::slice::from_ref(root), id);
+        }
+        Self::find(&self.roots, id)
+    }
+
+    pub fn is_selected(&self, connection: Option<&str>, id: &ObjectId) -> bool {
+        self.selected.as_ref() == Some(id) && self.selected_connection.as_deref() == connection
     }
 }
 
@@ -678,7 +932,7 @@ fn is_system_node(node: &ExplorerNode) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExplorerAction, ExplorerState, NodeState};
+    use super::{ExplorerAction, ExplorerNode, ExplorerState, NodeState};
     use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
 
     #[test]
@@ -851,5 +1105,83 @@ mod tests {
             .unwrap();
         assert!(columns.children.iter().any(|n| n.label == "id"));
         assert!(!columns.children.iter().any(|n| n.label == "users.id"));
+    }
+
+    #[test]
+    fn replace_connection_catalog_attaches_children_under_profile() {
+        use crate::screens::connections::ConnectionRow;
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::nil()),
+            None,
+            "prod",
+            "postgres",
+            "local",
+            serde_json::json!({}),
+            SecretRef::new("ref".into()),
+        );
+        let mut explorer = ExplorerState::default();
+        explorer.sync_connection_roots(
+            &[ConnectionRow {
+                profile,
+                sessions: 1,
+            }],
+            "prod",
+        );
+        explorer.replace_connection_catalog(
+            "prod",
+            CatalogList {
+                objects: vec![CatalogObject::new(
+                    ObjectId::new("table:orders"),
+                    ObjectKind::Table,
+                    QualifiedName::new(Some("db"), Some("public"), "orders"),
+                    None,
+                )],
+                restrictions: vec![],
+            },
+            false,
+        );
+        assert_eq!(explorer.roots.len(), 1);
+        assert_eq!(explorer.roots[0].children.len(), 1);
+        assert_eq!(explorer.roots[0].children[0].label, "orders");
+    }
+
+    #[test]
+    fn duplicate_object_ids_preserve_their_connection_during_selection() {
+        fn root(name: &str, shared_id: &ObjectId) -> ExplorerNode {
+            let mut root = ExplorerNode::connection(name);
+            root.expanded = true;
+            root.children = vec![ExplorerNode {
+                id: shared_id.clone(),
+                label: "public".into(),
+                kind: ObjectKind::Schema,
+                qualified: format!("{name}.public"),
+                schema: Some("public".into()),
+                state: NodeState::Collapsed,
+                expanded: false,
+                favorite: false,
+                children: Vec::new(),
+                restriction: None,
+                error: None,
+            }];
+            root
+        }
+
+        let shared_id = ObjectId::new("pg:schema:2200");
+        let mut explorer = ExplorerState {
+            roots: vec![root("prod", &shared_id), root("staging", &shared_id)],
+            ..ExplorerState::default()
+        };
+
+        explorer.select_visible(1);
+        assert_eq!(explorer.selected_connection_name(), Some("prod"));
+        explorer.move_selection(2);
+        assert_eq!(explorer.selected_connection_name(), Some("staging"));
+        assert_eq!(
+            explorer.selected_node().map(|node| node.qualified.as_str()),
+            Some("staging.public")
+        );
+        assert_eq!(explorer.selected_index(), 3);
     }
 }

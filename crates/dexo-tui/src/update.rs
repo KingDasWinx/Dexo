@@ -50,7 +50,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     .connections
                     .upsert_session(crate::screens::connections::SessionRow {
                         id,
-                        connection: name,
+                        connection: name.clone(),
                         transaction: TransactionState::Idle,
                         generation,
                         environment: model.connection.environment.clone(),
@@ -59,19 +59,25 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     });
                 model.connections.selected_session = Some(id);
             }
-            model.explorer.clear();
+            model.explorer.sync_connection_roots(
+                &model.connections.profiles,
+                model.connection.name.as_str(),
+            );
             if ready {
                 model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
                 model.focus = Focus::Editor;
+                let connection = crate::screens::explorer::connection_id(&model.connection.name);
+                model.explorer.select(connection.clone());
                 let mut effects = Vec::new();
                 if let Some(session) = session {
                     let operation = crate::runtime::OperationId::new();
+                    model.explorer.expand_with(&connection, operation);
                     effects.push(Effect::LoadCatalogChildren {
-                        parent: None,
+                        parent: Some(connection),
                         operation,
                         session,
                         generation,
-                        replace_roots: true,
+                        replace_roots: false,
                         include_system: model.explorer.include_system,
                     });
                 }
@@ -264,7 +270,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ConnectSelected => connect_selected(model),
         Action::EditSelectedConnection => {
             if !model.connections.open && model.focus == Focus::Explorer {
-                model.connections.selected_profile = model.explorer.connection_cursor;
+                if let Some(index) = selected_connection_profile_index(model) {
+                    model.connections.selected_profile = index;
+                }
             }
             match model.connections.selected().cloned() {
                 Some(profile) => {
@@ -297,21 +305,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             })
             .into_iter()
             .collect(),
-        Action::CloseSelectedSession => model
-            .connections
-            .selected()
-            .and_then(|profile| {
-                model
-                    .connections
-                    .session_for(&profile.name)
-                    .map(|session| session.id)
-            })
-            .or(model.active_session)
-            .map(|session| Effect::CloseSession { session })
-            .into_iter()
-            .collect(),
+        Action::CloseSelectedSession => close_selected_session(model),
         Action::ProfilesLoaded(profiles) => {
             model.connections.load_profiles(profiles);
+            sync_explorer_connections(model);
             Vec::new()
         }
         Action::ProfileSaved(profile) => {
@@ -331,6 +328,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                         acc
                     }),
             );
+            sync_explorer_connections(model);
             model.messages.push(format!("saved {}", profile.name));
             Vec::new()
         }
@@ -355,10 +353,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.active_session = None;
                 model.connection.ready = false;
                 model.connection.name.clear();
-                model.explorer.clear();
                 model.explorer.offline = false;
                 model.explorer.stale = false;
             }
+            sync_explorer_connections(model);
             model.messages.push(format!("deleted {name}"));
             effects
         }
@@ -476,13 +474,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
         }
         Action::Focus(target) => focus_pane(model, target),
-        Action::ExplorerExpand => {
-            if model.explorer.sidebar_focus == crate::screens::explorer::SidebarFocus::Connections {
-                activate_sidebar_connection(model)
-            } else {
-                expand_or_open_selected(model)
-            }
-        }
+        Action::ExplorerExpand => activate_connection_or_catalog(model),
         Action::RefreshCatalogNode => refresh_catalog(model, false),
         Action::RefreshCatalogSubtree => refresh_catalog(model, false),
         Action::RefreshCatalogAll => refresh_catalog(model, true),
@@ -499,7 +491,17 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             let capture = replace_roots || parent.is_none();
             if capture {
-                model.explorer.replace_roots(list);
+                if let Some(parent) = parent {
+                    model.explorer.apply_children(&parent, list);
+                } else if !model.connection.name.is_empty() {
+                    model.explorer.replace_connection_catalog(
+                        &model.connection.name,
+                        list,
+                        model.explorer.offline,
+                    );
+                } else {
+                    model.explorer.replace_roots(list);
+                }
             } else if let Some(parent) = parent {
                 model.explorer.apply_children(&parent, list);
             }
@@ -2088,12 +2090,19 @@ fn mouse_workbench(
             close_palette(model);
             model.focus = Focus::Explorer;
             model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
-            let ids = model.explorer.visible_ids();
-            if let Some(id) = ids.get(index).cloned() {
-                model.explorer.select(id);
+            if index < model.explorer.visible_ids().len() {
+                model.explorer.select_visible(index);
+                if let Some(profile_index) = selected_connection_profile_index(model) {
+                    model.connections.selected_profile = profile_index;
+                }
             }
-            if doubled {
-                expand_or_open_selected(model)
+            let activate = doubled
+                || model
+                    .explorer
+                    .selected_node()
+                    .is_some_and(crate::screens::explorer::is_connection_node);
+            if activate {
+                activate_connection_or_catalog(model)
             } else {
                 Vec::new()
             }
@@ -2102,9 +2111,15 @@ fn mouse_workbench(
             crate::screens::editor::end_typing(model);
             close_palette(model);
             model.focus = Focus::Explorer;
-            model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Connections;
-            model.explorer.connection_cursor = index;
-            activate_sidebar_connection(model)
+            model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
+            if index < model.connections.profiles.len() {
+                let name = model.connections.profiles[index].profile.name.clone();
+                model.connections.selected_profile = index;
+                model
+                    .explorer
+                    .select(crate::screens::explorer::connection_id(&name));
+            }
+            activate_connection_or_catalog(model)
         }
         Some(HitTarget::Editor) => {
             let effects = update(model, Action::Focus(FocusTarget::Editor));
@@ -3041,6 +3056,14 @@ fn confirm_delete(
     }]
 }
 
+fn explorer_sidebar_header_rows(model: &Model) -> usize {
+    if model.connections.profiles.is_empty() {
+        2
+    } else {
+        1
+    }
+}
+
 fn explorer_visible_rows(model: &Model) -> usize {
     let area = Rect::new(0, 0, model.width.max(1), model.height.max(1));
     let plan = LayoutPlan::for_area_with(area, Some(&model.panes));
@@ -3051,8 +3074,123 @@ fn explorer_visible_rows(model: &Model) -> usize {
     };
     height
         .saturating_sub(2)
-        .saturating_sub((2 + model.connections.profiles.len()) as u16)
+        .saturating_sub(explorer_sidebar_header_rows(model) as u16)
         .max(1) as usize
+}
+
+fn sync_explorer_connections(model: &mut Model) {
+    model.explorer.sync_connection_roots(
+        &model.connections.profiles,
+        model.connection.name.as_str(),
+    );
+}
+
+fn selected_connection_profile_index(model: &Model) -> Option<usize> {
+    let name = model.explorer.selected_connection_name()?;
+    model
+        .connections
+        .profiles
+        .iter()
+        .position(|row| row.profile.name == name)
+}
+
+fn close_selected_session(model: &mut Model) -> Vec<Effect> {
+    let connection_name = if model.connections.open {
+        model
+            .connections
+            .selected()
+            .map(|profile| profile.name.clone())
+    } else if model.focus == Focus::Explorer {
+        model.explorer.selected_connection_name().map(str::to_owned)
+    } else {
+        model.active_session.and_then(|active| {
+            model
+                .connections
+                .sessions
+                .iter()
+                .find(|session| session.id == active)
+                .map(|session| session.connection.clone())
+        })
+    };
+
+    let Some(connection_name) = connection_name else {
+        model
+            .messages
+            .push("select a connection to disconnect".into());
+        return Vec::new();
+    };
+
+    if let Some(index) = model
+        .connections
+        .profiles
+        .iter()
+        .position(|row| row.profile.name == connection_name)
+    {
+        model.connections.selected_profile = index;
+    }
+
+    let Some(session) = model
+        .connections
+        .session_for(&connection_name)
+        .map(|session| session.id)
+    else {
+        model
+            .messages
+            .push(format!("{connection_name} is disconnected"));
+        return Vec::new();
+    };
+
+    vec![Effect::CloseSession { session }]
+}
+
+fn activate_connection_or_catalog(model: &mut Model) -> Vec<Effect> {
+    if model
+        .explorer
+        .selected_node()
+        .is_some_and(crate::screens::explorer::is_connection_node)
+    {
+        activate_connection_node(model)
+    } else {
+        expand_or_open_selected(model)
+    }
+}
+
+fn activate_connection_node(model: &mut Model) -> Vec<Effect> {
+    let Some(index) = selected_connection_profile_index(model) else {
+        return Vec::new();
+    };
+    model.connections.selected_profile = index;
+    let name = model.connections.profiles[index].profile.name.clone();
+    let profile = model.connections.profiles[index].profile.clone();
+    let connection = crate::screens::explorer::connection_id(&name);
+    if model.connections.session_for(&name).is_none() {
+        return connect_selected(model);
+    }
+    if let Some(session) = model.connections.session_for(&name).cloned()
+        && model.active_session != Some(session.id)
+    {
+        return activate_existing_session(model, &profile, session);
+    }
+    if let Some(node) = model.explorer.selected_node() {
+        if node.expanded {
+            if crate::screens::explorer::is_connection_node(node) && node.children.is_empty() {
+                if matches!(
+                    node.state,
+                    crate::screens::explorer::NodeState::Loading(_)
+                ) {
+                    return Vec::new();
+                }
+                return expand_selected_catalog(model);
+            }
+            model.explorer.collapse(&connection);
+            return Vec::new();
+        }
+        if !node.children.is_empty() {
+            model.explorer.expand_local(&connection);
+            return Vec::new();
+        }
+    }
+    expand_selected_catalog(model)
 }
 
 fn connect_selected(model: &mut Model) -> Vec<Effect> {
@@ -3070,49 +3208,23 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     }]
 }
 
-fn activate_sidebar_connection(model: &mut Model) -> Vec<Effect> {
-    if model.explorer.connection_cursor >= model.connections.profiles.len() {
-        return Vec::new();
-    }
-    model.connections.selected_profile = model.explorer.connection_cursor;
-    connect_selected(model)
-}
-
 fn move_sidebar_selection(model: &mut Model, delta: i32) {
-    use crate::screens::explorer::SidebarFocus;
-
-    match (model.explorer.sidebar_focus, delta) {
-        (SidebarFocus::Connections, -1) if model.explorer.connection_cursor > 0 => {
-            model.explorer.connection_cursor -= 1;
-        }
-        (SidebarFocus::Connections, -1) => {}
-        (SidebarFocus::Connections, 1)
-            if model.explorer.connection_cursor + 1 < model.connections.profiles.len() =>
-        {
-            model.explorer.connection_cursor += 1;
-        }
-        (SidebarFocus::Connections, 1) => {
-            model.explorer.sidebar_focus = SidebarFocus::Catalog;
-        }
-        (SidebarFocus::Catalog, -1)
-            if model.explorer.selected_index() == 0 && !model.connections.profiles.is_empty() =>
-        {
-            model.explorer.sidebar_focus = SidebarFocus::Connections;
-            model.explorer.connection_cursor = model.connections.profiles.len() - 1;
-        }
-        (SidebarFocus::Catalog, _) => {
-            model.explorer.move_selection(delta);
-            model.explorer.sync_scroll(explorer_visible_rows(model));
-        }
-        _ => {}
+    model.explorer.move_selection(delta);
+    model.explorer.sync_scroll(explorer_visible_rows(model));
+    if let Some(index) = selected_connection_profile_index(model) {
+        model.connections.selected_profile = index;
     }
 }
+
 fn enter_offline_explorer(model: &mut Model) -> Vec<Effect> {
-    model.explorer.clear();
+    sync_explorer_connections(model);
     model.explorer.offline = true;
     if model.connection.name.is_empty() {
         return Vec::new();
     }
+    model
+        .explorer
+        .select(crate::screens::explorer::connection_id(&model.connection.name));
     vec![Effect::LoadOfflineCatalog {
         connection_id: model.connection.name.clone(),
         database_name: catalog_database(model),
@@ -3140,14 +3252,17 @@ fn activate_existing_session(
     model.session_generation = session.generation;
     model.connections.selected_session = Some(session.id);
     model.transaction = session.transaction;
-    model.explorer.clear();
+    sync_explorer_connections(model);
+    let connection = crate::screens::explorer::connection_id(&profile.name);
+    model.explorer.select(connection.clone());
     let operation = crate::runtime::OperationId::new();
+    model.explorer.expand_with(&connection, operation);
     vec![Effect::LoadCatalogChildren {
-        parent: None,
+        parent: Some(connection),
         operation,
         session: session.id,
         generation: session.generation,
-        replace_roots: true,
+        replace_roots: false,
         include_system: model.explorer.include_system,
     }]
 }
@@ -3985,8 +4100,12 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     }
     let operation = crate::runtime::OperationId::new();
     if all {
-        model.explorer.clear();
-        return catalog_load_effect(model, None, operation, true);
+        if model.connection.name.is_empty() {
+            return Vec::new();
+        }
+        let connection = crate::screens::explorer::connection_id(&model.connection.name);
+        model.explorer.expand_with(&connection, operation);
+        return catalog_load_effect(model, Some(connection), operation, false);
     }
     let Some(id) = model.explorer.selected.clone() else {
         return Vec::new();

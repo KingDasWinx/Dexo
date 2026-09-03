@@ -898,11 +898,11 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "connection.close_session",
-            title: "Close Session",
-            keywords: &["disconnect"],
-            shortcut: None,
+            title: "Disconnect Connection",
+            keywords: &["close", "session"],
+            shortcut: Some("Shift+D"),
             requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionCloseSession),
+            invocation: PaletteInvocation::Dispatch(Action::CloseSelectedSession),
         },
         CommandSpec {
             id: "project.browse",

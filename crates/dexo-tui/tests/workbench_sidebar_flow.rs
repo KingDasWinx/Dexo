@@ -5,7 +5,7 @@ use dexo_tui::action::{Action, Effect};
 use dexo_tui::model::{EditorDocument, Focus, Model};
 use dexo_tui::mouse::{HitMap, HitTarget};
 use dexo_tui::runtime::SessionId;
-use dexo_tui::screens::explorer::SidebarFocus;
+use dexo_tui::screens::explorer::connection_id;
 use dexo_tui::update;
 
 fn saved_profile() -> ConnectionProfile {
@@ -20,7 +20,28 @@ fn saved_profile() -> ConnectionProfile {
     )
 }
 
+fn sync_sidebar(model: &mut Model) {
+    model.explorer.sync_connection_roots(
+        &model.connections.profiles,
+        model.connection.name.as_str(),
+    );
+}
+
+fn select_connection(model: &mut Model, name: &str) {
+    sync_sidebar(model);
+    model.explorer.select(connection_id(name));
+    if let Some(index) = model
+        .connections
+        .profiles
+        .iter()
+        .position(|row| row.profile.name == name)
+    {
+        model.connections.selected_profile = index;
+    }
+}
+
 fn paint(model: &mut Model) {
+    sync_sidebar(model);
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
     let mut hits = HitMap::default();
     terminal
@@ -39,6 +60,31 @@ fn click_target(model: &mut Model, target: HitTarget) {
             row,
             modifiers: KeyModifiers::NONE,
         }),
+    );
+}
+
+fn key_d() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE))
+}
+
+fn shift_d() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Char('D'), KeyModifiers::SHIFT))
+}
+
+fn connect_prod(model: &mut Model, session: SessionId) {
+    model.connections.load_profiles(vec![saved_profile()]);
+    let _ = update(
+        model,
+        Action::ConnectionChanged {
+            name: "prod".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(session),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
     );
 }
 
@@ -64,7 +110,7 @@ fn clicking_sidebar_edit_opens_the_selected_connection() {
         .connections
         .load_profiles(vec![saved_profile(), alternate]);
     model.focus = Focus::Explorer;
-    model.explorer.connection_cursor = 1;
+    select_connection(&mut model, "staging");
     paint(&mut model);
 
     click_target(
@@ -111,7 +157,7 @@ fn enter_on_sidebar_connection_emits_connect() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
     model.focus = Focus::Explorer;
-    model.explorer.sidebar_focus = SidebarFocus::Connections;
+    select_connection(&mut model, "prod");
 
     let effects = update(&mut model, Action::ExplorerExpand);
 
@@ -125,8 +171,9 @@ fn enter_on_sidebar_connection_emits_connect() {
 fn right_clicking_sidebar_connection_does_not_connect() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
+    select_connection(&mut model, "prod");
     paint(&mut model);
-    let (column, row) = model.hits.center(HitTarget::SidebarConnection(0));
+    let (column, row) = model.hits.center(HitTarget::ExplorerNode(0));
 
     let effects = update(
         &mut model,
@@ -139,8 +186,10 @@ fn right_clicking_sidebar_connection_does_not_connect() {
     );
 
     assert!(effects.is_empty());
-    assert_eq!(model.explorer.connection_cursor, 0);
-    assert_ne!(model.explorer.sidebar_focus, SidebarFocus::Connections);
+    assert_eq!(
+        model.explorer.selected.as_ref(),
+        Some(&connection_id("prod"))
+    );
 }
 
 #[test]
@@ -149,7 +198,6 @@ fn ready_connection_returns_focus_to_catalog_and_editor() {
         focus: Focus::Explorer,
         ..Model::default()
     };
-    model.explorer.sidebar_focus = SidebarFocus::Connections;
 
     let _ = update(
         &mut model,
@@ -165,7 +213,10 @@ fn ready_connection_returns_focus_to_catalog_and_editor() {
         },
     );
 
-    assert_eq!(model.explorer.sidebar_focus, SidebarFocus::Catalog);
+    assert_eq!(
+        model.explorer.sidebar_focus,
+        dexo_tui::screens::explorer::SidebarFocus::Catalog
+    );
     assert_eq!(model.focus, Focus::Editor);
 }
 
@@ -287,6 +338,10 @@ fn ctrl_n_creates_a_document_bound_to_the_active_connection() {
         &mut model,
         Action::Key(KeyEvent::new(KeyCode::Char('n'), KeyModifiers::CONTROL)),
     );
+    let _ = update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
 
     let document = model.active_document();
     assert_eq!(
@@ -298,20 +353,7 @@ fn ctrl_n_creates_a_document_bound_to_the_active_connection() {
 }
 
 #[test]
-fn up_on_first_sidebar_connection_stays_in_connections() {
-    let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile()]);
-    model.focus = Focus::Explorer;
-    model.explorer.sidebar_focus = SidebarFocus::Connections;
-
-    let _ = update(&mut model, Action::ExplorerUp);
-
-    assert_eq!(model.explorer.sidebar_focus, SidebarFocus::Connections);
-    assert_eq!(model.explorer.connection_cursor, 0);
-}
-
-#[test]
-fn editing_sidebar_connection_uses_sidebar_cursor() {
+fn up_on_first_sidebar_connection_stays_on_first_connection() {
     let mut alternate = saved_profile();
     alternate.name = "staging".into();
     let mut model = Model::default();
@@ -319,7 +361,26 @@ fn editing_sidebar_connection_uses_sidebar_cursor() {
         .connections
         .load_profiles(vec![saved_profile(), alternate]);
     model.focus = Focus::Explorer;
-    model.explorer.connection_cursor = 1;
+    select_connection(&mut model, "prod");
+
+    let _ = update(&mut model, Action::ExplorerUp);
+
+    assert_eq!(
+        model.explorer.selected.as_ref(),
+        Some(&connection_id("prod"))
+    );
+}
+
+#[test]
+fn editing_sidebar_connection_uses_explorer_selection() {
+    let mut alternate = saved_profile();
+    alternate.name = "staging".into();
+    let mut model = Model::default();
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), alternate]);
+    model.focus = Focus::Explorer;
+    select_connection(&mut model, "staging");
 
     let _ = update(&mut model, Action::EditSelectedConnection);
 
@@ -331,6 +392,182 @@ fn editing_sidebar_connection_uses_sidebar_cursor() {
             .map(|profile| profile.name.as_str()),
         Some("staging")
     );
+}
+
+#[test]
+fn shift_d_on_sidebar_connection_closes_its_session() {
+    let session = SessionId(uuid::Uuid::nil());
+    let mut model = Model::default();
+    connect_prod(&mut model, session);
+    model.focus = Focus::Explorer;
+    select_connection(&mut model, "prod");
+
+    let effects = update(&mut model, shift_d());
+
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CloseSession { session: id } if *id == session
+        )),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn shift_d_on_child_closes_its_owning_connection() {
+    let prod_session = SessionId(uuid::Uuid::from_u128(1));
+    let staging_session = SessionId(uuid::Uuid::from_u128(2));
+    let mut staging = saved_profile();
+    staging.name = "staging".into();
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile(), staging]);
+    for (name, session) in [("prod", prod_session), ("staging", staging_session)] {
+        let _ = update(
+            &mut model,
+            Action::ConnectionChanged {
+                name: name.into(),
+                ready: true,
+                environment: "local".into(),
+                session: Some(session),
+                generation: 1,
+                token: 0,
+                read_only: false,
+                driver: "postgres".into(),
+            },
+        );
+    }
+    let schema = ObjectId::new("schema:prod:public");
+    model.explorer.apply_children(
+        &connection_id("prod"),
+        CatalogList {
+            objects: vec![CatalogObject::new(
+                schema.clone(),
+                ObjectKind::Schema,
+                QualifiedName::new(Some("prod"), Some("public"), "public"),
+                Some(connection_id("prod")),
+            )],
+            restrictions: Vec::new(),
+        },
+    );
+    model.explorer.select(schema);
+    model.focus = Focus::Explorer;
+
+    let effects = update(&mut model, shift_d());
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::CloseSession { session }] if *session == prod_session
+    ));
+}
+
+#[test]
+fn shift_d_on_duplicate_child_id_closes_the_selected_connection() {
+    let prod_session = SessionId(uuid::Uuid::from_u128(1));
+    let staging_session = SessionId(uuid::Uuid::from_u128(2));
+    let mut staging = saved_profile();
+    staging.name = "staging".into();
+    let mut model = Model::default();
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), staging]);
+    for (name, session) in [("prod", prod_session), ("staging", staging_session)] {
+        let _ = update(
+            &mut model,
+            Action::ConnectionChanged {
+                name: name.into(),
+                ready: true,
+                environment: "local".into(),
+                session: Some(session),
+                generation: 1,
+                token: 0,
+                read_only: false,
+                driver: "postgres".into(),
+            },
+        );
+    }
+    let shared_id = ObjectId::new("pg:schema:2200");
+    for name in ["prod", "staging"] {
+        model.explorer.replace_connection_catalog(
+            name,
+            CatalogList {
+                objects: vec![CatalogObject::new(
+                    shared_id.clone(),
+                    ObjectKind::Schema,
+                    QualifiedName::new(Some(name), Some("public"), "public"),
+                    Some(connection_id(name)),
+                )],
+                restrictions: Vec::new(),
+            },
+            false,
+        );
+    }
+    model.explorer.select_in_connection("staging", shared_id);
+    model.focus = Focus::Explorer;
+
+    let effects = update(&mut model, shift_d());
+
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [Effect::CloseSession { session }] if *session == staging_session
+        ),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn shift_d_on_offline_connection_never_closes_another_session() {
+    let prod_session = SessionId(uuid::Uuid::from_u128(1));
+    let mut staging = saved_profile();
+    staging.name = "staging".into();
+    let mut model = Model::default();
+    connect_prod(&mut model, prod_session);
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), staging]);
+    model.focus = Focus::Explorer;
+    select_connection(&mut model, "staging");
+
+    let effects = update(&mut model, shift_d());
+
+    assert!(effects.is_empty(), "{effects:?}");
+    assert_eq!(model.active_session, Some(prod_session));
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.contains("staging") && message.contains("disconnected"))
+    );
+}
+
+#[test]
+fn lowercase_d_on_catalog_object_still_opens_ddl() {
+    let session = SessionId(uuid::Uuid::from_u128(1));
+    let mut model = Model::default();
+    connect_prod(&mut model, session);
+    let schema = ObjectId::new("schema:prod:public");
+    model.explorer.apply_children(
+        &connection_id("prod"),
+        CatalogList {
+            objects: vec![CatalogObject::new(
+                schema.clone(),
+                ObjectKind::Schema,
+                QualifiedName::new(Some("prod"), Some("public"), "public"),
+                Some(connection_id("prod")),
+            )],
+            restrictions: Vec::new(),
+        },
+    );
+    model.explorer.select(schema.clone());
+    model.focus = Focus::Explorer;
+
+    let effects = update(&mut model, key_d());
+
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadObjectInspector { id, session: loaded, .. }]
+            if id == &schema && *loaded == session
+    ));
 }
 
 #[test]
@@ -358,7 +595,122 @@ fn editing_from_connections_overlay_uses_overlay_selection() {
 }
 
 #[test]
-fn reactivating_open_sidebar_session_returns_to_editor_and_catalog() {
+fn second_activate_expands_collapsed_connected_folder() {
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+    let _ = update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "prod".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(SessionId(uuid::Uuid::nil())),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
+    );
+    model
+        .explorer
+        .collapse(&connection_id("prod"));
+    model.focus = Focus::Explorer;
+    select_connection(&mut model, "prod");
+
+    let effects = update(&mut model, Action::ExplorerExpand);
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadCatalogChildren { .. }))
+            || model
+                .explorer
+                .selected_node()
+                .is_some_and(|node| node.expanded),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn clicking_connected_connection_expands_collapsed_folder() {
+    let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
+    let _ = update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "prod".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(SessionId(uuid::Uuid::nil())),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
+    );
+    model
+        .explorer
+        .collapse(&connection_id("prod"));
+    paint(&mut model);
+
+    click_target(&mut model, HitTarget::ExplorerNode(0));
+
+    assert!(
+        model
+            .explorer
+            .selected_node()
+            .is_some_and(|node| node.expanded),
+        "expected connection folder to expand after click"
+    );
+}
+
+#[test]
+fn reactivating_a_different_open_session_switches_back_to_editor() {
+    let mut alternate = saved_profile();
+    alternate.name = "staging".into();
+    let mut model = Model::default();
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), alternate]);
+    let _ = update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "prod".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(SessionId(uuid::Uuid::nil())),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
+    );
+    model.connections.upsert_session(dexo_tui::screens::connections::SessionRow {
+        id: SessionId(uuid::Uuid::from_u128(2)),
+        connection: "staging".into(),
+        transaction: dexo_driver_api::TransactionState::Idle,
+        generation: 2,
+        environment: "local".into(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
+    sync_sidebar(&mut model);
+    model.focus = Focus::Explorer;
+    select_connection(&mut model, "staging");
+
+    let effects = update(&mut model, Action::ExplorerExpand);
+
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadCatalogChildren { .. }))
+    );
+    assert_eq!(model.connection.name, "staging");
+    assert_eq!(model.focus, Focus::Editor);
+}
+
+#[test]
+fn activate_while_catalog_is_loading_does_not_collapse_folder() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
     let _ = update(
@@ -375,13 +727,17 @@ fn reactivating_open_sidebar_session_returns_to_editor_and_catalog() {
         },
     );
     model.focus = Focus::Explorer;
-    model.explorer.sidebar_focus = SidebarFocus::Connections;
+    select_connection(&mut model, "prod");
 
     let effects = update(&mut model, Action::ExplorerExpand);
 
     assert!(effects.is_empty());
-    assert_eq!(model.explorer.sidebar_focus, SidebarFocus::Catalog);
-    assert_eq!(model.focus, Focus::Editor);
+    assert!(
+        model
+            .explorer
+            .selected_node()
+            .is_some_and(|node| node.expanded),
+    );
 }
 
 #[test]
@@ -423,6 +779,21 @@ fn catalog_of(names: &[&str]) -> CatalogList {
 /// Every registered catalog hit must land on the screen row that actually draws
 /// that node, otherwise a click selects the neighbouring object.
 fn assert_catalog_hits_land_on_their_row(model: &Model, labels: &[&str]) {
+    fn node_label(model: &Model, id: &ObjectId) -> Option<String> {
+        fn walk(nodes: &[dexo_tui::screens::explorer::ExplorerNode], id: &ObjectId) -> Option<String> {
+            for node in nodes {
+                if node.id == *id {
+                    return Some(node.label.clone());
+                }
+                if let Some(found) = walk(&node.children, id) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(model.explorer.nodes(), id)
+    }
+
     let (width, height) = (80u16, 24u16);
     let mut hits = HitMap::default();
     let mut terminal =
@@ -434,8 +805,13 @@ fn assert_catalog_hits_land_on_their_row(model: &Model, labels: &[&str]) {
         .lines()
         .map(str::to_string)
         .collect();
+    let ids = model.explorer.visible_ids();
 
-    for (index, label) in labels.iter().enumerate() {
+    for label in labels {
+        let index = ids
+            .iter()
+            .position(|id| node_label(model, id).is_some_and(|name| name == *label))
+            .unwrap_or_else(|| panic!("no visible node for {label}"));
         let (x, y) = hits.center(HitTarget::ExplorerNode(index));
         assert_eq!(
             hits.at(x, y),
@@ -451,10 +827,16 @@ fn assert_catalog_hits_land_on_their_row(model: &Model, labels: &[&str]) {
 }
 
 #[test]
-fn catalog_hits_match_rendered_rows_without_saved_connections() {
+fn catalog_hits_match_rendered_rows_under_active_connection() {
     let mut model = Model::default();
+    model.connections.load_profiles(vec![saved_profile()]);
     model.connection.name = "prod".into();
-    model.explorer.replace_roots(catalog_of(&["alpha", "beta"]));
+    model.explorer.sync_connection_roots(&model.connections.profiles, "prod");
+    model.explorer.replace_connection_catalog(
+        "prod",
+        catalog_of(&["alpha", "beta"]),
+        false,
+    );
 
     assert_catalog_hits_land_on_their_row(&model, &["alpha", "beta"]);
 }
@@ -464,8 +846,10 @@ fn catalog_hits_match_rendered_rows_when_offline_with_cached_catalog() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
     model.connection.name = "prod".into();
-    model.explorer.replace_roots(catalog_of(&["alpha", "beta"]));
-    model.explorer.offline = true;
+    model.explorer.sync_connection_roots(&model.connections.profiles, "prod");
+    model
+        .explorer
+        .replace_connection_catalog("prod", catalog_of(&["alpha", "beta"]), true);
 
     assert_catalog_hits_land_on_their_row(&model, &["alpha", "beta"]);
 }

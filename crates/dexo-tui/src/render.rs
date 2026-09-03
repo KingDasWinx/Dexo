@@ -726,9 +726,6 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
         "[e]dit",
         HitTarget::Button(HitButton::Edit),
     );
-    for (index, _) in model.connections.profiles.iter().enumerate() {
-        register_line(hits, inner, 1 + index, HitTarget::SidebarConnection(index));
-    }
     let layout = crate::widgets::object_tree::sidebar_layout(
         &model.explorer,
         model.connections.profiles.len(),

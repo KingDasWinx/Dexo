@@ -367,9 +367,13 @@ impl WorkbenchRuntime {
                 include_system,
             } => {
                 if let Some(active) = self.sessions.get(session) {
+                    let driver_parent = parent.clone().filter(|id| {
+                        id != &crate::screens::explorer::connection_id(&active.connection)
+                    });
                     catalog_manager::load_children(
                         Arc::clone(&active.session),
                         parent,
+                        driver_parent,
                         operation,
                         session,
                         generation,

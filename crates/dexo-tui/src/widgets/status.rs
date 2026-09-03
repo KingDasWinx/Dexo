@@ -105,19 +105,23 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
         return Some("Alt+1 connections  Ctrl+P commands");
     }
     match model.focus {
-        crate::model::Focus::Explorer => match model.explorer.sidebar_focus {
-            crate::screens::explorer::SidebarFocus::Connections => {
-                Some("Enter connect  n new  e edit  Tab catalog")
-            }
-            crate::screens::explorer::SidebarFocus::Catalog => model
-                .explorer
-                .selected_node()
-                .and_then(|node| {
-                    crate::screens::explorer::opens_table_data(&node.kind)
-                        .then_some("Enter abre a table")
-                })
-                .or(Some("Enter expande/recolhe")),
-        },
+        crate::model::Focus::Explorer => model
+            .explorer
+            .selected_node()
+            .and_then(|node| {
+                if crate::screens::explorer::is_connection_node(node) {
+                    if model.connections.session_for(&node.label).is_some() {
+                        Some("Enter expande/recolhe  n new  e edit")
+                    } else {
+                        Some("Enter connect  n new  e edit")
+                    }
+                } else if crate::screens::explorer::opens_table_data(&node.kind) {
+                    Some("Enter abre a table")
+                } else {
+                    Some("Enter expande/recolhe")
+                }
+            })
+            .or(Some("Enter connect/expand  n new  e edit")),
         crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
         _ => None,
     }
@@ -127,22 +131,49 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
 mod tests {
     use super::footer_hint;
     use crate::model::{Focus, Model};
-    use crate::screens::explorer::SidebarFocus;
+    use crate::screens::explorer::connection_id;
 
     #[test]
-    fn sidebar_footer_tracks_sidebar_focus() {
+    fn sidebar_footer_shows_connect_or_expand_hint() {
         let mut model = Model {
             focus: Focus::Explorer,
             ..Model::default()
         };
-        model.explorer.sidebar_focus = SidebarFocus::Connections;
+        model.connections.load_profiles(vec![profile("prod")]);
+        model.explorer.sync_connection_roots(&model.connections.profiles, "");
+        model.explorer.select(connection_id("prod"));
         assert_eq!(
             footer_hint(&model),
-            Some("Enter connect  n new  e edit  Tab catalog")
+            Some("Enter connect  n new  e edit")
         );
 
-        model.explorer.sidebar_focus = SidebarFocus::Catalog;
-        assert_eq!(footer_hint(&model), Some("Enter expande/recolhe"));
+        model.connections.upsert_session(crate::screens::connections::SessionRow {
+            id: crate::runtime::SessionId(uuid::Uuid::new_v4()),
+            connection: "prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+        model.explorer.sync_connection_roots(&model.connections.profiles, "prod");
+        model.explorer.select(connection_id("prod"));
+        assert_eq!(
+            footer_hint(&model),
+            Some("Enter expande/recolhe  n new  e edit")
+        );
+    }
+
+    fn profile(name: &str) -> dexo_app::ConnectionProfile {
+        dexo_app::ConnectionProfile::new(
+            dexo_app::ConnectionId(uuid::Uuid::nil()),
+            None,
+            name,
+            "postgres",
+            "local",
+            serde_json::json!({}),
+            dexo_app::SecretRef::new("ref".into()),
+        )
     }
 
     #[test]
