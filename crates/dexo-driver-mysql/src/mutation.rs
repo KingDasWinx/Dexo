@@ -232,6 +232,48 @@ fn cap_value(value: DbValue) -> DbValue {
 
 #[async_trait::async_trait]
 impl DataMutator for MysqlSession {
+    async fn table_columns(
+        &self,
+        target: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ColumnKeyInfo>, DriverError> {
+        let sql = "
+            SELECT
+                c.COLUMN_NAME AS name,
+                c.COLUMN_KEY = 'PRI' AS is_primary,
+                (
+                    SELECT COUNT(*) FROM information_schema.KEY_COLUMN_USAGE k
+                    WHERE k.TABLE_SCHEMA = c.TABLE_SCHEMA
+                      AND k.TABLE_NAME = c.TABLE_NAME
+                      AND k.COLUMN_NAME = c.COLUMN_NAME
+                      AND k.CONSTRAINT_NAME IN (
+                          SELECT tc.CONSTRAINT_NAME FROM information_schema.TABLE_CONSTRAINTS tc
+                          WHERE tc.TABLE_SCHEMA = c.TABLE_SCHEMA
+                            AND tc.TABLE_NAME = c.TABLE_NAME
+                            AND tc.CONSTRAINT_TYPE IN ('PRIMARY KEY', 'UNIQUE')
+                      )
+                ) > 0 AS is_unique
+            FROM information_schema.COLUMNS c
+            WHERE c.TABLE_SCHEMA = ?
+              AND c.TABLE_NAME = ?
+            ORDER BY c.ORDINAL_POSITION
+        ";
+        let schema = target.schema().unwrap_or_default().to_string();
+        let object = target.object().to_string();
+        let mut conn = self.conn.lock().await;
+        let rows: Vec<mysql_async::Row> = conn
+            .exec(sql, (schema, object))
+            .await
+            .map_err(map_error)?;
+        Ok(rows
+            .into_iter()
+            .map(|mut row| dexo_driver_api::ColumnKeyInfo {
+                name: row.take::<String, _>("name").unwrap_or_default(),
+                primary_key: row.take::<i64, _>("is_primary").unwrap_or(0) != 0,
+                unique: row.take::<i64, _>("is_unique").unwrap_or(0) != 0,
+            })
+            .collect())
+    }
+
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError> {
         let _ = Page::new(request.page.offset, request.page.limit)?;
         request.validate()?;
