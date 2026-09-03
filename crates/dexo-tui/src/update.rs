@@ -1200,12 +1200,19 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.mcp_audit.events = events;
             Vec::new()
         }
-        Action::DocumentLoaded { document, content } => {
+        Action::DocumentLoaded { document, path, content } => {
             if let Some(doc) = model.documents.iter_mut().find(|item| item.id == document) {
-                *doc = crate::model::EditorDocument::with_text(content);
+                let title = path
+                    .file_name()
+                    .map(|name| name.to_string_lossy().into_owned())
+                    .unwrap_or_else(|| doc.title.clone());
+                *doc = crate::model::EditorDocument::with_text(&content);
                 doc.id = document;
+                doc.title = title;
+                doc.path = Some(path.clone());
+                doc.saved_revision = doc.sql.revision();
             }
-            Vec::new()
+            touch_recent_sql_file(model, &path)
         }
         Action::DocumentAutosaved { id, revision } => {
             if let Some(document) = model
@@ -1218,6 +1225,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::DocumentSaved { document, revision } => {
+            let saved_path = model
+                .documents
+                .iter()
+                .find(|candidate| candidate.id == document)
+                .and_then(|candidate| candidate.path.clone());
             let current_revision = model
                 .documents
                 .iter_mut()
@@ -1229,6 +1241,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     }
                     current_revision
                 });
+
+            let mut effects = Vec::new();
+            if let Some(path) = saved_path {
+                effects.extend(touch_recent_sql_file(model, &path));
+            }
 
             if let Some(pending) = &model.pending_document_close
                 && pending.document == document
@@ -1245,7 +1262,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     remove_document(model, index);
                 }
             }
-            Vec::new()
+            effects
         }
         Action::DocumentConflict { path } => {
             // The write never landed, so any tab waiting on it stays open.
@@ -1404,8 +1421,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             project,
             documents,
             layout,
+            recent_sql_files,
         } => {
-            apply_loaded_project(model, project, documents, layout);
+            apply_loaded_project(model, project, documents, layout, recent_sql_files);
             Vec::new()
         }
         Action::ProjectDeleted { name } => {
@@ -1854,12 +1872,18 @@ fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
 }
 
 fn mouse_file_picker(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    let rows = file_picker_rows(model);
     match hit {
-        Some(HitTarget::ListRow(index)) => {
-            if index < model.file_picker.entries.len() {
-                model.file_picker.selected = index;
-                model.file_picker.focus = crate::screens::file_picker::FilePickerFocus::List;
+        Some(HitTarget::RecentSqlFile(index)) => {
+            model.file_picker.select_recent(index);
+            if doubled {
+                file_picker_submit(model)
+            } else {
+                Vec::new()
             }
+        }
+        Some(HitTarget::ListRow(index)) => {
+            model.file_picker.select_browser(index, rows);
             if doubled {
                 if model.file_picker.activate_selected().is_some() {
                     file_picker_submit(model)
@@ -3949,7 +3973,9 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     };
     apply_layout(model, layout);
     model.connections.load_profiles(state.connections);
+    sync_explorer_connections(model);
     model.editor.snippets = state.snippets;
+    model.recent_sql_files = state.recent_sql_files;
     apply_saved_settings(model);
 }
 
@@ -5309,31 +5335,60 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.file_picker.focus_prev();
             Vec::new()
         }
-        KeyCode::Up if model.file_picker.focus == FilePickerFocus::List => {
-            model.file_picker.move_selection(-1, rows);
+        KeyCode::Down => {
+            model.file_picker.move_down(rows);
             Vec::new()
         }
-        KeyCode::Down if model.file_picker.focus == FilePickerFocus::List => {
-            model.file_picker.move_selection(1, rows);
+        KeyCode::Up => {
+            model.file_picker.move_up(rows);
             Vec::new()
         }
-        KeyCode::Left if model.file_picker.focus == FilePickerFocus::List => {
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::Backspace
+        | KeyCode::Delete
+            if model.file_picker.focus == FilePickerFocus::Name =>
+        {
+            let _ = model.file_picker.name.handle_key(key);
+            Vec::new()
+        }
+        KeyCode::Left if model.file_picker.focus == FilePickerFocus::List
+            && model.file_picker.section == crate::screens::file_picker::FilePickerSection::Browser =>
+        {
             model.file_picker.parent();
             Vec::new()
         }
-        KeyCode::Right if model.file_picker.focus == FilePickerFocus::List => {
+        KeyCode::Left => {
+            model.file_picker.footer_left();
+            Vec::new()
+        }
+        KeyCode::Right
+            if model.file_picker.focus == FilePickerFocus::List
+                && model.file_picker.section
+                    == crate::screens::file_picker::FilePickerSection::Browser =>
+        {
             let _ = model.file_picker.activate_selected();
             Vec::new()
         }
-        KeyCode::Backspace if model.file_picker.focus == FilePickerFocus::Name => {
-            model.file_picker.name.pop();
+        KeyCode::Right => {
+            model.file_picker.footer_right();
             Vec::new()
         }
-        KeyCode::Backspace if model.file_picker.focus == FilePickerFocus::List => {
+        KeyCode::Backspace
+            if model.file_picker.focus == FilePickerFocus::List
+                && model.file_picker.section
+                    == crate::screens::file_picker::FilePickerSection::Browser =>
+        {
             model.file_picker.parent();
             Vec::new()
         }
-        KeyCode::Char('h') if model.file_picker.focus == FilePickerFocus::List => {
+        KeyCode::Char('h')
+            if model.file_picker.focus == FilePickerFocus::List
+                && model.file_picker.section
+                    == crate::screens::file_picker::FilePickerSection::Browser =>
+        {
             model.file_picker.toggle_hidden();
             Vec::new()
         }
@@ -5341,7 +5396,7 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             if model.file_picker.focus == FilePickerFocus::Name
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
         {
-            model.file_picker.name.push(ch);
+            let _ = model.file_picker.name.handle_key(key);
             Vec::new()
         }
         KeyCode::Char(ch)
@@ -5374,15 +5429,7 @@ fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
     };
     model.file_picker.open = false;
     match model.file_picker_mode {
-        crate::screens::file_picker::FilePickerMode::Open => {
-            vec![Effect::LoadDocument(crate::action::DocumentIoRequest {
-                document: model.active_document().id.clone(),
-                path,
-                content: String::new(),
-                revision: 0,
-                expected_fingerprint: None,
-            })]
-        }
+        crate::screens::file_picker::FilePickerMode::Open => open_document_path(model, path),
         crate::screens::file_picker::FilePickerMode::Save => {
             let doc = model.active_document_mut();
             doc.path = Some(path.clone());
@@ -5471,11 +5518,13 @@ fn apply_loaded_project(
     project: dexo_app::Project,
     documents: Vec<(String, String)>,
     layout: Option<dexo_storage::WorkbenchLayout>,
+    recent_sql_files: Vec<std::path::PathBuf>,
 ) {
     model.project = project.name.clone();
     model.project_id = project.id.0.to_string();
     model.projects.touch_recent(&project.name);
     model.projects.pending = None;
+    model.recent_sql_files = recent_sql_files;
     if documents.is_empty() {
         model.documents = vec![crate::model::EditorDocument::scratch()];
         model.active_document = 0;
@@ -5797,13 +5846,89 @@ fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::Diagnostic
 
 fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePickerMode) {
     model.file_picker_mode = mode;
-    model.file_picker.open_browser();
-    if mode == crate::screens::file_picker::FilePickerMode::Save
-        && let Some(path) = model.active_document().path.as_ref()
-        && let Some(name) = path.file_name()
-    {
-        model.file_picker.name = name.to_string_lossy().into();
+    let recents = if mode == crate::screens::file_picker::FilePickerMode::Open {
+        model.recent_sql_files.as_slice()
+    } else {
+        &[]
+    };
+    model.file_picker.open_browser_with_recents(recents);
+    if mode == crate::screens::file_picker::FilePickerMode::Save {
+        let preset = model
+            .active_document()
+            .path
+            .as_ref()
+            .and_then(|path| path.file_name())
+            .map(|name| name.to_string_lossy().into_owned());
+        if let Some(name) = preset {
+            model.file_picker.name.set_text(name);
+        }
     }
+}
+
+fn normalize_document_path(path: &std::path::Path) -> std::path::PathBuf {
+    std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf())
+}
+
+fn document_index_for_path(model: &Model, path: &std::path::Path) -> Option<usize> {
+    let normalized = normalize_document_path(path);
+    model.documents.iter().position(|document| {
+        document
+            .path
+            .as_ref()
+            .map(|existing| normalize_document_path(existing) == normalized)
+            .unwrap_or(false)
+    })
+}
+
+fn touch_recent_sql_file(model: &mut Model, path: &std::path::Path) -> Vec<Effect> {
+    let normalized = normalize_document_path(path);
+    let path_str = normalized.to_string_lossy().into_owned();
+    model
+        .recent_sql_files
+        .retain(|existing| existing.to_string_lossy() != path_str);
+    model.recent_sql_files.insert(0, normalized.clone());
+    model.recent_sql_files.truncate(20);
+    if model.project_id.is_empty() {
+        return Vec::new();
+    }
+    vec![Effect::TouchRecentSqlFile {
+        project_id: model.project_id.clone(),
+        path: path_str,
+    }]
+}
+
+fn open_document_path(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect> {
+    if path.is_dir() {
+        model.messages.push("choose a file, not a directory".into());
+        return Vec::new();
+    }
+    let normalized = normalize_document_path(&path);
+    if let Some(index) = document_index_for_path(model, &normalized) {
+        model.active_document = index;
+        model.sync_document_tabs_scroll();
+        return touch_recent_sql_file(model, &normalized);
+    }
+    let title = normalized
+        .file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "untitled.sql".into());
+    let document_id = uuid::Uuid::new_v4().to_string();
+    model.documents.push(crate::model::EditorDocument::new_unique(
+        title,
+        Some(normalized.clone()),
+        None,
+    ));
+    model.active_document = model.documents.len().saturating_sub(1);
+    model.sync_document_tabs_scroll();
+    let mut effects = touch_recent_sql_file(model, &normalized);
+    effects.push(Effect::LoadDocument(crate::action::DocumentIoRequest {
+        document: document_id,
+        path: normalized,
+        content: String::new(),
+        revision: 0,
+        expected_fingerprint: None,
+    }));
+    effects
 }
 
 fn open_diagnostics_picker(model: &mut Model) -> Vec<Effect> {
@@ -6074,6 +6199,28 @@ mod tests {
         let mut model = Model::default();
         update(&mut model, Action::SaveActiveDocument);
         assert!(model.file_picker.open);
+    }
+
+    #[test]
+    fn open_document_path_creates_tab_and_deduplicates_by_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("query.sql");
+        std::fs::write(&path, "select 1").unwrap();
+        let mut model = Model {
+            project_id: "project-1".into(),
+            ..Model::default()
+        };
+        let first = super::open_document_path(&mut model, path.clone());
+        assert!(first.iter().any(|effect| matches!(effect, Effect::LoadDocument { .. })));
+        assert_eq!(model.documents.len(), 2);
+        assert_eq!(model.active_document, 1);
+        assert_eq!(model.documents[1].path.as_ref(), Some(&path));
+        assert_eq!(model.recent_sql_files.first().map(|p| p.as_path()), Some(path.as_path()));
+
+        let second = super::open_document_path(&mut model, path.clone());
+        assert!(second.iter().all(|effect| !matches!(effect, Effect::LoadDocument { .. })));
+        assert_eq!(model.documents.len(), 2);
+        assert_eq!(model.active_document, 1);
     }
 
     fn catalog_object(

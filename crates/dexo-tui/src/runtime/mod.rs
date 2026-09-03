@@ -206,6 +206,11 @@ impl WorkbenchRuntime {
             }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
+            crate::Effect::TouchRecentSqlFile { project_id, path } => {
+                if let Some(storage) = &self.storage {
+                    let _ = storage.touch_recent_sql_file(project_id, path);
+                }
+            }
             crate::Effect::AutosaveDocument {
                 id,
                 path,
@@ -964,6 +969,7 @@ impl WorkbenchRuntime {
             Ok(content) => {
                 self.emit(Action::DocumentLoaded {
                     document: request.document,
+                    path: request.path,
                     content,
                 })
                 .await;
@@ -1207,6 +1213,7 @@ impl WorkbenchRuntime {
                         .map(|document| (document.id, document.content))
                         .collect(),
                     layout: loaded.layout,
+                    recent_sql_files: loaded.recent_sql_files,
                 })
                 .await;
             }

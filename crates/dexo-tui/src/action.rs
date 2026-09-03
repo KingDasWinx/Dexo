@@ -391,6 +391,7 @@ pub enum Action {
     },
     DocumentLoaded {
         document: String,
+        path: std::path::PathBuf,
         content: String,
     },
     DocumentAutosaved {
@@ -425,6 +426,7 @@ pub enum Action {
         project: dexo_app::Project,
         documents: Vec<(String, String)>,
         layout: Option<dexo_storage::WorkbenchLayout>,
+        recent_sql_files: Vec<std::path::PathBuf>,
     },
     ProjectDeleted {
         name: String,
@@ -635,6 +637,10 @@ pub enum Effect {
     },
     LoadDocument(DocumentIoRequest),
     SaveDocument(DocumentIoRequest),
+    TouchRecentSqlFile {
+        project_id: String,
+        path: String,
+    },
     AutosaveDocument {
         id: String,
         path: PathBuf,

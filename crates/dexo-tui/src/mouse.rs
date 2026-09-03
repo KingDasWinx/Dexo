@@ -31,6 +31,7 @@ pub enum HitTarget {
     GridRow(usize),
     GridCell { row: usize, col: usize },
     GridHeader(usize),
+    RecentSqlFile(usize),
     Overlay,
     ListRow(usize),
     FormField(usize),

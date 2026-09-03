@@ -1087,6 +1087,7 @@ pub struct Model {
     pub hits: HitMap,
     pub file_picker: FilePicker,
     pub file_picker_mode: FilePickerMode,
+    pub recent_sql_files: Vec<std::path::PathBuf>,
     pub diagnostic_preview: Option<String>,
     pub diagnostics: DiagnosticsScreen,
 }
@@ -1133,6 +1134,7 @@ impl Default for Model {
             hits: HitMap::default(),
             file_picker: FilePicker::default(),
             file_picker_mode: FilePickerMode::Open,
+            recent_sql_files: Vec::new(),
             diagnostic_preview: None,
             diagnostics: DiagnosticsScreen::default(),
             transaction: TransactionState::Idle,

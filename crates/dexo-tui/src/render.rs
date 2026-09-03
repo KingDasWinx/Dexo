@@ -1804,41 +1804,41 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
     let list_rows = popup.height.saturating_sub(5).max(4) as usize;
-    let lines = model.file_picker.lines(model.file_picker_mode, list_rows);
+    let layout = model
+        .file_picker
+        .layout(model.file_picker_mode, list_rows);
     paint_popup(
         frame,
         popup,
         overlay_block(model, model.file_picker_mode.title()),
-        lines.join("\n"),
-    );
-    let offset = crate::palette::scroll_to_selection(
-        model.file_picker.selected,
-        model.file_picker.offset,
-        model.file_picker.entries.len(),
-        list_rows.max(1),
+        layout.lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if i == 0 {
-            hits.register(HitTarget::Button(HitButton::ParentDir), rect);
-            return;
-        }
-        if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(
-                hits,
-                rect,
-                line,
-                model.file_picker_mode.submit_label(),
-            );
-            return;
-        }
-        if line.contains("name:") {
-            hits.register(HitTarget::FormField(0), rect);
-            return;
-        }
-        let index = offset.saturating_add(i.saturating_sub(1));
-        if index < model.file_picker.entries.len() {
-            hits.register(HitTarget::ListRow(index), rect);
+    for_popup_lines(popup, &layout.lines, |i, line, rect| {
+        match layout.kinds.get(i) {
+            Some(crate::screens::file_picker::FilePickerLineKind::Cwd) => {
+                hits.register(HitTarget::Button(HitButton::ParentDir), rect);
+            }
+            Some(crate::screens::file_picker::FilePickerLineKind::RecentItem(index)) => {
+                hits.register(HitTarget::RecentSqlFile(*index), rect);
+            }
+            Some(crate::screens::file_picker::FilePickerLineKind::BrowserEntry(index)) => {
+                hits.register(HitTarget::ListRow(*index), rect);
+            }
+            Some(crate::screens::file_picker::FilePickerLineKind::Name) => {
+                hits.register(HitTarget::FormField(0), rect);
+            }
+            Some(crate::screens::file_picker::FilePickerLineKind::Footer) if line.contains("[Cancel]")
+            =>
+            {
+                crate::widgets::form::register_footer(
+                    hits,
+                    rect,
+                    line,
+                    model.file_picker_mode.submit_label(),
+                );
+            }
+            _ => {}
         }
     });
 }

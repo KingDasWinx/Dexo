@@ -21,6 +21,7 @@ pub struct BootstrapState {
     pub documents: Vec<StoredDocument>,
     pub projects: Vec<Project>,
     pub snippets: Vec<dexo_sql::Snippet>,
+    pub recent_sql_files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,7 @@ pub struct LoadedProject {
     pub project: Project,
     pub documents: Vec<StoredDocument>,
     pub layout: Option<WorkbenchLayout>,
+    pub recent_sql_files: Vec<PathBuf>,
 }
 
 pub enum StorageCommand {
@@ -59,6 +61,10 @@ pub enum StorageCommand {
         reply: Option<tokio::sync::oneshot::Sender<anyhow::Result<()>>>,
     },
     SaveDocument(DocumentIoRequest),
+    TouchRecentSqlFile {
+        project_id: String,
+        path: String,
+    },
     FlushDocuments {
         project_id: String,
         documents: Vec<FlushedDocument>,
@@ -209,6 +215,13 @@ impl StorageWorker {
                                 let _ = RecoveryRepository::new(db.connection())
                                     .clear(&request.document);
                             }
+                        }
+                        StorageCommand::TouchRecentSqlFile { project_id, path } => {
+                            let _ = RecentItemsRepository::new(db.connection()).touch(
+                                &project_id,
+                                "sql_file",
+                                &path,
+                            );
                         }
                         StorageCommand::FlushDocuments {
                             project_id,
@@ -374,6 +387,12 @@ impl StorageWorker {
         Ok(())
     }
 
+    pub fn touch_recent_sql_file(&self, project_id: String, path: String) -> anyhow::Result<()> {
+        self.tx
+            .send(StorageCommand::TouchRecentSqlFile { project_id, path })?;
+        Ok(())
+    }
+
     pub async fn flush_documents(
         &self,
         project_id: String,
@@ -490,6 +509,16 @@ impl Drop for StorageWorker {
     }
 }
 
+fn list_recent_sql_files(db: &Database, project_id: &str) -> anyhow::Result<Vec<PathBuf>> {
+    Ok(RecentItemsRepository::new(db.connection())
+        .list(project_id)?
+        .into_iter()
+        .filter(|(kind, _, _)| kind == "sql_file")
+        .map(|(_, path, _)| PathBuf::from(path))
+        .take(20)
+        .collect())
+}
+
 fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
     let conn = db.connection();
     let projects = ProjectRepository::new(conn);
@@ -521,6 +550,7 @@ fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
             .collect()
     })?;
     let _ = RecentItemsRepository::new(conn).touch(&project_id, "project", &active_project.name);
+    let recent_sql_files = list_recent_sql_files(db, &project_id)?;
     Ok(BootstrapState {
         projects: ProjectRepository::new(conn).list()?,
         active_project,
@@ -529,6 +559,7 @@ fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
         layout,
         documents,
         snippets,
+        recent_sql_files,
     })
 }
 
@@ -598,10 +629,12 @@ fn load_project(db: &Database, id: &str) -> anyhow::Result<LoadedProject> {
     let layout = LayoutRepository::new(db.connection()).load(&project_id)?;
     let _ =
         RecentItemsRepository::new(db.connection()).touch(&project_id, "project", &project.name);
+    let recent_sql_files = list_recent_sql_files(db, &project_id)?;
     Ok(LoadedProject {
         project,
         documents,
         layout,
+        recent_sql_files,
     })
 }
 

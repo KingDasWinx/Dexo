@@ -94,6 +94,7 @@ fn bootstrap_lists_profiles_without_auto_connecting() {
         documents: Vec::new(),
         projects: Vec::new(),
         snippets: Vec::new(),
+        recent_sql_files: Vec::new(),
     };
     let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
     assert_eq!(model.connections.profiles.len(), 1);
@@ -127,6 +128,7 @@ fn bootstrap_restores_checkpoints_automatically_without_a_prompt() {
         documents: Vec::new(),
         projects: Vec::new(),
         snippets: Vec::new(),
+        recent_sql_files: Vec::new(),
     };
 
     let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
