@@ -264,6 +264,7 @@ pub enum Action {
     ApplyChanges,
     FailApply,
     RevertChanges,
+    DiscardAllChanges,
     ToggleRowDelete,
     OpenInsertRow,
     SubmitInsertRow,

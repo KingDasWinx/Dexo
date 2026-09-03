@@ -305,6 +305,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RevertChanges),
         },
         CommandSpec {
+            id: "data.discard_all",
+            title: "Discard All Pending Changes",
+            keywords: &["revert", "cancel", "rows"],
+            shortcut: Some("Ctrl+Shift+R"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::DiscardAllChanges),
+        },
+        CommandSpec {
             id: "data.toggle_delete",
             title: "Toggle Row Delete",
             keywords: &["remove", "restore", "row"],
@@ -1296,7 +1304,7 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explorer.up"
         | "explorer.down" => &[ExplorerNode],
         "explorer.copy_ddl" => &[LoadedDdl],
-        "data.revert" | "data.review" => &[PendingChanges],
+        "data.revert" | "data.review" | "data.discard_all" => &[PendingChanges],
         "data.nav_back" => &[Breadcrumb],
         "query.cancel" => &[ActiveQuery],
         "editor.accept_completion" => &[Completion],

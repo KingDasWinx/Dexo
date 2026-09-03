@@ -771,7 +771,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         } => {
             if catalog_generation_matches(model, &session, generation) {
                 model.data.apply();
-                return reload_object_data(model);
+                model.data.row_changes.clear();
+                return load_table_document(model, model.active_document);
             }
             Vec::new()
         }
@@ -882,6 +883,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::RevertChanges => {
             model.data.revert();
+            Vec::new()
+        }
+        Action::DiscardAllChanges => {
+            discard_all_pending(model);
             Vec::new()
         }
         Action::ToggleRowDelete => toggle_row_delete(model),
@@ -4375,6 +4380,22 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     };
     model.explorer.expand_with(&id, operation);
     catalog_load_effect(model, Some(id), operation, false)
+}
+
+fn discard_all_pending(model: &mut Model) {
+    let mut inserted_rows: Vec<usize> = model
+        .data
+        .row_changes
+        .iter()
+        .filter(|(_, state)| matches!(state, dexo_app::data::RowEditState::Inserted))
+        .map(|(&index, _)| index)
+        .collect();
+    inserted_rows.sort_unstable_by(|a, b| b.cmp(a));
+    for index in inserted_rows {
+        model.results.remove_row(index);
+    }
+    model.data.row_changes.clear();
+    model.data.changes.discard();
 }
 
 fn submit_insert_row(model: &mut Model) -> Vec<Effect> {
