@@ -421,6 +421,21 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
+            crate::Effect::LoadTableColumns {
+                target,
+                session,
+                generation,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    data_manager::fetch_table_columns(
+                        Arc::clone(&active.session),
+                        target,
+                        generation,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
             crate::Effect::FetchValue {
                 value,
                 offset,

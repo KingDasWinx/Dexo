@@ -202,6 +202,14 @@ pub enum Action {
         generation: u64,
         message: String,
     },
+    TableColumnsLoaded {
+        generation: u64,
+        columns: Vec<dexo_driver_api::ColumnKeyInfo>,
+    },
+    TableColumnsFailed {
+        generation: u64,
+        message: String,
+    },
     ValueFetched {
         generation: u64,
         bytes: Vec<u8>,
@@ -762,6 +770,11 @@ pub enum Effect {
     },
     LoadTableData {
         request: dexo_driver_api::DataRequest,
+        session: SessionId,
+        generation: u64,
+    },
+    LoadTableColumns {
+        target: dexo_driver_api::QualifiedName,
         session: SessionId,
         generation: u64,
     },

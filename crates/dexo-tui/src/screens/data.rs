@@ -1,6 +1,6 @@
 use dexo_app::Environment;
 use dexo_app::data::{
-    ChangeSet, EditMode, ForeignKey, SqlDialect, TableMeta, ValueView, preview_sql,
+    ChangeSet, EditMode, ForeignKey, RowEditState, SqlDialect, TableMeta, ValueView, preview_sql,
 };
 use dexo_driver_api::{DbValue, QualifiedName};
 
@@ -90,6 +90,7 @@ pub struct DataScreen {
     pub query_prompt: DataQueryPrompt,
     pub target_document: Option<String>,
     pub request_started: Option<std::time::Instant>,
+    pub row_changes: std::collections::BTreeMap<usize, RowEditState>,
 }
 
 impl Default for DataScreen {
@@ -121,6 +122,7 @@ impl Default for DataScreen {
             query_prompt: DataQueryPrompt::default(),
             target_document: None,
             request_started: None,
+            row_changes: std::collections::BTreeMap::new(),
         }
     }
 }

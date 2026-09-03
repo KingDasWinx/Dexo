@@ -734,6 +734,30 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::TableColumnsLoaded { generation, columns } => {
+            if generation == model.session_generation {
+                model.data.table = dexo_app::data::TableMeta {
+                    columns: columns
+                        .into_iter()
+                        .map(|column| dexo_app::data::ColumnDef {
+                            name: column.name,
+                            primary_key: column.primary_key,
+                            unique: column.unique,
+                            nullable: true,
+                        })
+                        .collect(),
+                };
+                model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
+                model.data.row_changes.clear();
+            }
+            Vec::new()
+        }
+        Action::TableColumnsFailed { generation, message } => {
+            if generation == model.session_generation {
+                model.messages.push(message);
+            }
+            Vec::new()
+        }
         Action::ValueFetched { generation, bytes } => {
             if generation == model.session_generation {
                 model.data.viewer =
@@ -4376,11 +4400,18 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
                 target.display_unquoted(),
                 model.data.page_limit
             ));
-            vec![Effect::LoadTableData {
-                request,
-                session,
-                generation: model.session_generation,
-            }]
+            vec![
+                Effect::LoadTableData {
+                    request,
+                    session,
+                    generation: model.session_generation,
+                },
+                Effect::LoadTableColumns {
+                    target,
+                    session,
+                    generation: model.session_generation,
+                },
+            ]
         }
         Err(message) => {
             model.messages.push(message);
