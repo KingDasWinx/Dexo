@@ -6,8 +6,8 @@ default  no connection  —
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector───────────────┐
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                       │[Props] DDL Deps Privs    │
 │No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
-│Catalog                   ││   1                                                                                                  ││                          │
-│Select a connection       ││                                                                                                      ││                          │
+│                          ││   1                                                                                                  ││                          │
+│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │

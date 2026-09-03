@@ -5,11 +5,11 @@ expression: "render_to_string(&model, 100, 30)"
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                       
-│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│Catalog — off┌Transfer──────────────────────────────────────────────────────────────┐             │
-│ ▾ local     │import orders.csv                                                     │             │
-│>  ▸ public  │format=csv strategy=RejectFile                                        │             │
-│     mysql.us│progress rows=0 bytes=0 running=false                                 │             │
+│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
+│>   ▸ public ┌Transfer──────────────────────────────────────────────────────────────┐             │
+│      mysql.u│import orders.csv                                                     │             │
+│             │format=csv strategy=RejectFile                                        │             │
+│             │progress rows=0 bytes=0 running=false                                 │             │
 │             │preview:                                                              │             │
 │             │id,name                                                               │             │
 │             │1,ok                                                                  │             │

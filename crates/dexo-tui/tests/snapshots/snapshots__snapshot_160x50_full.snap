@@ -5,11 +5,11 @@ expression: "render_to_string(&snapshot_model(), 160, 50)"
 demo  local  public                                                                                                                                             
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector───────────────┐
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                       │[Props] DDL Deps Privs    │
-│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
-│Catalog — offline         ││   1▸select 1                                                                                         ││                          │
-│ ▾ local                  ││                                                                                                      ││                          │
-│>  ▸ public               ││                                                                                                      ││                          │
-│     mysql.users [restrict││                                                                                                      ││                          │
+│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────┐│No selection              │
+│>   ▸ public              ││   1▸select 1                                                                                         ││                          │
+│      mysql.users [restric││                                                                                                      ││                          │
+│                          ││                                                                                                      ││                          │
+│                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │

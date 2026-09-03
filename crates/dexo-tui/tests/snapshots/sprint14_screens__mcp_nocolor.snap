@@ -6,8 +6,8 @@ default  no connection  —
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                       
 │No connections — press n  │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
-│Catalog                   ││   1                                                                  │
-│Select a conn┌MCP profiles──────────────────────────────────────────────────────────┐             │
+│                          ││   1                                                                  │
+│             ┌MCP profiles──────────────────────────────────────────────────────────┐             │
 │             │mcp profile=assistant enabled=false confirm=false                     │             │
 │             │scope allow db.public.*                                               │             │
 │             │scope deny db.public.secrets                                          │             │

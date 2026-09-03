@@ -5,11 +5,11 @@ expression: "render_to_string(&model, 100, 30)"
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
 │Connections  [n]ew [e]dit │┌▸ Explain─────────────────────────────────────────────────────────────┐
-│No connections — press n  ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
-│Catalog — offline         ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
-│ ▾ local                  ││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
-│>  ▸ public               ││raw_bytes=59                                                          │
-│     mysql.users [restrict││                                                                      │
+│  ● local▾  [offline]     ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
+│>   ▸ public              ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
+│      mysql.users [restric││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
+│                          ││raw_bytes=59                                                          │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

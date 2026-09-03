@@ -1,9 +1,24 @@
-use dexo_driver_api::{ObjectId, ObjectKind};
+use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+use dexo_driver_api::{ObjectId, ObjectKind, TransactionState};
 use dexo_tui::layout::{LayoutMode, LayoutPlan};
 use dexo_tui::model::{ConnectionStatus, Model};
 use dexo_tui::render::render_to_string;
+use dexo_tui::runtime::SessionId;
+use dexo_tui::screens::connections::SessionRow;
 use dexo_tui::screens::explorer::{ExplorerNode, ExplorerState, NodeState};
 use ratatui::layout::Rect;
+
+fn local_profile() -> ConnectionProfile {
+    ConnectionProfile::new(
+        ConnectionId(uuid::Uuid::nil()),
+        None,
+        "local",
+        "postgres",
+        "local",
+        serde_json::json!({}),
+        SecretRef::new("ref".into()),
+    )
+}
 
 fn explorer_fixture() -> ExplorerState {
     let schema = ExplorerNode {
@@ -19,20 +34,7 @@ fn explorer_fixture() -> ExplorerState {
         restriction: None,
         error: None,
     };
-    let mut root = ExplorerNode {
-        id: ObjectId::new("catalog:local"),
-        label: "local".into(),
-        kind: ObjectKind::Catalog,
-        qualified: "local".into(),
-        schema: None,
-        state: NodeState::Expanded,
-        expanded: true,
-        favorite: false,
-        children: vec![schema],
-        restriction: None,
-        error: None,
-    };
-    root.children.push(ExplorerNode {
+    let restricted = ExplorerNode {
         id: ObjectId::new("restricted:users"),
         label: "mysql.users".into(),
         kind: ObjectKind::User,
@@ -44,10 +46,15 @@ fn explorer_fixture() -> ExplorerState {
         children: Vec::new(),
         restriction: Some("permission denied".into()),
         error: None,
-    });
+    };
+    let mut connection = ExplorerNode::connection("local");
+    connection.expanded = true;
+    connection.state = NodeState::Expanded;
+    connection.children = vec![schema, restricted];
     ExplorerState {
-        roots: vec![root],
+        roots: vec![connection],
         selected: Some(ObjectId::new("schema:public")),
+        selected_connection: Some("local".into()),
         offline: true,
         ..ExplorerState::default()
     }
@@ -67,6 +74,16 @@ fn snapshot_model() -> Model {
         explorer: explorer_fixture(),
         ..Model::default()
     };
+    model.connections.load_profiles(vec![local_profile()]);
+    model.connections.upsert_session(SessionRow {
+        id: SessionId(uuid::Uuid::nil()),
+        connection: "local".into(),
+        transaction: TransactionState::Idle,
+        generation: 1,
+        environment: String::new(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
     model.set_sql("select 1");
     model
 }

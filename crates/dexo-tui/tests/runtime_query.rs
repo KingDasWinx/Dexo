@@ -4,8 +4,9 @@ use std::sync::{Arc, Mutex};
 
 use dexo_app::{DriverRegistry, ScriptPolicy, statements_for};
 use dexo_driver_api::{
-    ColumnMeta, DbValue, DriverError, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch,
-    Session, TransactionControl, TransactionMode, TransactionState,
+    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, ColumnMeta, DbValue,
+    DriverError, ObjectDdl, ObjectId, ObjectKind, QualifiedName, QueryEvent, QueryId, QueryRequest,
+    QueryStream, RowBatch, Session, TransactionControl, TransactionMode, TransactionState,
 };
 use dexo_tui::action::{Action, ScriptRequest};
 use dexo_tui::runtime::session_registry::SessionRegistry;
@@ -37,6 +38,7 @@ struct FakeSession {
     cancels: AtomicU64,
     tx: Mutex<TransactionState>,
     remaining: Mutex<VecDeque<usize>>,
+    catalog_parents: Mutex<Vec<Option<ObjectId>>>,
 }
 
 impl Default for FakeSession {
@@ -46,6 +48,7 @@ impl Default for FakeSession {
             cancels: AtomicU64::new(0),
             tx: Mutex::new(TransactionState::Idle),
             remaining: Mutex::new(VecDeque::new()),
+            catalog_parents: Mutex::new(Vec::new()),
         }
     }
 }
@@ -108,6 +111,52 @@ impl Session for FakeSession {
 
     fn transactions(&self) -> Option<&dyn TransactionControl> {
         Some(self)
+    }
+
+    fn catalog(&self) -> Option<&dyn CatalogReader> {
+        Some(self)
+    }
+}
+
+#[async_trait::async_trait]
+impl CatalogReader for FakeSession {
+    async fn list_children(
+        &self,
+        parent: Option<&ObjectId>,
+        _options: &CatalogListOptions,
+    ) -> Result<CatalogList, DriverError> {
+        self.catalog_parents
+            .lock()
+            .expect("catalog parents")
+            .push(parent.cloned());
+        Ok(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("catalog:db"),
+                ObjectKind::Catalog,
+                QualifiedName::new(Some("db"), None::<String>, "db"),
+                None,
+            )],
+            restrictions: vec![],
+        })
+    }
+
+    async fn object(&self, _id: &ObjectId) -> Result<Option<CatalogObject>, DriverError> {
+        Ok(None)
+    }
+
+    async fn ddl(&self, id: &ObjectId) -> Result<ObjectDdl, DriverError> {
+        Ok(ObjectDdl {
+            object_id: id.clone(),
+            sql: String::new(),
+        })
+    }
+
+    async fn dependencies(&self, _id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
+        Ok(Vec::new())
+    }
+
+    async fn dependents(&self, _id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
+        Ok(Vec::new())
     }
 }
 
@@ -173,12 +222,77 @@ async fn runtime_with_session(
     WorkbenchRuntime,
     tokio::sync::mpsc::Receiver<Action>,
 ) {
+    runtime_with_named_session("session-a", fake).await
+}
+
+async fn runtime_with_named_session(
+    connection: &str,
+    fake: Arc<FakeSession>,
+) -> (
+    tempfile::TempDir,
+    WorkbenchRuntime,
+    tokio::sync::mpsc::Receiver<Action>,
+) {
     let dir = tempfile::tempdir().unwrap();
     let worker = StorageWorker::start(dir.path().join("dexo.db")).unwrap();
     let (tx, rx) = tokio::sync::mpsc::channel(64);
     let mut runtime = WorkbenchRuntime::new(tx, worker, DriverRegistry::new());
-    runtime.sessions_mut().insert("session-a", fake);
+    runtime.sessions_mut().insert(connection, fake);
     (dir, runtime, rx)
+}
+
+#[tokio::test]
+async fn connection_folder_loads_driver_root_and_keeps_ui_parent() {
+    let fake = Arc::new(FakeSession::default());
+    let (_dir, mut runtime, mut actions) = runtime_with_named_session("prod", fake.clone()).await;
+    let session = runtime.sessions().ids()[0];
+    let connection = ObjectId::new("connection:prod");
+
+    runtime
+        .dispatch(dexo_tui::Effect::LoadCatalogChildren {
+            parent: Some(connection.clone()),
+            operation: OperationId::new(),
+            session,
+            generation: 1,
+            replace_roots: false,
+            include_system: false,
+        })
+        .await;
+
+    assert_eq!(
+        *fake.catalog_parents.lock().expect("catalog parents"),
+        vec![None],
+        "the synthetic sidebar folder must load the driver's catalog root"
+    );
+    let action = actions.recv().await.expect("catalog loaded action");
+    assert!(matches!(
+        action,
+        Action::CatalogLoaded { parent: Some(actual), .. } if actual == connection
+    ));
+}
+
+#[tokio::test]
+async fn driver_owned_connection_prefixed_parent_is_not_treated_as_the_ui_folder() {
+    let fake = Arc::new(FakeSession::default());
+    let (_dir, mut runtime, _actions) = runtime_with_named_session("prod", fake.clone()).await;
+    let session = runtime.sessions().ids()[0];
+    let driver_parent = ObjectId::new("connection:remote");
+
+    runtime
+        .dispatch(dexo_tui::Effect::LoadCatalogChildren {
+            parent: Some(driver_parent.clone()),
+            operation: OperationId::new(),
+            session,
+            generation: 1,
+            replace_roots: false,
+            include_system: false,
+        })
+        .await;
+
+    assert_eq!(
+        *fake.catalog_parents.lock().expect("catalog parents"),
+        vec![Some(driver_parent)]
+    );
 }
 
 fn script_request(sql: &str) -> ScriptRequest {

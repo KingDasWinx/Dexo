@@ -5,11 +5,11 @@ expression: "render_to_string(&snapshot_model(), 100, 30)"
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                       
-│No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│Catalog — offline         ││   1▸select 1                                                         │
-│ ▾ local                  ││                                                                      │
-│>  ▸ public               ││                                                                      │
-│     mysql.users [restrict││                                                                      │
+│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
+│>   ▸ public              ││   1▸select 1                                                         │
+│      mysql.users [restric││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

@@ -5,11 +5,11 @@ expression: "render_to_string(&model, 160, 50)"
 demo  local  public                                                                                                                                             
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                ┌  Inspector───────────────┐
 │Connections  [n]ew [e]dit │┌▸ DDL─────────────────────────────────────────────────────────────────────────────────────────────────┐│[Props] DDL Deps Privs    │
-│No connections — press n  ││schema table                                                                                          ││No selection              │
-│Catalog — offline         ││> target: public.orders                                                                               ││                          │
-│ ▾ local                  ││  columns:                                                                                            ││                          │
-│>  ▸ public               ││  defaults:                                                                                           ││                          │
-│     mysql.users [restrict││  indexes:                                                                                            ││                          │
+│  ● local▾  [offline]     ││schema table                                                                                          ││No selection              │
+│>   ▸ public              ││> target: public.orders                                                                               ││                          │
+│      mysql.users [restric││  columns:                                                                                            ││                          │
+│                          ││  defaults:                                                                                           ││                          │
+│                          ││  indexes:                                                                                            ││                          │
 │                          ││  constraints:                                                                                        ││                          │
 │                          ││  foreign_keys:                                                                                       ││                          │
 │                          ││error: columns are required                                                                           ││                          │

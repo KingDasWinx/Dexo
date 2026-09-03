@@ -5,11 +5,11 @@ expression: "render_to_string(&model, 100, 30)"
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain │ demo.public.users            
 │Connections  [n]ew [e]dit │┌▸ Data────────────────────────────────────────────────────────────────┐
-│No connections — press n  ││table: demo.public.users                                              │
-│Catalog — offline         ││filter: Eq(ColumnId("id"), I64(1))                                    │
-│ ▾ local     ┌Review changes────────────────────────────────────────────────────────┐             │
-│>  ▸ public  │target: demo.public.users                                             │             │
-│     mysql.us│ops: 1                                                                │             │
+│  ● local▾  [offline]     ││table: demo.public.users                                              │
+│>   ▸ public              ││filter: Eq(ColumnId("id"), I64(1))                                    │
+│      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │
+│             │target: demo.public.users                                             │             │
+│             │ops: 1                                                                │             │
 │             │status: Pending                                                       │             │
 │             │ready                                                                 │             │
 │             │INSERT INTO demo.public.users (id) VALUES ($1)                        │             │
