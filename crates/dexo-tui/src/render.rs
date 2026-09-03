@@ -114,6 +114,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.transaction_prompt.open {
         render_transaction_prompt(frame, model, hits);
     }
+    if model.document_name_prompt.open {
+        render_document_name_prompt(frame, model, hits);
+    }
     if model.data.query_prompt.open {
         render_data_query(frame, model, hits);
     }
@@ -1419,6 +1422,31 @@ fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap
         }
         if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
+    });
+}
+
+fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let popup = centered(frame.area(), 56, 8);
+    let lines = model.document_name_prompt.lines();
+    paint_popup(
+        frame,
+        popup,
+        Block::bordered().title(model.document_name_prompt.title()),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("name:") {
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(
+                hits,
+                rect,
+                line,
+                model.document_name_prompt.submit_label(),
+            );
         }
     });
 }

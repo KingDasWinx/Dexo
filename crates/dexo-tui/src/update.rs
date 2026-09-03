@@ -567,13 +567,16 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SelectDocument { index } => {
             if index < model.documents.len() {
                 model.active_document = index;
+                model.document_tab_focus = crate::model::DocumentTabFocus::Document(index);
                 model.focus = Focus::Editor;
+                model.sync_document_tabs_scroll();
             }
             Vec::new()
         }
         Action::NextDocument => {
             if !model.documents.is_empty() {
                 model.active_document = (model.active_document + 1) % model.documents.len();
+                model.focus_active_document_tab();
                 model.focus = Focus::Editor;
             }
             Vec::new()
@@ -584,22 +587,41 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     .active_document
                     .checked_sub(1)
                     .unwrap_or(model.documents.len() - 1);
+                model.focus_active_document_tab();
                 model.focus = Focus::Editor;
+            }
+            Vec::new()
+        }
+        Action::NextDocumentTabFocus => {
+            if model.focus == Focus::Editor {
+                model.advance_document_tab_focus(1);
+            }
+            Vec::new()
+        }
+        Action::PrevDocumentTabFocus => {
+            if model.focus == Focus::Editor {
+                model.advance_document_tab_focus(-1);
+            }
+            Vec::new()
+        }
+        Action::ScrollDocumentTabsPrev => {
+            model.document_tabs_scroll = model.document_tabs_scroll.saturating_sub(1);
+            Vec::new()
+        }
+        Action::ScrollDocumentTabsNext => {
+            if !model.documents.is_empty() {
+                model.document_tabs_scroll = (model.document_tabs_scroll + 1)
+                    .min(model.documents.len().saturating_sub(1));
             }
             Vec::new()
         }
         Action::CloseDocument => close_active_document(model),
         Action::NewDocument => {
-            let connection_id = active_connection_uuid(model);
-            let title = format!("query-{}.sql", model.documents.len());
-            model
-                .documents
-                .push(crate::model::EditorDocument::new_unique(
-                    title,
-                    None,
-                    connection_id,
-                ));
-            model.active_document = model.documents.len() - 1;
+            open_new_document_prompt(model);
+            Vec::new()
+        }
+        Action::RenameDocument => {
+            open_rename_document_prompt(model);
             Vec::new()
         }
         Action::SelectGridRow => {
@@ -1538,6 +1560,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::ConfigTransfer) => mouse_config_transfer(model, hit),
         Some(OverlayKind::SecretPrompt) => mouse_secret(model, hit),
         Some(OverlayKind::TransactionPrompt) => mouse_transaction(model, hit),
+        Some(OverlayKind::DocumentNamePrompt) => mouse_document_name(model, hit),
         Some(OverlayKind::DataQueryPrompt) => mouse_data_query(model, hit),
         Some(OverlayKind::ConnectionForm) => mouse_connection_form(model, hit),
         Some(OverlayKind::Settings) => mouse_settings(model, hit),
@@ -1630,6 +1653,22 @@ fn mouse_transaction(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::FooterCancel) => {
             model.transaction_prompt.open = false;
             model.transaction_prompt.error = None;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_document_name(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(_)) => {
+            model.document_name_prompt.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => submit_document_name_prompt(model),
+        Some(HitTarget::FooterCancel) => {
+            model.document_name_prompt.open = false;
+            model.document_name_prompt.error = None;
             Vec::new()
         }
         _ => Vec::new(),
@@ -2068,6 +2107,8 @@ fn mouse_workbench(
             effects
         }
         Some(HitTarget::DocumentTabNew) => update(model, Action::NewDocument),
+        Some(HitTarget::DocumentTabScrollPrev) => update(model, Action::ScrollDocumentTabsPrev),
+        Some(HitTarget::DocumentTabScrollNext) => update(model, Action::ScrollDocumentTabsNext),
         Some(HitTarget::Button(HitButton::New)) => update(model, Action::OpenConnectionForm),
         Some(HitTarget::Button(HitButton::Edit)) => update(model, Action::EditSelectedConnection),
         Some(HitTarget::PaneDivider(edge))
@@ -2527,6 +2568,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.transaction_prompt.open {
         return handle_transaction_prompt_key(model, key);
     }
+    if model.document_name_prompt.open {
+        return handle_document_name_prompt_key(model, key);
+    }
     if model.data.query_prompt.open {
         return handle_data_query_prompt_key(model, key);
     }
@@ -2782,6 +2826,14 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
+    if model.document_tab_focus == crate::model::DocumentTabFocus::New
+        && key.code == KeyCode::Enter
+        && key.modifiers.is_empty()
+        && model.focus == Focus::Editor
+        && model.tabs.active == 0
+    {
+        return update(model, Action::NewDocument);
+    }
     let spec = crate::keymap::KeySpec {
         modifiers: key.modifiers,
         code: key.code,
@@ -2812,6 +2864,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
     }
     if model.tabs.active == 0 && crate::screens::editor::handle_key(model, key) {
+        if model.document_tab_focus == crate::model::DocumentTabFocus::New {
+            model.focus_active_document_tab();
+        }
         crate::screens::editor::refresh_intelligence(model, false);
         return Vec::new();
     }
@@ -3343,6 +3398,48 @@ fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
         {
             model.transaction_prompt.name.push(ch);
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    match key.code {
+        KeyCode::Esc => {
+            model.document_name_prompt.open = false;
+            model.document_name_prompt.error = None;
+            Vec::new()
+        }
+        KeyCode::Tab => {
+            model.document_name_prompt.footer = model.document_name_prompt.footer.next();
+            Vec::new()
+        }
+        KeyCode::BackTab => {
+            model.document_name_prompt.footer = model.document_name_prompt.footer.prev();
+            Vec::new()
+        }
+        KeyCode::Enter
+            if model.document_name_prompt.footer == crate::widgets::form::FooterFocus::Cancel =>
+        {
+            model.document_name_prompt.open = false;
+            model.document_name_prompt.error = None;
+            Vec::new()
+        }
+        KeyCode::Enter => submit_document_name_prompt(model),
+        KeyCode::Char(_)
+        | KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Home
+        | KeyCode::End
+        | KeyCode::Backspace
+        | KeyCode::Delete
+            if model.document_name_prompt.footer == crate::widgets::form::FooterFocus::Input =>
+        {
+            let _ = model
+                .document_name_prompt
+                .name
+                .handle_key(key);
             Vec::new()
         }
         _ => Vec::new(),
@@ -4683,6 +4780,68 @@ fn submit_savepoint_prompt(model: &mut Model) -> Vec<Effect> {
     effects
 }
 
+fn suggested_document_name(model: &Model) -> String {
+    format!("query-{}.sql", model.documents.len())
+}
+
+fn open_new_document_prompt(model: &mut Model) {
+    let default_name = suggested_document_name(model);
+    model.document_name_prompt =
+        crate::screens::document_name_prompt::DocumentNamePrompt::open_create(default_name);
+}
+
+fn open_rename_document_prompt(model: &mut Model) {
+    if model.documents.is_empty() {
+        return;
+    }
+    let index = model.active_document;
+    let current = model.documents[index].title.clone();
+    model.document_name_prompt =
+        crate::screens::document_name_prompt::DocumentNamePrompt::open_rename(index, current);
+}
+
+fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::document_name_prompt::{
+        DocumentNameIntent, normalize_document_name,
+    };
+
+    let intent = model.document_name_prompt.intent;
+    let fallback = model.document_name_prompt.default_name.clone();
+    let name = match normalize_document_name(model.document_name_prompt.name.as_str(), &fallback) {
+        Ok(name) => name,
+        Err(error) => {
+            model.document_name_prompt.error = Some(error);
+            return Vec::new();
+        }
+    };
+
+    model.document_name_prompt.open = false;
+    model.document_name_prompt.error = None;
+
+    match intent {
+        Some(DocumentNameIntent::Create) => {
+            let connection_id = active_connection_uuid(model);
+            model.documents.push(crate::model::EditorDocument::new_unique(
+                name,
+                None,
+                connection_id,
+            ));
+            model.active_document = model.documents.len() - 1;
+            model.focus_active_document_tab();
+            model.focus = Focus::Editor;
+        }
+        Some(DocumentNameIntent::Rename) => {
+            let index = model.document_name_prompt.document_index;
+            if index < model.documents.len() {
+                model.documents[index].title = name;
+                model.sync_document_tabs_scroll();
+            }
+        }
+        None => {}
+    }
+    Vec::new()
+}
+
 fn open_data_query_prompt(
     model: &mut Model,
     intent: crate::screens::data::DataQueryIntent,
@@ -4808,6 +4967,7 @@ fn remove_document(model: &mut Model, index: usize) {
         }
         model.active_document = model.active_document.min(model.documents.len() - 1);
     }
+    model.focus_active_document_tab();
     model.focus = Focus::Editor;
 }
 
@@ -5777,6 +5937,7 @@ fn palette_select(model: &mut Model) -> Vec<Effect> {
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use dexo_driver_api::DbValue;
 
     use super::update;
@@ -5895,6 +6056,10 @@ mod tests {
         model.connection.name = "prod".into();
 
         update(&mut model, Action::NewDocument);
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
 
         let doc = model.documents.last().unwrap();
         assert_eq!(

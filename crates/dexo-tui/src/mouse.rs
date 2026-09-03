@@ -18,6 +18,8 @@ pub enum HitTarget {
     DocumentTab(usize),
     DocumentTabClose(usize),
     DocumentTabNew,
+    DocumentTabScrollPrev,
+    DocumentTabScrollNext,
     Explorer,
     ExplorerNode(usize),
     SidebarConnection(usize),
@@ -97,6 +99,7 @@ pub enum OverlayKind {
     ConfigTransfer,
     SecretPrompt,
     TransactionPrompt,
+    DocumentNamePrompt,
     DataQueryPrompt,
     ConnectionForm,
     Settings,
@@ -181,6 +184,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (
             model.transaction_prompt.open,
             OverlayKind::TransactionPrompt,
+        ),
+        (
+            model.document_name_prompt.open,
+            OverlayKind::DocumentNamePrompt,
         ),
         (model.secret_prompt.open, OverlayKind::SecretPrompt),
         (model.config_transfer.open, OverlayKind::ConfigTransfer),

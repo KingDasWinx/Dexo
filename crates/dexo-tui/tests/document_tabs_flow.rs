@@ -1,7 +1,32 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
-use dexo_tui::model::EditorDocument;
+use dexo_tui::model::{DocumentTabFocus, EditorDocument};
 use dexo_tui::mouse::{HitMap, HitTarget};
 use dexo_tui::{Action, Focus, Model, update};
+
+fn alt_left() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT))
+}
+
+fn alt_right() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::ALT))
+}
+
+fn alt_up() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::ALT))
+}
+
+fn alt_down() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::ALT))
+}
+
+fn enter() -> Action {
+    Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+}
+
+fn confirm_document_name(model: &mut Model) {
+    assert!(model.document_name_prompt.open);
+    update(model, enter());
+}
 
 fn two_documents() -> Model {
     let mut model = Model::from(Focus::Explorer);
@@ -9,6 +34,182 @@ fn two_documents() -> Model {
         .documents
         .push(EditorDocument::new_unique("q2.sql", None, None));
     model
+}
+
+#[test]
+fn alt_arrows_cycle_document_tabs_and_the_new_button() {
+    let mut model = two_documents();
+    model.focus = Focus::Editor;
+
+    update(&mut model, alt_right());
+
+    assert_eq!(model.active_document, 1);
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(1));
+
+    update(&mut model, alt_right());
+
+    assert_eq!(model.active_document, 1);
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::New);
+    assert_eq!(model.focus, Focus::Editor);
+
+    update(&mut model, alt_right());
+
+    assert_eq!(model.active_document, 0);
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(0));
+
+    update(&mut model, alt_left());
+
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::New);
+}
+
+#[test]
+fn alt_arrows_do_not_cycle_document_tabs_outside_the_editor() {
+    for focus in [Focus::Explorer, Focus::Results, Focus::Inspector] {
+        for action in [alt_left(), alt_right()] {
+            let mut model = two_documents();
+            model.focus = focus;
+
+            update(&mut model, action);
+
+            assert_eq!(
+                model.active_document, 0,
+                "active document changed in {focus:?}"
+            );
+            assert_eq!(
+                model.document_tab_focus,
+                DocumentTabFocus::Document(0),
+                "document tab focus changed in {focus:?}"
+            );
+            assert_eq!(model.focus, focus, "workbench focus changed in {focus:?}");
+        }
+    }
+}
+
+#[test]
+fn alt_arrows_resize_the_focused_side_pane_toward_its_border() {
+    let mut model = two_documents();
+    model.apply_size(160, 50);
+
+    model.focus = Focus::Explorer;
+    let explorer_width = model.panes.explorer_width;
+    update(&mut model, alt_right());
+    assert_eq!(model.panes.explorer_width, explorer_width + 2);
+    update(&mut model, alt_left());
+    assert_eq!(model.panes.explorer_width, explorer_width);
+
+    model.focus = Focus::Inspector;
+    let inspector_width = model.panes.inspector_width;
+    update(&mut model, alt_left());
+    assert_eq!(model.panes.inspector_width, inspector_width + 2);
+    update(&mut model, alt_right());
+    assert_eq!(model.panes.inspector_width, inspector_width);
+
+    model.focus = Focus::Results;
+    update(&mut model, alt_left());
+    update(&mut model, alt_right());
+    assert_eq!(model.panes.explorer_width, explorer_width);
+    assert_eq!(model.panes.inspector_width, inspector_width);
+}
+
+#[test]
+fn alt_up_down_resize_results_height_from_editor_or_results() {
+    let mut model = two_documents();
+    model.apply_size(160, 50);
+    let start = model.panes.results_height;
+
+    model.focus = Focus::Results;
+    update(&mut model, alt_up());
+    assert_eq!(model.panes.results_height, start + 2);
+    update(&mut model, alt_down());
+    assert_eq!(model.panes.results_height, start);
+
+    model.focus = Focus::Editor;
+    update(&mut model, alt_up());
+    assert_eq!(model.panes.results_height, start + 2);
+    update(&mut model, alt_down());
+    assert_eq!(model.panes.results_height, start);
+
+    model.focus = Focus::Explorer;
+    update(&mut model, alt_up());
+    update(&mut model, alt_down());
+    assert_eq!(model.panes.results_height, start);
+}
+
+#[test]
+fn document_tab_focus_actions_are_ignored_outside_the_editor() {
+    for action in [Action::NextDocumentTabFocus, Action::PrevDocumentTabFocus] {
+        let mut model = two_documents();
+        let before = model.document_tab_focus;
+
+        update(&mut model, action);
+
+        assert_eq!(model.active_document, 0);
+        assert_eq!(model.document_tab_focus, before);
+        assert_eq!(model.focus, Focus::Explorer);
+    }
+}
+
+#[test]
+fn enter_on_new_tab_focus_creates_a_document() {
+    let mut model = Model::default();
+    model.document_tab_focus = DocumentTabFocus::New;
+
+    update(&mut model, enter());
+    confirm_document_name(&mut model);
+
+    assert_eq!(model.documents.len(), 2);
+    assert_eq!(model.active_document, 1);
+    assert_eq!(model.active_document().title, "query-1.sql");
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(1));
+}
+
+#[test]
+fn new_document_prompt_accepts_a_custom_name() {
+    let mut model = Model::default();
+
+    update(&mut model, Action::NewDocument);
+    assert_eq!(model.document_name_prompt.name.as_str(), "query-1.sql");
+
+    for _ in 0..model.document_name_prompt.name.len() {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        );
+    }
+    for ch in "reports".chars() {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        );
+    }
+    confirm_document_name(&mut model);
+
+    assert_eq!(model.documents.len(), 2);
+    assert_eq!(model.active_document().title, "reports.sql");
+}
+
+#[test]
+fn rename_document_prompt_updates_the_active_tab_title() {
+    let mut model = Model::default();
+
+    update(&mut model, Action::RenameDocument);
+    assert_eq!(model.document_name_prompt.name.as_str(), "scratch.sql");
+
+    for _ in 0..model.document_name_prompt.name.len() {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        );
+    }
+    for ch in "daily".chars() {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        );
+    }
+    confirm_document_name(&mut model);
+
+    assert_eq!(model.active_document().title, "daily.sql");
 }
 
 #[test]
@@ -202,6 +403,28 @@ fn a_pathless_dirty_document_still_checkpoints_to_recovery() {
 }
 
 #[test]
+fn many_document_tabs_render_with_overflow_indicators() {
+    let mut model = Model::default();
+    model.documents.clear();
+    for index in 0..8 {
+        model.documents.push(EditorDocument::new_unique(
+            format!("query-{index}.sql"),
+            None,
+            None,
+        ));
+    }
+    model.active_document = 7;
+    model.document_tab_focus = DocumentTabFocus::Document(7);
+    model.sync_document_tabs_scroll();
+
+    let frame = dexo_tui::render::render_to_string(&model, 40, 20);
+
+    assert!(frame.contains('‹') || frame.contains('›'), "{frame}");
+    assert!(frame.contains('+'), "{frame}");
+    assert!(frame.contains("query-7.sql"), "{frame}");
+}
+
+#[test]
 fn compact_sql_workbench_renders_document_tabs() {
     let mut model = Model::default();
     model
@@ -267,6 +490,7 @@ fn clicking_document_tab_new_creates_bound_document() {
     model.hits = hits;
 
     click_target(&mut model, HitTarget::DocumentTabNew);
+    confirm_document_name(&mut model);
 
     assert_eq!(model.documents.len(), 2);
     assert_eq!(model.active_document().title, "query-1.sql");

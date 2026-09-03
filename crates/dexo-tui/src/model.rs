@@ -19,6 +19,7 @@ use crate::screens::connection::ConnectionForm;
 use crate::screens::connections::ConnectionsScreen;
 use crate::screens::data::DataScreen;
 use crate::screens::diagnostics::DiagnosticsScreen;
+use crate::screens::document_name_prompt::DocumentNamePrompt;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
@@ -44,6 +45,12 @@ pub enum Focus {
     Results,
     Inspector,
     Palette,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DocumentTabFocus {
+    Document(usize),
+    New,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -1029,6 +1036,8 @@ pub struct Model {
     pub messages: Vec<String>,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
+    pub document_tab_focus: DocumentTabFocus,
+    pub document_tabs_scroll: usize,
     /// Document revision whose tab closes once its matching save is
     /// acknowledged. The buffer is the only copy of the edits until the write
     /// lands.
@@ -1060,6 +1069,7 @@ pub struct Model {
     pub config_transfer: ConfigTransferScreen,
     pub secret_prompt: SecretPrompt,
     pub transaction_prompt: TransactionPrompt,
+    pub document_name_prompt: DocumentNamePrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
@@ -1132,6 +1142,8 @@ impl Default for Model {
             messages: Vec::new(),
             documents: vec![EditorDocument::scratch()],
             active_document: 0,
+            document_tab_focus: DocumentTabFocus::Document(0),
+            document_tabs_scroll: 0,
             pending_document_close: None,
             execution_target: ExecutionTarget::Document,
             script_policy: ScriptPolicy::StopOnError,
@@ -1160,6 +1172,7 @@ impl Default for Model {
             config_transfer: ConfigTransferScreen::default(),
             secret_prompt: SecretPrompt::default(),
             transaction_prompt: TransactionPrompt::default(),
+            document_name_prompt: DocumentNamePrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
@@ -1189,6 +1202,64 @@ impl From<TransactionState> for Model {
 impl Model {
     pub fn fixture(seed: impl Into<Self>) -> Self {
         seed.into()
+    }
+
+    pub fn sync_document_tab_focus(&mut self) {
+        if self.documents.is_empty() {
+            self.document_tab_focus = DocumentTabFocus::New;
+            return;
+        }
+        match self.document_tab_focus {
+            DocumentTabFocus::Document(index) if index >= self.documents.len() => {
+                self.document_tab_focus =
+                    DocumentTabFocus::Document(self.active_document.min(self.documents.len() - 1));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn advance_document_tab_focus(&mut self, delta: i32) {
+        if self.documents.is_empty() {
+            self.document_tab_focus = DocumentTabFocus::New;
+            return;
+        }
+        let slots = self.documents.len() + 1;
+        let current = match self.document_tab_focus {
+            DocumentTabFocus::Document(index) => index,
+            DocumentTabFocus::New => self.documents.len(),
+        };
+        let next = (current as i32).wrapping_add(delta).rem_euclid(slots as i32) as usize;
+        if next < self.documents.len() {
+            self.document_tab_focus = DocumentTabFocus::Document(next);
+            self.active_document = next;
+            self.focus = Focus::Editor;
+        } else {
+            self.document_tab_focus = DocumentTabFocus::New;
+        }
+        self.sync_document_tabs_scroll();
+    }
+
+    pub fn focus_active_document_tab(&mut self) {
+        if self.documents.is_empty() {
+            self.document_tab_focus = DocumentTabFocus::New;
+        } else {
+            self.document_tab_focus = DocumentTabFocus::Document(self.active_document);
+        }
+        self.sync_document_tabs_scroll();
+    }
+
+    pub fn document_tabs_area_width(&self) -> u16 {
+        crate::layout::LayoutPlan::for_area_with_document_tabs(
+            ratatui::layout::Rect::new(0, 0, self.width, self.height),
+            Some(&self.panes),
+            self.tabs.active == 0,
+        )
+        .document_tabs
+        .width
+    }
+
+    pub fn sync_document_tabs_scroll(&mut self) {
+        crate::widgets::document_tabs::sync_scroll(self, self.document_tabs_area_width());
     }
 
     pub fn workbench_layout(&self) -> dexo_storage::WorkbenchLayout {
@@ -1228,6 +1299,7 @@ impl Model {
         .mode;
         self.panes = self.panes.clamp(width, height);
         self.sync_grid_viewport();
+        self.sync_document_tabs_scroll();
     }
 
     pub fn sync_grid_viewport(&mut self) {

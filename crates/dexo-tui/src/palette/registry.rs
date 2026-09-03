@@ -601,6 +601,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::PrevDocument),
         },
         CommandSpec {
+            id: "document.prev_focus",
+            title: "Previous Document Tab Focus",
+            keywords: &["editor", "tab"],
+            shortcut: Some("Alt+Left"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::PrevDocumentTabFocus),
+        },
+        CommandSpec {
+            id: "document.next_focus",
+            title: "Next Document Tab Focus",
+            keywords: &["editor", "tab"],
+            shortcut: Some("Alt+Right"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::NextDocumentTabFocus),
+        },
+        CommandSpec {
             id: "document.close",
             title: "Close Document",
             keywords: &["editor", "tab"],
@@ -615,6 +631,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: Some("Ctrl+N"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::NewDocument),
+        },
+        CommandSpec {
+            id: "document.rename",
+            title: "Rename Document",
+            keywords: &["editor", "tab", "title"],
+            shortcut: Some("F2"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::RenameDocument),
         },
         CommandSpec {
             id: "document.save",

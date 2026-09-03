@@ -1,9 +1,8 @@
 use dexo_tui::palette::{FlowIntent, PaletteInvocation};
 
-const COMMAND_IDS: [&str; 133] = [
+const COMMAND_IDS: [&str; 135] = [
     "workbench.quit",
     "palette.open",
-    "query.execute",
     "query.execute_statement",
     "query.execute_selection",
     "query.execute_document",
@@ -73,8 +72,11 @@ const COMMAND_IDS: [&str; 133] = [
     "tab.next",
     "document.next",
     "document.prev",
+    "document.next_focus",
+    "document.prev_focus",
     "document.close",
     "document.new",
+    "document.rename",
     "document.save",
     "document.open",
     "results.select_row",
@@ -155,7 +157,6 @@ const FLOW_IDS: &[&str] = &[
     "connection.duplicate",
     "connection.test",
     "connection.delete",
-    "connection.close_session",
     "project.switch",
     "project.create",
     "project.rename",
@@ -195,10 +196,6 @@ const FLOW_INTENTS: &[(&str, FlowIntent)] = &[
     ("connection.duplicate", FlowIntent::ConnectionDuplicate),
     ("connection.test", FlowIntent::ConnectionTest),
     ("connection.delete", FlowIntent::ConnectionDelete),
-    (
-        "connection.close_session",
-        FlowIntent::ConnectionCloseSession,
-    ),
     ("project.switch", FlowIntent::ProjectSwitch),
     ("project.create", FlowIntent::ProjectCreate),
     ("project.rename", FlowIntent::ProjectRename),
@@ -218,9 +215,28 @@ fn registry_contains_each_command_exactly_once() {
     let entries = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
     let actual: std::collections::BTreeSet<_> = entries.iter().map(|e| e.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.into_iter().collect();
-    assert_eq!(entries.len(), 133);
-    assert_eq!(actual.len(), 133, "duplicate command id");
+    assert_eq!(entries.len(), 135);
+    assert_eq!(actual.len(), 135, "duplicate command id");
     assert_eq!(actual, expected);
+}
+
+#[test]
+fn query_commands_expose_one_action_per_execution_scope() {
+    let entries = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
+    let actual: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.id.starts_with("query.execute"))
+        .map(|entry| (entry.id, entry.shortcut))
+        .collect();
+
+    assert_eq!(
+        actual,
+        vec![
+            ("query.execute_statement", Some("Ctrl+Enter")),
+            ("query.execute_selection", None),
+            ("query.execute_document", Some("Ctrl+Shift+F10")),
+        ]
+    );
 }
 
 #[test]
