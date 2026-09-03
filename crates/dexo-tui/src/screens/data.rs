@@ -6,6 +6,49 @@ use dexo_driver_api::{DbValue, QualifiedName};
 
 use crate::widgets::form::{FooterFocus, footer_line};
 
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InsertRowForm {
+    pub open: bool,
+    pub fields: Vec<crate::screens::schema_editor::FormField>,
+    pub focus: usize,
+}
+
+impl InsertRowForm {
+    pub fn open_for(&mut self, table: &TableMeta) {
+        self.open = true;
+        self.focus = 0;
+        self.fields = table
+            .columns
+            .iter()
+            .map(|column| crate::screens::schema_editor::FormField {
+                label: column.name.clone(),
+                value: String::new(),
+                secret: false,
+            })
+            .collect();
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.fields.clear();
+        self.focus = 0;
+    }
+
+    pub fn values(&self) -> Vec<(String, DbValue)> {
+        self.fields
+            .iter()
+            .map(|field| {
+                let value = if field.value.is_empty() {
+                    DbValue::Null
+                } else {
+                    DbValue::Text(field.value.clone())
+                };
+                (field.label.clone(), value)
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DataQueryIntent {
     Sort,
@@ -91,6 +134,7 @@ pub struct DataScreen {
     pub target_document: Option<String>,
     pub request_started: Option<std::time::Instant>,
     pub row_changes: std::collections::BTreeMap<usize, RowEditState>,
+    pub insert_form: InsertRowForm,
 }
 
 impl Default for DataScreen {
@@ -123,6 +167,7 @@ impl Default for DataScreen {
             target_document: None,
             request_started: None,
             row_changes: std::collections::BTreeMap::new(),
+            insert_form: InsertRowForm::default(),
         }
     }
 }

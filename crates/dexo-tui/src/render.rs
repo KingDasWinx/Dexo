@@ -94,6 +94,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(review) = &model.data.review {
         render_review(frame, review, hits);
     }
+    if model.data.insert_form.open {
+        render_insert_row_form(frame, model, hits);
+    }
     if let Some(preview) = &model.schema_editor.preview {
         render_ddl_preview(frame, preview, hits);
     }
@@ -1016,6 +1019,26 @@ fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             HitTarget::ListRow(action_offset.saturating_add(index)),
         );
     }
+}
+
+fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let form = &model.data.insert_form;
+    let area = frame.area();
+    let popup = centered(area, 60, (form.fields.len() as u16 + 4).max(6));
+    let mut lines = Vec::new();
+    for (index, field) in form.fields.iter().enumerate() {
+        let marker = if index == form.focus { ">" } else { " " };
+        lines.push(format!("{marker} {}: {}", field.label, field.value));
+    }
+    lines.push(String::new());
+    lines.push("Enter submit  Esc cancel".into());
+    paint_popup(
+        frame,
+        popup,
+        overlay_block(model, "New row"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
 }
 
 fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal, hits: &mut HitMap) {

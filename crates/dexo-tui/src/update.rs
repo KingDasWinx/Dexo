@@ -885,6 +885,15 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ToggleRowDelete => toggle_row_delete(model),
+        Action::OpenInsertRow => {
+            model.data.insert_form.open_for(&model.data.table);
+            Vec::new()
+        }
+        Action::CancelInsertRow => {
+            model.data.insert_form.close();
+            Vec::new()
+        }
+        Action::SubmitInsertRow => submit_insert_row(model),
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
         Action::DataNavBack => data_nav_back(model),
@@ -2842,6 +2851,49 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
+    if model.data.insert_form.open {
+        return match key.code {
+            KeyCode::Esc => update(model, Action::CancelInsertRow),
+            KeyCode::Enter => update(model, Action::SubmitInsertRow),
+            KeyCode::Up => {
+                model.data.insert_form.focus = model
+                    .data
+                    .insert_form
+                    .focus
+                    .checked_sub(1)
+                    .unwrap_or(model.data.insert_form.fields.len().saturating_sub(1));
+                Vec::new()
+            }
+            KeyCode::Down | KeyCode::Tab => {
+                model.data.insert_form.focus =
+                    (model.data.insert_form.focus + 1) % model.data.insert_form.fields.len().max(1);
+                Vec::new()
+            }
+            KeyCode::Backspace => {
+                if let Some(field) = model
+                    .data
+                    .insert_form
+                    .fields
+                    .get_mut(model.data.insert_form.focus)
+                {
+                    field.value.pop();
+                }
+                Vec::new()
+            }
+            KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+                if let Some(field) = model
+                    .data
+                    .insert_form
+                    .fields
+                    .get_mut(model.data.insert_form.focus)
+                {
+                    field.value.push(ch);
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
     if model.data.review.is_some() {
         return match key.code {
             KeyCode::Esc => {
@@ -4323,6 +4375,40 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     };
     model.explorer.expand_with(&id, operation);
     catalog_load_effect(model, Some(id), operation, false)
+}
+
+fn submit_insert_row(model: &mut Model) -> Vec<Effect> {
+    let values = model.data.insert_form.values();
+    model.data.insert_form.close();
+    if model.data.table.columns.is_empty() {
+        return Vec::new();
+    }
+    model.data.changes.insert(values.clone());
+    if !model.data.changes.errors().is_empty() {
+        for error in model.data.changes.errors().to_vec() {
+            model.messages.push(error);
+        }
+        return Vec::new();
+    }
+    let row_index = model.results.row_count();
+    let row_values: Vec<DbValue> = model
+        .results
+        .columns()
+        .iter()
+        .map(|column| {
+            values
+                .iter()
+                .find(|(name, _)| name == &column.name)
+                .map(|(_, value)| value.clone())
+                .unwrap_or(DbValue::Null)
+        })
+        .collect();
+    model.results.append_rows(vec![row_values]);
+    model
+        .data
+        .row_changes
+        .insert(row_index, dexo_app::data::RowEditState::Inserted);
+    Vec::new()
 }
 
 fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {

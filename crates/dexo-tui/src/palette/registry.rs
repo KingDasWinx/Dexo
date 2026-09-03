@@ -313,6 +313,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ToggleRowDelete),
         },
         CommandSpec {
+            id: "data.insert_row",
+            title: "Insert Row",
+            keywords: &["new", "create", "row"],
+            shortcut: Some("Ctrl+N"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenInsertRow),
+        },
+        CommandSpec {
             id: "data.nav_back",
             title: "Data Navigate Back",
             keywords: &["crumb", "related"],
@@ -1247,7 +1255,8 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explain.open"
         | "admin.sessions"
         | "data.page_next"
-        | "data.page_prev" => &[ActiveSession],
+        | "data.page_prev"
+        | "data.insert_row" => &[ActiveSession],
         "explorer.inspect"
         | "explorer.ddl"
         | "explorer.dependencies"
