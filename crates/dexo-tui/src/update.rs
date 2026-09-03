@@ -835,9 +835,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             created_at,
         } => {
             if generation == model.session_generation {
-                model.explorer.replace_roots(list);
-                model.explorer.offline = true;
-                model.explorer.stale = true;
+                if model.connection.name.is_empty() {
+                    model.explorer.replace_roots(list);
+                } else {
+                    let connection_name = model.connection.name.clone();
+                    model
+                        .explorer
+                        .restore_connection_catalog(&connection_name, list);
+                }
                 if let Some(created_at) = created_at {
                     model
                         .messages

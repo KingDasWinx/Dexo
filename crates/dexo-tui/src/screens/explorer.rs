@@ -304,6 +304,60 @@ impl ExplorerState {
         self.connection_name_for(id)
     }
 
+    /// Restores an offline catalog snapshot (a flat, multi-level dump captured by
+    /// `capture_snapshot`) under the given connection's node, rebuilding the real
+    /// parent/child hierarchy from each object's `parent` id instead of dumping
+    /// every captured object (schemas, tables, columns, indexes, constraints...)
+    /// as flat siblings. Leaves sibling connection nodes untouched.
+    pub fn restore_connection_catalog(&mut self, connection_name: &str, page: CatalogList) {
+        let id = connection_id(connection_name);
+        let mut by_parent: std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>> =
+            std::collections::HashMap::new();
+        for object in page.objects {
+            by_parent.entry(object.parent.clone()).or_default().push(object);
+        }
+        let top_level = by_parent.remove(&None).unwrap_or_default();
+        let mut children: Vec<ExplorerNode> = top_level
+            .into_iter()
+            .map(|object| {
+                let child_id = object.id.clone();
+                let kind = object.kind.clone();
+                let mut node = ExplorerNode::from_object(object);
+                Self::attach_offline_descendants(&mut node, &child_id, &kind, &mut by_parent);
+                node
+            })
+            .collect();
+        for restriction in page.restrictions {
+            children.push(restriction_node(restriction));
+        }
+        if let Some(node) = Self::find_mut(&mut self.roots, &id) {
+            node.children = children;
+            node.expanded = true;
+            node.state = NodeState::Expanded;
+        }
+        self.offline = true;
+        self.stale = true;
+        self.selected = Some(id.clone());
+        self.selected_connection = Some(connection_name.to_owned());
+    }
+
+    fn attach_offline_descendants(
+        node: &mut ExplorerNode,
+        id: &ObjectId,
+        kind: &ObjectKind,
+        by_parent: &mut std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>>,
+    ) {
+        let Some(direct_children) = by_parent.remove(&Some(id.clone())) else {
+            return;
+        };
+        node.children = group_catalog_children(id, kind, direct_children);
+        for child in &mut node.children {
+            let child_id = child.id.clone();
+            let child_kind = child.kind.clone();
+            Self::attach_offline_descendants(child, &child_id, &child_kind, by_parent);
+        }
+    }
+
     pub fn replace_connection_catalog(
         &mut self,
         connection_name: &str,
