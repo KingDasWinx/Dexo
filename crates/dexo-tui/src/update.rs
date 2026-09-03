@@ -1634,6 +1634,7 @@ fn mouse_help(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     ) {
         model.help.open = false;
         model.help.scroll = 0;
+        model.help.query.clear();
     }
     Vec::new()
 }
@@ -3623,12 +3624,14 @@ fn toggle_help(model: &mut Model) {
     if model.help.open {
         model.help.open = false;
         model.help.scroll = 0;
+        model.help.query.clear();
         return;
     }
     close_palette(model);
     model.results_menu.open = false;
     model.help.open = true;
     model.help.scroll = 0;
+    model.help.query.clear();
 }
 
 fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
@@ -3636,11 +3639,7 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Esc | KeyCode::F(1) => {
             model.help.open = false;
             model.help.scroll = 0;
-            Vec::new()
-        }
-        KeyCode::Char('?') => {
-            model.help.open = false;
-            model.help.scroll = 0;
+            model.help.query.clear();
             Vec::new()
         }
         KeyCode::Up | KeyCode::PageUp => {
@@ -3649,6 +3648,16 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Down | KeyCode::PageDown => {
             model.help.scroll = model.help.scroll.saturating_add(1);
+            Vec::new()
+        }
+        KeyCode::Backspace => {
+            model.help.query.pop();
+            model.help.scroll = 0;
+            Vec::new()
+        }
+        KeyCode::Char(ch) => {
+            model.help.query.push(ch);
+            model.help.scroll = 0;
             Vec::new()
         }
         _ => Vec::new(),
@@ -6140,6 +6149,78 @@ mod tests {
     use crate::action::{Action, Effect};
     use crate::model::{Focus, Model};
     use crate::runtime::{OperationId, OperationKey};
+
+    #[test]
+    fn typing_while_help_is_open_appends_to_search_query_and_resets_scroll() {
+        let mut model = Model::default();
+        model.help.open = true;
+        model.help.scroll = 5;
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
+        );
+
+        assert_eq!(model.help.query, "d");
+        assert_eq!(model.help.scroll, 0);
+    }
+
+    #[test]
+    fn backspace_while_help_is_open_removes_last_search_char() {
+        let mut model = Model::default();
+        model.help.open = true;
+        model.help.query = "disc".into();
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
+        );
+
+        assert_eq!(model.help.query, "dis");
+    }
+
+    #[test]
+    fn question_mark_is_typed_into_the_help_search_instead_of_closing_it() {
+        let mut model = Model::default();
+        model.help.open = true;
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('?'), KeyModifiers::NONE)),
+        );
+
+        assert!(model.help.open);
+        assert_eq!(model.help.query, "?");
+    }
+
+    #[test]
+    fn esc_still_closes_help_and_clears_its_search_query() {
+        let mut model = Model::default();
+        model.help.open = true;
+        model.help.query = "disc".into();
+
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        );
+
+        assert!(!model.help.open);
+        assert_eq!(model.help.query, "");
+    }
+
+    #[test]
+    fn reopening_help_resets_a_previous_search_query() {
+        let mut model = Model::default();
+        model.help.open = true;
+        model.help.query = "disc".into();
+
+        update(&mut model, Action::ToggleHelp);
+        assert!(!model.help.open);
+        update(&mut model, Action::ToggleHelp);
+
+        assert!(model.help.open);
+        assert_eq!(model.help.query, "");
+    }
 
     #[test]
     fn query_events_do_not_change_editor_focus() {

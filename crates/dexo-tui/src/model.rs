@@ -89,6 +89,7 @@ pub struct PaletteState {
 pub struct HelpState {
     pub open: bool,
     pub scroll: u16,
+    pub query: String,
 }
 
 #[derive(Clone, Debug, PartialEq)]

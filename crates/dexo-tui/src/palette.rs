@@ -168,6 +168,16 @@ fn score(entry: &PaletteEntry, query: &str) -> Option<u8> {
     haystacks.filter_map(|text| score_text(text, &query)).max()
 }
 
+/// Whether any of `texts` fuzzy-matches `query` (case-insensitive), the same scoring
+/// the command palette uses. An empty `query` always matches.
+pub(crate) fn matches_any(texts: &[&str], query: &str) -> bool {
+    if query.is_empty() {
+        return true;
+    }
+    let query = query.to_ascii_lowercase();
+    texts.iter().any(|text| score_text(text, &query).is_some())
+}
+
 fn score_text(text: &str, query: &str) -> Option<u8> {
     let text = text.to_ascii_lowercase();
     if text.starts_with(query) {

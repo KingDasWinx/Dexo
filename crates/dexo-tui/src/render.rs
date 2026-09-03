@@ -833,21 +833,36 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     let popup = centered(area, 76, area.height.saturating_sub(2).max(12));
     frame.render_widget(Clear, popup);
-    let mut lines = Vec::new();
+    let query = model.help.query.as_str();
+    let mut lines = vec![format!("Search: {query}"), String::new()];
+    let mut any_match = false;
     for (section, rows) in model.keymap.help_sections() {
-        lines.push(format!("[{section}]"));
+        let mut section_lines = Vec::new();
         for (chord, command) in rows {
             let title = palette_entries(model)
                 .iter()
                 .find(|entry| entry.id == command)
                 .map(|entry| entry.title)
                 .unwrap_or(command.as_str());
-            lines.push(format!("  {chord:<16} {title}"));
+            if !crate::palette::matches_any(&[&chord, title, &command], query) {
+                continue;
+            }
+            section_lines.push(format!("  {chord:<16} {title}"));
         }
+        if section_lines.is_empty() {
+            continue;
+        }
+        any_match = true;
+        lines.push(format!("[{section}]"));
+        lines.extend(section_lines);
         lines.push(String::new());
     }
-    if lines.is_empty() {
-        lines.push("no bindings".into());
+    if !any_match {
+        lines.push(if query.is_empty() {
+            "no bindings".into()
+        } else {
+            format!("no matches for '{query}'")
+        });
     }
     let inner_h = popup.height.saturating_sub(2) as usize;
     let max_scroll = lines.len().saturating_sub(inner_h.max(1));
@@ -1869,6 +1884,44 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    #[test]
+    fn help_search_shows_the_typed_query() {
+        let mut model = Model::default();
+        model.apply_size(100, 40);
+        model.help.open = true;
+        model.help.query = "disc".into();
+
+        let view = render_to_string(&model, 100, 40);
+
+        assert!(view.contains("Search: disc"));
+    }
+
+    #[test]
+    fn help_search_filters_bindings_by_action_or_chord() {
+        let mut model = Model::default();
+        model.apply_size(100, 40);
+        model.help.open = true;
+        model.help.query = "disconnect".into();
+
+        let view = render_to_string(&model, 100, 40);
+
+        assert!(view.contains("shift+d"));
+        assert!(view.contains("Disconnect Connection"));
+        assert!(!view.contains("New Connection"));
+    }
+
+    #[test]
+    fn help_search_shows_a_message_when_nothing_matches() {
+        let mut model = Model::default();
+        model.apply_size(100, 40);
+        model.help.open = true;
+        model.help.query = "zzz-no-such-binding".into();
+
+        let view = render_to_string(&model, 100, 40);
+
+        assert!(view.contains("no matches"));
     }
 
     #[test]

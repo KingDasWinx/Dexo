@@ -111,7 +111,7 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
             .and_then(|node| {
                 if crate::screens::explorer::is_connection_node(node) {
                     if model.connections.session_for(&node.label).is_some() {
-                        Some("Enter expande/recolhe  n new  e edit")
+                        Some("Enter expande/recolhe  n new  e edit  shift+d disconnect")
                     } else {
                         Some("Enter connect  n new  e edit")
                     }
@@ -160,7 +160,7 @@ mod tests {
         model.explorer.select(connection_id("prod"));
         assert_eq!(
             footer_hint(&model),
-            Some("Enter expande/recolhe  n new  e edit")
+            Some("Enter expande/recolhe  n new  e edit  shift+d disconnect")
         );
     }
 
