@@ -65,7 +65,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             );
             if ready {
                 model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
-                model.focus = Focus::Editor;
                 let connection = crate::screens::explorer::connection_id(&model.connection.name);
                 model.explorer.select(connection.clone());
                 let mut effects = Vec::new();
@@ -128,7 +127,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.documents.push(document);
                 model.active_document = model.documents.len() - 1;
             }
-            model.focus = Focus::Editor;
             Vec::new()
         }
         Action::OpenConnectionForm => {
@@ -3317,7 +3315,6 @@ fn activate_existing_session(
     session: crate::screens::connections::SessionRow,
 ) -> Vec<Effect> {
     model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
-    model.focus = Focus::Editor;
     if model.active_session == Some(session.id) {
         return Vec::new();
     }

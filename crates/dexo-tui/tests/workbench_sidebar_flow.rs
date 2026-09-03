@@ -193,7 +193,7 @@ fn right_clicking_sidebar_connection_does_not_connect() {
 }
 
 #[test]
-fn ready_connection_returns_focus_to_catalog_and_editor() {
+fn ready_connection_switches_sidebar_to_catalog_without_stealing_focus() {
     let mut model = Model {
         focus: Focus::Explorer,
         ..Model::default()
@@ -217,7 +217,7 @@ fn ready_connection_returns_focus_to_catalog_and_editor() {
         model.explorer.sidebar_focus,
         dexo_tui::screens::explorer::SidebarFocus::Catalog
     );
-    assert_eq!(model.focus, Focus::Editor);
+    assert_eq!(model.focus, Focus::Explorer);
 }
 
 #[test]
@@ -665,7 +665,7 @@ fn clicking_connected_connection_expands_collapsed_folder() {
 }
 
 #[test]
-fn reactivating_a_different_open_session_switches_back_to_editor() {
+fn reactivating_a_different_open_session_keeps_sidebar_focus() {
     let mut alternate = saved_profile();
     alternate.name = "staging".into();
     let mut model = Model::default();
@@ -706,7 +706,7 @@ fn reactivating_a_different_open_session_switches_back_to_editor() {
             .any(|effect| matches!(effect, Effect::LoadCatalogChildren { .. }))
     );
     assert_eq!(model.connection.name, "staging");
-    assert_eq!(model.focus, Focus::Editor);
+    assert_eq!(model.focus, Focus::Explorer);
 }
 
 #[test]
