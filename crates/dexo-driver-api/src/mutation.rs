@@ -142,6 +142,13 @@ pub struct RemoteValueRef {
     pub total: u64,
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct ColumnKeyInfo {
+    pub name: String,
+    pub primary_key: bool,
+    pub unique: bool,
+}
+
 #[async_trait::async_trait]
 pub trait DataMutator: Send + Sync {
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError>;
@@ -152,6 +159,7 @@ pub trait DataMutator: Send + Sync {
         limit: u32,
     ) -> Result<Vec<u8>, DriverError>;
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError>;
+    async fn table_columns(&self, target: &QualifiedName) -> Result<Vec<ColumnKeyInfo>, DriverError>;
 }
 
 #[cfg(test)]
