@@ -975,6 +975,18 @@ fn spool_or_prefix(bytes: Vec<u8>, inline: usize) -> (DbValue, Option<GridCell>)
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum DocumentKind {
+    Console,
+    Table(dexo_driver_api::QualifiedName),
+}
+
+impl DocumentKind {
+    pub fn is_table(&self) -> bool {
+        matches!(self, DocumentKind::Table(_))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EditorDocument {
     pub id: String,
@@ -988,6 +1000,8 @@ pub struct EditorDocument {
     pub viewport_column: usize,
     pub typing: bool,
     pub anchor: Option<usize>,
+    pub kind: DocumentKind,
+    pub console_log: Vec<String>,
 }
 
 impl PartialEq for EditorDocument {
@@ -1004,6 +1018,8 @@ impl PartialEq for EditorDocument {
             && self.viewport_column == other.viewport_column
             && self.typing == other.typing
             && self.anchor == other.anchor
+            && self.kind == other.kind
+            && self.console_log == other.console_log
     }
 }
 
@@ -1021,6 +1037,8 @@ impl EditorDocument {
             viewport_column: 0,
             typing: false,
             anchor: None,
+            kind: DocumentKind::Console,
+            console_log: Vec::new(),
         }
     }
 
@@ -1041,6 +1059,8 @@ impl EditorDocument {
             viewport_column: 0,
             typing: false,
             anchor: None,
+            kind: DocumentKind::Console,
+            console_log: Vec::new(),
         }
     }
 
@@ -1054,7 +1074,30 @@ impl EditorDocument {
         }
     }
 
+    pub fn new_table(target: dexo_driver_api::QualifiedName) -> Self {
+        let title = target.object().to_string();
+        let sql_text = format!("SELECT * FROM {} LIMIT 501", target.display_unquoted());
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            title,
+            path: None,
+            connection_id: None,
+            sql: SqlDocument::new(&sql_text),
+            saved_revision: 0,
+            session: None,
+            viewport_line: 0,
+            viewport_column: 0,
+            typing: false,
+            anchor: None,
+            kind: DocumentKind::Table(target),
+            console_log: Vec::new(),
+        }
+    }
+
     pub fn is_dirty(&self) -> bool {
+        if self.kind.is_table() {
+            return false;
+        }
         self.sql.revision() != self.saved_revision
     }
 
@@ -1375,8 +1418,14 @@ impl Model {
             Some(&self.panes),
             self.tabs.active == 0,
         );
-        let width = plan.results.width.saturating_sub(2).max(1);
-        let inner_h = plan.results.height.saturating_sub(2).max(1);
+        let table_data_active = self.active_document().kind.is_table() && self.tabs.active == 1;
+        let pane = if table_data_active {
+            plan.content
+        } else {
+            plan.results
+        };
+        let width = pane.width.saturating_sub(2).max(1);
+        let inner_h = pane.height.saturating_sub(2).max(1);
         // Match widgets/grid.rs: optional tab row, then one column-header row.
         let tab_h = if self.results.tabs.len() > 1 { 1u16 } else { 0 };
         let height = inner_h.saturating_sub(tab_h).saturating_sub(1).max(1);

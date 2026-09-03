@@ -88,6 +88,8 @@ pub struct DataScreen {
     pub sort: Vec<dexo_driver_api::Sort>,
     pub last_error: Option<String>,
     pub query_prompt: DataQueryPrompt,
+    pub target_document: Option<String>,
+    pub request_started: Option<std::time::Instant>,
 }
 
 impl Default for DataScreen {
@@ -117,6 +119,8 @@ impl Default for DataScreen {
             sort: Vec::new(),
             last_error: None,
             query_prompt: DataQueryPrompt::default(),
+            target_document: None,
+            request_started: None,
         }
     }
 }

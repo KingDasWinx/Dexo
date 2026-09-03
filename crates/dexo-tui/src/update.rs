@@ -564,29 +564,34 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::SelectDocument { index } => {
             if index < model.documents.len() {
-                model.active_document = index;
                 model.document_tab_focus = crate::model::DocumentTabFocus::Document(index);
                 model.focus = Focus::Editor;
+                let effects = activate_document(model, index);
                 model.sync_document_tabs_scroll();
+                return effects;
             }
             Vec::new()
         }
         Action::NextDocument => {
             if !model.documents.is_empty() {
-                model.active_document = (model.active_document + 1) % model.documents.len();
+                let index = (model.active_document + 1) % model.documents.len();
+                let effects = activate_document(model, index);
                 model.focus_active_document_tab();
                 model.focus = Focus::Editor;
+                return effects;
             }
             Vec::new()
         }
         Action::PrevDocument => {
             if !model.documents.is_empty() {
-                model.active_document = model
+                let index = model
                     .active_document
                     .checked_sub(1)
                     .unwrap_or(model.documents.len() - 1);
+                let effects = activate_document(model, index);
                 model.focus_active_document_tab();
                 model.focus = Focus::Editor;
+                return effects;
             }
             Vec::new()
         }
@@ -711,8 +716,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.data.apply_page(page.clone());
                 model.results.clear();
                 model.results.set_columns(page.columns.clone());
+                let row_count = page.rows.len();
                 model.results.append_rows(page.rows);
                 promote_remote_cells(model, &page.columns);
+                log_rows_retrieved(model, row_count);
             }
             Vec::new()
         }
@@ -4293,6 +4300,23 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     catalog_load_effect(model, Some(id), operation, false)
 }
 
+fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
+    if index >= model.documents.len() {
+        return Vec::new();
+    }
+    model.active_document = index;
+    if model.documents[index].kind.is_table() {
+        return load_table_document(model, index);
+    }
+    Vec::new()
+}
+
+fn document_index_for_table(model: &Model, target: &dexo_driver_api::QualifiedName) -> Option<usize> {
+    model.documents.iter().position(|document| {
+        matches!(&document.kind, crate::model::DocumentKind::Table(existing) if existing == target)
+    })
+}
+
 fn open_object_data(model: &mut Model) -> Vec<Effect> {
     let Some(node) = model.explorer.selected_node() else {
         return Vec::new();
@@ -4303,11 +4327,99 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
             .push("connect a session to browse table data".into());
         return Vec::new();
     }
-    model.data.target = dexo_app::parse_qualified(&node.qualified);
-    model.data.loading = true;
+    let target = dexo_app::parse_qualified(&node.qualified);
+    let index = match document_index_for_table(model, &target) {
+        Some(index) => index,
+        None => {
+            model
+                .documents
+                .push(crate::model::EditorDocument::new_table(target));
+            model.documents.len() - 1
+        }
+    };
+    model.active_document = index;
+    model.tabs.active = 1;
     model.data.last_error = None;
+    load_table_document(model, index)
+}
+
+fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    let crate::model::DocumentKind::Table(target) = model.documents[index].kind.clone() else {
+        return Vec::new();
+    };
+    model.data.target = target.clone();
+    model.data.loading = true;
     model.data.page_offset = 0;
-    reload_object_data(model)
+    model.data.target_document = Some(model.documents[index].id.clone());
+    model.data.request_started = Some(std::time::Instant::now());
+    if model.documents[index].console_log.is_empty() {
+        model.documents[index]
+            .console_log
+            .push(format!("[{}] Connected", format_clock()));
+    }
+    match crate::runtime::data_manager::table_request(
+        target.clone(),
+        Vec::new(),
+        model.data.filter.clone(),
+        model.data.sort.clone(),
+        model.data.page_offset,
+        model.data.page_limit,
+    ) {
+        Ok(request) => {
+            model.documents[index].console_log.push(format!(
+                "[{}] {}> SELECT * FROM {} LIMIT {}",
+                format_clock(),
+                target.display_unquoted(),
+                target.display_unquoted(),
+                model.data.page_limit
+            ));
+            vec![Effect::LoadTableData {
+                request,
+                session,
+                generation: model.session_generation,
+            }]
+        }
+        Err(message) => {
+            model.messages.push(message);
+            Vec::new()
+        }
+    }
+}
+
+fn log_rows_retrieved(model: &mut Model, row_count: usize) {
+    let Some(document_id) = model.data.target_document.clone() else {
+        return;
+    };
+    let elapsed_ms = model
+        .data
+        .request_started
+        .map(|started| started.elapsed().as_millis())
+        .unwrap_or(0);
+    let offset = model.data.page_offset;
+    let Some(document) = model
+        .documents
+        .iter_mut()
+        .find(|document| document.id == document_id)
+    else {
+        return;
+    };
+    document.console_log.push(format!(
+        "[{}] {row_count} rows retrieved starting from {} in {elapsed_ms} ms",
+        format_clock(),
+        offset + 1
+    ));
+}
+
+fn format_clock() -> String {
+    let secs = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_secs();
+    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
+    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {

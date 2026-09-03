@@ -43,15 +43,28 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             if model.tabs.active == 0 {
                 crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
             }
-            if !overlay_blocks_workbench(model) {
-                hits.register(HitTarget::Editor, plan.content);
+            let table_data_active =
+                model.active_document().kind.is_table() && model.tabs.active == 1;
+            if table_data_active {
+                if !overlay_blocks_workbench(model) {
+                    hits.register(HitTarget::Grid, plan.content);
+                }
+                crate::widgets::grid::render(frame, plan.content, model, hits);
+                if !overlay_blocks_workbench(model) {
+                    hits.register(HitTarget::Inspector, plan.inspector);
+                }
+                render_console_log(frame, plan.results, model);
+            } else {
+                if !overlay_blocks_workbench(model) {
+                    hits.register(HitTarget::Editor, plan.content);
+                }
+                render_editor_content(frame, plan.content, model, hits);
+                if !overlay_blocks_workbench(model) {
+                    hits.register(HitTarget::Grid, plan.results);
+                    hits.register(HitTarget::Inspector, plan.inspector);
+                }
+                crate::widgets::grid::render(frame, plan.results, model, hits);
             }
-            render_editor_content(frame, plan.content, model, hits);
-            if !overlay_blocks_workbench(model) {
-                hits.register(HitTarget::Grid, plan.results);
-                hits.register(HitTarget::Inspector, plan.inspector);
-            }
-            crate::widgets::grid::render(frame, plan.results, model, hits);
             render_inspector_panel(
                 frame,
                 plan.inspector,
@@ -298,7 +311,26 @@ fn inspector_title() -> String {
     "Inspector".into()
 }
 
+fn render_console_log(frame: &mut Frame, area: Rect, model: &Model) {
+    let log = &model.active_document().console_log;
+    let rows = area.height.saturating_sub(2) as usize;
+    let scroll = log.len().saturating_sub(rows.max(1)) as u16;
+    render_panel_scrolled(frame, area, model, "Console", false, log.join("\n"), scroll);
+}
+
 fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    if model.tabs.active == 0 && model.active_document().kind.is_table() {
+        render_panel_scrolled(
+            frame,
+            area,
+            model,
+            "SQL (read-only)",
+            model.focus == Focus::Editor,
+            model.active_document().text(),
+            0,
+        );
+        return;
+    }
     if model.tabs.active == 0 {
         crate::widgets::editor::render(frame, area, model);
         return;
