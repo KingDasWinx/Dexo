@@ -8,7 +8,7 @@ demo  local  public
 │  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │>   ▸ public ┌Transfer──────────────────────────────────────────────────────────────┐             │
 │      mysql.u│import orders.csv                                                     │             │
-│             │format=csv strategy=RejectFile                                        │             │
+│             │format=csv (Ctrl+F to cycle) strategy=RejectFile                      │             │
 │             │progress rows=2 bytes=0 running=false                                 │             │
 │             │preview:                                                              │             │
 │             │preview ready                                                         │             │

@@ -5,7 +5,7 @@ expression: "render_to_string(&model, 60, 20)"
 demo  local  public                                         
 ┌Transfer──────────────────────────────────────────────────┐
 │export out.csv                                            │
-│format=csv strategy=Stop                                  │
+│format=csv (Ctrl+F to cycle) strategy=Stop                │
 │progress rows=10000 bytes=80000 running=true              │
 │ [Submit]   [Cancel]                                      │
 │                                                          │

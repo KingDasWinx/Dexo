@@ -159,7 +159,10 @@ impl TransferScreen {
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!("{} {}", self.mode.as_str(), self.path),
-            format!("format={} strategy={:?}", self.format, self.strategy),
+            format!(
+                "format={} (Ctrl+F to cycle) strategy={:?}",
+                self.format, self.strategy
+            ),
             format!(
                 "progress rows={} bytes={} running={}",
                 self.progress.rows, self.progress.bytes, self.running

@@ -2846,6 +2846,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
                 Vec::new()
             }
+            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
+                model.transfer.format = next_transfer_format(&model.transfer.format);
+                Vec::new()
+            }
             KeyCode::Char(ch)
                 if model.transfer.footer == crate::widgets::form::FooterFocus::Input
                     && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
@@ -5676,6 +5680,17 @@ fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
         session,
         generation: model.session_generation,
     }]
+}
+
+fn next_transfer_format(current: &str) -> String {
+    match current {
+        "csv" => "tsv",
+        "tsv" => "json",
+        "json" => "jsonl",
+        "jsonl" => "sql",
+        _ => "csv",
+    }
+    .into()
 }
 
 fn open_transfer(model: &mut Model, mode: crate::screens::transfer::TransferMode) -> Vec<Effect> {
