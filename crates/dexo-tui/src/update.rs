@@ -783,7 +783,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             message,
         } => {
             if generation == model.session_generation {
-                model.data.fail_apply();
+                model.data.fail_apply(message.clone());
                 model.messages.push(message);
             }
             Vec::new()
@@ -885,7 +885,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ApplyChanges => apply_changes(model),
         Action::FailApply => {
-            model.data.fail_apply();
+            model.data.fail_apply("apply failed".into());
             Vec::new()
         }
         Action::RevertChanges => {
@@ -4463,7 +4463,7 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
                 return Vec::new();
             };
             if let Some(position) = find_pending_index(&model.data.changes, |change| {
-                matches!(change, dexo_app::data::PendingChange::Insert { values } if values == &original)
+                matches!(change, dexo_app::data::PendingChange::Insert { values } if is_subset_of(values, &original))
             }) {
                 model.data.changes.revert(position);
             }
@@ -4539,6 +4539,17 @@ fn find_pending_index(
     predicate: impl Fn(&dexo_app::data::PendingChange) -> bool,
 ) -> Option<usize> {
     changes.pending().iter().position(predicate)
+}
+
+/// Whether every `(name, value)` pair in `values` also appears in `row` — order-
+/// independent, and correct even though `values` only holds the fields the user
+/// actually typed (empty fields are omitted, not sent as `Null`), while `row` is
+/// always the full column snapshot.
+fn is_subset_of(values: &[(String, DbValue)], row: &[(String, DbValue)]) -> bool {
+    values.iter().all(|(name, value)| {
+        row.iter()
+            .any(|(other_name, other_value)| other_name == name && other_value == value)
+    })
 }
 
 fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {

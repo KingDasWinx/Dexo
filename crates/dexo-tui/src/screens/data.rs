@@ -34,17 +34,14 @@ impl InsertRowForm {
         self.focus = 0;
     }
 
+    /// Empty fields are omitted entirely rather than sent as `Null`, so a
+    /// left-blank auto-increment/serial or defaulted column falls through to
+    /// the database's own default instead of an explicit NULL overriding it.
     pub fn values(&self) -> Vec<(String, DbValue)> {
         self.fields
             .iter()
-            .map(|field| {
-                let value = if field.value.is_empty() {
-                    DbValue::Null
-                } else {
-                    DbValue::Text(field.value.clone())
-                };
-                (field.label.clone(), value)
-            })
+            .filter(|field| !field.value.is_empty())
+            .map(|field| (field.label.clone(), DbValue::Text(field.value.clone())))
             .collect()
     }
 }
@@ -106,6 +103,7 @@ pub struct ReviewModal {
     pub production: bool,
     pub confirmed: bool,
     pub status: ReviewStatus,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -181,6 +179,7 @@ impl DataScreen {
             production: self.environment == Environment::Production,
             confirmed: false,
             status: ReviewStatus::Pending,
+            error: None,
         });
     }
 
@@ -201,9 +200,10 @@ impl DataScreen {
         self.changes.discard();
     }
 
-    pub fn fail_apply(&mut self) {
+    pub fn fail_apply(&mut self, message: String) {
         if let Some(review) = &mut self.review {
             review.status = ReviewStatus::Failed;
+            review.error = Some(message);
         }
     }
 
@@ -225,17 +225,21 @@ impl DataScreen {
 }
 
 pub fn review_lines(modal: &ReviewModal) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("target: {}", modal.target),
         format!("ops: {}", modal.operations),
         format!("status: {:?}", modal.status),
-        if modal.production && !modal.confirmed {
-            "confirm production to apply".into()
-        } else {
-            "ready".into()
-        },
-        modal.preview_sql.clone(),
-    ]
+    ];
+    if let Some(error) = &modal.error {
+        lines.push(format!("error: {error}"));
+    }
+    lines.push(if modal.production && !modal.confirmed {
+        "confirm production to apply".into()
+    } else {
+        "ready".into()
+    });
+    lines.push(modal.preview_sql.clone());
+    lines
 }
 
 #[cfg(test)]

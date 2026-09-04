@@ -421,7 +421,7 @@ async fn apply_inner(session: &PostgresSession, mutations: &[Mutation]) -> Resul
         if !matches!(mutation, Mutation::Insert { .. }) && affected != 1 {
             return Err(DriverError::new(
                 DriverErrorCategory::Conflict,
-                "mutation conflict",
+                format!("mutation conflict: expected to affect exactly 1 row, affected {affected}"),
             ));
         }
     }

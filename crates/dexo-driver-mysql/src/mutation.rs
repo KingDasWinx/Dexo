@@ -351,7 +351,7 @@ impl DataMutator for MysqlSession {
                 let _ = conn.query_drop("ROLLBACK").await;
                 return Err(DriverError::new(
                     DriverErrorCategory::Conflict,
-                    "mutation conflict",
+                    format!("mutation conflict: expected to affect exactly 1 row, affected {affected}"),
                 ));
             }
         }
