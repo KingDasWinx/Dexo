@@ -1,6 +1,8 @@
 use crate::palette::scroll_to_selection;
 use crate::screens::connections::ConnectionRow;
-use crate::screens::explorer::{ExplorerNode, ExplorerState, NodeState, is_connection_node};
+use crate::screens::explorer::{
+    ExplorerNode, ExplorerState, NodeState, is_connection_node, is_folder_node,
+};
 use dexo_driver_api::ObjectId;
 
 /// Row layout of the sidebar. `render_sidebar` and the mouse hit map both read
@@ -198,6 +200,23 @@ fn collect(
                 }
             };
             let fav = if node.favorite { "*" } else { "" };
+            // Folders say how many members they hold; columns say their data type.
+            // Both are suffixes so the state badge stays rightmost, and neither
+            // touches `node.label`, which is read elsewhere as an identifier.
+            let detail = if is_folder_node(node) {
+                format!(
+                    " ({})",
+                    node.children
+                        .iter()
+                        .filter(|child| state.matches(child))
+                        .count()
+                )
+            } else {
+                match &node.type_name {
+                    Some(type_name) => format!(" ({type_name})"),
+                    None => String::new(),
+                }
+            };
             let label = if is_connection_node(node) {
                 let marker = if connection_sessions(profiles, &node.label) > 0 {
                     connected
@@ -206,7 +225,7 @@ fn collect(
                 };
                 format!("{marker} {label}{twistie}{fav}{badge}", label = node.label)
             } else {
-                format!("{twistie}{fav}{}{badge}", node.label)
+                format!("{twistie}{fav}{}{detail}{badge}", node.label)
             };
             lines.push(format!("{cursor} {}{label}", "  ".repeat(depth)));
         }
@@ -273,6 +292,67 @@ mod tests {
             tree.iter()
                 .any(|line| line.contains('>') && line.contains("t11")),
             "{window:?}"
+        );
+    }
+
+    #[test]
+    fn column_shows_its_type_without_the_type_entering_the_label() {
+        use dexo_driver_api::{CatalogList, CatalogObject, ObjectKind, QualifiedName};
+
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("table:users"),
+                ObjectKind::Table,
+                QualifiedName::new(Some("db"), Some("public"), "users"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        explorer.expand(&ObjectId::new("table:users"));
+        explorer.apply_children(
+            &ObjectId::new("table:users"),
+            CatalogList {
+                objects: vec![
+                    CatalogObject::new(
+                        ObjectId::new("col:id"),
+                        ObjectKind::Column,
+                        QualifiedName::new(Some("db"), Some("public"), "users.id"),
+                        Some(ObjectId::new("table:users")),
+                    )
+                    .with_attribute("type", serde_json::json!("integer")),
+                ],
+                restrictions: vec![],
+            },
+        );
+        let columns_id = explorer.roots[0].children[0].id.clone();
+        explorer.expand(&columns_id);
+
+        let lines = super::render_lines(&explorer);
+        assert!(
+            lines.iter().any(|line| line.contains("id (integer)")),
+            "{lines:?}"
+        );
+        // The folder counts what it holds.
+        assert!(
+            lines.iter().any(|line| line.contains("Columns (1)")),
+            "{lines:?}"
+        );
+
+        // `label` stays an identifier: copy-name, search and goto all read it.
+        explorer.select(ObjectId::new("col:id"));
+        assert_eq!(
+            explorer.selected_node().map(|n| n.label.as_str()),
+            Some("id")
+        );
+        let node = explorer.selected_node().expect("column node");
+        let by_type = ExplorerState {
+            filter_name: "integer".into(),
+            ..ExplorerState::default()
+        };
+        assert!(
+            !by_type.matches(node),
+            "the data type leaked into the label and is now searchable"
         );
     }
 

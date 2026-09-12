@@ -4389,6 +4389,15 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
         model.explorer.expand_with(&connection, operation);
         return catalog_load_effect(model, Some(connection), operation, false);
     }
+    // Refreshing a folder sends `folder:...` to the driver, which cannot parse it
+    // and answers with an empty list -- emptying the folder for good.
+    if model
+        .explorer
+        .selected_node()
+        .is_some_and(crate::screens::explorer::is_folder_node)
+    {
+        return Vec::new();
+    }
     let Some(id) = model.explorer.selected.clone() else {
         return Vec::new();
     };
@@ -4851,6 +4860,7 @@ fn goto_definition(model: &mut Model) -> Vec<Effect> {
     };
     let wanted = target.display_unquoted();
     if let Some(id) = find_qualified(&model.explorer, &wanted) {
+        model.explorer.reveal(&id);
         model.explorer.select(id.clone());
         let operation = crate::runtime::OperationId::new();
         if model.explorer.expand_with(&id, operation) {
@@ -4875,10 +4885,13 @@ fn find_qualified(
         qualified: &str,
     ) -> Option<dexo_driver_api::ObjectId> {
         for node in nodes {
-            if node.qualified == qualified
-                || qualified.starts_with(&format!("{}.", node.qualified))
-                || node.qualified.ends_with(&format!(".{qualified}"))
-                || qualified.ends_with(&format!(".{}", node.label))
+            // A folder's `qualified` is just its label ("Tables"), which would
+            // shadow a real object that happens to share the name.
+            if !crate::screens::explorer::is_folder_node(node)
+                && (node.qualified == qualified
+                    || qualified.starts_with(&format!("{}.", node.qualified))
+                    || node.qualified.ends_with(&format!(".{qualified}"))
+                    || qualified.ends_with(&format!(".{}", node.label)))
             {
                 return Some(node.id.clone());
             }

@@ -175,6 +175,7 @@ fn model_satisfying(requirements: &[dexo_tui::palette::Requirement]) -> Model {
                         state: dexo_tui::screens::explorer::NodeState::Collapsed,
                         expanded: false,
                         favorite: false,
+                        type_name: None,
                         children: Vec::new(),
                         restriction: None,
                         error: None,

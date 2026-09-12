@@ -344,6 +344,7 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                         state: dexo_tui::screens::explorer::NodeState::Collapsed,
                         expanded: false,
                         favorite: false,
+                        type_name: None,
                         children: Vec::new(),
                         restriction: None,
                         error: None,

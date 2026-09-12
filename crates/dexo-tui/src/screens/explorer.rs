@@ -75,6 +75,15 @@ pub fn is_connection_node(node: &ExplorerNode) -> bool {
     )
 }
 
+/// A synthetic grouping node ("Tables", "Columns"...). It has no counterpart in
+/// the driver, so anything that talks to a driver has to route around it.
+pub fn is_folder_node(node: &ExplorerNode) -> bool {
+    matches!(
+        node.kind,
+        ObjectKind::DriverSpecific(ref kind) if kind == "folder"
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplorerNode {
     pub id: ObjectId,
@@ -85,6 +94,9 @@ pub struct ExplorerNode {
     pub state: NodeState,
     pub expanded: bool,
     pub favorite: bool,
+    /// Data type of a column, shown beside its name. `None` for every other kind
+    /// and for columns read back from a snapshot cached before drivers set it.
+    pub type_name: Option<String>,
     pub children: Vec<ExplorerNode>,
     pub restriction: Option<String>,
     pub error: Option<String>,
@@ -101,6 +113,7 @@ impl ExplorerNode {
             state: NodeState::Collapsed,
             expanded: false,
             favorite: false,
+            type_name: None,
             children: Vec::new(),
             restriction: None,
             error: None,
@@ -139,6 +152,11 @@ impl ExplorerNode {
                 .get("favorite")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
+            type_name: object
+                .attributes
+                .get("type")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
             children: Vec::new(),
             restriction: None,
             error: None,
@@ -187,6 +205,7 @@ impl ExplorerState {
             state: NodeState::Collapsed,
             expanded: false,
             favorite: false,
+            type_name: None,
             children: Vec::new(),
             restriction: None,
             error: None,
@@ -200,6 +219,7 @@ impl ExplorerState {
             state: NodeState::Expanded,
             expanded: true,
             favorite: false,
+            type_name: None,
             children: vec![schema],
             restriction: None,
             error: None,
@@ -213,6 +233,7 @@ impl ExplorerState {
             state: NodeState::Restricted,
             expanded: false,
             favorite: false,
+            type_name: None,
             children: Vec::new(),
             restriction: Some("permission denied".into()),
             error: None,
@@ -314,7 +335,10 @@ impl ExplorerState {
         let mut by_parent: std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>> =
             std::collections::HashMap::new();
         for object in page.objects {
-            by_parent.entry(object.parent.clone()).or_default().push(object);
+            by_parent
+                .entry(object.parent.clone())
+                .or_default()
+                .push(object);
         }
         let top_level = by_parent.remove(&None).unwrap_or_default();
         let mut children: Vec<ExplorerNode> = top_level
@@ -347,6 +371,15 @@ impl ExplorerState {
         kind: &ObjectKind,
         by_parent: &mut std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>>,
     ) {
+        // A folder's id is synthetic and never a key in `by_parent`, so looking it
+        // up would dead-end here and strip every descendant below the folder.
+        if is_folder_node(node) {
+            for child in &mut node.children {
+                let (child_id, child_kind) = (child.id.clone(), child.kind.clone());
+                Self::attach_offline_descendants(child, &child_id, &child_kind, by_parent);
+            }
+            return;
+        }
         let Some(direct_children) = by_parent.remove(&Some(id.clone())) else {
             return;
         };
@@ -533,6 +566,25 @@ impl ExplorerState {
         false
     }
 
+    /// Expands every ancestor of `id` so the node lands inside `visible_ids`.
+    /// Without it a goto into a collapsed group selects a row nobody can see and
+    /// the cursor falls back to row 0.
+    pub fn reveal(&mut self, id: &ObjectId) -> bool {
+        fn walk(nodes: &mut [ExplorerNode], id: &ObjectId) -> bool {
+            for node in nodes {
+                if node.id == *id {
+                    return true;
+                }
+                if walk(&mut node.children, id) {
+                    node.expanded = true;
+                    return true;
+                }
+            }
+            false
+        }
+        walk(&mut self.roots, id)
+    }
+
     pub fn apply_children(&mut self, parent: &ObjectId, page: CatalogList) {
         Self::apply_in(&mut self.roots, parent, page);
     }
@@ -669,7 +721,7 @@ impl ExplorerState {
                     walk(&node.children, out);
                     continue;
                 }
-                if matches!(&node.kind, ObjectKind::DriverSpecific(kind) if kind == "folder") {
+                if is_folder_node(node) {
                     walk(&node.children, out);
                     continue;
                 }
@@ -840,36 +892,39 @@ fn group_catalog_children(
                 (bucket_partition, "Partitions"),
             ],
         ),
-        ObjectKind::Schema => group_schema_children(parent, objects),
+        ObjectKind::Schema => group_by_kind(
+            parent,
+            objects,
+            &[
+                (bucket_table, "Tables"),
+                (bucket_view, "Views"),
+                (bucket_matview, "Materialized Views"),
+                (bucket_function, "Functions"),
+                (bucket_procedure, "Procedures"),
+                (bucket_sequence, "Sequences"),
+                (bucket_type, "Types"),
+            ],
+        ),
+        // MySQL has no schema level and hangs relations straight off the catalog,
+        // so the catalog arm carries table-like buckets that stay empty on Postgres.
+        ObjectKind::Catalog => group_by_kind(
+            parent,
+            objects,
+            &[
+                (bucket_schema, "Schemas"),
+                (bucket_table, "Tables"),
+                (bucket_view, "Views"),
+                (bucket_procedure, "Procedures"),
+                (bucket_function, "Functions"),
+                (bucket_event, "Events"),
+                (bucket_extension, "Extensions"),
+                (bucket_fdw, "Foreign Data Wrappers"),
+                (bucket_publication, "Publications"),
+                (bucket_user_role, "Users & Roles"),
+            ],
+        ),
         _ => objects.into_iter().map(ExplorerNode::from_object).collect(),
     }
-}
-
-fn group_schema_children(parent: &ObjectId, objects: Vec<CatalogObject>) -> Vec<ExplorerNode> {
-    let mut tables = Vec::new();
-    let mut rest = Vec::new();
-    for object in objects {
-        if matches!(
-            object.kind,
-            ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
-        ) {
-            tables.push(ExplorerNode::from_object(object));
-        } else {
-            rest.push(object);
-        }
-    }
-    let mut children = tables;
-    children.extend(group_by_kind(
-        parent,
-        rest,
-        &[
-            (bucket_function, "Functions"),
-            (bucket_procedure, "Procedures"),
-            (bucket_sequence, "Sequences"),
-            (bucket_type, "Types"),
-        ],
-    ));
-    children
 }
 
 type KindBucket<'a> = (fn(&ObjectKind) -> bool, &'a str);
@@ -918,6 +973,7 @@ fn folder_node(
         state: NodeState::Expanded,
         expanded: false,
         favorite: false,
+        type_name: None,
         children,
         restriction: None,
         error: None,
@@ -957,6 +1013,33 @@ fn bucket_sequence(kind: &ObjectKind) -> bool {
 fn bucket_type(kind: &ObjectKind) -> bool {
     matches!(kind, ObjectKind::DriverSpecific(name) if name == "enum" || name == "domain")
 }
+fn bucket_schema(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Schema)
+}
+fn bucket_table(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Table)
+}
+fn bucket_view(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::View)
+}
+fn bucket_matview(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::MaterializedView)
+}
+fn bucket_event(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "event")
+}
+fn bucket_extension(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "extension")
+}
+fn bucket_fdw(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "fdw")
+}
+fn bucket_publication(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "publication")
+}
+fn bucket_user_role(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::User | ObjectKind::Role)
+}
 
 fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> ExplorerNode {
     ExplorerNode {
@@ -968,6 +1051,7 @@ fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> Explore
         state: NodeState::Restricted,
         expanded: false,
         favorite: false,
+        type_name: None,
         children: Vec::new(),
         restriction: Some(restriction.reason),
         error: None,
@@ -1114,14 +1198,21 @@ mod tests {
         );
         {
             let schema = &explorer.roots[0];
-            assert!(schema.children.iter().any(|n| n.label == "users"));
+            // Every class gets its own group now; nothing hangs off the schema bare.
+            let labels: Vec<&str> = schema.children.iter().map(|n| n.label.as_str()).collect();
+            assert_eq!(labels, ["Tables", "Functions"]);
+            let tables = schema
+                .children
+                .iter()
+                .find(|n| n.label == "Tables")
+                .expect("tables folder");
+            assert!(tables.children.iter().any(|n| n.label == "users"));
             let functions = schema
                 .children
                 .iter()
                 .find(|n| n.label == "Functions")
                 .expect("functions folder");
             assert!(functions.children.iter().any(|n| n.label == "armor"));
-            assert!(!schema.children.iter().any(|n| n.label == "armor"));
         }
 
         explorer.apply_children(
@@ -1144,11 +1235,16 @@ mod tests {
                 restrictions: vec![],
             },
         );
+        // Addressed by id, so the extra folder level must not hide it from `apply_in`.
         let table = explorer.roots[0]
             .children
             .iter()
+            .find(|n| n.label == "Tables")
+            .expect("tables folder")
+            .children
+            .iter()
             .find(|n| n.label == "users")
-            .unwrap();
+            .expect("table survived the extra level");
         assert!(table.children.iter().any(|n| n.label == "Columns"));
         assert!(table.children.iter().any(|n| n.label == "Indexes"));
         assert!(!table.children.iter().any(|n| n.kind == ObjectKind::Column));
@@ -1159,6 +1255,112 @@ mod tests {
             .unwrap();
         assert!(columns.children.iter().any(|n| n.label == "id"));
         assert!(!columns.children.iter().any(|n| n.label == "users.id"));
+    }
+
+    #[test]
+    fn catalog_children_group_by_class_and_skip_empty_groups() {
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("catalog:db"),
+                ObjectKind::Catalog,
+                QualifiedName::new(Some("db"), None::<String>, "db"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        let parent = ObjectId::new("catalog:db");
+        let child = |id: &str, kind: ObjectKind, name: &str| {
+            CatalogObject::new(
+                ObjectId::new(id),
+                kind,
+                QualifiedName::new(Some("db"), None::<String>, name),
+                Some(parent.clone()),
+            )
+        };
+        explorer.apply_children(
+            &parent,
+            CatalogList {
+                objects: vec![
+                    child("schema:public", ObjectKind::Schema, "public"),
+                    child("user:alice", ObjectKind::User, "alice"),
+                    child(
+                        "ext:pgcrypto",
+                        ObjectKind::DriverSpecific("extension".into()),
+                        "pgcrypto",
+                    ),
+                    child(
+                        "event:nightly",
+                        ObjectKind::DriverSpecific("event".into()),
+                        "nightly",
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        // Exact and ordered: catches a reshuffled bucket list, and the absence of
+        // Tables/Views/Functions is what proves empty groups stay out.
+        let labels: Vec<&str> = explorer.roots[0]
+            .children
+            .iter()
+            .map(|n| n.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Schemas", "Events", "Extensions", "Users & Roles"]);
+    }
+
+    #[test]
+    fn offline_restore_reaches_columns_through_folders() {
+        let mut explorer = ExplorerState {
+            roots: vec![ExplorerNode::connection("prod")],
+            ..ExplorerState::default()
+        };
+        let object = |id: &str, kind: ObjectKind, name: &str, parent: Option<&str>| {
+            CatalogObject::new(
+                ObjectId::new(id),
+                kind,
+                QualifiedName::new(Some("db"), Some("public"), name),
+                parent.map(ObjectId::new),
+            )
+        };
+        explorer.restore_connection_catalog(
+            "prod",
+            CatalogList {
+                objects: vec![
+                    object("catalog:db", ObjectKind::Catalog, "db", None),
+                    object(
+                        "schema:public",
+                        ObjectKind::Schema,
+                        "public",
+                        Some("catalog:db"),
+                    ),
+                    object(
+                        "table:orders",
+                        ObjectKind::Table,
+                        "orders",
+                        Some("schema:public"),
+                    ),
+                    object(
+                        "col:id",
+                        ObjectKind::Column,
+                        "orders.id",
+                        Some("table:orders"),
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        // Folder ids are synthetic, so the restore walk has to step through them
+        // instead of looking them up as parents. Otherwise this dead-ends at "Schemas".
+        let path = [
+            "db", "Schemas", "public", "Tables", "orders", "Columns", "id",
+        ];
+        let mut nodes = explorer.roots[0].children.as_slice();
+        for (depth, label) in path.iter().enumerate() {
+            let node = nodes.iter().find(|n| n.label == *label).unwrap_or_else(|| {
+                panic!("offline restore lost the tree at {label} (depth {depth})")
+            });
+            nodes = node.children.as_slice();
+        }
     }
 
     #[test]
@@ -1215,6 +1417,7 @@ mod tests {
                 state: NodeState::Collapsed,
                 expanded: false,
                 favorite: false,
+                type_name: None,
                 children: Vec::new(),
                 restriction: None,
                 error: None,
