@@ -5,12 +5,20 @@ use crate::error::{AppError, ErrorCategory};
 
 pub const SETTINGS_VERSION: u32 = 1;
 
+/// The light/dark surface. Orthogonal to [`SettingsFile::accent`], which carries
+/// the system's primary color.
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
-pub enum ThemeId {
+pub enum ModeId {
     #[default]
     Dark,
     Light,
     HighContrast,
+}
+
+pub const DEFAULT_ACCENT: &str = "cyan";
+
+fn default_accent() -> String {
+    DEFAULT_ACCENT.into()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -44,7 +52,11 @@ pub enum UnicodeMode {
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub struct SettingsFile {
     pub version: u32,
-    pub theme: ThemeId,
+    /// Named `theme` in settings written before the mode and the accent split.
+    #[serde(alias = "theme")]
+    pub mode: ModeId,
+    #[serde(default = "default_accent")]
+    pub accent: String,
     pub keymap: KeymapConfig,
     pub mouse: bool,
     pub animation: bool,
@@ -56,7 +68,8 @@ impl Default for SettingsFile {
     fn default() -> Self {
         Self {
             version: SETTINGS_VERSION,
-            theme: ThemeId::Dark,
+            mode: ModeId::Dark,
+            accent: default_accent(),
             keymap: KeymapConfig::default(),
             mouse: true,
             animation: true,
@@ -107,20 +120,35 @@ pub fn save_settings(config_dir: &Path, settings: &SettingsFile) -> Result<(), A
 
 #[cfg(test)]
 mod tests {
-    use super::{ThemeId, load_settings, save_settings};
+    use super::{ModeId, load_settings, save_settings};
     use crate::settings::SettingsFile;
 
     #[test]
-    fn saved_theme_survives_restart() {
+    fn saved_mode_and_accent_survive_restart() {
         let dir = tempfile::tempdir().unwrap();
         let settings = SettingsFile {
-            theme: ThemeId::HighContrast,
+            mode: ModeId::HighContrast,
+            accent: "rose".into(),
             mouse: false,
             ..SettingsFile::default()
         };
         save_settings(dir.path(), &settings).unwrap();
         let loaded = load_settings(dir.path());
-        assert_eq!(loaded.theme, ThemeId::HighContrast);
+        assert_eq!(loaded.mode, ModeId::HighContrast);
+        assert_eq!(loaded.accent, "rose");
         assert!(!loaded.mouse);
+    }
+
+    #[test]
+    fn settings_written_before_the_split_still_load() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            super::settings_path(dir.path()),
+            "version = 1\ntheme = \"Light\"\nmouse = true\nanimation = true\nunicode = \"Unicode\"\nrecovery_interval_secs = 5\n[keymap]\nrun_statement = \"Ctrl+Enter\"\nprofile = \"default\"\n",
+        )
+        .unwrap();
+        let loaded = load_settings(dir.path());
+        assert_eq!(loaded.mode, ModeId::Light);
+        assert_eq!(loaded.accent, super::DEFAULT_ACCENT);
     }
 }

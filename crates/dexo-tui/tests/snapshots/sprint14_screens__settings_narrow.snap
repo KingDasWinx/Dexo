@@ -1,0 +1,24 @@
+---
+source: crates/dexo-tui/tests/sprint14_screens.rs
+expression: "render_to_string(&model, 44, 20)"
+---
+default  no connection  —                   
+ scratch.sql ×  +                           
+┌Settings──────────────────────────────────┐
+│> Mode       Dark                         │
+│  Accent     Cyan                         │
+│  Keymap     Default                      │
+│  Mouse      On                           │
+│  Animation  On                           │
+│  Unicode    On                           │
+│                                          │
+│  [Reset to defaults]                     │
+│  arrows change  r reset  esc close       │
+│                                          │
+└──────────────────────────────────────────┘
+│                                          │
+│                                          │
+│                                          │
+│                                          │
+└──────────────────────────────────────────┘
+disconnected  tx:idle  FOCUS: Editor  layout

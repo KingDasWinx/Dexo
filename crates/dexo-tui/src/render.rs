@@ -1,6 +1,7 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::text::Span;
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
@@ -10,9 +11,14 @@ use crate::mouse::{
     register_line, register_overlay,
 };
 use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
+use crate::theme::Role;
 
 pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     hits.clear();
+    let area = frame.area();
+    frame
+        .buffer_mut()
+        .set_style(area, model.theme.base(model.capabilities));
     let plan = LayoutPlan::for_area_with_document_tabs(
         frame.area(),
         Some(&model.panes),
@@ -192,6 +198,9 @@ fn register_pane_dividers(hits: &mut HitMap, plan: LayoutPlan) {
 fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     frame.render_widget(Clear, area);
+    frame
+        .buffer_mut()
+        .set_style(area, model.theme.base(model.capabilities));
     register_overlay(hits, area);
 
     let compact = area.width < 60 || area.height < 18;
@@ -738,6 +747,7 @@ pub fn pane_block(model: &Model, title: &str, focused: bool) -> Block<'static> {
 
 fn overlay_block(model: &Model, title: &str) -> Block<'static> {
     Block::bordered()
+        .style(model.theme.base(model.capabilities))
         .title(Span::styled(
             title.to_string(),
             model.theme.overlay(model.capabilities),
@@ -1592,12 +1602,17 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let popup = centered(frame.area(), 64, 12);
-    let lines = model.settings.lines();
-    paint_popup(
-        frame,
+    let wide = popup_inner(popup).width >= crate::screens::settings::WIDE_MIN_WIDTH;
+    let lines = model.settings.lines(wide);
+    let body = if wide {
+        settings_option_lines(model)
+    } else {
+        lines.iter().map(|line| Line::from(line.clone())).collect()
+    };
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, "Settings")),
         popup,
-        Block::bordered().title("Settings"),
-        lines.join("\n"),
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |index, line, rect| {
@@ -1607,6 +1622,61 @@ fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             hits.register(HitTarget::Button(HitButton::Reset), rect);
         }
     });
+}
+
+/// Every choice stays on screen. The active one carries brackets, weight and color at
+/// once, so it still reads when the terminal has no color to give.
+fn settings_option_lines(model: &Model) -> Vec<Line<'static>> {
+    let caps = model.capabilities;
+    let muted = model.theme.style(Role::Muted, caps);
+    let focus = model.theme.style(Role::Focus, caps);
+    let settings = &model.settings;
+    let mut body: Vec<Line> = Vec::new();
+
+    for (row, field) in settings.options().into_iter().enumerate() {
+        let focused = row == settings.focus;
+        let marker = if focused { "> " } else { "  " };
+        let mut spans = vec![
+            Span::styled(marker.to_string(), focus),
+            Span::styled(
+                format!("{:<11}", field.label),
+                if focused { focus } else { muted },
+            ),
+        ];
+        for (index, value) in field.values.iter().enumerate() {
+            let active = index == field.active;
+            let tint = field
+                .tint
+                .then(|| crate::theme::accent_color(crate::theme::ACCENTS[index].0, caps))
+                .flatten();
+            let style = match (active, tint) {
+                (true, Some(color)) => Style::default().fg(color).add_modifier(Modifier::BOLD),
+                (true, None) => focus.add_modifier(Modifier::BOLD),
+                (false, Some(color)) => Style::default().fg(color).add_modifier(Modifier::DIM),
+                (false, None) => muted,
+            };
+            // Same width either way, so the row does not shift as the value changes.
+            let text = if active {
+                format!("[{value}] ")
+            } else {
+                format!(" {value}  ")
+            };
+            spans.push(Span::styled(text, style));
+        }
+        body.push(Line::from(spans));
+    }
+
+    body.push(Line::default());
+    let reset_focused = settings.focus == crate::screens::settings::RESET_FOCUS;
+    body.push(Line::from(Span::styled(
+        settings.footer_line(),
+        if reset_focused { focus } else { muted },
+    )));
+    body.push(Line::from(Span::styled(
+        crate::screens::settings::SettingsScreen::hint(true).to_string(),
+        muted,
+    )));
+    body
 }
 
 fn render_recovery(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
@@ -1705,7 +1775,8 @@ fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.push("(empty)".into());
     }
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(Block::bordered()),
+        Paragraph::new(lines.join("\n"))
+            .block(Block::bordered().style(model.theme.base(model.capabilities))),
         popup,
     );
     register_overlay(hits, popup);

@@ -737,12 +737,20 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::InspectorNextTab),
         },
         CommandSpec {
-            id: "settings.theme",
-            title: "Cycle Theme",
-            keywords: &["dark", "light"],
+            id: "settings.mode",
+            title: "Toggle Light/Dark Mode",
+            keywords: &["dark", "light", "contrast"],
             shortcut: None,
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::CycleTheme),
+            invocation: PaletteInvocation::Dispatch(Action::CycleMode),
+        },
+        CommandSpec {
+            id: "settings.accent",
+            title: "Cycle Accent Color",
+            keywords: &["accent", "primary", "color"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CycleAccent),
         },
         CommandSpec {
             id: "settings.keymap",
@@ -1035,7 +1043,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         CommandSpec {
             id: "settings.open",
             title: "Open Settings",
-            keywords: &["theme", "keymap", "mouse"],
+            keywords: &["theme", "mode", "accent", "keymap", "mouse"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenSettings),

@@ -56,7 +56,31 @@ pub struct Keymap {
     pub bindings: Vec<Binding>,
 }
 
+/// Selectable keymaps, as `(profile, label)`.
+pub const PROFILES: &[(&str, &str)] = &[("default", "Default"), ("vim", "Vim"), ("emacs", "Emacs")];
+
+pub fn profile_index(name: &str) -> usize {
+    PROFILES
+        .iter()
+        .position(|(key, _)| *key == name)
+        .unwrap_or(0)
+}
+
+/// Wraps in both directions, so a picker can step back as easily as forward.
+pub fn step_profile(name: &str, delta: i32) -> &'static str {
+    let len = PROFILES.len() as i32;
+    PROFILES[((profile_index(name) as i32 + delta).rem_euclid(len)) as usize].0
+}
+
 impl Keymap {
+    pub fn named(name: &str) -> Self {
+        match name {
+            "vim" => Self::vim_profile(),
+            "emacs" => Self::emacs_profile(),
+            _ => Self::default_profile(),
+        }
+    }
+
     pub fn default_profile() -> Self {
         parse_keymap(DEFAULT_TOML).expect("builtin default keymap")
     }

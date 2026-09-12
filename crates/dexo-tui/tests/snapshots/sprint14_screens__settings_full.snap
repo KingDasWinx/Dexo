@@ -15,15 +15,15 @@ default  no connection  —
 │                          ││                                                                                                      ││                          │
 │                          ││                                                                                                      ││                          │
 │                          ││                   ┌Settings──────────────────────────────────────────────────────┐                   ││                          │
-│                          ││                   │> Theme      Dark                                             │                   ││                          │
-│                          ││                   │  Keymap     Default                                          │                   ││                          │
-│                          ││                   │  Mouse      On                                               │                   ││                          │
-│                          ││                   │  Animation  On                                               │                   ││                          │
-│                          ││                   │  Unicode    On                                               │                   ││                          │
+│                          ││                   │> Mode       [Dark]  Light   Low color                        │                   ││                          │
+│                          ││                   │  Accent     [Cyan]  Blue   Violet   Green   Amber   Rose     │                   ││                          │
+│                          ││                   │  Keymap     [Default]  Vim   Emacs                           │                   ││                          │
+│                          ││                   │  Mouse      [On]  Off                                        │                   ││                          │
+│                          ││                   │  Animation  [On]  Off                                        │                   ││                          │
+│                          ││                   │  Unicode    [On]  Off                                        │                   ││                          │
 │                          ││                   │                                                              │                   ││                          │
 │                          ││                   │  [Reset to defaults]                                         │                   ││                          │
-│                          ││                   │  up/down move  enter change  esc close                       │                   ││                          │
-│                          ││                   │                                                              │                   ││                          │
+│                          ││                   │  up/down field  left/right change  r reset  esc close        │                   ││                          │
 │                          ││                   │                                                              │                   ││                          │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                   ││                          │
 │                          ││                                                                                                      ││                          │

@@ -46,10 +46,11 @@ async fn admin_refresh_uses_selected_session_and_ignores_stale_response() {
 }
 
 #[tokio::test]
-async fn saved_theme_keymap_and_mouse_survive_restart() {
+async fn saved_mode_accent_keymap_and_mouse_survive_restart() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dexo_app::settings::SettingsFile {
-        theme: dexo_app::settings::ThemeId::HighContrast,
+        mode: dexo_app::settings::ModeId::HighContrast,
+        accent: "violet".into(),
         mouse: false,
         keymap: dexo_app::settings::KeymapConfig {
             run_statement: "Ctrl+Enter".into(),
@@ -59,7 +60,8 @@ async fn saved_theme_keymap_and_mouse_survive_restart() {
     };
     dexo_app::settings::save_settings(dir.path(), &settings).unwrap();
     let loaded = dexo_app::settings::load_settings(dir.path());
-    assert_eq!(loaded.theme, dexo_app::settings::ThemeId::HighContrast);
+    assert_eq!(loaded.mode, dexo_app::settings::ModeId::HighContrast);
+    assert_eq!(loaded.accent, "violet");
     assert_eq!(loaded.keymap.run_statement, "Ctrl+Enter");
     assert_eq!(loaded.keymap.profile, "vim");
     assert!(!loaded.mouse);
@@ -111,6 +113,28 @@ fn settings_open_applies_without_fixture() {
     let mut model = Model::default();
     update(&mut model, Action::OpenSettings);
     assert!(model.settings.open);
+}
+
+/// Arrow keys are the advertised way to change a setting, so they have to be inverses:
+/// step forward past what you wanted and left must bring it straight back.
+#[test]
+fn left_and_right_are_inverses_on_every_settings_row() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(model: &mut Model, code: KeyCode) {
+        update(model, Action::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    let mut model = Model::default();
+    update(&mut model, Action::OpenSettings);
+    for row in 0..dexo_tui::screens::settings::FIELD_COUNT {
+        model.settings.focus = row;
+        let before = model.settings.clone();
+        press(&mut model, KeyCode::Right);
+        assert_ne!(model.settings, before, "row {row} ignored the right arrow");
+        press(&mut model, KeyCode::Left);
+        assert_eq!(model.settings, before, "row {row} did not step back");
+    }
 }
 
 #[test]

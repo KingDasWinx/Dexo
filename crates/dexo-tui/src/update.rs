@@ -687,8 +687,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             open_file_picker(model, crate::screens::file_picker::FilePickerMode::Open);
             Vec::new()
         }
-        Action::CycleTheme => cycle_theme(model),
-        Action::CycleKeymap => cycle_keymap(model),
+        Action::CycleMode => cycle_mode(model, 1),
+        Action::CycleAccent => cycle_accent(model, 1),
+        Action::CycleKeymap => cycle_keymap(model, 1),
         Action::ToggleMouse => {
             model.mouse = !model.mouse;
             model.settings.mouse = model.mouse;
@@ -2172,7 +2173,7 @@ fn mouse_settings(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::ListRow(index)) if index < crate::screens::settings::FIELD_COUNT => {
             model.settings.focus = index;
             model.settings.confirm_reset = false;
-            activate_focused_setting(model)
+            step_focused_setting(model, 1)
         }
         Some(HitTarget::Button(HitButton::Reset)) => {
             model.settings.focus = crate::screens::settings::RESET_FOCUS;
@@ -2964,9 +2965,11 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.settings.focus_next();
                 Vec::new()
             }
-            KeyCode::Enter | KeyCode::Char(' ') => activate_focused_setting(model),
+            KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right => step_focused_setting(model, 1),
+            KeyCode::Left => step_focused_setting(model, -1),
             KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
-            KeyCode::Char('t') => update(model, Action::CycleTheme),
+            KeyCode::Char('t') => update(model, Action::CycleMode),
+            KeyCode::Char('c') => update(model, Action::CycleAccent),
             KeyCode::Char('k') => update(model, Action::CycleKeymap),
             KeyCode::Char('m') => update(model, Action::ToggleMouse),
             KeyCode::Char('a') => update(model, Action::ToggleAnimation),
@@ -5424,36 +5427,45 @@ fn remove_document(model: &mut Model, index: usize) {
     model.focus = Focus::Editor;
 }
 
-fn cycle_theme(model: &mut Model) -> Vec<Effect> {
-    let (name, theme) = match model.settings.theme.as_str() {
-        "light" => ("low-color", crate::theme::builtin_low_color()),
-        "low-color" | "high-contrast" => ("dark", crate::theme::builtin_dark()),
-        _ => ("light", crate::theme::builtin_light()),
-    };
-    model.settings.theme = name.into();
-    model.theme = theme;
-    persist_settings(model);
+fn cycle_mode(model: &mut Model, delta: i32) -> Vec<Effect> {
+    let next = crate::theme::Mode::from_key(&model.settings.mode).step(delta);
+    model.settings.mode = next.as_key().into();
+    rebuild_theme(model);
     Vec::new()
 }
 
-fn cycle_keymap(model: &mut Model) -> Vec<Effect> {
-    model.keymap = match model.keymap.name.as_str() {
-        "vim" => crate::keymap::Keymap::emacs_profile(),
-        "emacs" => crate::keymap::Keymap::default_profile(),
-        _ => crate::keymap::Keymap::vim_profile(),
-    };
+fn cycle_accent(model: &mut Model, delta: i32) -> Vec<Effect> {
+    model.settings.accent = crate::theme::step_accent(&model.settings.accent, delta).into();
+    rebuild_theme(model);
+    Vec::new()
+}
+
+/// The surface and the primary color are picked separately, then composed here.
+fn rebuild_theme(model: &mut Model) {
+    model.theme = crate::theme::theme_for(
+        crate::theme::Mode::from_key(&model.settings.mode),
+        &model.settings.accent,
+    );
+    persist_settings(model);
+}
+
+fn cycle_keymap(model: &mut Model, delta: i32) -> Vec<Effect> {
+    let next = crate::keymap::step_profile(&model.keymap.name, delta);
+    model.keymap = crate::keymap::Keymap::named(next);
     model.settings.keymap = model.keymap.name.clone();
     persist_settings(model);
     Vec::new()
 }
 
-fn activate_focused_setting(model: &mut Model) -> Vec<Effect> {
+/// `delta` is the arrow direction; the two-value rows ignore it because they toggle.
+fn step_focused_setting(model: &mut Model, delta: i32) -> Vec<Effect> {
     match model.settings.focus {
-        0 => update(model, Action::CycleTheme),
-        1 => update(model, Action::CycleKeymap),
-        2 => update(model, Action::ToggleMouse),
-        3 => update(model, Action::ToggleAnimation),
-        4 => update(model, Action::ToggleUnicode),
+        0 => cycle_mode(model, delta),
+        1 => cycle_accent(model, delta),
+        2 => cycle_keymap(model, delta),
+        3 => update(model, Action::ToggleMouse),
+        4 => update(model, Action::ToggleAnimation),
+        5 => update(model, Action::ToggleUnicode),
         _ => update(model, Action::ConfirmResetSettings),
     }
 }
@@ -5484,11 +5496,12 @@ fn persist_settings(model: &Model) {
     };
     let mut manager = crate::runtime::settings_manager::SettingsManager::load(&paths.data_dir);
     let next = dexo_app::settings::SettingsFile {
-        theme: match model.settings.theme.as_str() {
-            "high-contrast" | "low-color" => dexo_app::settings::ThemeId::HighContrast,
-            "light" => dexo_app::settings::ThemeId::Light,
-            _ => dexo_app::settings::ThemeId::Dark,
+        mode: match crate::theme::Mode::from_key(&model.settings.mode) {
+            crate::theme::Mode::LowColor => dexo_app::settings::ModeId::HighContrast,
+            crate::theme::Mode::Light => dexo_app::settings::ModeId::Light,
+            crate::theme::Mode::Dark => dexo_app::settings::ModeId::Dark,
         },
+        accent: model.settings.accent.clone(),
         mouse: model.mouse,
         animation: model.animation,
         unicode: if model.capabilities.unicode {
@@ -5516,25 +5529,15 @@ fn apply_saved_settings(model: &mut Model) {
         manager.active.unicode,
         dexo_app::settings::UnicodeMode::Unicode
     );
-    model.keymap = match manager.active.keymap.profile.as_str() {
-        "vim" => crate::keymap::Keymap::vim_profile(),
-        "emacs" => crate::keymap::Keymap::emacs_profile(),
-        _ => crate::keymap::Keymap::default_profile(),
+    model.keymap = crate::keymap::Keymap::named(&manager.active.keymap.profile);
+    let mode = match manager.active.mode {
+        dexo_app::settings::ModeId::HighContrast => crate::theme::Mode::LowColor,
+        dexo_app::settings::ModeId::Light => crate::theme::Mode::Light,
+        dexo_app::settings::ModeId::Dark => crate::theme::Mode::Dark,
     };
-    match manager.active.theme {
-        dexo_app::settings::ThemeId::HighContrast => {
-            model.settings.theme = "high-contrast".into();
-            model.theme = crate::theme::builtin_low_color();
-        }
-        dexo_app::settings::ThemeId::Light => {
-            model.settings.theme = "light".into();
-            model.theme = crate::theme::builtin_light();
-        }
-        dexo_app::settings::ThemeId::Dark => {
-            model.settings.theme = "dark".into();
-            model.theme = crate::theme::builtin_dark();
-        }
-    }
+    model.settings.mode = mode.as_key().into();
+    model.settings.accent = manager.active.accent.clone();
+    model.theme = crate::theme::theme_for(mode, &model.settings.accent);
     sync_settings_screen(model);
 }
 
@@ -6321,7 +6324,10 @@ fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::Diagnostic
     dexo_app::diagnostic_service::DiagnosticBundle::assemble(
         env!("CARGO_PKG_VERSION").into(),
         format!("{:?}", model.capabilities),
-        format!("theme={} mouse={}", model.settings.theme, model.mouse),
+        format!(
+            "mode={} accent={} mouse={}",
+            model.settings.mode, model.settings.accent, model.mouse
+        ),
         String::new(),
     )
 }
