@@ -25,17 +25,15 @@ fn parse_pid(id: &str) -> Result<i32, DriverError> {
 }
 
 fn duration_ms(row: &tokio_postgres::Row) -> Option<u64> {
-    // ponytail: EXTRACT(EPOCH) arrives as i64, f64 or numeric depending on PG/libpq.
-    row.try_get::<_, Option<i64>>(4)
-        .ok()
-        .flatten()
-        .map(|ms| ms.max(0) as u64)
-        .or_else(|| {
-            row.try_get::<_, Option<f64>>(4)
-                .ok()
-                .flatten()
-                .map(|ms| ms.max(0.0) as u64)
-        })
+    // EXTRACT(EPOCH) arrives as i64, f64 or numeric depending on the server version, and
+    // asking for the wrong one of those used to read as "no duration".
+    match crate::decode::decode_at(row, 4) {
+        dexo_driver_api::DbValue::I64(ms) => Some(ms.max(0) as u64),
+        dexo_driver_api::DbValue::Decimal(text) | dexo_driver_api::DbValue::Native { text, .. } => {
+            text.parse::<f64>().ok().map(|ms| ms.max(0.0) as u64)
+        }
+        _ => None,
+    }
 }
 
 fn restricted_list<T>(error: tokio_postgres::Error) -> Result<AdminList<T>, DriverError> {
