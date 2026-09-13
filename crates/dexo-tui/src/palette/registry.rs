@@ -1210,8 +1210,6 @@ fn hidden(id: &str) -> bool {
             | "palette.open"
             // opening the palette destroys completion state, so it is always disabled
             | "editor.accept_completion"
-            // ponytail: the screen can neither import nor export yet; unhide once it can.
-            | "config.transfer"
     )
 }
 

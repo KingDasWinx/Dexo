@@ -5,7 +5,7 @@ expression: "render_to_string(&model, 60, 20)"
 demo  local  public                                         
  scratch.sql ×  +                                           
 ┌MCP profiles──────────────────────────────────────────────┐
-│mcp profile=assistant enabled=true confirm=true           │
+│mcp profile=assistant enabled=true confirm=false          │
 │scope allow db.public.*                                   │
 │scope deny db.public.secrets                              │
 │tool catalog_search                                       │

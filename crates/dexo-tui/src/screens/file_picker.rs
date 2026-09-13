@@ -10,6 +10,8 @@ pub enum FilePickerMode {
     Save,
     Transfer,
     Diagnostics,
+    ConfigExport,
+    ConfigImport,
 }
 
 impl FilePickerMode {
@@ -19,14 +21,17 @@ impl FilePickerMode {
             Self::Save => "Save file",
             Self::Transfer => "Choose path",
             Self::Diagnostics => "Save diagnostics",
+            Self::ConfigExport => "Export config to",
+            Self::ConfigImport => "Import config from",
         }
     }
 
     pub fn submit_label(self) -> &'static str {
         match self {
             Self::Open => "Open",
-            Self::Save | Self::Diagnostics => "Save",
+            Self::Save | Self::Diagnostics | Self::ConfigExport => "Save",
             Self::Transfer => "Choose",
+            Self::ConfigImport => "Open",
         }
     }
 }

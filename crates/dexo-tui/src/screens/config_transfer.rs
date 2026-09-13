@@ -63,6 +63,12 @@ impl ConfigTransferScreen {
         if let Some(message) = &self.message {
             lines.push(message.clone());
         }
+        // Without this the screen advertised nothing and neither key was findable.
+        lines.push(if self.preview.is_some() {
+            "e export  i import  r rename  p replace  enter apply  esc close".into()
+        } else {
+            "e export  i import  esc close".to_string()
+        });
         lines
     }
 }

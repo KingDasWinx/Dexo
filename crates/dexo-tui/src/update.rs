@@ -1039,10 +1039,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             vec![Effect::LoadMcpProfiles]
         }
         Action::ConfirmMcpEnable => {
-            model.mcp_profiles.confirm_enable();
-            vec![Effect::EnableMcpProfile {
-                name: model.mcp_profiles.name.clone(),
-            }]
+            if model.mcp_profiles.enable_selected() {
+                vec![Effect::EnableMcpProfile {
+                    name: model.mcp_profiles.name.clone(),
+                }]
+            } else {
+                Vec::new()
+            }
         }
         Action::RevokeAllMcpGrants => {
             model.mcp_audit.open = false;
@@ -2684,6 +2687,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.data.query_prompt.open {
         return handle_data_query_prompt_key(model, key);
     }
+    if model.file_picker.open {
+        return handle_file_picker_key(model, key);
+    }
     if model.projects.open {
         return handle_projects_key(model, key);
     }
@@ -2695,9 +2701,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.connection_form.open {
         return handle_connection_form_key(model, key);
-    }
-    if model.file_picker.open {
-        return handle_file_picker_key(model, key);
     }
     if model.editor.history_open {
         return handle_history_overlay(model, key);
@@ -2937,6 +2940,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Enter | KeyCode::Char('r') if model.mcp_profiles.confirm_revoke => {
                 vec![Effect::RevokeAllMcpGrants]
             }
+            KeyCode::Char('e') => update(model, Action::ConfirmMcpEnable),
             KeyCode::Char('r') => {
                 model.mcp_profiles.revoke_all();
                 Vec::new()
@@ -5945,6 +5949,12 @@ fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
                 bundle: diagnostics_bundle(model),
             }]
         }
+        crate::screens::file_picker::FilePickerMode::ConfigExport => {
+            update(model, Action::ExportConfig { path })
+        }
+        crate::screens::file_picker::FilePickerMode::ConfigImport => {
+            update(model, Action::ImportConfig { path })
+        }
     }
 }
 
@@ -6153,6 +6163,20 @@ fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
             model.config_transfer.open = false;
+            Vec::new()
+        }
+        KeyCode::Char('e') => {
+            open_file_picker(
+                model,
+                crate::screens::file_picker::FilePickerMode::ConfigExport,
+            );
+            Vec::new()
+        }
+        KeyCode::Char('i') => {
+            open_file_picker(
+                model,
+                crate::screens::file_picker::FilePickerMode::ConfigImport,
+            );
             Vec::new()
         }
         KeyCode::Enter => update(model, Action::ApplyConfigImport),

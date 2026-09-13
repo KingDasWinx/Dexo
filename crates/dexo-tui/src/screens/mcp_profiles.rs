@@ -54,8 +54,23 @@ impl McpProfilesScreen {
         }
     }
 
-    pub fn confirm_enable(&mut self) {
-        self.confirm_enable = true;
+    /// Arms the confirmation on the first call and commits on the second, the same
+    /// shape as [`Self::revoke_all`]. Returns true once the profile is really enabled.
+    pub fn enable_selected(&mut self) -> bool {
+        if self.name.is_empty() {
+            self.preview = "no MCP profile selected".into();
+            return false;
+        }
+        if self.enabled {
+            self.preview = format!("{} is already enabled", self.name);
+            return false;
+        }
+        if !self.confirm_enable {
+            self.confirm_enable = true;
+            self.preview = format!("confirm enable {}", self.name);
+            return false;
+        }
+        self.confirm_enable = false;
         self.enabled = true;
         self.preview = format!(
             "enabled {} scopes={} tools={}",
@@ -63,6 +78,7 @@ impl McpProfilesScreen {
             self.scopes.len(),
             self.tools.len()
         );
+        true
     }
 
     pub fn tick(&mut self) {
@@ -101,6 +117,8 @@ impl McpProfilesScreen {
     }
 
     fn apply_selected(&mut self) {
+        // A pending confirmation belongs to the profile that armed it.
+        self.confirm_enable = false;
         match self.profiles.get(self.selected).cloned() {
             Some(profile) => {
                 self.name = profile.name;
@@ -172,8 +190,13 @@ mod tests {
     fn sample_starts_disabled_until_confirmed() {
         let mut screen = McpProfilesScreen::fixture();
         assert!(!screen.enabled);
-        screen.confirm_enable();
+        assert!(!screen.enable_selected(), "first press must only arm");
+        assert!(!screen.enabled);
+        assert!(screen.preview.contains("confirm enable"));
+        assert!(screen.enable_selected(), "second press commits");
         assert!(screen.enabled);
+        // A second attempt on an already-enabled profile is a no-op, not a re-grant.
+        assert!(!screen.enable_selected());
         assert!(screen.lines().join("\n").contains("deny db.public.secrets"));
         assert!(screen.lines().join("\n").contains("grant data_write"));
         screen.tick();
