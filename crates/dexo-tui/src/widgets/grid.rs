@@ -28,49 +28,70 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let tab_h = if model.results.tabs.len() > 1 { 1 } else { 0 };
-    if tab_h > 0 {
-        let tabs = Rect::new(inner.x, inner.y, inner.width, 1);
-        let mut x = tabs.x;
-        for (index, tab) in model.results.tabs.iter().enumerate() {
-            let label = format!(" {} ", tab.title);
-            let width = label.len() as u16;
-            let rect = Rect::new(
-                x,
-                tabs.y,
-                width.min(tabs.width.saturating_sub(x.saturating_sub(tabs.x))),
-                1,
-            );
-            hits.register(HitTarget::ResultTab(index), rect);
-            x = x.saturating_add(width);
-        }
-        frame.render_widget(
-            Paragraph::new(
-                model
-                    .results
-                    .tabs
-                    .iter()
-                    .enumerate()
-                    .map(|(index, tab)| {
-                        if index == model.results.active {
-                            format!("[{}]", tab.title)
-                        } else {
-                            format!(" {} ", tab.title)
-                        }
-                    })
-                    .collect::<Vec<_>>()
-                    .join(""),
-            ),
-            tabs,
-        );
-    }
+    let tab_h = 1;
+    let toolbar = Rect::new(inner.x, inner.y, inner.width, 1);
+    frame.render_widget(
+        Paragraph::new(output_toolbar(model, hits, toolbar)),
+        toolbar,
+    );
     let body = Rect::new(
         inner.x,
         inner.y.saturating_add(tab_h),
         inner.width,
         inner.height.saturating_sub(tab_h),
     );
+    if model.results.view == crate::model::ResultsView::Explain {
+        let plan = model.explain.lines().join("\n");
+        frame.render_widget(
+            Paragraph::new(plan).scroll((model.results.explain_scroll, 0)),
+            body,
+        );
+        return;
+    }
     frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
+}
+
+/// One row inside the pane holding the view selector and, after a divider, the result
+/// sets. The pane's top border is already the drag divider, so nothing can live there.
+/// The active entry is bracketed, so it still reads with no color.
+fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
+    let mut out = String::new();
+    let mut x = area.x;
+    let push = |out: &mut String, hits: &mut HitMap, x: &mut u16, text: String, target| {
+        let width = text.chars().count() as u16;
+        let remaining = area.width.saturating_sub(x.saturating_sub(area.x));
+        if remaining > 0 {
+            hits.register(target, Rect::new(*x, area.y, width.min(remaining), 1));
+        }
+        *x = x.saturating_add(width);
+        out.push_str(&text);
+    };
+
+    for (index, view) in crate::model::ResultsView::ALL.iter().enumerate() {
+        let text = if *view == model.results.view {
+            format!("[{}]", view.label())
+        } else {
+            format!(" {} ", view.label())
+        };
+        push(&mut out, hits, &mut x, text, HitTarget::ResultsView(index));
+    }
+
+    if model.results.view == crate::model::ResultsView::Explain {
+        // cycling the sub-view used to be invisible
+        out.push_str(&format!("  {:?}", model.explain.view));
+    } else if model.results.tabs.len() > 1 {
+        out.push_str(" │");
+        x = x.saturating_add(2);
+        for (index, tab) in model.results.tabs.iter().enumerate() {
+            let text = if index == model.results.active {
+                format!("[{}]", tab.title)
+            } else {
+                format!(" {} ", tab.title)
+            };
+            push(&mut out, hits, &mut x, text, HitTarget::ResultTab(index));
+        }
+    }
+    out
 }
 
 fn result_banner(model: &Model) -> String {

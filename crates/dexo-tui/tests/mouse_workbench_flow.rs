@@ -176,9 +176,47 @@ fn clicking_each_workbench_pane_matches_its_alt_focus_shortcut() {
     }
 }
 
+/// The selector's rects are derived from the title string rather than from a laid-out
+/// row, so the arithmetic has to be pinned: a click must land on the label under it.
+#[test]
+fn clicking_the_results_view_selector_lands_on_its_label() {
+    use dexo_tui::model::ResultsView;
+
+    let mut model = Model::default();
+    paint(&mut model);
+
+    let (column, row) = model.hits.center(HitTarget::ResultsView(1));
+    assert_ne!((column, row), (0, 0), "Explain label must be painted");
+    let view = dexo_tui::render::render_to_string(&model, model.width, model.height);
+    let line = view.lines().nth(row as usize).expect("selector row");
+    // the hit rect spans the label, so the click lands mid-word by design
+    let window: String = line
+        .chars()
+        .skip(column.saturating_sub(5) as usize)
+        .take(13)
+        .collect();
+    assert!(
+        window.contains("Explain"),
+        "click at {column} lands near {window:?}, not on the Explain label"
+    );
+
+    update(
+        &mut model,
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+    );
+    assert_eq!(model.results.view, ResultsView::Explain);
+
+    let (column, row) = model.hits.center(HitTarget::ResultsView(0));
+    update(
+        &mut model,
+        mouse(MouseEventKind::Down(MouseButton::Left), column, row),
+    );
+    assert_eq!(model.results.view, ResultsView::Grid);
+}
+
 #[test]
 fn clicking_workbench_tabs_matches_ctrl_number_shortcuts() {
-    for index in 0..5 {
+    for index in 0..4 {
         let mut mouse_model = Model::default();
         paint(&mut mouse_model);
         let (column, row) = mouse_model.hits.center(HitTarget::WorkbenchTab(index));

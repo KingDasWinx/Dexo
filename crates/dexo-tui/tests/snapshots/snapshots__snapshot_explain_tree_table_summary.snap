@@ -3,12 +3,12 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                                            
-│Connections  [n]ew [e]dit │┌▸ Explain─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                                                           │
-│>   ▸ public              ││planning_ms=0.04 execution_ms=0.21                                                                                                │
-│      mysql.users [restric││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)                                │
-│                          ││raw_bytes=59                                                                                                                      │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties                                                                                                      
+│Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                                                   
+│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│>   ▸ public              ││   1▸select 1                                                                                                                     │
+│      mysql.users [restric││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -40,11 +40,11 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
+│                          ││ Grid [Explain]  Tree                                                                                                             │
+│                          ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                                                           │
+│                          ││planning_ms=0.04 execution_ms=0.21                                                                                                │
+│                          ││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)                                │
+│                          ││raw_bytes=59                                                                                                                      │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

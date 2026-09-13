@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&snapshot_model(), 100, 30)"
 ---
 demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties                                          
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                       
 │  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │>   ▸ public              ││   1▸select 1                                                         │
@@ -20,7 +20,7 @@ demo  local  public
 │                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────┐
-│                          ││                                                                      │
+│                          ││[Grid] Explain                                                        │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

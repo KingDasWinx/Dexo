@@ -3,12 +3,12 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│Connections  [n]ew [e]dit │┌▸ Explain─────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
-│>   ▸ public              ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
-│      mysql.users [restric││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
-│                          ││raw_bytes=59                                                          │
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties                                          
+│Connections  [n]ew [e]dit │ scratch.sql ×  +                                                       
+│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
+│>   ▸ public              ││   1▸select 1                                                         │
+│      mysql.users [restric││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -20,11 +20,11 @@ demo  local  public
 │                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────┐
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
+│                          ││ Grid [Explain]  Table                                                │
+│                          ││explain captured_at=1710000000 paused=false analyze=true confirmed=tru│
+│                          ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
+│                          ││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
+│                          ││raw_bytes=59                                                          │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

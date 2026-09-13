@@ -216,6 +216,8 @@ fn snapshot_explain_tree_table_summary() {
     let mut model = snapshot_model();
     update(&mut model, Action::OpenExplain);
     model.explain = dexo_tui::screens::explain::ExplainScreen::fixture();
+    // the plan now lives in the output pane, beside the grid it belongs with
+    assert_eq!(model.results.view, dexo_tui::model::ResultsView::Explain);
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     update(&mut model, Action::CycleExplainView);
     insta::assert_snapshot!(render_to_string(&model, 100, 30));

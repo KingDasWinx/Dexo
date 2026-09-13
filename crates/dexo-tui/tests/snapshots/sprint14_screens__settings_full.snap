@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                                                                            
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties                                                                                                      
 │Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                                                   
 │No connections — press n  │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │                          ││   1                                                                                                                              │
@@ -40,7 +40,7 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                          ││                                                                                                                                  │
+│                          ││[Grid] Explain                                                                                                                    │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

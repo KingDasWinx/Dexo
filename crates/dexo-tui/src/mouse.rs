@@ -13,6 +13,7 @@ pub enum PaneEdge {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HitTarget {
     ResultTab(usize),
+    ResultsView(usize),
     WorkbenchTab(usize),
     DocumentTab(usize),
     DocumentTabClose(usize),

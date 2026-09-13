@@ -131,7 +131,6 @@ impl Default for TabsState {
                 "Data".into(),
                 "DDL".into(),
                 "Properties".into(),
-                "Explain".into(),
             ],
             scroll: 0,
         }
@@ -324,6 +323,31 @@ impl ResultTab {
 pub struct ResultsState {
     pub tabs: Vec<ResultTab>,
     pub active: usize,
+    /// Which projection of the output pane is on screen. Explain used to be a
+    /// workbench tab, which put query output in two unrelated places.
+    pub view: ResultsView,
+    /// Explain scrolls on its own; it used to share `tabs.scroll` with four tabs
+    /// that had nothing to do with it.
+    pub explain_scroll: u16,
+}
+
+/// Views of the output pane, in selector order.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResultsView {
+    #[default]
+    Grid,
+    Explain,
+}
+
+impl ResultsView {
+    pub const ALL: [Self; 2] = [Self::Grid, Self::Explain];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grid => "Grid",
+            Self::Explain => "Explain",
+        }
+    }
 }
 
 impl ResultsState {

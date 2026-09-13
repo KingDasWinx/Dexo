@@ -347,7 +347,6 @@ fn editor_tab_view(model: &Model) -> (&'static str, String) {
         1 => ("Data", data_tab_body(model)),
         2 => ("DDL", ddl_tab_body(model)),
         3 => ("Properties", properties_tab_body(model)),
-        4 => ("Explain", model.explain.lines().join("\n")),
         _ => ("Data", data_tab_body(model)),
     }
 }

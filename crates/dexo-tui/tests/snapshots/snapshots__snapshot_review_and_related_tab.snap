@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ Explain │ demo.public.users            
+┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties │ demo.public.users                      
 │Connections  [n]ew [e]dit │┌▸ Data────────────────────────────────────────────────────────────────┐
 │  ● local▾  [offline]     ││table: demo.public.users                                              │
 │>   ▸ public              ││filter: Eq(ColumnId("id"), I64(1))                                    │

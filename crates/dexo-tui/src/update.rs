@@ -983,11 +983,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             open_transfer(model, crate::screens::transfer::TransferMode::Restore)
         }
         Action::OpenExplain => {
-            model.tabs.active = 4;
+            model.results.view = crate::model::ResultsView::Explain;
+            model.results.explain_scroll = 0;
             explain_effect(model, false)
         }
         Action::CycleExplainView => {
             model.explain.view = model.explain.view.next();
+            model.results.explain_scroll = 0;
             Vec::new()
         }
         Action::ConfirmExplainAnalyze => {
@@ -1241,7 +1243,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ExplainLoaded { plan } => {
             let previous = model.explain.plan.clone();
             model.explain.set_plan(*plan, previous.as_ref());
-            model.tabs.active = 4;
+            // Show the plan where output lives; never move the user's focus for it.
+            model.results.view = crate::model::ResultsView::Explain;
+            model.results.explain_scroll = 0;
             Vec::new()
         }
         Action::AdminSessionsLoaded {
@@ -1341,11 +1345,19 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ResultsUp => {
-            model.results.move_cursor_row(-1, false);
+            if model.results.view == crate::model::ResultsView::Explain {
+                model.results.explain_scroll = model.results.explain_scroll.saturating_sub(1);
+            } else {
+                model.results.move_cursor_row(-1, false);
+            }
             Vec::new()
         }
         Action::ResultsDown => {
-            model.results.move_cursor_row(1, false);
+            if model.results.view == crate::model::ResultsView::Explain {
+                model.results.explain_scroll = model.results.explain_scroll.saturating_add(1);
+            } else {
+                model.results.move_cursor_row(1, false);
+            }
             Vec::new()
         }
         Action::ResultsLeft => {
@@ -2191,6 +2203,14 @@ fn mouse_workbench(
     match hit {
         Some(HitTarget::WorkbenchTab(index)) => update(model, Action::SwitchTab { index }),
         Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
+        Some(HitTarget::ResultsView(index)) => {
+            if let Some(view) = crate::model::ResultsView::ALL.get(index).copied() {
+                model.results.view = view;
+                model.results.explain_scroll = 0;
+            }
+            model.focus = Focus::Results;
+            Vec::new()
+        }
         Some(HitTarget::DocumentTab(index)) => update(model, Action::SelectDocument { index }),
         Some(HitTarget::DocumentTabClose(index)) => {
             let mut effects = update(model, Action::SelectDocument { index });
@@ -6789,6 +6809,31 @@ mod tests {
             dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), name),
             None,
         )
+    }
+
+    /// A plan used to arrive and force `tabs.active = 4`, yanking the user out of the
+    /// editor mid-keystroke. It belongs in the output pane, which nobody is looking at
+    /// while they type.
+    #[test]
+    fn explain_result_arrives_without_stealing_the_editor() {
+        let mut model = Model::default();
+        model.set_sql("select 1");
+        model.focus = Focus::Editor;
+        let document = model.active_document().id.clone();
+
+        let plan = crate::screens::explain::ExplainScreen::fixture()
+            .plan
+            .expect("fixture plan");
+        update(
+            &mut model,
+            Action::ExplainLoaded {
+                plan: Box::new(plan),
+            },
+        );
+
+        assert_eq!(model.focus, Focus::Editor, "explain moved the focus");
+        assert_eq!(model.active_document().id, document);
+        assert_eq!(model.results.view, crate::model::ResultsView::Explain);
     }
 
     #[test]
