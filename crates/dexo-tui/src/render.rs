@@ -42,10 +42,11 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             );
             crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
             if model.active_document().kind.is_table() {
+                let grid_pane = plan.grid_pane(true);
                 if !overlay_blocks_workbench(model) {
-                    hits.register(HitTarget::Grid, plan.content);
+                    hits.register(HitTarget::Grid, grid_pane);
                 }
-                crate::widgets::grid::render(frame, plan.content, model, hits);
+                crate::widgets::grid::render(frame, grid_pane, model, hits);
                 render_console_log(
                     frame,
                     plan.results,
@@ -57,10 +58,11 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                     hits.register(HitTarget::Editor, plan.content);
                 }
                 render_editor_content(frame, plan.content, model, hits);
+                let grid_pane = plan.grid_pane(false);
                 if !overlay_blocks_workbench(model) {
-                    hits.register(HitTarget::Grid, plan.results);
+                    hits.register(HitTarget::Grid, grid_pane);
                 }
-                crate::widgets::grid::render(frame, plan.results, model, hits);
+                crate::widgets::grid::render(frame, grid_pane, model, hits);
             }
         }
     }

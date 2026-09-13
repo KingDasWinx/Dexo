@@ -472,6 +472,52 @@ mod tests {
         );
     }
 
+    /// Walking down must land on the last row the pane paints -- if a row is painted
+    /// below the cursor and the cursor cannot reach it, the pane is lying about how far
+    /// the list goes. `sync_grid_viewport` picked its pane by document kind, but Compact
+    /// has one pane and what fills it is decided by focus, so an editor document there
+    /// was sized against a zero-height results rect: the cursor stopped on the first row
+    /// with a full screen of rows painted below it.
+    #[test]
+    fn the_cursor_reaches_the_last_row_the_pane_paints() {
+        use crate::model::EditorDocument;
+
+        for w in [60u16, 80, 100, 120, 160, 200] {
+            for h in [20u16, 24, 30, 40, 50] {
+                for table in [false, true] {
+                    let mut model = Model::default();
+                    if table {
+                        model
+                            .documents
+                            .push(EditorDocument::new_table(dexo_app::parse_qualified(
+                                "public.orders",
+                            )));
+                        model.active_document = 1;
+                    }
+                    *model.results = GridModel::sample_rows(500);
+                    model.focus = Focus::Results;
+                    model.apply_size(w, h);
+
+                    for _ in 0..200 {
+                        update(&mut model, Action::ResultsDown);
+                    }
+                    let cursor = model.results.cursor_row().expect("cursor");
+                    let view = render_to_string(&model, w, h);
+                    assert!(
+                        view.contains(&format!("▸ {cursor} ")),
+                        "{w}x{h} table={table}: the cursor is not painted at all"
+                    );
+                    assert!(
+                        !view.contains(&format!("│{} ", cursor + 1)),
+                        "{w}x{h} table={table}: row {} is painted below a cursor that \
+                         stopped at {cursor}",
+                        cursor + 1
+                    );
+                }
+            }
+        }
+    }
+
     /// The model's row viewport and the rows the widget paints are two derivations of
     /// the same number. They drifted once already, when the toolbar row stopped being
     /// conditional; this pins them to each other rather than to the arithmetic.

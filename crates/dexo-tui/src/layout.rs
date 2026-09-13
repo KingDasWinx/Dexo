@@ -82,6 +82,18 @@ pub struct LayoutPlan {
 }
 
 impl LayoutPlan {
+    /// The rect the result grid is drawn in. Compact has a single pane, and outside it a
+    /// table document puts the grid in the editor's slot. `Model::sync_grid_viewport`
+    /// sizes the row viewport from this, so it has to be the same answer `render` acts
+    /// on -- picking a different pane there stops the cursor short of the last row.
+    pub fn grid_pane(&self, table_document: bool) -> Rect {
+        if self.mode == LayoutMode::Compact || table_document {
+            self.content
+        } else {
+            self.results
+        }
+    }
+
     pub fn for_area(area: Rect) -> Self {
         Self::for_area_with(area, None)
     }

@@ -1645,11 +1645,7 @@ impl Model {
             Some(&self.effective_panes()),
             true,
         );
-        let pane = if self.active_document().kind.is_table() {
-            plan.content
-        } else {
-            plan.results
-        };
+        let pane = plan.grid_pane(self.active_document().kind.is_table());
         let width = pane.width.saturating_sub(2).max(1);
         let inner_h = pane.height.saturating_sub(2).max(1);
         // The toolbar row used to be drawn only for multiple result sets, and this
