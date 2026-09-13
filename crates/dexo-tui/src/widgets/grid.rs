@@ -9,6 +9,14 @@ use crate::model::{
 use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
 
+/// Rows the grid spends on chrome inside its border: the toolbar, then the column
+/// header. `Model::sync_grid_viewport` sizes the row viewport against this, and the two
+/// must agree -- believing in one row more than the pane draws walks the cursor off the
+/// bottom, where the selection is invisible.
+pub const CHROME_ROWS: u16 = TOOLBAR_ROWS + HEADER_ROWS;
+const TOOLBAR_ROWS: u16 = 1;
+const HEADER_ROWS: u16 = 1;
+
 pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -30,17 +38,16 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if inner.width == 0 || inner.height == 0 {
         return;
     }
-    let tab_h = 1;
-    let toolbar = Rect::new(inner.x, inner.y, inner.width, 1);
+    let toolbar = Rect::new(inner.x, inner.y, inner.width, TOOLBAR_ROWS);
     frame.render_widget(
         Paragraph::new(output_toolbar(model, hits, toolbar)),
         toolbar,
     );
     let body = Rect::new(
         inner.x,
-        inner.y.saturating_add(tab_h),
+        inner.y.saturating_add(TOOLBAR_ROWS),
         inner.width,
-        inner.height.saturating_sub(tab_h),
+        inner.height.saturating_sub(TOOLBAR_ROWS),
     );
     match model.results.view {
         ResultsView::Explain => {
@@ -184,7 +191,7 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
         header.push(Span::styled("…", header_style));
     }
     let mut lines = vec![Line::from(header)];
-    let body_height = area.height.saturating_sub(1) as usize;
+    let body_height = area.height.saturating_sub(HEADER_ROWS) as usize;
     let sel_marker = crate::accessibility::marker(Role::Selection, model.capabilities.unicode);
     let active_style = model.theme.active_row(model.capabilities);
     let selected_style = model.theme.selected_row(model.capabilities);
@@ -465,22 +472,36 @@ mod tests {
         );
     }
 
+    /// The model's row viewport and the rows the widget paints are two derivations of
+    /// the same number. They drifted once already, when the toolbar row stopped being
+    /// conditional; this pins them to each other rather than to the arithmetic.
     #[test]
-    fn sync_grid_viewport_reserves_header_from_results_pane() {
+    fn the_viewport_holds_exactly_the_rows_the_grid_paints() {
         use crate::layout::LayoutPlan;
         use crate::model::Model;
 
         let mut model = Model::default();
+        *model.results = GridModel::sample_rows(200);
         model.apply_size(120, 40);
-        let plan = LayoutPlan::for_area_with(
+
+        let plan = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, model.width, model.height),
             Some(&model.panes),
+            true,
         );
-        let inner_h = plan.results.height.saturating_sub(2).max(1);
-        let expected = inner_h.saturating_sub(1).max(1) as usize; // column header
+        let pane = plan.results;
+        let inner = ratatui::widgets::Block::bordered().inner(pane);
+        let body = Rect::new(
+            inner.x,
+            inner.y.saturating_add(TOOLBAR_ROWS),
+            inner.width,
+            inner.height.saturating_sub(TOOLBAR_ROWS),
+        );
+        let painted = preview_lines(&model, body, &mut HitMap::default()).len() - 1;
         assert_eq!(
-            model.results.viewport().height, expected,
-            "viewport height must match painted data rows, not the full pane inner height"
+            model.results.viewport().height,
+            painted,
+            "the model believes in rows the pane does not paint"
         );
     }
 
@@ -548,6 +569,35 @@ mod tests {
             grid.move_cursor_col(-1);
         }
         assert_eq!(grid.viewport().column_offset, 0);
+    }
+
+    /// The pane draws a toolbar row that the viewport arithmetic did not subtract, so
+    /// the model believed in one row more than the grid shows. Walking to the bottom
+    /// then parked the cursor on a row drawn past the border -- the selection vanished.
+    #[test]
+    fn the_cursor_row_stays_on_screen_at_the_bottom_of_the_grid() {
+        use crate::model::EditorDocument;
+
+        let mut model = Model::default();
+        model
+            .documents
+            .push(EditorDocument::new_table(dexo_app::parse_qualified(
+                "public.orders",
+            )));
+        model.active_document = 1;
+        *model.results = crate::model::GridModel::sample_rows(200);
+        model.apply_size(120, 40);
+
+        for _ in 0..199 {
+            update(&mut model, Action::ResultsDown);
+        }
+        assert_eq!(model.results.cursor_row(), Some(199));
+
+        let view = render_to_string(&model, 120, 40);
+        assert!(
+            view.contains("199"),
+            "the row under the cursor is drawn past the pane:\n{view}"
+        );
     }
 
     /// Until this view existed a message got one toast and was then unreachable: the log

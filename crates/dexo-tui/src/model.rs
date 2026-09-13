@@ -1599,9 +1599,11 @@ impl Model {
         };
         let width = pane.width.saturating_sub(2).max(1);
         let inner_h = pane.height.saturating_sub(2).max(1);
-        // Match widgets/grid.rs: optional tab row, then one column-header row.
-        let tab_h = if self.results.tabs.len() > 1 { 1u16 } else { 0 };
-        let height = inner_h.saturating_sub(tab_h).saturating_sub(1).max(1);
+        // The toolbar row used to be drawn only for multiple result sets, and this
+        // counted it the same way. It is unconditional now.
+        let height = inner_h
+            .saturating_sub(crate::widgets::grid::CHROME_ROWS)
+            .max(1);
         self.results.set_viewport_size(width, height);
     }
 
