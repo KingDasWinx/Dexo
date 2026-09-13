@@ -1607,6 +1607,10 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
 fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
     crate::screens::editor::end_typing(model);
     let leaving_editor = model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
+    // A table document shifts everything down a pane: the grid takes the editor's slot
+    // and the console takes the grid's. These keys name a position, not a widget, and
+    // only pane 3 needs saying here -- `effective_focus` already reads pane 2 correctly.
+    let table = model.active_document().kind.is_table();
     model.focus = match target {
         FocusTarget::Explorer => {
             model.panes.explorer_visible = true;
@@ -1615,7 +1619,11 @@ fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
         FocusTarget::Editor => Focus::Editor,
         FocusTarget::Results => {
             model.panes.results_visible = true;
-            Focus::Results
+            if table {
+                Focus::Console
+            } else {
+                Focus::Results
+            }
         }
     };
     model.panes = model.panes.clamp(model.width, model.height);
@@ -2607,7 +2615,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             }
             Vec::new()
         }
-        _ => match model.focus {
+        _ => match model.effective_focus() {
             Focus::Explorer => {
                 if delta < 0 {
                     update(model, Action::ExplorerUp)
@@ -2622,6 +2630,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
                     update(model, Action::ResultsDown)
                 }
             }
+            Focus::Console => Vec::new(),
             Focus::Editor | Focus::Palette => {
                 let doc = model.active_document_mut();
                 if delta < 0 {
@@ -3087,9 +3096,12 @@ fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
     if model.palette.open {
         return KeyContext::Palette;
     }
-    match model.focus {
+    match model.effective_focus() {
         Focus::Explorer => KeyContext::Explorer,
         Focus::Results => KeyContext::Results,
+        // Nothing in the console is navigable, so only the global chords -- the way back
+        // out included -- resolve there.
+        Focus::Console => KeyContext::Global,
         Focus::Editor | Focus::Palette => KeyContext::Editor,
     }
 }
@@ -6856,6 +6868,55 @@ mod tests {
             dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), name),
             None,
         )
+    }
+
+    /// A table document puts the grid in pane 2 and the console in pane 3. Alt+2 and
+    /// Alt+3 are positional, so they used to land one pane off: Alt+2 focused an editor
+    /// that is not on screen, and Alt+3 focused the grid.
+    #[test]
+    fn pane_focus_follows_what_a_table_document_actually_shows() {
+        let mut model = Model::default();
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+            ));
+        model.active_document = model.documents.len() - 1;
+
+        use crate::action::FocusTarget;
+
+        update(&mut model, Action::Focus(FocusTarget::Editor));
+        let view = crate::render::render_to_string(&model, 160, 50);
+        assert!(
+            view.contains("▸ Results"),
+            "pane 2 is the grid here:\n{view}"
+        );
+
+        update(&mut model, Action::Focus(FocusTarget::Results));
+        let view = crate::render::render_to_string(&model, 160, 50);
+        assert!(
+            view.contains("▸ Console"),
+            "pane 3 is the console here:\n{view}"
+        );
+        assert!(
+            !view.contains("▸ Results"),
+            "the grid kept the highlight:\n{view}"
+        );
+
+        // The same slip happens without touching Alt at all: sit in the editor, open a
+        // table from the tree, and the focus left behind points at no pane on screen.
+        model.focus = Focus::Editor;
+        assert!(
+            crate::render::render_to_string(&model, 160, 50).contains("▸ Results"),
+            "a stale editor focus left nothing highlighted"
+        );
+        model.active_document = 0;
+        model.focus = Focus::Console;
+        let view = crate::render::render_to_string(&model, 160, 50);
+        assert!(
+            view.contains("▸ Results"),
+            "console focus outlived the console:\n{view}"
+        );
     }
 
     /// The output pane used to have two cyclers: one for Grid/Explain and one for the

@@ -36,7 +36,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 plan.explorer,
                 model,
                 "Sidebar",
-                model.focus == Focus::Explorer,
+                model.effective_focus() == Focus::Explorer,
                 explorer_body(model, plan.explorer),
             );
             crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
@@ -45,7 +45,12 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                     hits.register(HitTarget::Grid, plan.content);
                 }
                 crate::widgets::grid::render(frame, plan.content, model, hits);
-                render_console_log(frame, plan.results, model);
+                render_console_log(
+                    frame,
+                    plan.results,
+                    model,
+                    model.effective_focus() == Focus::Console,
+                );
             } else {
                 if !overlay_blocks_workbench(model) {
                     hits.register(HitTarget::Editor, plan.content);
@@ -248,7 +253,7 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let interactive = !overlay_blocks_workbench(model);
-    match model.focus {
+    match model.effective_focus() {
         Focus::Explorer => {
             if interactive {
                 hits.register(HitTarget::Explorer, area);
@@ -281,6 +286,7 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             }
             crate::widgets::grid::render(frame, area, model, hits);
         }
+        Focus::Console => render_console_log(frame, area, model, true),
     }
 }
 
@@ -301,11 +307,19 @@ fn context_line(model: &Model) -> String {
     )
 }
 
-fn render_console_log(frame: &mut Frame, area: Rect, model: &Model) {
+fn render_console_log(frame: &mut Frame, area: Rect, model: &Model, focused: bool) {
     let log = &model.active_document().console_log;
     let rows = area.height.saturating_sub(2) as usize;
     let scroll = log.len().saturating_sub(rows.max(1)) as u16;
-    render_panel_scrolled(frame, area, model, "Console", false, log.join("\n"), scroll);
+    render_panel_scrolled(
+        frame,
+        area,
+        model,
+        "Console",
+        focused,
+        log.join("\n"),
+        scroll,
+    );
 }
 
 fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, _hits: &mut HitMap) {

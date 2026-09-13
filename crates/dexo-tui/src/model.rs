@@ -43,7 +43,29 @@ pub enum Focus {
     Explorer,
     Editor,
     Results,
+    /// Only a table document has this pane: the grid takes the editor's slot and the
+    /// console takes the grid's.
+    Console,
     Palette,
+}
+
+impl Model {
+    /// The pane the stored focus actually points at. Opening a table document moves the
+    /// grid into the editor's slot, and closing one takes the console away -- either way
+    /// the focus left behind would highlight a pane that is not on screen.
+    pub fn effective_focus(&self) -> Focus {
+        if self.active_document().kind.is_table() {
+            match self.focus {
+                Focus::Editor => Focus::Results,
+                other => other,
+            }
+        } else {
+            match self.focus {
+                Focus::Console => Focus::Results,
+                other => other,
+            }
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

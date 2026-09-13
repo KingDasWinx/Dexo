@@ -5,7 +5,7 @@ expression: "render_to_string(&model, 160, 50)"
 demo  local  public                                                                                                                                             
 ┌  Sidebar─────────────────┐                                                                                                                                    
 │Connections  [n]ew [e]dit │ scratch.sql ×  orders ×  +                                                                                                         
-│  ● local▾  [offline]     │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ● local▾  [offline]     │┌▸ Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │>   ▸ public              ││[Grid] Explain  Messages                                                                                                          │
 │      mysql.users [restric││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -51,4 +51,4 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                                                                                   Ctrl+P  F1
+local  Enter actions  v view  n/p page  Ctrl+W close                                                                                                  Ctrl+P  F1

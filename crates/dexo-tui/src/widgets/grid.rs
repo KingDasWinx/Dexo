@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     } else {
         format!("Results ({}){extra}", model.results.row_count())
     };
-    let focused = model.focus == Focus::Results;
+    let focused = model.effective_focus() == Focus::Results;
     let block = crate::render::pane_block(model, &title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);

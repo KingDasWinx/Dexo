@@ -5,7 +5,7 @@ expression: "render_to_string(&model, 100, 30)"
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐                                                                        
 │Connections  [n]ew [e]dit │ scratch.sql ×  users ×  +                                              
-│  ● local▾  [offline]     │┌  Results (0) crumbs:1────────────────────────────────────────────────┐
+│  ● local▾  [offline]     │┌▸ Results (0) crumbs:1────────────────────────────────────────────────┐
 │>   ▸ public              ││[Grid] Explain  Messages                                              │
 │      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │
 │             │target: demo.public.users                                             │             │
@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1
+local  Enter actions  v view  n/p page  Ctrl+W close                                      Ctrl+P  F1

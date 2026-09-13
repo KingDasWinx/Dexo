@@ -23,7 +23,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         frame.render_widget(Paragraph::new(doc.text()), area);
         return;
     }
-    let focused = model.focus == Focus::Editor;
+    let focused = model.effective_focus() == Focus::Editor;
     let block = crate::render::pane_block(model, &title, focused);
     let inner = block.inner(area);
     frame.render_widget(block, area);
@@ -87,7 +87,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     frame.render_widget(Paragraph::new(rendered), inner);
 
-    if model.focus == Focus::Editor {
+    if model.effective_focus() == Focus::Editor {
         let (line, col) = line_col_of(&text, cursor);
         if line >= start && line < end {
             let line_text = lines.get(line).copied().unwrap_or("");

@@ -121,13 +121,14 @@ fn fit_hint(hint: &str, budget: usize) -> String {
 fn footer_hint(model: &Model) -> Option<&'static str> {
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact)
         && matches!(
-            model.focus,
+            model.effective_focus(),
             crate::model::Focus::Editor | crate::model::Focus::Palette
         )
     {
         return Some("Alt+1 connections  Ctrl+P commands");
     }
-    match model.focus {
+    // A table document has no editor on screen, so the editor's hint would be a lie.
+    match model.effective_focus() {
         crate::model::Focus::Explorer => model
             .explorer
             .selected_node()
@@ -146,6 +147,7 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
             })
             .or(Some("Enter connect/expand  n new  e edit")),
         crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
+        crate::model::Focus::Results => Some("Enter actions  v view  n/p page  Ctrl+W close"),
         _ => None,
     }
 }
@@ -218,7 +220,9 @@ mod tests {
     }
 
     #[test]
-    fn editor_footer_is_available_for_a_table_document() {
+    /// A table document has no editor on screen, so the editor's hint was a lie there:
+    /// `Ctrl+Enter run` runs nothing on a table.
+    fn the_footer_hint_follows_the_pane_a_table_document_actually_shows() {
         let mut model = Model {
             focus: Focus::Editor,
             ..Model::default()
@@ -229,6 +233,12 @@ mod tests {
                 dexo_app::parse_qualified("public.orders"),
             ));
         model.active_document = 1;
+        assert_eq!(
+            footer_hint(&model),
+            Some("Enter actions  v view  n/p page  Ctrl+W close")
+        );
+
+        model.active_document = 0;
         assert_eq!(
             footer_hint(&model),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")
