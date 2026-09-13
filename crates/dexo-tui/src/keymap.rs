@@ -8,6 +8,9 @@ pub enum KeyContext {
     Editor,
     Explorer,
     Results,
+    /// The pane the grid gives up to the console on a table document. It holds no
+    /// navigation of its own -- only the keys that act on the pane itself.
+    Console,
     Palette,
     Modal,
 }
@@ -187,7 +190,8 @@ impl Keymap {
             let entry = (chord, binding.command.clone());
             match binding.context {
                 KeyContext::Editor => buckets[0].1.push(entry),
-                KeyContext::Results => buckets[1].1.push(entry),
+                // the console is the results pane wearing a different hat
+                KeyContext::Results | KeyContext::Console => buckets[1].1.push(entry),
                 KeyContext::Explorer => buckets[2].1.push(entry),
                 KeyContext::Global => buckets[3].1.push(entry),
                 KeyContext::Palette | KeyContext::Modal => buckets[4].1.push(entry),
@@ -329,6 +333,7 @@ fn parse_context(name: &str) -> Result<KeyContext, KeymapError> {
         "editor" => Ok(KeyContext::Editor),
         "explorer" => Ok(KeyContext::Explorer),
         "results" => Ok(KeyContext::Results),
+        "console" => Ok(KeyContext::Console),
         "palette" => Ok(KeyContext::Palette),
         "modal" => Ok(KeyContext::Modal),
         other => Err(KeymapError {
@@ -460,6 +465,10 @@ profile = "default"
 "?" = "help.open"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
+
+[console]
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
 "#;
 
 const VIM_TOML: &str = r#"
@@ -524,6 +533,10 @@ profile = "vim"
 "?" = "help.open"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
+
+[console]
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
 "#;
 
 const EMACS_TOML: &str = r#"
@@ -585,6 +598,10 @@ profile = "emacs"
 "enter" = "results.actions"
 "ctrl+enter" = "results.toggle_pick"
 "?" = "help.open"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[console]
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 "#;
@@ -685,6 +702,9 @@ mod tests {
                 (KeyContext::Results, "alt+down", "layout.results_shrink"),
                 (KeyContext::Editor, "alt+up", "layout.results_grow"),
                 (KeyContext::Editor, "alt+down", "layout.results_shrink"),
+                // the console is that same pane on a table document
+                (KeyContext::Console, "alt+up", "layout.results_grow"),
+                (KeyContext::Console, "alt+down", "layout.results_shrink"),
             ] {
                 assert_eq!(
                     keymap

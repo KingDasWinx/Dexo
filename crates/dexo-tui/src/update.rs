@@ -3096,9 +3096,10 @@ fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
     match model.effective_focus() {
         Focus::Explorer => KeyContext::Explorer,
         Focus::Results => KeyContext::Results,
-        // Nothing in the console is navigable, so only the global chords -- the way back
-        // out included -- resolve there.
-        Focus::Console => KeyContext::Global,
+        // Nothing in the console is navigable, so its context holds only the keys that
+        // act on the pane itself. Global chords -- the way back out included -- still
+        // resolve there.
+        Focus::Console => KeyContext::Console,
         Focus::Editor | Focus::Palette => KeyContext::Editor,
     }
 }

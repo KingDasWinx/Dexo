@@ -133,6 +133,33 @@ fn alt_up_down_resize_results_height_from_editor_or_results() {
     assert_eq!(model.panes.results_height, start);
 }
 
+/// On a table document pane 3 holds the console, so Alt+3 lands there -- and it is the
+/// same pane these keys resize. The console's key context used to be `Global`, where
+/// they resolve to nothing.
+#[test]
+fn alt_up_down_resize_the_console_the_same_pane_it_occupies() {
+    let mut model = two_documents();
+    model
+        .documents
+        .push(EditorDocument::new_table(dexo_app::parse_qualified(
+            "public.orders",
+        )));
+    model.active_document = model.documents.len() - 1;
+    model.apply_size(160, 50);
+    let start = model.panes.results_height;
+
+    update(
+        &mut model,
+        Action::Focus(dexo_tui::action::FocusTarget::Results),
+    );
+    assert_eq!(model.focus, Focus::Console);
+
+    update(&mut model, alt_up());
+    assert_eq!(model.panes.results_height, start + 2);
+    update(&mut model, alt_down());
+    assert_eq!(model.panes.results_height, start);
+}
+
 #[test]
 fn document_tab_focus_actions_work_from_any_pane() {
     // Both are palette commands. They used to bail unless the focus was the editor,
