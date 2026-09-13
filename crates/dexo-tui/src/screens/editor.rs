@@ -297,18 +297,6 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
-        KeyCode::Char(ch) if ctrl && (ch == 'z' || ch == 'Z') => {
-            undo(model);
-            true
-        }
-        KeyCode::Char(ch) if ctrl && (ch == 'y' || ch == 'Y') => {
-            redo(model);
-            true
-        }
-        KeyCode::Char('a') if ctrl => {
-            select_all(model);
-            true
-        }
         KeyCode::Char(ch) if !ctrl => {
             insert_text(model, &ch.to_string());
             suggest_live(model);
@@ -439,21 +427,21 @@ fn delete(model: &mut Model) {
     reveal_cursor(doc);
 }
 
-fn undo(model: &mut Model) {
+pub fn undo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.undo();
     reveal_cursor(doc);
 }
 
-fn redo(model: &mut Model) {
+pub fn redo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.redo();
     reveal_cursor(doc);
 }
 
-fn select_all(model: &mut Model) {
+pub fn select_all(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let len = doc.sql.text().chars().count();

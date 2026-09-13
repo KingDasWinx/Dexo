@@ -179,18 +179,44 @@ fn model_with_local_state() -> Model {
     model
 }
 
+/// Reset and discard live inside their own screens now, so they are reached by the
+/// screen key rather than the palette. The confirmation must still be shown either way.
 #[test]
 fn destructive_local_commands_open_their_owner_before_confirmation() {
-    for (id, visible) in [
-        ("settings.reset", "[Confirm reset]"),
-        ("recovery.discard", "confirm_discard=true"),
-        ("mcp.revoke_all", "confirm revoke all grants"),
-    ] {
-        let mut model = model_with_local_state();
-        choose(&mut model, id);
-        let view = dexo_tui::render::render_to_string(&model, 100, 30);
-        assert!(view.contains(visible), "{id} confirmation is hidden");
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(model: &mut Model, ch: char) {
+        update(
+            model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        );
     }
+
+    let mut model = model_with_local_state();
+    update(&mut model, Action::OpenSettings);
+    press(&mut model, 'r');
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("[Confirm reset]"),
+        "settings reset confirmation is hidden"
+    );
+
+    let mut model = model_with_local_state();
+    update(&mut model, Action::OpenRecovery);
+    press(&mut model, 'n');
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("confirm_discard=true"),
+        "recovery discard confirmation is hidden"
+    );
+
+    let mut model = model_with_local_state();
+    choose(&mut model, "mcp.revoke_all");
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("confirm revoke all grants"),
+        "mcp revoke confirmation is hidden"
+    );
 }
 
 #[test]

@@ -432,6 +432,9 @@ profile = "default"
 "ctrl+n" = "document.new"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
+"ctrl+z" = "editor.undo"
+"ctrl+y" = "editor.redo"
+"ctrl+a" = "editor.select_all"
 "ctrl+tab" = "document.next"
 "ctrl+shift+tab" = "document.prev"
 "alt+left" = "document.prev_focus"
@@ -497,6 +500,9 @@ profile = "vim"
 "ctrl+n" = "document.new"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
+"ctrl+z" = "editor.undo"
+"ctrl+y" = "editor.redo"
+"ctrl+a" = "editor.select_all"
 "ctrl+tab" = "document.next"
 "ctrl+shift+tab" = "document.prev"
 "alt+left" = "document.prev_focus"
@@ -565,6 +571,9 @@ profile = "emacs"
 "ctrl+n" = "document.new"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
+"ctrl+z" = "editor.undo"
+"ctrl+y" = "editor.redo"
+"ctrl+a" = "editor.select_all"
 "ctrl+tab" = "document.next"
 "ctrl+shift+tab" = "document.prev"
 "alt+left" = "document.prev_focus"
@@ -841,11 +850,10 @@ profile = "overlap"
     }
 
     fn assert_registered(ids: impl IntoIterator<Item = impl AsRef<str>>) {
-        let registered: std::collections::BTreeSet<_> =
-            crate::palette::palette_entries(&crate::model::Model::default())
-                .into_iter()
-                .map(|entry| entry.id)
-                .collect();
+        let registered: std::collections::BTreeSet<_> = crate::palette::command_specs()
+            .into_iter()
+            .map(|spec| spec.id)
+            .collect();
         for id in ids {
             let id = id.as_ref();
             assert!(registered.contains(id), "unregistered command: {id}");
@@ -853,7 +861,7 @@ profile = "overlap"
     }
 
     #[test]
-    fn every_registered_command_is_palette_reachable() {
+    fn every_bound_command_is_registered() {
         for keymap in [
             Keymap::default_profile(),
             Keymap::vim_profile(),

@@ -151,14 +151,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::CycleLayout),
         },
         CommandSpec {
-            id: "layout.results_focus",
-            title: "Layout: Results focus",
-            keywords: &["preset", "wide", "grid"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::LayoutResultsFocus),
-        },
-        CommandSpec {
             id: "layout.hide_inspector",
             title: "Hide Inspector",
             keywords: &["layout", "pane", "toggle"],
@@ -372,7 +364,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "data.review",
             title: "Review Changes",
             keywords: &["apply", "edit"],
-            shortcut: None,
+            shortcut: Some("Ctrl+S"),
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::DataReview),
         },
@@ -420,7 +412,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "transfer.export",
             title: "Export Data",
             keywords: &["csv", "json", "file"],
-            shortcut: None,
+            shortcut: Some("e"),
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::TransferExport),
         },
@@ -463,6 +455,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenExplain),
+        },
+        CommandSpec {
+            id: "explain.cycle_view",
+            title: "Cycle Explain View",
+            keywords: &["tree", "table", "summary", "plan"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CycleExplainView),
+        },
+        CommandSpec {
+            id: "explain.analyze",
+            title: "Explain Analyze",
+            keywords: &["analyze", "execute", "timing", "actual"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ConfirmExplainAnalyze),
         },
         CommandSpec {
             id: "admin.sessions",
@@ -524,7 +532,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "explorer.inspect",
             title: "Inspect Object",
             keywords: &["properties", "ddl"],
-            shortcut: None,
+            shortcut: Some("i"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectInspector),
         },
@@ -532,17 +540,9 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "explorer.ddl",
             title: "Open Object DDL",
             keywords: &["create", "script"],
-            shortcut: None,
+            shortcut: Some("d"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectDdl),
-        },
-        CommandSpec {
-            id: "explorer.refresh_subtree",
-            title: "Refresh Catalog Subtree",
-            keywords: &["reload", "tree"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::RefreshCatalogSubtree),
         },
         CommandSpec {
             id: "explorer.up",
@@ -567,14 +567,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenDependencies),
-        },
-        CommandSpec {
-            id: "explorer.dependents",
-            title: "Show Dependents",
-            keywords: &["used", "inspector"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenDependents),
         },
         CommandSpec {
             id: "tab.sql",
@@ -937,52 +929,12 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ToggleResultsPick),
         },
         CommandSpec {
-            id: "connection.add",
-            title: "Add Connection",
-            keywords: &["database", "postgres", "mysql", "connect"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenConnectionForm),
-        },
-        CommandSpec {
             id: "connection.browse",
             title: "Browse Connections",
             keywords: &["database", "sessions", "profiles"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenConnections),
-        },
-        CommandSpec {
-            id: "connection.connect",
-            title: "Connect / Switch Session",
-            keywords: &["session", "switch"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect),
-        },
-        CommandSpec {
-            id: "connection.duplicate",
-            title: "Duplicate Connection",
-            keywords: &["copy", "profile"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionDuplicate),
-        },
-        CommandSpec {
-            id: "connection.test",
-            title: "Test Connection",
-            keywords: &["ping"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionTest),
-        },
-        CommandSpec {
-            id: "connection.delete",
-            title: "Delete Connection",
-            keywords: &["remove"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete),
         },
         CommandSpec {
             id: "connection.close_session",
@@ -1105,6 +1057,30 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RefreshSqlIntelligence),
         },
         CommandSpec {
+            id: "editor.undo",
+            title: "Undo",
+            keywords: &["revert", "back"],
+            shortcut: Some("Ctrl+Z"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorUndo),
+        },
+        CommandSpec {
+            id: "editor.redo",
+            title: "Redo",
+            keywords: &["forward", "again"],
+            shortcut: Some("Ctrl+Y"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorRedo),
+        },
+        CommandSpec {
+            id: "editor.select_all",
+            title: "Select All",
+            keywords: &["selection", "everything"],
+            shortcut: Some("Ctrl+A"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorSelectAll),
+        },
+        CommandSpec {
             id: "editor.format",
             title: "Format SQL",
             keywords: &["pretty", "indent"],
@@ -1116,7 +1092,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "editor.accept_completion",
             title: "Accept Completion",
             keywords: &["complete"],
-            shortcut: Some("Tab"),
+            shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::AcceptCompletion),
         },
@@ -1163,6 +1139,82 @@ fn command_spec_list() -> Vec<CommandSpec> {
     ]
 }
 
+/// Commands that stay invokable by key or by id, but are not worth a row in the
+/// palette: cursor motion, pane gestures, tab switching, and steps that are already
+/// a labelled row inside the screen they belong to.
+fn hidden(id: &str) -> bool {
+    matches!(
+        id,
+        // cursor and selection gestures
+        "results.up"
+            | "results.down"
+            | "results.left"
+            | "results.right"
+            | "results.pageup"
+            | "results.pagedown"
+            | "results.top"
+            | "results.extend_up"
+            | "results.extend_down"
+            | "results.toggle_pick"
+            | "results.actions"
+            | "results.select_row"
+            | "results.select_column"
+            | "explorer.up"
+            | "explorer.down"
+            | "explorer.expand"
+            // pane focus and sizing
+            | "focus.explorer"
+            | "focus.editor"
+            | "focus.results"
+            | "focus.inspector"
+            | "layout.hide_inspector"
+            | "layout.hide_explorer"
+            | "layout.hide_results"
+            | "layout.results_grow"
+            | "layout.results_shrink"
+            | "layout.explorer_grow"
+            | "layout.explorer_shrink"
+            | "layout.inspector_grow"
+            | "layout.inspector_shrink"
+            // tab switching
+            | "tab.sql"
+            | "tab.data"
+            | "tab.ddl"
+            | "tab.properties"
+            | "tab.explain"
+            | "tab.next"
+            | "document.next"
+            | "document.prev"
+            | "document.prev_focus"
+            | "document.next_focus"
+            | "inspector.next_tab"
+            | "results.next_tab"
+            | "results.prev_tab"
+            // already a labelled row inside the Settings screen
+            | "settings.mode"
+            | "settings.accent"
+            | "settings.keymap"
+            | "settings.mouse"
+            | "settings.animation"
+            | "settings.unicode"
+            | "settings.reset"
+            // second step of a flow the palette already opened
+            | "recovery.restore"
+            | "recovery.discard"
+            // grid chrome
+            | "data.page_next"
+            | "data.page_prev"
+            | "data.toggle_delete"
+            | "data.nav_back"
+            // listing the palette inside the palette
+            | "palette.open"
+            // opening the palette destroys completion state, so it is always disabled
+            | "editor.accept_completion"
+            // ponytail: the screen can neither import nor export yet; unhide once it can.
+            | "config.transfer"
+    )
+}
+
 pub fn command_specs() -> Vec<CommandSpec> {
     command_spec_list()
         .into_iter()
@@ -1180,6 +1232,7 @@ pub fn command_spec(id: &str) -> Option<CommandSpec> {
 pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
     command_specs()
         .into_iter()
+        .filter(|spec| !hidden(spec.id))
         .map(|spec| PaletteEntry {
             id: spec.id,
             title: spec.title,
@@ -1201,12 +1254,9 @@ fn unmet_requirement(model: &Model, requirement: Requirement) -> Option<String> 
         Requirement::ExplorerNode => model.explorer.selected.is_none(),
         Requirement::LoadedDdl => model.inspector.ddl.is_none(),
         Requirement::PendingChanges => model.data.changes.pending().is_empty(),
-        Requirement::Breadcrumb => model.data.crumbs.is_empty(),
         Requirement::ActiveQuery => model.active_operation.is_none(),
-        Requirement::Completion => model.editor.completions.is_empty(),
         Requirement::Parameters => model.editor.parameters.is_empty(),
         Requirement::History => model.editor.history.is_empty(),
-        Requirement::Recovery => model.recovery.checkpoints.is_empty(),
     };
     unmet.then(|| requirement.reason().to_string())
 }
@@ -1305,20 +1355,22 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "results.toggle_pick"
         | "data.toggle_delete" => &[Results, RowSelection],
         "explorer.expand"
-        | "explorer.refresh_subtree"
         | "explorer.copy_name"
         | "explorer.copy_simple"
         | "explorer.favorite"
         | "explorer.up"
         | "explorer.down" => &[ExplorerNode],
+        "transfer.import"
+        | "backup.dump"
+        | "backup.restore"
+        | "explorer.refresh_all"
+        | "explain.analyze" => &[ActiveSession],
+        "explorer.refresh" => &[ActiveSession, ExplorerNode],
         "explorer.copy_ddl" => &[LoadedDdl],
         "data.revert" | "data.review" | "data.discard_all" => &[PendingChanges],
-        "data.nav_back" => &[Breadcrumb],
         "query.cancel" => &[ActiveQuery],
-        "editor.accept_completion" => &[Completion],
         "editor.parameters" => &[Parameters],
         "editor.history.clear" => &[History],
-        "recovery.restore" | "recovery.discard" => &[Recovery],
         _ => &[],
     }
 }

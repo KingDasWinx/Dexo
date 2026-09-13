@@ -2,7 +2,7 @@ use crate::action::Action;
 use crate::model::Model;
 
 mod registry;
-pub use registry::{command_spec, palette_entries};
+pub use registry::{command_spec, command_specs, palette_entries};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowIntent {
@@ -20,11 +20,6 @@ pub enum FlowIntent {
     TransferImport,
     Backup,
     Restore,
-    ConnectionConnect,
-    ConnectionDuplicate,
-    ConnectionTest,
-    ConnectionDelete,
-    ConnectionCloseSession,
     ProjectCreate,
     ProjectSwitch,
     ProjectRename,
@@ -76,12 +71,9 @@ pub enum Requirement {
     ExplorerNode,
     LoadedDdl,
     PendingChanges,
-    Breadcrumb,
     ActiveQuery,
-    Completion,
     Parameters,
     History,
-    Recovery,
 }
 
 impl Requirement {
@@ -93,26 +85,21 @@ impl Requirement {
             Self::ExplorerNode => "select an explorer object first",
             Self::LoadedDdl => "load DDL first",
             Self::PendingChanges => "no pending changes",
-            Self::Breadcrumb => "no previous data location",
             Self::ActiveQuery => "no query is running",
-            Self::Completion => "no completion available",
             Self::Parameters => "no query parameters",
             Self::History => "history is empty",
-            Self::Recovery => "no recovery checkpoint",
         }
     }
 }
 
-pub fn invocation_by_id(model: &Model, id: &str) -> Option<PaletteInvocation> {
-    palette_entries(model)
-        .into_iter()
-        .find(|entry| entry.id == id)
-        .map(|entry| entry.invocation)
+/// Resolves any registered command, hidden ones included -- keys and the results menu
+/// address commands by id and must keep reaching what the palette no longer lists.
+pub fn invocation_by_id(_model: &Model, id: &str) -> Option<PaletteInvocation> {
+    command_spec(id).map(|spec| spec.invocation)
 }
 
 pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
     &[
-        ("copy-row-csv", "Copy row as CSV"),
         ("copy-cell", "Copy cell"),
         ("data.copy.json", "Copy as JSON"),
         ("data.copy.csv", "Copy as CSV"),
@@ -124,9 +111,14 @@ pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-/// Popup list rows for a terminal height. Matches `render_palette` (height clamp 5..=12, minus border+query).
+/// Height the palette popup takes for a given terminal height.
+pub fn popup_height(term_height: u16) -> u16 {
+    term_height.clamp(5, POPUP_MAX_HEIGHT)
+}
+
+/// Popup list rows for a terminal height: the popup minus its border and query line.
 pub fn popup_list_rows(term_height: u16) -> usize {
-    term_height.clamp(5, 12).saturating_sub(3) as usize
+    popup_height(term_height).saturating_sub(3) as usize
 }
 
 /// Keep `selected` inside `[offset, offset + rows)`. Same rule as ratatui `ListState`.
@@ -148,9 +140,63 @@ pub fn scroll_to_selection(selected: usize, offset: usize, count: usize, rows: u
     }
 }
 
+/// Palette categories, in display order. The key is the command id prefix; several
+/// one-command prefixes fold into a shared label so the list does not turn into a
+/// column of headings for a column of commands.
+/// Kept flat so `render_palette` and `popup_list_rows` cannot drift apart.
+pub const POPUP_MAX_HEIGHT: u16 = 16;
+pub const POPUP_MAX_WIDTH: u16 = 76;
+
+const CATEGORIES: &[(&str, &str)] = &[
+    ("query", "Query"),
+    ("transaction", "Transaction"),
+    ("data", "Data"),
+    ("results", "Results"),
+    ("schema", "Schema"),
+    ("explain", "Explain"),
+    ("transfer", "Transfer"),
+    ("backup", "Backup"),
+    ("explorer", "Explorer"),
+    ("connection", "Connection"),
+    ("document", "Document"),
+    ("editor", "Editor"),
+    ("project", "Project"),
+    ("mcp", "MCP"),
+    ("recovery", "Recovery"),
+    ("settings", "Settings"),
+    ("layout", "Layout"),
+    ("focus", "Focus"),
+    ("tab", "Tab"),
+    ("inspector", "Inspector"),
+    ("workbench", "Workbench"),
+    ("palette", "Workbench"),
+    ("help", "Workbench"),
+    ("config", "Workbench"),
+    ("admin", "Workbench"),
+    ("diagnostics", "Workbench"),
+];
+
+fn category_index(id: &str) -> usize {
+    let prefix = id.split('.').next().unwrap_or(id);
+    CATEGORIES
+        .iter()
+        .position(|(key, _)| *key == prefix)
+        .unwrap_or(CATEGORIES.len())
+}
+
+/// Display name for a command's category, e.g. `data.copy.csv` -> "Data".
+pub fn category_label(id: &str) -> &str {
+    CATEGORIES
+        .get(category_index(id))
+        .map(|(_, label)| *label)
+        .unwrap_or_else(|| id.split('.').next().unwrap_or(id))
+}
+
 pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a PaletteEntry> {
     if query.is_empty() {
-        return entries.iter().collect();
+        let mut browse: Vec<&PaletteEntry> = entries.iter().collect();
+        browse.sort_by_key(|entry| category_index(entry.id));
+        return browse;
     }
     let mut scored: Vec<(u8, &PaletteEntry)> = entries
         .iter()
@@ -231,8 +277,17 @@ mod tests {
     #[test]
     fn fuzzy_word_start_beats_subsequence() {
         let entries = palette_entries(&Model::default());
-        let filtered = filter_entries(&entries, "pal");
-        assert_eq!(filtered[0].id, "palette.open");
+        // "Submit Parameters" starts a word with the query; "Compare Schema" only
+        // matches it as a scattered subsequence. Asserting the pair rather than
+        // index 0 keeps the test about ranking, not about the rest of the registry.
+        let filtered = filter_entries(&entries, "para");
+        let rank = |id: &str| filtered.iter().position(|entry| entry.id == id);
+        let word_start = rank("editor.parameters").expect("word-start match");
+        let subsequence = rank("schema.diff").expect("subsequence match");
+        assert!(
+            word_start < subsequence,
+            "word start should outrank subsequence: {filtered:?}"
+        );
     }
 
     #[test]
@@ -255,23 +310,24 @@ mod tests {
             popup_list_rows(model.height),
         );
         let view = crate::render::render_to_string(&model, 80, 24);
-        let last = entries.last().unwrap().title;
+        let ordered = filter_entries(&entries, "");
+        let last = ordered.last().unwrap().title;
         assert!(
             view.contains(last),
             "selected command `{last}` should stay visible after scroll"
         );
         assert!(
-            !view.contains(entries[0].title),
+            !view.contains(ordered[0].title),
             "first command should scroll off when selection is at the end"
         );
     }
 
     #[test]
-    fn every_current_action_is_in_palette() {
+    fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 143);
-        assert_eq!(ids.len(), 143);
+        assert_eq!(entries.len(), 82);
+        assert_eq!(ids.len(), 82);
     }
 
     #[test]
@@ -320,7 +376,6 @@ mod tests {
         assert!(view.contains("Record"));
         assert!(view.contains("Actions"));
         assert!(view.contains("n: 2"));
-        assert!(view.contains("Copy row as CSV"));
         update(
             &mut model,
             Action::Key(crossterm::event::KeyEvent::new(

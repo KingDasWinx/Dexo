@@ -217,9 +217,9 @@ fn snapshot_explain_tree_table_summary() {
     update(&mut model, Action::OpenExplain);
     model.explain = dexo_tui::screens::explain::ExplainScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
-    update(&mut model, Action::ExplainViewTable);
+    update(&mut model, Action::CycleExplainView);
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
-    update(&mut model, Action::ExplainViewSummary);
+    update(&mut model, Action::CycleExplainView);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
 }
 

@@ -819,31 +819,49 @@ fn for_popup_lines(popup: Rect, lines: &[String], mut map: impl FnMut(usize, &st
     }
 }
 
+/// Width of the palette's category gutter, sized to the longest label.
+const CATEGORY_WIDTH: usize = 12;
+
 fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let width = area.width.clamp(10, 60);
-    let height = area.height.clamp(5, 12);
+    let width = area.width.clamp(10, crate::palette::POPUP_MAX_WIDTH);
+    let height = crate::palette::popup_height(area.height);
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 3;
     let popup = Rect::new(x, y, width, height);
     let entries = palette_entries(model);
     let visible = filter_entries(&entries, &model.palette.query);
     let mut lines = vec![format!("> {}", model.palette.query)];
-    let rows = height.saturating_sub(3) as usize;
+    let rows = crate::palette::popup_list_rows(area.height);
     let offset = scroll_to_selection(
         model.palette.selected,
         model.palette.offset,
         visible.len(),
         rows,
     );
+    let browsing = model.palette.query.is_empty();
     for (index, entry) in visible.iter().enumerate().skip(offset).take(rows) {
         let marker = if index == model.palette.selected {
             ">"
         } else {
             " "
+        };
+        // While browsing, print the category once per group and on the first visible
+        // row -- that second case is what keeps a heading on screen mid-scroll. While
+        // searching the order is relevance, so every row carries its own label.
+        let label = crate::palette::category_label(entry.id);
+        let repeats = browsing
+            && index > offset
+            && visible
+                .get(index - 1)
+                .is_some_and(|prev| crate::palette::category_label(prev.id) == label);
+        let category = if repeats {
+            " ".repeat(CATEGORY_WIDTH)
+        } else {
+            format!("{label:<CATEGORY_WIDTH$}")
         };
         let shortcut = entry
             .shortcut
@@ -854,7 +872,10 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             .as_deref()
             .map(|reason| format!(" ({reason})"))
             .unwrap_or_default();
-        lines.push(format!("{marker} {}{shortcut}{disabled}", entry.title));
+        lines.push(format!(
+            "{marker} {category}{}{shortcut}{disabled}",
+            entry.title
+        ));
     }
     paint_popup(
         frame,
@@ -884,10 +905,8 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     for (section, rows) in model.keymap.help_sections() {
         let mut section_lines = Vec::new();
         for (chord, command) in rows {
-            let title = palette_entries(model)
-                .iter()
-                .find(|entry| entry.id == command)
-                .map(|entry| entry.title)
+            let title = crate::palette::command_spec(command.as_str())
+                .map(|spec| spec.title)
                 .unwrap_or(command.as_str());
             if !crate::palette::matches_any(&[&chord, title, &command], query) {
                 continue;

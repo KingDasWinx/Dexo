@@ -1,5 +1,4 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use dexo_tui::screens::connections::ConnectionIntent;
 use dexo_tui::screens::projects::{ProjectIntent, ProjectsMode};
 use dexo_tui::{Action, Effect, Focus, Model, update};
 
@@ -59,8 +58,9 @@ fn project_create_opens_the_existing_name_form() {
 fn palette_renders_registered_shortcut() {
     let mut model = Model::default();
     update(&mut model, Action::OpenPalette);
+    update(&mut model, Action::PaletteQuery("execute statement".into()));
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
-    assert!(view.contains("Ctrl+P"));
+    assert!(view.contains("Ctrl+Enter"), "{view}");
 }
 
 #[test]
@@ -85,12 +85,20 @@ fn project_rename_loads_a_visible_chooser_before_input() {
     assert!(matches!(effects.as_slice(), [Effect::ListProjects]));
 }
 
+/// Delete is reached by `x` in the connections screen now that the palette flow is
+/// gone. The confirmation must still be asked for, never skipped.
 #[test]
-fn connection_delete_opens_browser_and_never_hides_confirmation() {
+fn connection_delete_never_hides_confirmation() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
     let mut model = Model::default();
-    choose(&mut model, "connection.delete");
+    update(&mut model, Action::OpenConnections);
     assert!(model.connections.open);
-    assert_eq!(model.connections.intent, Some(ConnectionIntent::Delete));
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+    );
+    assert!(model.connections.open);
     assert!(model.connections.delete_target.is_none());
 }
 
@@ -130,6 +138,7 @@ fn model_satisfying(requirements: &[dexo_tui::palette::Requirement]) -> Model {
             Requirement::ActiveSession => {
                 model.active_session = Some(SessionId(uuid::Uuid::from_u128(1)));
                 model.session_generation = 1;
+                model.connection.name = "local".into();
             }
             Requirement::Results => {
                 model.results.append_rows(vec![
@@ -201,23 +210,12 @@ fn model_satisfying(requirements: &[dexo_tui::palette::Requirement]) -> Model {
                     .changes
                     .insert(vec![("id".into(), DbValue::I64(1))]);
             }
-            Requirement::Breadcrumb => model.data.crumbs.push((model.data.target.clone(), None, 0)),
             Requirement::ActiveQuery => model.active_operation = Some(OperationId::new()),
-            Requirement::Completion => {
-                model.set_sql("sel");
-                dexo_tui::screens::editor::refresh_intelligence(&mut model, true);
-            }
             Requirement::Parameters => {
                 model.set_sql("select :id");
                 dexo_tui::screens::editor::refresh_intelligence(&mut model, false);
             }
             Requirement::History => model.editor.history.push("select 1".into()),
-            Requirement::Recovery => {
-                model
-                    .recovery
-                    .checkpoints
-                    .push(("doc".into(), "now".into(), "select 1".into()))
-            }
         }
     }
     if model.active_document().text().is_empty() {

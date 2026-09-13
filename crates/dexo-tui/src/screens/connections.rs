@@ -22,15 +22,6 @@ pub struct SessionRow {
     pub driver: String,
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConnectionIntent {
-    Connect,
-    Duplicate,
-    Test,
-    Delete,
-    CloseSession,
-}
-
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectionsScreen {
     pub open: bool,
@@ -42,7 +33,6 @@ pub struct ConnectionsScreen {
     pub pending: Option<crate::runtime::OperationId>,
     pub pending_connect: Option<u64>,
     pub delete_target: Option<ConnectionProfile>,
-    pub intent: Option<ConnectionIntent>,
     pub error: Option<String>,
 }
 
@@ -143,18 +133,7 @@ impl ConnectionsScreen {
                 row.profile.environment
             ));
         }
-        if let Some(intent) = self.intent {
-            let action = match intent {
-                ConnectionIntent::Connect => "connect/switch",
-                ConnectionIntent::Duplicate => "duplicate",
-                ConnectionIntent::Test => "test",
-                ConnectionIntent::Delete => "delete",
-                ConnectionIntent::CloseSession => "close",
-            };
-            lines.push(format!("choose connection to {action}"));
-        } else {
-            lines.push("Enter connect  c close  t test  e edit  n new  d dup  x delete".into());
-        }
+        lines.push("Enter connect  c close  t test  e edit  n new  d dup  x delete".into());
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }

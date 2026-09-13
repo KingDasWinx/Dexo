@@ -474,7 +474,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::Focus(target) => focus_pane(model, target),
         Action::ExplorerExpand => activate_connection_or_catalog(model),
         Action::RefreshCatalogNode => refresh_catalog(model, false),
-        Action::RefreshCatalogSubtree => refresh_catalog(model, false),
         Action::RefreshCatalogAll => refresh_catalog(model, true),
         Action::CatalogLoaded {
             session,
@@ -534,12 +533,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::OpenDependencies => {
             let effects = open_inspector(model);
             model.inspector.tab = crate::screens::object_inspector::InspectorTab::Dependencies;
-            effects
-        }
-        Action::OpenDependents => {
-            let effects = open_inspector(model);
-            model.inspector.tab = crate::screens::object_inspector::InspectorTab::Dependencies;
-            model.messages.push("dependents".into());
             effects
         }
         Action::ExplorerUp => {
@@ -994,16 +987,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.tabs.active = 4;
             explain_effect(model, false)
         }
-        Action::ExplainViewTree => {
-            model.explain.view = crate::screens::explain::ExplainView::Tree;
-            Vec::new()
-        }
-        Action::ExplainViewTable => {
-            model.explain.view = crate::screens::explain::ExplainView::Table;
-            Vec::new()
-        }
-        Action::ExplainViewSummary => {
-            model.explain.view = crate::screens::explain::ExplainView::Summary;
+        Action::CycleExplainView => {
+            model.explain.view = model.explain.view.next();
             Vec::new()
         }
         Action::ConfirmExplainAnalyze => {
@@ -1160,6 +1145,20 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::FormatSql => {
             crate::screens::editor::apply_format(model);
+            Vec::new()
+        }
+        Action::EditorUndo => {
+            crate::screens::editor::undo(model);
+            crate::screens::editor::refresh_intelligence(model, false);
+            Vec::new()
+        }
+        Action::EditorRedo => {
+            crate::screens::editor::redo(model);
+            crate::screens::editor::refresh_intelligence(model, false);
+            Vec::new()
+        }
+        Action::EditorSelectAll => {
+            crate::screens::editor::select_all(model);
             Vec::new()
         }
         Action::AcceptCompletion => {
@@ -1427,11 +1426,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.panes = model.panes.clamp(model.width, model.height);
             model.layout_dirty = true;
             model.sync_grid_viewport();
-            Vec::new()
-        }
-        Action::LayoutResultsFocus => {
-            apply_layout_preset(model, crate::layout::LayoutPreset::ResultsWide);
-            model.focus = Focus::Results;
             Vec::new()
         }
         Action::GrowResults => {
@@ -3228,7 +3222,6 @@ fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
             model.connections.open = false;
-            model.connections.intent = None;
             model.connections.error = None;
             Vec::new()
         }
@@ -6200,20 +6193,6 @@ fn open_project_intent(
     vec![Effect::ListProjects]
 }
 
-fn open_connection_intent(
-    model: &mut Model,
-    intent: crate::screens::connections::ConnectionIntent,
-) -> Vec<Effect> {
-    model.connections.open = true;
-    model.connections.intent = Some(intent);
-    model.connections.error = None;
-    if model.connections.profiles.is_empty() {
-        vec![Effect::LoadConnectionProfiles]
-    } else {
-        Vec::new()
-    }
-}
-
 fn submit_project_name(model: &mut Model) -> Vec<Effect> {
     let name = model.projects.name_input.trim();
     if name.is_empty() {
@@ -6262,24 +6241,7 @@ fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
         model.connections.error = Some("select a connection first".into());
         return Vec::new();
     }
-    match model.connections.intent {
-        Some(crate::screens::connections::ConnectionIntent::Connect) => {
-            update(model, Action::ConnectSelected)
-        }
-        Some(crate::screens::connections::ConnectionIntent::Duplicate) => {
-            update(model, Action::DuplicateConnection)
-        }
-        Some(crate::screens::connections::ConnectionIntent::Test) => {
-            update(model, Action::TestConnection)
-        }
-        Some(crate::screens::connections::ConnectionIntent::Delete) => {
-            update(model, Action::DeleteConnection)
-        }
-        Some(crate::screens::connections::ConnectionIntent::CloseSession) => {
-            update(model, Action::CloseSelectedSession)
-        }
-        None => connect_selected(model),
-    }
+    connect_selected(model)
 }
 
 fn open_snippets(model: &mut Model) -> Vec<Effect> {
@@ -6501,24 +6463,6 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::Restore) => {
             open_transfer(model, crate::screens::transfer::TransferMode::Restore)
         }
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect) => open_connection_intent(
-            model,
-            crate::screens::connections::ConnectionIntent::Connect,
-        ),
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDuplicate) => open_connection_intent(
-            model,
-            crate::screens::connections::ConnectionIntent::Duplicate,
-        ),
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionTest) => {
-            open_connection_intent(model, crate::screens::connections::ConnectionIntent::Test)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete) => {
-            open_connection_intent(model, crate::screens::connections::ConnectionIntent::Delete)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::ConnectionCloseSession) => open_connection_intent(
-            model,
-            crate::screens::connections::ConnectionIntent::CloseSession,
-        ),
         PaletteInvocation::OpenFlow(FlowIntent::SettingsReset) => {
             model.settings.open = true;
             model.settings.confirm_reset = true;
