@@ -254,7 +254,7 @@ fn clipboard_failure_is_not_success() {
         model
             .messages
             .iter()
-            .any(|message| message.contains("clipboard"))
+            .any(|message| message.message.contains("clipboard"))
     );
 }
 

@@ -360,7 +360,12 @@ fn read_only_blocks_begin_transaction() {
     };
     let effects = update(&mut model, Action::BeginTransaction);
     assert!(effects.is_empty());
-    assert!(model.messages.iter().any(|m| m.contains("read-only")));
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|m| m.message.contains("read-only"))
+    );
 }
 
 #[test]

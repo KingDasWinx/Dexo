@@ -6,7 +6,7 @@ demo  local  public
 ┌  Sidebar─────────────────┐                                                                        
 │Connections  [n]ew [e]dit │ scratch.sql ×  users ×  +                                              
 │  ● local▾  [offline]     │┌  Results (0) crumbs:1────────────────────────────────────────────────┐
-│>   ▸ public              ││[Grid] Explain                                                        │
+│>   ▸ public              ││[Grid] Explain  Messages                                              │
 │      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │
 │             │target: demo.public.users                                             │             │
 │             │ops: 1                                                                │             │

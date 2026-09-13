@@ -138,7 +138,7 @@ fn clipboard_failure_is_not_success() {
         model
             .messages
             .iter()
-            .any(|message| message.contains("denied"))
+            .any(|message| message.message.contains("denied"))
     );
     update(
         &mut model,
@@ -225,7 +225,7 @@ fn foreign_key_null_disables_navigation() {
         model
             .messages
             .iter()
-            .any(|message| message.contains("null"))
+            .any(|message| message.message.contains("null"))
     );
 }
 

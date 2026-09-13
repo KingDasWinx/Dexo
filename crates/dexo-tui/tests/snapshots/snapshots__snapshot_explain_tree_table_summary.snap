@@ -40,7 +40,7 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                          ││ Grid [Explain]  Tree                                                                                                             │
+│                          ││ Grid [Explain] Messages  │ Tree                                                                                                  │
 │                          ││explain captured_at=1710000000 paused=false analyze=true confirmed=true                                                           │
 │                          ││planning_ms=0.04 execution_ms=0.21                                                                                                │
 │                          ││Seq Scan rel=items cost=22.5 rows=10/1000 time_ms=0.18 loops=1 actual rows >> estimate (heuristic)                                │

@@ -983,15 +983,17 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             use crate::model::ResultsView;
             use crate::screens::explain::ExplainView;
             model.results.explain_scroll = 0;
+            model.results.messages_scroll = 0;
             match (model.results.view, model.explain.view) {
                 (ResultsView::Grid, _) => {
                     model.results.view = ResultsView::Explain;
                     model.explain.view = ExplainView::Tree;
                 }
                 (ResultsView::Explain, ExplainView::Summary) => {
-                    model.results.view = ResultsView::Grid;
+                    model.results.view = ResultsView::Messages;
                 }
                 (ResultsView::Explain, view) => model.explain.view = view.next(),
+                (ResultsView::Messages, _) => model.results.view = ResultsView::Grid,
             }
             Vec::new()
         }
@@ -1350,18 +1352,31 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ResultsUp => {
-            if model.results.view == crate::model::ResultsView::Explain {
-                model.results.explain_scroll = model.results.explain_scroll.saturating_sub(1);
-            } else {
-                model.results.move_cursor_row(-1, false);
+            match model.results.view {
+                crate::model::ResultsView::Explain => {
+                    model.results.explain_scroll = model.results.explain_scroll.saturating_sub(1);
+                }
+                crate::model::ResultsView::Messages => {
+                    model.results.messages_scroll = model.results.messages_scroll.saturating_sub(1);
+                }
+                crate::model::ResultsView::Grid => model.results.move_cursor_row(-1, false),
             }
             Vec::new()
         }
         Action::ResultsDown => {
-            if model.results.view == crate::model::ResultsView::Explain {
-                model.results.explain_scroll = model.results.explain_scroll.saturating_add(1);
-            } else {
-                model.results.move_cursor_row(1, false);
+            match model.results.view {
+                crate::model::ResultsView::Explain => {
+                    model.results.explain_scroll = model.results.explain_scroll.saturating_add(1);
+                }
+                crate::model::ResultsView::Messages => {
+                    // Bounded by the log itself; it is the one list here that only grows.
+                    model.results.messages_scroll = model
+                        .results
+                        .messages_scroll
+                        .saturating_add(1)
+                        .min(model.messages.len().saturating_sub(1) as u16);
+                }
+                crate::model::ResultsView::Grid => model.results.move_cursor_row(1, false),
             }
             Vec::new()
         }
@@ -2219,6 +2234,7 @@ fn mouse_workbench(
             if let Some(view) = crate::model::ResultsView::ALL.get(index).copied() {
                 model.results.view = view;
                 model.results.explain_scroll = 0;
+                model.results.messages_scroll = 0;
             }
             model.focus = Focus::Results;
             Vec::new()
@@ -6851,7 +6867,7 @@ mod tests {
 
         let mut model = Model::default();
         let mut seen = Vec::new();
-        for _ in 0..4 {
+        for _ in 0..5 {
             seen.push((model.results.view, model.explain.view));
             update(&mut model, Action::CycleResultsView);
         }
@@ -6863,6 +6879,7 @@ mod tests {
                 (ResultsView::Explain, ExplainView::Tree),
                 (ResultsView::Explain, ExplainView::Table),
                 (ResultsView::Explain, ExplainView::Summary),
+                (ResultsView::Messages, ExplainView::Summary),
             ]
         );
         assert_eq!(model.results.view, ResultsView::Grid, "the ring must close");

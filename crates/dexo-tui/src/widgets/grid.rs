@@ -1,9 +1,11 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span};
-use ratatui::widgets::Paragraph;
+use ratatui::widgets::{Paragraph, Wrap};
 
-use crate::model::{Focus, Model, allocate_column_widths, format_value, truncate_cell};
+use crate::model::{
+    Focus, Model, ResultsView, Severity, allocate_column_widths, format_value, truncate_cell,
+};
 use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
 
@@ -40,15 +42,26 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         inner.width,
         inner.height.saturating_sub(tab_h),
     );
-    if model.results.view == crate::model::ResultsView::Explain {
-        let plan = model.explain.lines().join("\n");
-        frame.render_widget(
-            Paragraph::new(plan).scroll((model.results.explain_scroll, 0)),
-            body,
-        );
-        return;
+    match model.results.view {
+        ResultsView::Explain => {
+            let plan = model.explain.lines().join("\n");
+            frame.render_widget(
+                Paragraph::new(plan).scroll((model.results.explain_scroll, 0)),
+                body,
+            );
+        }
+        ResultsView::Messages => {
+            frame.render_widget(
+                Paragraph::new(message_lines(model))
+                    .wrap(Wrap { trim: false })
+                    .scroll((model.results.messages_scroll, 0)),
+                body,
+            );
+        }
+        ResultsView::Grid => {
+            frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
+        }
     }
-    frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
 }
 
 /// One row inside the pane holding the view selector and, after a divider, the result
@@ -67,19 +80,27 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
         out.push_str(&text);
     };
 
-    for (index, view) in crate::model::ResultsView::ALL.iter().enumerate() {
+    for (index, view) in ResultsView::ALL.iter().enumerate() {
+        // The count is how you know there is anything in there without switching.
+        let label = match view {
+            ResultsView::Messages if !model.messages.is_empty() => {
+                format!("Messages({})", model.messages.len())
+            }
+            _ => view.label().to_string(),
+        };
         let text = if *view == model.results.view {
-            format!("[{}]", view.label())
+            format!("[{label}]")
         } else {
-            format!(" {} ", view.label())
+            format!(" {label} ")
         };
         push(&mut out, hits, &mut x, text, HitTarget::ResultsView(index));
     }
 
-    if model.results.view == crate::model::ResultsView::Explain {
-        // cycling the sub-view used to be invisible
-        out.push_str(&format!("  {:?}", model.explain.view));
-    } else if model.results.tabs.len() > 1 {
+    if model.results.view == ResultsView::Explain {
+        // cycling the sub-view used to be invisible; the divider keeps it from reading
+        // as a fourth view now that Messages sits next to it
+        out.push_str(&format!(" │ {:?}", model.explain.view));
+    } else if model.results.view == ResultsView::Grid && model.results.tabs.len() > 1 {
         out.push_str(" │");
         x = x.saturating_add(2);
         for (index, tab) in model.results.tabs.iter().enumerate() {
@@ -97,10 +118,8 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
 fn result_banner(model: &Model) -> String {
     let mut extra = String::new();
     if let Some(tab) = model.results.tabs.get(model.results.active) {
-        if !tab.notices.is_empty() {
-            extra.push_str(" !");
-            extra.push_str(tab.notices.last().expect("notice"));
-        }
+        // A notice used to be crammed in here, one at a time, truncated by the title.
+        // It lives in the Messages view now, with the rest of them.
         if let Some(reason) = &tab.local_only {
             extra.push_str(" local-only:");
             extra.push_str(reason);
@@ -247,9 +266,42 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
     lines
 }
 
+/// The log, oldest first so the newest is where you land after scrolling down -- and so a
+/// burst of messages reads in the order it happened.
+fn message_lines(model: &Model) -> Vec<Line<'static>> {
+    if model.messages.is_empty() {
+        return vec![Line::from(Span::styled(
+            "no messages yet",
+            model.theme.style(Role::Muted, model.capabilities),
+        ))];
+    }
+    model
+        .messages
+        .iter()
+        .map(|entry| {
+            let role = match entry.severity {
+                Severity::Info => Role::Muted,
+                Severity::Warn => Role::Warning,
+                Severity::Error => Role::Error,
+            };
+            Line::from(vec![
+                Span::styled(
+                    format!("{:<5} ", entry.severity.label()),
+                    model.theme.style(role, model.capabilities),
+                ),
+                Span::raw(entry.message.clone()),
+            ])
+        })
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::action::Action;
     use crate::model::{GridModel, truncate_cell};
+    use crate::render::render_to_string;
+    use crate::update::update;
 
     #[test]
     fn renders_only_visible_rows() {
@@ -496,5 +548,61 @@ mod tests {
             grid.move_cursor_col(-1);
         }
         assert_eq!(grid.viewport().column_offset, 0);
+    }
+
+    /// Until this view existed a message got one toast and was then unreachable: the log
+    /// was in the model and rendered nowhere.
+    #[test]
+    fn the_messages_view_shows_the_log_with_its_severities() {
+        let mut model = Model {
+            focus: Focus::Results,
+            ..Model::default()
+        };
+        model.results.view = ResultsView::Messages;
+
+        assert!(
+            render_to_string(&model, 120, 40).contains("no messages yet"),
+            "an empty log needs to say so"
+        );
+
+        model.messages.info("saved staging".into());
+        model.messages.warn("connection is read-only".into());
+        model
+            .messages
+            .error("relation \"orders\" does not exist".into());
+
+        let view = render_to_string(&model, 120, 40);
+        for text in [
+            "saved staging",
+            "connection is read-only",
+            "does not exist",
+            "Messages(3)",
+        ] {
+            assert!(view.contains(text), "missing {text}: {view}");
+        }
+        // the severity is a word, so it survives with no color at all
+        assert!(view.contains("info "), "{view}");
+        assert!(view.contains("warn "), "{view}");
+        assert!(view.contains("error"), "{view}");
+    }
+
+    /// The log is the one list in the pane that only grows, so it scrolls on its own
+    /// axis rather than moving the grid cursor.
+    #[test]
+    fn messages_scroll_without_touching_the_grid_cursor() {
+        let mut model = Model::default();
+        model.results.view = ResultsView::Messages;
+        for index in 0..5 {
+            model.messages.info(format!("entry {index}"));
+        }
+        let row = model.results.cursor_row();
+
+        update(&mut model, Action::ResultsDown);
+        update(&mut model, Action::ResultsDown);
+        assert_eq!(model.results.messages_scroll, 2);
+        assert_eq!(model.results.cursor_row(), row, "the grid cursor moved");
+
+        update(&mut model, Action::ResultsUp);
+        assert_eq!(model.results.messages_scroll, 1);
     }
 }

@@ -164,7 +164,7 @@ fn switching_with_open_transaction_keeps_old_project() {
         model
             .messages
             .iter()
-            .any(|message| message.contains("transaction"))
+            .any(|message| message.message.contains("transaction"))
     );
 }
 

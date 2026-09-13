@@ -532,12 +532,9 @@ fn shift_d_on_offline_connection_never_closes_another_session() {
 
     assert!(effects.is_empty(), "{effects:?}");
     assert_eq!(model.active_session, Some(prod_session));
-    assert!(
-        model
-            .messages
-            .iter()
-            .any(|message| message.contains("staging") && message.contains("disconnected"))
-    );
+    assert!(model.messages.iter().any(|message| {
+        message.message.contains("staging") && message.message.contains("disconnected")
+    }));
 }
 
 #[test]

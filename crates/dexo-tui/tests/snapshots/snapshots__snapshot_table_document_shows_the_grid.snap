@@ -6,7 +6,7 @@ demo  local  public
 ┌  Sidebar─────────────────┐                                                                                                                                    
 │Connections  [n]ew [e]dit │ scratch.sql ×  orders ×  +                                                                                                         
 │  ● local▾  [offline]     │┌  Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│>   ▸ public              ││[Grid] Explain                                                                                                                    │
+│>   ▸ public              ││[Grid] Explain  Messages                                                                                                          │
 │      mysql.users [restric││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

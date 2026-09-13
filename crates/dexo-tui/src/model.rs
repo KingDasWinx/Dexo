@@ -329,6 +329,13 @@ impl Severity {
     }
 }
 
+/// One entry in the log. The toast shows the newest; the Messages view shows them all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notification {
+    pub message: String,
+    pub severity: Severity,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Toast {
     pub message: String,
@@ -340,7 +347,7 @@ pub struct Toast {
 /// used to be appended to the status bar, which is the one place a user never looks.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Notifications {
-    entries: Vec<String>,
+    entries: Vec<Notification>,
     pub toast: Option<Toast>,
 }
 
@@ -366,15 +373,19 @@ impl Notifications {
             severity,
             ticks_left: severity.ticks(),
         });
-        self.entries.push(message);
+        self.entries.push(Notification { message, severity });
     }
 
-    pub fn last(&self) -> Option<&String> {
+    pub fn last(&self) -> Option<&Notification> {
         self.entries.last()
     }
 
-    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+    pub fn iter(&self) -> std::slice::Iter<'_, Notification> {
         self.entries.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
     }
 
     pub fn is_empty(&self) -> bool {
@@ -413,6 +424,7 @@ pub struct ResultsState {
     /// Explain scrolls on its own; it used to share `tabs.scroll` with four tabs
     /// that had nothing to do with it.
     pub explain_scroll: u16,
+    pub messages_scroll: u16,
 }
 
 /// Views of the output pane, in selector order.
@@ -421,15 +433,19 @@ pub enum ResultsView {
     #[default]
     Grid,
     Explain,
+    /// The log, which until now had no surface at all: a message got one toast and was
+    /// then unreachable.
+    Messages,
 }
 
 impl ResultsView {
-    pub const ALL: [Self; 2] = [Self::Grid, Self::Explain];
+    pub const ALL: [Self; 3] = [Self::Grid, Self::Explain, Self::Messages];
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Grid => "Grid",
             Self::Explain => "Explain",
+            Self::Messages => "Messages",
         }
     }
 }

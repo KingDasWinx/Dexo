@@ -233,7 +233,7 @@ fn closing_dirty_untitled_document_keeps_it_open() {
     assert_eq!(model.documents.len(), 1);
     assert!(model.active_document().is_dirty());
     assert_eq!(
-        model.messages.last().map(String::as_str),
+        model.messages.last().map(|entry| entry.message.as_str()),
         Some("Save the untitled document before closing it.")
     );
 }
@@ -282,7 +282,7 @@ fn closing_dirty_file_document_waits_for_the_save_to_land() {
         )
     }));
     assert_eq!(
-        model.messages.last().map(String::as_str),
+        model.messages.last().map(|entry| entry.message.as_str()),
         Some("Saving dirty file before closing it.")
     );
 

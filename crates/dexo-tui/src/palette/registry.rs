@@ -427,7 +427,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         CommandSpec {
             id: "results.cycle_view",
             title: "Cycle Output View",
-            keywords: &["grid", "explain", "output", "results"],
+            keywords: &["grid", "explain", "messages", "output", "results"],
             shortcut: Some("v"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::CycleResultsView),
