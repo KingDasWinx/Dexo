@@ -3,10 +3,10 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&snapshot_model(), 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌  Sidebar─────────────────┐                                                                                                                                    
-│Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                                                   
-│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│>   ▸ public              ││   1▸select 1                                                                                                                     │
+┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
+│Connections  [n]ew [e]dit │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ● local▾  [offline]     ││   1▸select 1                                                                                                                     │
+│>   ▸ public              ││                                                                                                                                  │
 │      mysql.users [restric││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

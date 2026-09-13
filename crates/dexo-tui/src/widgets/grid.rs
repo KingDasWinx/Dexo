@@ -486,7 +486,7 @@ mod tests {
 
         let plan = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, model.width, model.height),
-            Some(&model.panes),
+            Some(&model.effective_panes()),
             true,
         );
         let pane = plan.results;
@@ -569,6 +569,42 @@ mod tests {
             grid.move_cursor_col(-1);
         }
         assert_eq!(grid.viewport().column_offset, 0);
+    }
+
+    /// A table document has no editor: the grid takes that slot and the bottom pane is
+    /// just a log. Sharing the editor's split left the grid -- the entire screen there --
+    /// with four rows out of twenty-four.
+    #[test]
+    fn a_table_document_gives_the_grid_the_room_the_editor_would_have_had() {
+        use crate::model::EditorDocument;
+
+        let mut model = Model::default();
+        model
+            .documents
+            .push(EditorDocument::new_table(dexo_app::parse_qualified(
+                "public.orders",
+            )));
+        *model.results = crate::model::GridModel::sample_rows(200);
+
+        model.active_document = 0;
+        model.apply_size(100, 24);
+        let in_editor = model.results.viewport().height;
+
+        model.active_document = 1;
+        model.apply_size(100, 24);
+        let on_the_table = model.results.viewport().height;
+
+        assert!(
+            on_the_table > in_editor,
+            "the grid is still sharing the editor's split: {on_the_table} vs {in_editor}"
+        );
+        // it owns the screen there, so it should hold at least half the terminal
+        assert!(
+            on_the_table >= 12,
+            "the grid is cramped on the one screen it owns: {on_the_table} rows of 24"
+        );
+        // and the console is still there, just out of the way
+        assert!(render_to_string(&model, 100, 24).contains("Console"));
     }
 
     /// The pane draws a toolbar row that the viewport arithmetic did not subtract, so

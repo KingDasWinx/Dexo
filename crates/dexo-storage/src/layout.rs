@@ -12,6 +12,10 @@ pub struct WorkbenchLayout {
     pub results_visible: bool,
     pub explorer_width: u16,
     pub results_height: u16,
+    /// The bottom pane's height on a table document, where it holds only the console.
+    /// Absent from layouts saved before it existed, hence the default.
+    #[serde(default = "default_console_height")]
+    pub console_height: u16,
     pub focused_panel: String,
     #[serde(default)]
     pub document_ids: Vec<String>,
@@ -31,6 +35,7 @@ impl Default for WorkbenchLayout {
             results_visible: true,
             explorer_width: 28,
             results_height: 12,
+            console_height: default_console_height(),
             focused_panel: "editor".into(),
             document_ids: Vec::new(),
             active_document_id: None,
@@ -40,12 +45,17 @@ impl Default for WorkbenchLayout {
     }
 }
 
+fn default_console_height() -> u16 {
+    4
+}
+
 impl WorkbenchLayout {
     pub fn clamp(mut self, width: u16, height: u16) -> Self {
         let max_side = width.saturating_div(2).max(8);
         let max_results = height.saturating_sub(6).max(3);
         self.explorer_width = self.explorer_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
+        self.console_height = self.console_height.min(max_results).max(3);
         if width < 60 || height < 24 {
             self.explorer_visible = false;
             self.results_visible = false;

@@ -42,24 +42,28 @@ impl LayoutPreset {
                 results_visible: true,
                 explorer_width: 28,
                 results_height: 12,
+                console_height: 4,
             },
             Self::ResultsWide => PaneLayout {
                 explorer_visible: true,
                 results_visible: true,
                 explorer_width: 22,
                 results_height: (height.saturating_mul(55) / 100).max(10),
+                console_height: (height.saturating_mul(25) / 100).max(4),
             },
             Self::EditorWide => PaneLayout {
                 explorer_visible: true,
                 results_visible: true,
                 explorer_width: 22,
                 results_height: 5,
+                console_height: 3,
             },
             Self::ExplorerWide => PaneLayout {
                 explorer_visible: true,
                 results_visible: true,
                 explorer_width: (width.saturating_mul(40) / 100).max(24),
                 results_height: 10,
+                console_height: 4,
             },
         };
         panes.clamp(width, height)
@@ -71,7 +75,6 @@ pub struct LayoutPlan {
     pub mode: LayoutMode,
     pub context: Rect,
     pub explorer: Rect,
-    pub tabs: Rect,
     pub document_tabs: Rect,
     pub content: Rect,
     pub results: Rect,
@@ -113,6 +116,10 @@ pub struct PaneLayout {
     pub results_visible: bool,
     pub explorer_width: u16,
     pub results_height: u16,
+    /// The bottom pane on a table document holds only the console log. Giving it the
+    /// editor's results height leaves the grid -- which is the entire screen there --
+    /// with about four rows.
+    pub console_height: u16,
 }
 
 impl PaneLayout {
@@ -121,6 +128,7 @@ impl PaneLayout {
         let max_results = height.saturating_sub(6).max(3);
         self.explorer_width = self.explorer_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
+        self.console_height = self.console_height.min(max_results).max(3);
         if width < 60 || height < 24 {
             self.explorer_visible = false;
             self.results_visible = false;
@@ -156,36 +164,25 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bool)
         center_w,
         body.height,
     );
-    let tabs_h = 1.min(center.height);
-    let document_tabs_h = u16::from(show_document_tabs).min(center.height.saturating_sub(tabs_h));
+    let document_tabs_h = u16::from(show_document_tabs).min(center.height);
     let results_h = match panes {
         Some(p) if !p.results_visible => 0,
         Some(p) => p
             .results_height
-            .min(center.height.saturating_sub(tabs_h + document_tabs_h)),
+            .min(center.height.saturating_sub(document_tabs_h)),
         None => center.height.saturating_mul(35) / 100,
     };
-    let content_h = center
-        .height
-        .saturating_sub(tabs_h + document_tabs_h + results_h);
-    let tabs = Rect::new(center.x, center.y, center.width, tabs_h);
-    let document_tabs = Rect::new(
-        center.x,
-        center.y.saturating_add(tabs_h),
-        center.width,
-        document_tabs_h,
-    );
+    let content_h = center.height.saturating_sub(document_tabs_h + results_h);
+    let document_tabs = Rect::new(center.x, center.y, center.width, document_tabs_h);
     let content = Rect::new(
         center.x,
-        center.y.saturating_add(tabs_h + document_tabs_h),
+        center.y.saturating_add(document_tabs_h),
         center.width,
         content_h,
     );
     let results = Rect::new(
         center.x,
-        center
-            .y
-            .saturating_add(tabs_h + document_tabs_h + content_h),
+        center.y.saturating_add(document_tabs_h + content_h),
         center.width,
         results_h,
     );
@@ -193,7 +190,6 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bool)
         mode: LayoutMode::Full,
         context,
         explorer,
-        tabs,
         document_tabs,
         content,
         results,
@@ -242,36 +238,25 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bo
         center_w,
         body.height,
     );
-    let tabs_h = 1.min(center.height);
-    let document_tabs_h = u16::from(show_document_tabs).min(center.height.saturating_sub(tabs_h));
+    let document_tabs_h = u16::from(show_document_tabs).min(center.height);
     let results_h = match panes {
         Some(p) if !p.results_visible => 0,
         Some(p) => p
             .results_height
-            .min(center.height.saturating_sub(tabs_h + document_tabs_h)),
+            .min(center.height.saturating_sub(document_tabs_h)),
         None => center.height.saturating_mul(30) / 100,
     };
-    let content_h = center
-        .height
-        .saturating_sub(tabs_h + document_tabs_h + results_h);
-    let tabs = Rect::new(center.x, center.y, center.width, tabs_h);
-    let document_tabs = Rect::new(
-        center.x,
-        center.y.saturating_add(tabs_h),
-        center.width,
-        document_tabs_h,
-    );
+    let content_h = center.height.saturating_sub(document_tabs_h + results_h);
+    let document_tabs = Rect::new(center.x, center.y, center.width, document_tabs_h);
     let content = Rect::new(
         center.x,
-        center.y.saturating_add(tabs_h + document_tabs_h),
+        center.y.saturating_add(document_tabs_h),
         center.width,
         content_h,
     );
     let results = Rect::new(
         center.x,
-        center
-            .y
-            .saturating_add(tabs_h + document_tabs_h + content_h),
+        center.y.saturating_add(document_tabs_h + content_h),
         center.width,
         results_h,
     );
@@ -279,7 +264,6 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bo
         mode: LayoutMode::Reduced,
         context,
         explorer,
-        tabs,
         document_tabs,
         content,
         results,
@@ -311,7 +295,6 @@ fn compact_layout(area: Rect, show_document_tabs: bool) -> LayoutPlan {
         mode: LayoutMode::Compact,
         context,
         explorer: Rect::new(0, 0, 0, 0),
-        tabs: Rect::new(0, 0, 0, 0),
         document_tabs,
         content,
         results: Rect::new(0, 0, 0, 0),
@@ -321,7 +304,7 @@ fn compact_layout(area: Rect, show_document_tabs: bool) -> LayoutPlan {
 
 #[cfg(test)]
 mod tests {
-    use super::{LayoutMode, LayoutPlan};
+    use super::{LayoutMode, LayoutPlan, LayoutPreset};
     use ratatui::layout::Rect;
 
     #[test]
@@ -338,6 +321,27 @@ mod tests {
         }
     }
 
+    /// `LayoutPlan` carried a `tabs` row for the workbench tab strip. The strip was
+    /// deleted; the row was not, and every pane below it paid for a blank line.
+    #[test]
+    fn the_center_column_starts_at_the_document_strip() {
+        let plan = LayoutPlan::for_area_with_document_tabs(
+            Rect::new(0, 0, 160, 50),
+            Some(&LayoutPreset::Normal.apply(160, 50)),
+            true,
+        );
+        assert_eq!(plan.document_tabs.y, plan.explorer.y, "a blank row is back");
+        assert_eq!(
+            plan.content.y,
+            plan.document_tabs.y + plan.document_tabs.height
+        );
+        assert_eq!(
+            plan.content.height + plan.results.height + plan.document_tabs.height,
+            plan.explorer.height,
+            "the center column does not fill its side"
+        );
+    }
+
     #[test]
     fn restored_sizes_are_clamped_to_terminal() {
         use super::PaneLayout;
@@ -346,6 +350,7 @@ mod tests {
             results_visible: true,
             explorer_width: 400,
             results_height: 400,
+            console_height: 400,
         }
         .clamp(160, 50);
         let plan = LayoutPlan::for_area_with(Rect::new(0, 0, 160, 50), Some(&huge));

@@ -2302,7 +2302,7 @@ fn mouse_workbench(
             let effects = update(model, Action::Focus(FocusTarget::Editor));
             let plan = LayoutPlan::for_area_with_document_tabs(
                 Rect::new(0, 0, model.width, model.height),
-                Some(&model.panes),
+                Some(&model.effective_panes()),
                 true,
             );
             if let Some(index) =
@@ -2370,7 +2370,7 @@ fn mouse_workbench(
 fn start_pane_drag(model: &mut Model, edge: PaneEdge, mouse: MouseEvent) {
     let start_value = match edge {
         PaneEdge::Explorer => model.panes.explorer_width,
-        PaneEdge::Results => model.panes.results_height,
+        PaneEdge::Results => bottom_pane_height(model),
     };
     model.drag = Some(DragState {
         kind: DragKind::PaneDivider(edge),
@@ -2400,7 +2400,7 @@ fn handle_mouse_drag(model: &mut Model, mouse: MouseEvent) {
 fn extend_editor_selection(model: &mut Model, anchor: usize, mouse: MouseEvent) {
     let plan = LayoutPlan::for_area_with_document_tabs(
         Rect::new(0, 0, model.width, model.height),
-        Some(&model.panes),
+        Some(&model.effective_panes()),
         true,
     );
     if let Some(index) =
@@ -2428,7 +2428,7 @@ fn resize_pane_drag(model: &mut Model, mouse: MouseEvent) {
     let value = (i32::from(start_value) + delta).clamp(0, i32::from(u16::MAX)) as u16;
     match edge {
         PaneEdge::Explorer => model.panes.explorer_width = value,
-        PaneEdge::Results => model.panes.results_height = value,
+        PaneEdge::Results => set_bottom_pane_height(model, value),
     }
     model.panes = model.panes.clamp(model.width, model.height);
     model.sync_grid_viewport();
@@ -3312,7 +3312,7 @@ fn explorer_sidebar_header_rows(model: &Model) -> usize {
 
 fn explorer_visible_rows(model: &Model) -> usize {
     let area = Rect::new(0, 0, model.width.max(1), model.height.max(1));
-    let plan = LayoutPlan::for_area_with(area, Some(&model.panes));
+    let plan = LayoutPlan::for_area_with(area, Some(&model.effective_panes()));
     let height = if matches!(plan.mode, crate::layout::LayoutMode::Compact) {
         plan.content.height
     } else {
@@ -3922,10 +3922,28 @@ fn apply_layout_preset(model: &mut Model, preset: crate::layout::LayoutPreset) {
     model.layout_dirty = true;
 }
 
+/// The bottom pane is the console on a table document and the result grid everywhere
+/// else, and the two keep separate heights -- see `PaneLayout::console_height`.
+fn bottom_pane_height(model: &Model) -> u16 {
+    if model.active_document().kind.is_table() {
+        model.panes.console_height
+    } else {
+        model.panes.results_height
+    }
+}
+
+fn set_bottom_pane_height(model: &mut Model, value: u16) {
+    if model.active_document().kind.is_table() {
+        model.panes.console_height = value;
+    } else {
+        model.panes.results_height = value;
+    }
+}
+
 fn adjust_results_height(model: &mut Model, delta: i16) {
-    let next = (model.panes.results_height as i16 + delta).max(3) as u16;
+    let next = (bottom_pane_height(model) as i16 + delta).max(3) as u16;
     model.panes.results_visible = true;
-    model.panes.results_height = next;
+    set_bottom_pane_height(model, next);
     model.panes = model.panes.clamp(model.width, model.height);
     model.sync_grid_viewport();
     model.layout_dirty = true;
@@ -4180,6 +4198,7 @@ fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>
     model.panes.results_visible = layout.results_visible;
     model.panes.explorer_width = layout.explorer_width;
     model.panes.results_height = layout.results_height;
+    model.panes.console_height = layout.console_height;
     if let Some(id) = &layout.active_document_id
         && let Some(index) = model
             .documents

@@ -19,7 +19,8 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     frame
         .buffer_mut()
         .set_style(area, model.theme.base(model.capabilities));
-    let plan = LayoutPlan::for_area_with_document_tabs(frame.area(), Some(&model.panes), true);
+    let plan =
+        LayoutPlan::for_area_with_document_tabs(frame.area(), Some(&model.effective_panes()), true);
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
         crate::layout::LayoutMode::Compact => {
@@ -1626,7 +1627,7 @@ fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 /// Vim/Neovim pum: align with the cursor, prefer below, flip above if it does not fit.
 fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
-    let plan = LayoutPlan::for_area_with(area, Some(&model.panes));
+    let plan = LayoutPlan::for_area_with(area, Some(&model.effective_panes()));
     let inner = Block::bordered().inner(plan.content);
     let doc = model.active_document();
     let (line, col) = crate::screens::editor::line_col_of(&doc.text(), doc.cursor());

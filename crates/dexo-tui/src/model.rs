@@ -1412,6 +1412,7 @@ impl Default for Model {
                 results_visible: true,
                 explorer_width: 28,
                 results_height: 12,
+                console_height: 4,
             },
             mouse: true,
             last_click: None,
@@ -1539,7 +1540,7 @@ impl Model {
     pub fn document_tabs_area_width(&self) -> u16 {
         crate::layout::LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, self.width, self.height),
-            Some(&self.panes),
+            Some(&self.effective_panes()),
             true,
         )
         .document_tabs
@@ -1557,6 +1558,7 @@ impl Model {
             results_visible: self.panes.results_visible,
             explorer_width: self.panes.explorer_width,
             results_height: self.panes.results_height,
+            console_height: self.panes.console_height,
             focused_panel: format!("{:?}", self.focus).to_ascii_lowercase(),
             document_ids: self.documents.iter().map(|d| d.id.clone()).collect(),
             active_document_id: self
@@ -1586,10 +1588,21 @@ impl Model {
         self.sync_document_tabs_scroll();
     }
 
+    /// The pane layout the active document needs. A table document has no editor: the
+    /// grid fills the editor's slot and the bottom pane is just a log, so it uses its
+    /// own height instead of the one tuned for an editor over a result grid.
+    pub fn effective_panes(&self) -> crate::layout::PaneLayout {
+        let mut panes = self.panes;
+        if self.active_document().kind.is_table() {
+            panes.results_height = self.panes.console_height;
+        }
+        panes
+    }
+
     pub fn sync_grid_viewport(&mut self) {
         let plan = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, self.width, self.height),
-            Some(&self.panes),
+            Some(&self.effective_panes()),
             true,
         );
         let pane = if self.active_document().kind.is_table() {

@@ -146,7 +146,8 @@ fn alt_up_down_resize_the_console_the_same_pane_it_occupies() {
         )));
     model.active_document = model.documents.len() - 1;
     model.apply_size(160, 50);
-    let start = model.panes.results_height;
+    let start = model.panes.console_height;
+    let editor_height = model.panes.results_height;
 
     update(
         &mut model,
@@ -155,9 +156,11 @@ fn alt_up_down_resize_the_console_the_same_pane_it_occupies() {
     assert_eq!(model.focus, Focus::Console);
 
     update(&mut model, alt_up());
-    assert_eq!(model.panes.results_height, start + 2);
+    assert_eq!(model.panes.console_height, start + 2);
     update(&mut model, alt_down());
-    assert_eq!(model.panes.results_height, start);
+    assert_eq!(model.panes.console_height, start);
+    // the editor's own split is a different number and must not move with it
+    assert_eq!(model.panes.results_height, editor_height);
 }
 
 #[test]
