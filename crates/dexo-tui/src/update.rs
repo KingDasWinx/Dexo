@@ -10,7 +10,22 @@ use crate::model::{DragKind, DragState, Focus, Model};
 use crate::mouse::{HitButton, HitTarget, OverlayKind, PaneEdge, note_click, top_overlay};
 use ratatui::layout::{Position, Rect};
 
+/// The grid's pane depends on which document is active: a table document draws it in
+/// the editor's slot and leaves the bottom pane holding only the console. Every path
+/// that swaps the active document -- the tree, the tab strip, Alt+Left/Right, closing a
+/// document, restoring a layout -- has to re-derive the row viewport from the new pane,
+/// or the cursor keeps scrolling against the pane it was sized for. There is no one
+/// place that assigns `active_document`, so the check lives where they all return.
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
+    let was_table = model.active_document().kind.is_table();
+    let effects = dispatch(model, action);
+    if model.active_document().kind.is_table() != was_table {
+        model.sync_grid_viewport();
+    }
+    effects
+}
+
+fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
         Action::Key(key) => handle_key(model, key),
         Action::Mouse(mouse) => handle_mouse(model, mouse),

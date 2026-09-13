@@ -518,6 +518,46 @@ mod tests {
         }
     }
 
+    /// Opening a table document moves the grid from the bottom pane into the editor's
+    /// slot and leaves the bottom pane holding only the console. The viewport is derived
+    /// from that pane, but nothing re-derived it when the active document changed: the
+    /// grid kept the handful of rows the editor's results pane had, so the cursor
+    /// scrolled the list under itself a couple of rows down with a full pane painted
+    /// below it.
+    #[test]
+    fn switching_to_a_table_document_resizes_the_row_viewport() {
+        use crate::action::Action;
+        use crate::model::EditorDocument;
+
+        for (w, h) in [(160u16, 50u16), (267, 59), (120, 35), (100, 30)] {
+            let mut model = Model::default();
+            *model.results = GridModel::sample_rows(500);
+            model.apply_size(w, h);
+
+            model
+                .documents
+                .push(EditorDocument::new_table(dexo_app::parse_qualified(
+                    "public.orders",
+                )));
+            update(&mut model, Action::SelectDocument { index: 1 });
+
+            for _ in 0..200 {
+                update(&mut model, Action::ResultsDown);
+            }
+            let cursor = model.results.cursor_row().expect("cursor");
+            let view = render_to_string(&model, w, h);
+            assert!(
+                view.contains(&format!("\u{25b8} {cursor} ")),
+                "{w}x{h}: the cursor is not painted at all"
+            );
+            assert!(
+                !view.contains(&format!("\u{2502}{} ", cursor + 1)),
+                "{w}x{h}: row {} is painted below a cursor that stopped at {cursor}",
+                cursor + 1
+            );
+        }
+    }
+
     /// The model's row viewport and the rows the widget paints are two derivations of
     /// the same number. They drifted once already, when the toolbar row stopped being
     /// conditional; this pins them to each other rather than to the arithmetic.
