@@ -776,7 +776,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             restrictions,
         } => {
             if catalog_generation_matches(model, &session, generation) {
-                model.inspector.open = true;
                 model.inspector.qualified_name = qualified_name;
                 model.inspector.object = object;
                 model.inspector.ddl = ddl;
@@ -4357,7 +4356,7 @@ fn expand_selected_catalog(model: &mut Model) -> Vec<Effect> {
 
 fn open_selected_table(model: &mut Model) -> Vec<Effect> {
     let mut effects = open_object_data(model);
-    effects.extend(open_inspector(model));
+    effects.extend(load_inspector(model));
     if let Some(id) = model.explorer.selected.clone() {
         let operation = crate::runtime::OperationId::new();
         if model.explorer.expand_with(&id, operation) {
@@ -4838,21 +4837,22 @@ fn open_inspector_facet(
     model: &mut Model,
     facet: crate::screens::object_inspector::InspectorFacet,
 ) -> Vec<Effect> {
-    let effects = open_inspector(model);
+    let effects = load_inspector(model);
+    model.inspector.open = true;
     model.inspector.facet = facet;
     model.inspector.scroll = 0;
     effects
 }
 
-fn open_inspector(model: &mut Model) -> Vec<Effect> {
+/// Loads an object's metadata. It does not show anything -- see `open_inspector_facet`.
+fn load_inspector(model: &mut Model) -> Vec<Effect> {
     let Some(node) = model.explorer.selected_node() else {
         return Vec::new();
     };
     let Some(session) = model.active_session else {
         return Vec::new();
     };
-    model.inspector =
-        crate::screens::object_inspector::ObjectInspector::open_loading(&node.qualified);
+    model.inspector = crate::screens::object_inspector::ObjectInspector::loading(&node.qualified);
     vec![Effect::LoadObjectInspector {
         id: node.id.clone(),
         session,
@@ -7017,8 +7017,11 @@ mod tests {
         assert_eq!(model.results.view, crate::model::ResultsView::Explain);
     }
 
+    /// Opening a table loads its metadata so `explorer.ddl` and Properties have something
+    /// to show. It used to open the Properties overlay along with it -- harmless while the
+    /// inspector was a pane, a modal over the grid once it became an overlay.
     #[test]
-    fn explorer_enter_opens_table_data_and_inspector() {
+    fn explorer_enter_opens_table_data_without_a_properties_modal() {
         use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
 
         let mut model = Model {
@@ -7042,8 +7045,37 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadObjectInspector { .. }))
         );
-        assert!(model.inspector.open);
+        assert!(
+            !model.inspector.open,
+            "opening a table popped the Properties overlay"
+        );
         assert_eq!(model.focus, Focus::Results);
+
+        // and the answer arriving later must not pop it either
+        let generation = model.session_generation;
+        let session = model.active_session.expect("session").0.to_string();
+        update(
+            &mut model,
+            Action::InspectorLoaded {
+                generation,
+                session,
+                qualified_name: "public.orders".into(),
+                object: None,
+                ddl: Some("create table orders ()".into()),
+                dependencies: Vec::new(),
+                dependents: Vec::new(),
+                effective_privileges: Vec::new(),
+                restrictions: Vec::new(),
+            },
+        );
+        assert!(
+            !model.inspector.open,
+            "the inspector response opened the overlay on its own"
+        );
+        assert_eq!(
+            model.inspector.ddl.as_deref(),
+            Some("create table orders ()")
+        );
     }
 
     #[test]

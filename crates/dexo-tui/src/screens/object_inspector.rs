@@ -25,9 +25,11 @@ pub struct ObjectInspector {
 }
 
 impl ObjectInspector {
-    pub fn open_loading(qualified: impl Into<String>) -> Self {
+    /// Resets the inspector for a new object without showing it. Opening the overlay is
+    /// the caller's decision: loading metadata is something opening a table does on its
+    /// own, and that must not put a modal over the grid.
+    pub fn loading(qualified: impl Into<String>) -> Self {
         Self {
-            open: true,
             qualified_name: qualified.into(),
             ..Self::default()
         }
