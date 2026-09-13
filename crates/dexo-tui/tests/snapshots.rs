@@ -233,9 +233,9 @@ fn snapshot_explain_tree_table_summary() {
     // the plan now lives in the output pane, beside the grid it belongs with
     assert_eq!(model.results.view, dexo_tui::model::ResultsView::Explain);
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
-    update(&mut model, Action::CycleExplainView);
+    update(&mut model, Action::CycleResultsView);
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
-    update(&mut model, Action::CycleExplainView);
+    update(&mut model, Action::CycleResultsView);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
 }
 

@@ -433,14 +433,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::CycleResultsView),
         },
         CommandSpec {
-            id: "explain.cycle_view",
-            title: "Cycle Explain View",
-            keywords: &["tree", "table", "summary", "plan"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::CycleExplainView),
-        },
-        CommandSpec {
             id: "explain.analyze",
             title: "Explain Analyze",
             keywords: &["analyze", "execute", "timing", "actual"],
@@ -1098,6 +1090,7 @@ fn hidden(id: &str) -> bool {
             | "document.prev_focus"
             | "document.next_focus"
             | "results.next_tab"
+            | "results.cycle_view"
             | "results.prev_tab"
             // already a labelled row inside the Settings screen
             | "settings.mode"

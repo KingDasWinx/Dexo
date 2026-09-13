@@ -310,7 +310,6 @@ pub enum Action {
         message: String,
     },
     OpenExplain,
-    CycleExplainView,
     CycleResultsView,
     ConfirmExplainAnalyze,
     OpenAdmin,

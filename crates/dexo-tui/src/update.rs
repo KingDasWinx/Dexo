@@ -970,19 +970,21 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             explain_effect(model, false)
         }
         Action::CycleResultsView => {
-            let next = (crate::model::ResultsView::ALL
-                .iter()
-                .position(|view| *view == model.results.view)
-                .unwrap_or(0)
-                + 1)
-                % crate::model::ResultsView::ALL.len();
-            model.results.view = crate::model::ResultsView::ALL[next];
+            // One flat ring over everything the output pane can show, so the user has a
+            // single question to answer instead of two nested ones.
+            use crate::model::ResultsView;
+            use crate::screens::explain::ExplainView;
             model.results.explain_scroll = 0;
-            Vec::new()
-        }
-        Action::CycleExplainView => {
-            model.explain.view = model.explain.view.next();
-            model.results.explain_scroll = 0;
+            match (model.results.view, model.explain.view) {
+                (ResultsView::Grid, _) => {
+                    model.results.view = ResultsView::Explain;
+                    model.explain.view = ExplainView::Tree;
+                }
+                (ResultsView::Explain, ExplainView::Summary) => {
+                    model.results.view = ResultsView::Grid;
+                }
+                (ResultsView::Explain, view) => model.explain.view = view.next(),
+            }
             Vec::new()
         }
         Action::ConfirmExplainAnalyze => {
@@ -6823,6 +6825,32 @@ mod tests {
             dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), name),
             None,
         )
+    }
+
+    /// The output pane used to have two cyclers: one for Grid/Explain and one for the
+    /// Explain sub-view. One flat ring is one question instead of two nested ones.
+    #[test]
+    fn output_view_cycles_through_every_projection_once() {
+        use crate::model::ResultsView;
+        use crate::screens::explain::ExplainView;
+
+        let mut model = Model::default();
+        let mut seen = Vec::new();
+        for _ in 0..4 {
+            seen.push((model.results.view, model.explain.view));
+            update(&mut model, Action::CycleResultsView);
+        }
+
+        assert_eq!(
+            seen,
+            [
+                (ResultsView::Grid, ExplainView::Tree),
+                (ResultsView::Explain, ExplainView::Tree),
+                (ResultsView::Explain, ExplainView::Table),
+                (ResultsView::Explain, ExplainView::Summary),
+            ]
+        );
+        assert_eq!(model.results.view, ResultsView::Grid, "the ring must close");
     }
 
     /// A plan used to arrive and force `tabs.active = 4`, yanking the user out of the
