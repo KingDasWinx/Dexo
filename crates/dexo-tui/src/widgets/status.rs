@@ -13,15 +13,18 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    // The sidebar already shows a connected session with a dot, so the name carries a
+    // prefix only when something is wrong.
     let conn = if model.connection.ready {
-        format!("connected:{}", model.connection.name)
+        model.connection.name.clone()
     } else if model.connection.name.is_empty() {
         "disconnected".into()
     } else {
         format!("offline:{}", model.connection.name)
     };
+    // Idle is the null state; a marker shown always marks nothing.
     let tx = match model.transaction {
-        TransactionState::Idle => "tx:idle",
+        TransactionState::Idle => "",
         TransactionState::Active => "tx:active",
         TransactionState::Failed => "tx:failed",
         TransactionState::Unknown => "tx:unknown",
@@ -57,9 +60,6 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         if let Some(hint) = footer_hint(model) {
             spans.push(Span::raw(format!("  {hint}")));
         }
-        if let Some(message) = model.messages.last() {
-            spans.push(Span::raw(format!("  {message}")));
-        }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
     }
@@ -67,31 +67,55 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         spans.push(Span::styled(format!("{env} "), env_style));
     }
     spans.push(Span::raw(format!("{conn}  ")));
-    spans.push(Span::styled(format!("{tx}  "), tx_style));
-    let focus_name = match model.focus {
-        crate::model::Focus::Explorer => "Explorer",
-        crate::model::Focus::Editor | crate::model::Focus::Palette => "Editor",
-        crate::model::Focus::Results => "Results",
-    };
-    spans.push(Span::styled(
-        format!("FOCUS: {focus_name}  "),
-        model.theme.status_focus(model.capabilities),
-    ));
-    spans.push(Span::raw(format!(
-        "layout:{}  rows:{}  ctrl+p palette  F1 help",
-        model.layout_preset.label(),
-        model.results.row_count()
-    )));
-    if model.mouse && area.width >= 150 {
-        spans.push(Span::raw("  click panes · drag edges"));
+    if !tx.is_empty() {
+        spans.push(Span::styled(format!("{tx}  "), tx_style));
     }
-    if let Some(hint) = footer_hint(model) {
-        spans.push(Span::raw(format!("  {hint}")));
+    // The focused pane already carries an accent border and the cursor; the layout
+    // preset and the row count are both printed where they apply. None of them
+    // belong here.
+    //
+    // Truncation order, narrowest last to survive: environment, connection, the two
+    // doors, then the hint. The doors outlive the hint because F1 is how you get the
+    // hint back.
+    let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    let doors = "Ctrl+P  F1";
+    let room = (area.width as usize).saturating_sub(used);
+    let reserved = doors.chars().count() + 2;
+    if let Some(hint) = footer_hint(model)
+        && room > reserved
+    {
+        spans.push(Span::raw(fit_hint(hint, room - reserved)));
     }
-    if let Some(message) = model.messages.last() {
-        spans.push(Span::raw(format!("  {message}")));
+    let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+    let gap = (area.width as usize).saturating_sub(used + doors.chars().count());
+    if gap > 0 {
+        spans.push(Span::raw(" ".repeat(gap)));
+        spans.push(Span::styled(
+            doors.to_string(),
+            model.theme.style(Role::Muted, model.capabilities),
+        ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// Drops whole hints rather than cutting a chord in half -- "Ctrl+W" teaches nothing.
+fn fit_hint(hint: &str, budget: usize) -> String {
+    if hint.chars().count() <= budget {
+        return hint.to_string();
+    }
+    let mut out = String::new();
+    for part in hint.split("  ") {
+        let candidate = if out.is_empty() {
+            part.to_string()
+        } else {
+            format!("{out}  {part}")
+        };
+        if candidate.chars().count() > budget {
+            break;
+        }
+        out = candidate;
+    }
+    out
 }
 
 fn footer_hint(model: &Model) -> Option<&'static str> {
@@ -212,12 +236,72 @@ mod tests {
     }
 
     #[test]
-    fn full_status_shows_mouse_hint_only_when_it_fits() {
+    fn messages_surface_as_a_toast_and_leave_the_footer_alone() {
+        use crate::action::Action;
+        use crate::render::render_to_string;
+        use crate::update::update;
+
+        let mut model = Model::default();
+        model
+            .messages
+            .push("Save the untitled document before closing it.".into());
+
+        let view = render_to_string(&model, 120, 40);
+        let footer = view.lines().last().unwrap();
+        assert!(
+            !footer.contains("Save the untitled"),
+            "the message is back in the status bar: {footer}"
+        );
+        assert!(view.contains("Save the untitled"), "the toast never showed");
+
+        // it ages out on its own
+        for _ in 0..crate::model::TOAST_TICKS {
+            update(&mut model, Action::ToastTick);
+        }
+        assert!(model.messages.toast.is_none());
+        assert!(
+            !render_to_string(&model, 120, 40).contains("Save the untitled"),
+            "the toast outlived its ticks"
+        );
+        // and the log keeps it
+        assert_eq!(model.messages.iter().count(), 1);
+
+        // Esc clears it without stealing the key from whatever is open.
+        model.messages.push("second".into());
+        model.help.open = true;
+        update(
+            &mut model,
+            Action::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Esc,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        );
+        assert!(model.messages.toast.is_none(), "Esc left the toast up");
+        assert!(!model.help.open, "the toast ate the overlay's Esc");
+    }
+
+    #[test]
+    fn narrow_status_drops_whole_hints_and_keeps_the_doors() {
         use crate::render::render_to_string;
 
         let model = Model::default();
-        assert!(render_to_string(&model, 160, 50).contains("click panes · drag edges"));
-        assert!(!render_to_string(&model, 120, 35).contains("click panes · drag edges"));
+        let footer = |width: u16| {
+            render_to_string(&model, width, 40)
+                .lines()
+                .last()
+                .unwrap()
+                .to_string()
+        };
+
+        let wide = footer(160);
+        assert!(wide.contains("Ctrl+W close"));
+
+        let narrow = footer(60);
+        // the way back to everything outlives the contextual hint
+        assert!(narrow.contains("Ctrl+P"), "{narrow}");
+        assert!(!narrow.contains("Ctrl+W close"), "{narrow}");
+        // and a chord is never cut in half
+        assert!(!narrow.contains("Ctrl+W"), "{narrow}");
     }
 
     #[test]

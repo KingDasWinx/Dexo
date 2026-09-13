@@ -311,6 +311,8 @@ pub enum Action {
     },
     OpenExplain,
     CycleResultsView,
+    DismissToast,
+    ToastTick,
     ConfirmExplainAnalyze,
     OpenAdmin,
     AdminPause,

@@ -21,4 +21,4 @@ demo  local  public
 └──────────────────────────────────────────────────────────┘
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows
+local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1

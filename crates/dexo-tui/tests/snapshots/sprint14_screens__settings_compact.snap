@@ -21,4 +21,4 @@ default  no connection  —
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0
+disconnected  Ctrl+Enter run  Ctrl+N new sql      Ctrl+P  F1

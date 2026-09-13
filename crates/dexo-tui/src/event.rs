@@ -79,6 +79,8 @@ async fn run_loop(
     let mut events = EventStream::new();
     let mut onboarding_tick = tokio::time::interval(Duration::from_millis(66));
     onboarding_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Only runs while a toast is up, the same shape as onboarding_tick.
+    let mut toast_tick = tokio::time::interval(Duration::from_secs(1));
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
@@ -103,6 +105,9 @@ async fn run_loop(
             }
             _ = onboarding_tick.tick(), if model.onboarding.open && model.onboarding.logo_frames.len() > 1 => {
                 let _ = crate::update::update(&mut model, Action::OnboardingTick);
+            }
+            _ = toast_tick.tick(), if model.messages.toast.is_some() => {
+                let _ = crate::update::update(&mut model, Action::ToastTick);
             }
             _ = checkpoint.tick() => {
                 let effects = crate::update::update(&mut model, Action::CheckpointTick);

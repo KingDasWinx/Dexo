@@ -297,6 +297,65 @@ impl ResultTab {
     }
 }
 
+/// How many toast ticks a message survives. The tick only runs while a toast is up.
+pub const TOAST_TICKS: u8 = 4;
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toast {
+    pub message: String,
+    pub ticks_left: u8,
+}
+
+/// The message log, plus the transient toast that surfaces the newest entry. The log
+/// used to be appended to the status bar, which is the one place a user never looks.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Notifications {
+    entries: Vec<String>,
+    pub toast: Option<Toast>,
+}
+
+impl Notifications {
+    /// Same signature as the `Vec::push` this replaced, so every call site is unchanged.
+    pub fn push(&mut self, message: String) {
+        self.toast = Some(Toast {
+            message: message.clone(),
+            ticks_left: TOAST_TICKS,
+        });
+        self.entries.push(message);
+    }
+
+    pub fn last(&self) -> Option<&String> {
+        self.entries.last()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, String> {
+        self.entries.iter()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn dismiss(&mut self) {
+        self.toast = None;
+    }
+
+    /// Ages the visible toast; returns true while one is still on screen.
+    pub fn tick(&mut self) -> bool {
+        match &mut self.toast {
+            Some(toast) if toast.ticks_left > 1 => {
+                toast.ticks_left -= 1;
+                true
+            }
+            Some(_) => {
+                self.toast = None;
+                false
+            }
+            None => false,
+        }
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultsState {
     pub tabs: Vec<ResultTab>,
@@ -1178,7 +1237,7 @@ pub struct Model {
     pub onboarding: OnboardingState,
     pub results_menu: ResultsMenuState,
     pub layout_preset: LayoutPreset,
-    pub messages: Vec<String>,
+    pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
     pub document_tab_focus: DocumentTabFocus,
@@ -1283,7 +1342,7 @@ impl Default for Model {
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
             palette: PaletteState::default(),
-            messages: Vec::new(),
+            messages: Notifications::default(),
             documents: vec![EditorDocument::scratch()],
             active_document: 0,
             document_tab_focus: DocumentTabFocus::Document(0),

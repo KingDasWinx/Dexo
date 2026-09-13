@@ -384,7 +384,6 @@ mod tests {
 
         update(&mut model, Action::Focus(FocusTarget::Editor));
         let view = crate::render::render_to_string(&model, 100, 40);
-        assert!(view.contains("FOCUS: Editor"));
         assert!(view.contains("▸ SQL") || view.contains("> SQL"));
     }
 }

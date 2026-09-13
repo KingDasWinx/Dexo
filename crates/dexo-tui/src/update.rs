@@ -969,6 +969,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.results.explain_scroll = 0;
             explain_effect(model, false)
         }
+        Action::DismissToast => {
+            model.messages.dismiss();
+            Vec::new()
+        }
+        Action::ToastTick => {
+            model.messages.tick();
+            Vec::new()
+        }
         Action::CycleResultsView => {
             // One flat ring over everything the output pane can show, so the user has a
             // single question to answer instead of two nested ones.
@@ -2623,6 +2631,11 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if key.kind != KeyEventKind::Press {
         return Vec::new();
+    }
+    // Esc clears the toast without consuming the key: every overlay below still gets its
+    // Esc, and the toast never becomes one more thing standing between you and a close.
+    if key.code == KeyCode::Esc {
+        model.messages.dismiss();
     }
     if model.palette.open {
         return handle_palette_key(model, key);

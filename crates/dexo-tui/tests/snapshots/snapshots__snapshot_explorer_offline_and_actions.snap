@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help  Ctrl+Enter
+local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1

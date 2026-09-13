@@ -147,6 +147,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.data.viewer.is_some() {
         render_value_viewer(frame, model, hits);
     }
+    render_toast(frame, model, hits);
     if model.editor.completion_open {
         render_completion(frame, model, hits);
     }
@@ -1441,6 +1442,29 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     register_overlay(hits, popup);
     // the form's fields were clickable as a tab; keep them clickable as an overlay
     register_form_fields(hits, popup, &fields);
+}
+
+/// Messages used to be appended to the status bar, which is the one place a user never
+/// looks after acting. This lands where the eye already is, and gets out of the way.
+fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let Some(toast) = &model.messages.toast else {
+        return;
+    };
+    let area = frame.area();
+    let text = format!(" {} ", toast.message);
+    let width = (text.chars().count() as u16 + 2).min(area.width.saturating_sub(2));
+    if width < 6 || area.height < 4 {
+        return;
+    }
+    let popup = Rect::new(
+        area.x + area.width.saturating_sub(width + 1),
+        area.y + 1,
+        width,
+        3,
+    );
+    frame.render_widget(Clear, popup);
+    frame.render_widget(Paragraph::new(text).block(overlay_block(model, "!")), popup);
+    register_overlay(hits, popup);
 }
 
 fn render_value_viewer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

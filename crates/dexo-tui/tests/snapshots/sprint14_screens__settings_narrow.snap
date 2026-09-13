@@ -21,4 +21,4 @@ default  no connection  —
 │                                          │
 │                                          │
 └──────────────────────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout
+disconnected  Ctrl+Enter run      Ctrl+P  F1
