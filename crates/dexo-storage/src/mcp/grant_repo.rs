@@ -105,11 +105,7 @@ pub fn is_revoked(conn: &Connection, id: Uuid) -> anyhow::Result<bool> {
 }
 
 fn capability_name(capability: GrantCapability) -> &'static str {
-    match capability {
-        GrantCapability::DataWrite => "data_write",
-        GrantCapability::Ddl => "ddl",
-        GrantCapability::Admin => "admin",
-    }
+    capability.as_str()
 }
 
 fn row_to_grant(row: &rusqlite::Row<'_>) -> rusqlite::Result<Grant> {

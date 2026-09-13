@@ -208,6 +208,53 @@ fn enabling_an_mcp_profile_takes_two_presses() {
     assert!(model.mcp_profiles.enabled);
 }
 
+/// The grants section was fixture-only: nothing ever read the ledger, so the screen
+/// showed an empty list no matter what a profile actually held.
+#[test]
+fn selecting_a_profile_shows_its_own_grants() {
+    use dexo_tui::screens::mcp_profiles::{GrantLine, McpProfileSummary, McpProfilesScreen};
+
+    let line = |id: &str, tools: &str| GrantLine {
+        id: id.into(),
+        capability: "data_write".into(),
+        tools: tools.into(),
+        expires_in_secs: 900,
+        diff: "prod db.public.items".into(),
+    };
+    let profile = |name: &str, grants: Vec<GrantLine>| McpProfileSummary {
+        name: name.into(),
+        enabled: false,
+        scopes: vec![],
+        tools: vec![],
+        grants,
+    };
+
+    let mut screen = McpProfilesScreen {
+        open: true,
+        ..Default::default()
+    };
+    screen.load_profiles(vec![
+        profile("assistant", vec![line("g1", "data_insert")]),
+        profile(
+            "reviewer",
+            vec![line("g2", "data_update"), line("g3", "data_delete")],
+        ),
+    ]);
+
+    assert_eq!(screen.grants.len(), 1);
+    assert!(screen.lines().join("\n").contains("data_insert"));
+
+    screen.select_next();
+    assert_eq!(screen.name, "reviewer");
+    assert_eq!(screen.grants.len(), 2, "grants must follow the selection");
+    let view = screen.lines().join("\n");
+    assert!(view.contains("data_update") && view.contains("data_delete"));
+    assert!(
+        !view.contains("data_insert"),
+        "the other profile's grants must not leak in"
+    );
+}
+
 /// Disabling only takes access away, so it commits on the first press. Enabling grants
 /// it, so it still arms first. The asymmetry is the point.
 #[test]
@@ -287,6 +334,7 @@ fn moving_off_a_profile_disarms_its_pending_enable() {
         enabled: false,
         scopes: vec![],
         tools: vec![],
+        grants: vec![],
     };
     let mut screen = dexo_tui::screens::mcp_profiles::McpProfilesScreen {
         open: true,

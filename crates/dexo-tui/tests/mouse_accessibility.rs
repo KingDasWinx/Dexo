@@ -523,12 +523,14 @@ fn mcp_profile_rows_match_the_profile_index() {
             enabled: true,
             scopes: vec![],
             tools: vec![],
+            grants: vec![],
         },
         dexo_tui::screens::mcp_profiles::McpProfileSummary {
             name: "writer".into(),
             enabled: false,
             scopes: vec![],
             tools: vec![],
+            grants: vec![],
         },
     ]);
     paint(&mut model);

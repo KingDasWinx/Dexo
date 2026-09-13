@@ -4,6 +4,9 @@ pub struct McpProfileSummary {
     pub enabled: bool,
     pub scopes: Vec<String>,
     pub tools: Vec<String>,
+    /// Live grants for this profile. The screen shows the selected profile's, which
+    /// is what makes `r` (revoke the selected profile) mean something on screen.
+    pub grants: Vec<GrantLine>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -167,12 +170,14 @@ impl McpProfilesScreen {
                 self.enabled = profile.enabled;
                 self.scopes = profile.scopes;
                 self.tools = profile.tools;
+                self.grants = profile.grants;
             }
             None => {
                 self.name.clear();
                 self.enabled = false;
                 self.scopes.clear();
                 self.tools.clear();
+                self.grants.clear();
             }
         }
     }

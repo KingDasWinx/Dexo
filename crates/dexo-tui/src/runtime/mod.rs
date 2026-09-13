@@ -1422,11 +1422,13 @@ impl WorkbenchRuntime {
         let Ok(profiles) = dexo_storage::McpProfileRepository::new(db.connection()).list() else {
             return;
         };
+        // The grants list used to be fixture-only: nothing read the ledger, so the
+        // screen showed a permanently empty section.
+        let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database).ok();
+        let now = unix_seconds();
         let profiles = profiles
             .into_iter()
             .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
-                name: profile.name,
-                enabled: profile.enabled,
                 scopes: profile
                     .selectors
                     .iter()
@@ -1437,6 +1439,12 @@ impl WorkbenchRuntime {
                     .iter()
                     .map(|rule| rule.tool.clone())
                     .collect(),
+                grants: ledger
+                    .as_ref()
+                    .map(|ledger| grant_lines(ledger, &profile.name, now))
+                    .unwrap_or_default(),
+                name: profile.name,
+                enabled: profile.enabled,
             })
             .collect();
         self.emit(Action::McpProfilesLoaded { profiles }).await;
@@ -1493,6 +1501,7 @@ impl WorkbenchRuntime {
             Ok(count) => {
                 self.emit(Action::McpGrantsRevoked { count }).await;
                 self.load_mcp_audit().await;
+                self.load_mcp_profiles().await;
             }
             Err(error) => {
                 self.emit(Action::McpRevokeFailed {
@@ -1522,6 +1531,7 @@ impl WorkbenchRuntime {
             Ok(count) => {
                 self.emit(Action::McpGrantsRevoked { count }).await;
                 self.load_mcp_audit().await;
+                self.load_mcp_profiles().await;
             }
             Err(error) => {
                 self.emit(Action::McpRevokeFailed {
@@ -1535,4 +1545,42 @@ impl WorkbenchRuntime {
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {
         &self.action_tx
     }
+}
+
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// A profile's live grants, shaped for the profiles screen.
+fn grant_lines(
+    ledger: &dexo_storage::SqliteGrantLedger,
+    profile: &str,
+    now: i64,
+) -> Vec<crate::screens::mcp_profiles::GrantLine> {
+    use dexo_app::mcp::GrantLedger;
+    ledger
+        .active_grants(profile, now)
+        .into_iter()
+        .map(|grant| crate::screens::mcp_profiles::GrantLine {
+            id: grant.id.to_string(),
+            capability: grant.capability.as_str().into(),
+            tools: grant.tools.join(","),
+            expires_in_secs: grant.expires_at.saturating_sub(now),
+            // What the grant narrowed the profile down to, which is the only part
+            // of a grant the profile rows do not already show.
+            diff: format!(
+                "{} {}",
+                grant.connection,
+                grant
+                    .selectors
+                    .iter()
+                    .map(|rule| format!("{rule:?}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        })
+        .collect()
 }

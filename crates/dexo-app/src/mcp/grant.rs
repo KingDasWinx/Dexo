@@ -27,6 +27,14 @@ pub enum GrantCapability {
 }
 
 impl GrantCapability {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::DataWrite => "data_write",
+            Self::Ddl => "ddl",
+            Self::Admin => "admin",
+        }
+    }
+
     pub fn parse(value: &str) -> Result<Self, AppError> {
         match value {
             "data_write" => Ok(Self::DataWrite),
