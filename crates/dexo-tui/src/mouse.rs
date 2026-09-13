@@ -14,7 +14,6 @@ pub enum PaneEdge {
 pub enum HitTarget {
     ResultTab(usize),
     ResultsView(usize),
-    WorkbenchTab(usize),
     DocumentTab(usize),
     DocumentTabClose(usize),
     DocumentTabNew,

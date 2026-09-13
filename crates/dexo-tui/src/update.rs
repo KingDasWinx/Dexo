@@ -542,20 +542,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             move_sidebar_selection(model, 1);
             Vec::new()
         }
-        Action::SwitchTab { index } => {
-            if index < model.tabs.titles.len() {
-                model.tabs.active = index;
-                model.tabs.scroll = 0;
-            }
-            Vec::new()
-        }
-        Action::NextTab => {
-            if !model.tabs.titles.is_empty() {
-                model.tabs.active = (model.tabs.active + 1) % model.tabs.titles.len();
-                model.tabs.scroll = 0;
-            }
-            Vec::new()
-        }
         Action::SelectDocument { index } => {
             if index < model.documents.len() {
                 model.document_tab_focus = crate::model::DocumentTabFocus::Document(index);
@@ -982,6 +968,17 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.results.view = crate::model::ResultsView::Explain;
             model.results.explain_scroll = 0;
             explain_effect(model, false)
+        }
+        Action::CycleResultsView => {
+            let next = (crate::model::ResultsView::ALL
+                .iter()
+                .position(|view| *view == model.results.view)
+                .unwrap_or(0)
+                + 1)
+                % crate::model::ResultsView::ALL.len();
+            model.results.view = crate::model::ResultsView::ALL[next];
+            model.results.explain_scroll = 0;
+            Vec::new()
         }
         Action::CycleExplainView => {
             model.explain.view = model.explain.view.next();
@@ -2205,7 +2202,6 @@ fn mouse_workbench(
     let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
     let pick = mouse.modifiers.contains(KeyModifiers::CONTROL);
     match hit {
-        Some(HitTarget::WorkbenchTab(index)) => update(model, Action::SwitchTab { index }),
         Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
         Some(HitTarget::ResultsView(index)) => {
             if let Some(view) = crate::model::ResultsView::ALL.get(index).copied() {
@@ -2274,15 +2270,10 @@ fn mouse_workbench(
             let plan = LayoutPlan::for_area_with_document_tabs(
                 Rect::new(0, 0, model.width, model.height),
                 Some(&model.panes),
-                model.tabs.active == 0,
+                true,
             );
-            if model.tabs.active == 0
-                && let Some(index) = crate::widgets::editor::char_index_at(
-                    model,
-                    plan.content,
-                    mouse.column,
-                    mouse.row,
-                )
+            if let Some(index) =
+                crate::widgets::editor::char_index_at(model, plan.content, mouse.column, mouse.row)
             {
                 let doc = model.active_document_mut();
                 doc.anchor = None;
@@ -2377,7 +2368,7 @@ fn extend_editor_selection(model: &mut Model, anchor: usize, mouse: MouseEvent) 
     let plan = LayoutPlan::for_area_with_document_tabs(
         Rect::new(0, 0, model.width, model.height),
         Some(&model.panes),
-        model.tabs.active == 0,
+        true,
     );
     if let Some(index) =
         crate::widgets::editor::char_index_at(model, plan.content, mouse.column, mouse.row)
@@ -3016,7 +3007,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         && key.code == KeyCode::Enter
         && key.modifiers.is_empty()
         && model.focus == Focus::Editor
-        && model.tabs.active == 0
     {
         return update(model, Action::NewDocument);
     }
@@ -3049,28 +3039,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             return Vec::new();
         }
     }
-    if model.tabs.active == 0 && crate::screens::editor::handle_key(model, key) {
+    if !model.active_document().kind.is_table() && crate::screens::editor::handle_key(model, key) {
         if model.document_tab_focus == crate::model::DocumentTabFocus::New {
             model.focus_active_document_tab();
         }
         crate::screens::editor::refresh_intelligence(model, false);
         return Vec::new();
-    }
-    if model.focus == Focus::Editor && model.tabs.active != 0 {
-        return handle_editor_tab_key(model, key);
-    }
-    Vec::new()
-}
-
-fn handle_editor_tab_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    match key.code {
-        KeyCode::Up => {
-            model.tabs.scroll = model.tabs.scroll.saturating_sub(1);
-        }
-        KeyCode::Down => {
-            model.tabs.scroll = model.tabs.scroll.saturating_add(1);
-        }
-        _ => {}
     }
     Vec::new()
 }
@@ -4163,10 +4137,6 @@ fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>
     model.panes.results_visible = layout.results_visible;
     model.panes.explorer_width = layout.explorer_width;
     model.panes.results_height = layout.results_height;
-    model.tabs.active = layout.active_tab;
-    if !layout.tabs.is_empty() {
-        model.tabs.titles = layout.tabs;
-    }
     if let Some(id) = &layout.active_document_id
         && let Some(index) = model
             .documents
@@ -4588,7 +4558,6 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
         }
     };
     model.active_document = index;
-    model.tabs.active = 1;
     model.data.last_error = None;
     load_table_document(model, index)
 }
@@ -5034,8 +5003,18 @@ fn open_related(model: &mut Model) -> Vec<Effect> {
         model.data.page_offset,
     ));
     model.data.crumb_forward.clear();
-    model.tabs.titles.push(title.clone());
-    model.tabs.active = model.tabs.titles.len() - 1;
+    // This used to push a title onto the workbench strip that `data_nav_back` never
+    // popped, so walking foreign keys leaked a tab per hop. The referenced table gets
+    // a document, reusing one if it is already open.
+    let index = document_index_for_table(model, &fk.referenced_table).unwrap_or_else(|| {
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                fk.referenced_table.clone(),
+            ));
+        model.documents.len() - 1
+    });
+    model.active_document = index;
     model.data.target = fk.referenced_table.clone();
     model.data.filter = Some(filter);
     model.data.related_open.push(title);
@@ -6881,12 +6860,10 @@ mod tests {
                 .explorer
                 .select(dexo_driver_api::ObjectId::new("table:orders"));
             let document = model.active_document().id.clone();
-            let tab = model.tabs.active;
 
             update(&mut model, action);
             assert!(model.inspector.open, "{facet:?} did not open");
             assert_eq!(model.inspector.facet, facet);
-            assert_eq!(model.tabs.active, tab, "{facet:?} moved the workbench tab");
             assert_eq!(model.active_document().id, document);
 
             update(

@@ -19,17 +19,11 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     frame
         .buffer_mut()
         .set_style(area, model.theme.base(model.capabilities));
-    let plan = LayoutPlan::for_area_with_document_tabs(
-        frame.area(),
-        Some(&model.panes),
-        model.tabs.active == 0,
-    );
+    let plan = LayoutPlan::for_area_with_document_tabs(frame.area(), Some(&model.panes), true);
     render_bar(frame, plan.context, context_line(model));
     match plan.mode {
         crate::layout::LayoutMode::Compact => {
-            if model.tabs.active == 0 {
-                crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
-            }
+            crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
             render_compact(frame, plan.content, model, hits);
         }
         _ => {
@@ -45,13 +39,8 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 model.focus == Focus::Explorer,
                 explorer_body(model, plan.explorer),
             );
-            crate::widgets::tabs::render(frame, plan.tabs, model, hits);
-            if model.tabs.active == 0 {
-                crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
-            }
-            let table_data_active =
-                model.active_document().kind.is_table() && model.tabs.active == 1;
-            if table_data_active {
+            crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
+            if model.active_document().kind.is_table() {
                 if !overlay_blocks_workbench(model) {
                     hits.register(HitTarget::Grid, plan.content);
                 }
@@ -273,6 +262,12 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
                 explorer_body(model, area),
             );
         }
+        Focus::Editor | Focus::Palette if model.active_document().kind.is_table() => {
+            if interactive {
+                hits.register(HitTarget::Grid, area);
+            }
+            crate::widgets::grid::render(frame, area, model, hits);
+        }
         Focus::Editor | Focus::Palette => {
             if interactive {
                 hits.register(HitTarget::Editor, area);
@@ -313,66 +308,7 @@ fn render_console_log(frame: &mut Frame, area: Rect, model: &Model) {
 }
 
 fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, _hits: &mut HitMap) {
-    if model.tabs.active == 0 && model.active_document().kind.is_table() {
-        render_panel_scrolled(
-            frame,
-            area,
-            model,
-            "SQL (read-only)",
-            model.focus == Focus::Editor,
-            model.active_document().text(),
-            0,
-        );
-        return;
-    }
-    if model.tabs.active == 0 {
-        crate::widgets::editor::render(frame, area, model);
-        return;
-    }
-    let (title, body) = editor_tab_view(model);
-    render_panel_scrolled(
-        frame,
-        area,
-        model,
-        title,
-        model.focus == Focus::Editor,
-        body,
-        model.tabs.scroll,
-    );
-}
-
-fn editor_tab_view(model: &Model) -> (&'static str, String) {
-    match model.tabs.active {
-        1 => ("Data", data_tab_body(model)),
-        _ => ("Data", data_tab_body(model)),
-    }
-}
-
-fn data_tab_body(model: &Model) -> String {
-    let mut lines = Vec::new();
-    let target = model.data.target.display_unquoted();
-    if !target.is_empty() && target != "tbl" {
-        lines.push(format!("table: {target}"));
-    }
-    if let Some(filter) = &model.data.filter {
-        lines.push(format!("filter: {filter:?}"));
-    }
-    lines.push(format!(
-        "rows: {}  page: {}  limit: {}",
-        model.results.row_count(),
-        model.data.page_offset,
-        model.data.page_limit
-    ));
-    if model.results.columns().is_empty() {
-        lines.push("Open a table or run a query. Rows stay in Results.".into());
-    } else {
-        lines.push("columns:".into());
-        for column in model.results.columns() {
-            let null = if column.nullable { "null" } else { "not null" };
-            lines.push(format!("  {} {} {null}", column.name, column.type_name));
-        }
-    }
-    lines.join("\n")
+    crate::widgets::editor::render(frame, area, model);
 }
 
 fn properties_tab_body(model: &Model) -> String {
@@ -1919,10 +1855,6 @@ mod tests {
             height: 40,
             ..Model::default()
         };
-        model.tabs.active = 1;
-        let data = render_to_string(&model, 100, 40);
-        assert!(data.contains("Open a table or run a query"));
-
         model.inspector.open = true;
         model.inspector.facet = InspectorFacet::Properties;
         let props = render_to_string(&model, 100, 40);

@@ -13,8 +13,6 @@ pub struct WorkbenchLayout {
     pub explorer_width: u16,
     pub results_height: u16,
     pub focused_panel: String,
-    pub active_tab: usize,
-    pub tabs: Vec<String>,
     #[serde(default)]
     pub document_ids: Vec<String>,
     #[serde(default)]
@@ -34,14 +32,6 @@ impl Default for WorkbenchLayout {
             explorer_width: 28,
             results_height: 12,
             focused_panel: "editor".into(),
-            active_tab: 0,
-            tabs: vec![
-                "SQL".into(),
-                "Data".into(),
-                "DDL".into(),
-                "Properties".into(),
-                "Explain".into(),
-            ],
             document_ids: Vec::new(),
             active_document_id: None,
             active_connection_id: None,
@@ -204,7 +194,6 @@ mod tests {
         let layout = WorkbenchLayout {
             explorer_width: 40,
             focused_panel: "results".into(),
-            active_tab: 2,
             ..WorkbenchLayout::default()
         };
         LayoutRepository::new(db.connection())

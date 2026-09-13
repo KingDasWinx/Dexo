@@ -208,13 +208,15 @@ fn mouse_capture_trait_records_on_and_off() {
 }
 
 #[test]
-fn click_workbench_tab_switches_tab() {
+fn click_output_view_switches_view() {
+    use dexo_tui::model::ResultsView;
+
     let mut model = Model::default();
     paint(&mut model);
-    click_target(&mut model, HitTarget::WorkbenchTab(1));
-    assert_eq!(model.tabs.active, 1);
-    click_target(&mut model, HitTarget::WorkbenchTab(0));
-    assert_eq!(model.tabs.active, 0);
+    click_target(&mut model, HitTarget::ResultsView(1));
+    assert_eq!(model.results.view, ResultsView::Explain);
+    click_target(&mut model, HitTarget::ResultsView(0));
+    assert_eq!(model.results.view, ResultsView::Grid);
 }
 
 #[test]
@@ -377,9 +379,9 @@ fn mouse_ignored_when_disabled() {
         ..Model::default()
     };
     paint(&mut model);
-    let active = model.tabs.active;
-    click_target(&mut model, HitTarget::WorkbenchTab(3));
-    assert_eq!(model.tabs.active, active);
+    let view = model.results.view;
+    click_target(&mut model, HitTarget::ResultsView(1));
+    assert_eq!(model.results.view, view);
 }
 
 #[test]

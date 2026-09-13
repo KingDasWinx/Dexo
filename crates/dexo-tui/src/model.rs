@@ -115,23 +115,6 @@ pub struct ResultsMenuState {
     pub offset: usize,
 }
 
-#[derive(Clone, Debug, PartialEq)]
-pub struct TabsState {
-    pub active: usize,
-    pub titles: Vec<String>,
-    pub scroll: u16,
-}
-
-impl Default for TabsState {
-    fn default() -> Self {
-        Self {
-            active: 0,
-            titles: vec!["SQL".into(), "Data".into()],
-            scroll: 0,
-        }
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct GridViewport {
     pub row_offset: usize,
@@ -1190,7 +1173,6 @@ pub struct Model {
     pub connection: ConnectionStatus,
     pub transaction: TransactionState,
     pub results: ResultsState,
-    pub tabs: TabsState,
     pub palette: PaletteState,
     pub help: HelpState,
     pub onboarding: OnboardingState,
@@ -1300,7 +1282,6 @@ impl Default for Model {
             diagnostics: DiagnosticsScreen::default(),
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
-            tabs: TabsState::default(),
             palette: PaletteState::default(),
             messages: Vec::new(),
             documents: vec![EditorDocument::scratch()],
@@ -1415,7 +1396,7 @@ impl Model {
         crate::layout::LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, self.width, self.height),
             Some(&self.panes),
-            self.tabs.active == 0,
+            true,
         )
         .document_tabs
         .width
@@ -1433,8 +1414,6 @@ impl Model {
             explorer_width: self.panes.explorer_width,
             results_height: self.panes.results_height,
             focused_panel: format!("{:?}", self.focus).to_ascii_lowercase(),
-            active_tab: self.tabs.active,
-            tabs: self.tabs.titles.clone(),
             document_ids: self.documents.iter().map(|d| d.id.clone()).collect(),
             active_document_id: self
                 .documents
@@ -1455,7 +1434,7 @@ impl Model {
         self.layout_mode = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, width, height),
             Some(&self.panes.clamp(width, height)),
-            self.tabs.active == 0,
+            true,
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
@@ -1467,10 +1446,9 @@ impl Model {
         let plan = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, self.width, self.height),
             Some(&self.panes),
-            self.tabs.active == 0,
+            true,
         );
-        let table_data_active = self.active_document().kind.is_table() && self.tabs.active == 1;
-        let pane = if table_data_active {
+        let pane = if self.active_document().kind.is_table() {
             plan.content
         } else {
             plan.results

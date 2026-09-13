@@ -194,12 +194,17 @@ mod tests {
     }
 
     #[test]
-    fn editor_footer_is_available_on_every_workbench_tab() {
+    fn editor_footer_is_available_for_a_table_document() {
         let mut model = Model {
             focus: Focus::Editor,
             ..Model::default()
         };
-        model.tabs.active = 1;
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+            ));
+        model.active_document = 1;
         assert_eq!(
             footer_hint(&model),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")

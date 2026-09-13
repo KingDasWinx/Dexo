@@ -153,10 +153,6 @@ pub enum Action {
     OpenDependencies,
     ExplorerUp,
     ExplorerDown,
-    SwitchTab {
-        index: usize,
-    },
-    NextTab,
     SelectDocument {
         index: usize,
     },
@@ -315,6 +311,7 @@ pub enum Action {
     },
     OpenExplain,
     CycleExplainView,
+    CycleResultsView,
     ConfirmExplainAnalyze,
     OpenAdmin,
     AdminPause,

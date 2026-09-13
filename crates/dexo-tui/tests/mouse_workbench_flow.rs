@@ -215,31 +215,6 @@ fn clicking_the_results_view_selector_lands_on_its_label() {
 }
 
 #[test]
-fn clicking_workbench_tabs_matches_ctrl_number_shortcuts() {
-    for index in 0..2 {
-        let mut mouse_model = Model::default();
-        paint(&mut mouse_model);
-        let (column, row) = mouse_model.hits.center(HitTarget::WorkbenchTab(index));
-        assert_ne!((column, row), (0, 0), "tab {index} must be painted");
-        update(
-            &mut mouse_model,
-            mouse(MouseEventKind::Down(MouseButton::Left), column, row),
-        );
-
-        let mut keyboard_model = Model::default();
-        update(
-            &mut keyboard_model,
-            Action::Key(KeyEvent::new(
-                KeyCode::Char(char::from(b'1' + index as u8)),
-                KeyModifiers::CONTROL,
-            )),
-        );
-
-        assert_eq!(mouse_model.tabs.active, keyboard_model.tabs.active);
-    }
-}
-
-#[test]
 fn dragging_explorer_divider_clamps_to_the_layout_limits() {
     let mut model = Model::default();
     let divider_x = model.panes.explorer_width;

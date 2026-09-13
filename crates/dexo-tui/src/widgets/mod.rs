@@ -6,6 +6,5 @@ pub mod image_viewer;
 pub mod object_tree;
 pub mod row_detail;
 pub mod status;
-pub mod tabs;
 pub mod text_input;
 pub mod viewer;

@@ -110,6 +110,12 @@ fn result_banner(model: &Model) -> String {
         extra.push_str(" crumbs:");
         extra.push_str(&model.data.crumbs.len().to_string());
     }
+    if model.data.page_offset > 0 || model.data.has_more {
+        extra.push_str(&format!(
+            " page:{}+{}",
+            model.data.page_offset, model.data.page_limit
+        ));
+    }
     if model.data.has_more {
         extra.push_str(" more");
     }

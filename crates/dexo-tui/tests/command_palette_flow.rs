@@ -243,10 +243,6 @@ fn observe_command(id: &str) -> ObservedOutcome {
     let spec = command_spec(id).unwrap();
     let mut model = model_satisfying(spec.requirements);
     apply_transaction_context(id, &mut model);
-    model.tabs.scroll = 1;
-    if model.tabs.active == 0 && id == "tab.sql" {
-        model.tabs.active = 1;
-    }
     if model.documents.len() < 2 {
         model
             .documents

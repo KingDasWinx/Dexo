@@ -425,6 +425,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenExplain),
         },
         CommandSpec {
+            id: "results.cycle_view",
+            title: "Cycle Output View",
+            keywords: &["grid", "explain", "output", "results"],
+            shortcut: Some("v"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CycleResultsView),
+        },
+        CommandSpec {
             id: "explain.cycle_view",
             title: "Cycle Explain View",
             keywords: &["tree", "table", "summary", "plan"],
@@ -535,30 +543,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenDependencies),
-        },
-        CommandSpec {
-            id: "tab.sql",
-            title: "Tab SQL",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+1"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 0 }),
-        },
-        CommandSpec {
-            id: "tab.data",
-            title: "Tab Data",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+2"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 1 }),
-        },
-        CommandSpec {
-            id: "tab.next",
-            title: "Next Tab",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+Tab"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::NextTab),
         },
         CommandSpec {
             id: "document.next",
@@ -1109,9 +1093,6 @@ fn hidden(id: &str) -> bool {
             | "layout.explorer_grow"
             | "layout.explorer_shrink"
             // tab switching
-            | "tab.sql"
-            | "tab.data"
-            | "tab.next"
             | "document.next"
             | "document.prev"
             | "document.prev_focus"

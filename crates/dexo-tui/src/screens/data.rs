@@ -336,10 +336,36 @@ mod tests {
         assert!(model.data.changes.pending().is_empty());
     }
 
+    /// `data_nav_back` popped the crumb but never the pushed tab title, so walking
+    /// foreign keys leaked a strip entry per hop. Documents are reused by target, so
+    /// going back and forth has to stay flat.
     #[test]
-    fn open_related_adds_tab() {
+    fn related_navigation_does_not_leak_per_hop() {
         let mut model = Model::default();
-        let before = model.tabs.titles.len();
+        model.data.related_fk = Some(ForeignKey {
+            local: vec!["user_id".into()],
+            referenced_table: QualifiedName::new(Some("db"), Some("public"), "users"),
+            referenced: vec!["id".into()],
+        });
+        model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
+
+        update(&mut model, Action::OpenRelated);
+        let after_first = model.documents.len();
+        update(&mut model, Action::DataNavBack);
+        update(&mut model, Action::OpenRelated);
+        update(&mut model, Action::DataNavBack);
+
+        assert_eq!(
+            model.documents.len(),
+            after_first,
+            "each hop left something behind"
+        );
+    }
+
+    #[test]
+    fn open_related_opens_a_document() {
+        let mut model = Model::default();
+        let before = model.documents.len();
         model.data.related_fk = Some(ForeignKey {
             local: vec!["user_id".into()],
             referenced_table: QualifiedName::new(Some("db"), Some("public"), "users"),
@@ -347,7 +373,8 @@ mod tests {
         });
         model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
         update(&mut model, Action::OpenRelated);
-        assert_eq!(model.tabs.titles.len(), before + 1);
+        assert_eq!(model.documents.len(), before + 1);
+        assert!(model.active_document().kind.is_table());
         assert_eq!(model.data.related_open, vec!["db.public.users"]);
     }
 }

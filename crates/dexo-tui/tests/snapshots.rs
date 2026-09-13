@@ -208,6 +208,20 @@ fn snapshot_transfer_preview_progress_rejects() {
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }
 
+/// A table document renders the grid where the editor would be. That branch had no
+/// snapshot coverage at all while it was gated behind a workbench tab.
+#[test]
+fn snapshot_table_document_shows_the_grid() {
+    let mut model = snapshot_model();
+    model
+        .documents
+        .push(dexo_tui::model::EditorDocument::new_table(
+            dexo_app::parse_qualified("public.orders"),
+        ));
+    model.active_document = model.documents.len() - 1;
+    insta::assert_snapshot!(render_to_string(&model, 160, 50));
+}
+
 #[test]
 fn snapshot_explain_tree_table_summary() {
     use dexo_tui::action::Action;
