@@ -3,35 +3,35 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
-┌  Sidebar─────────────────┐ SQL │ Data │ DDL │ Properties                                                                                                      
-│Connections  [n]ew [e]dit │┌▸ DDL─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││schema table                                                                                                                      │
-│>   ▸ public              ││> target: public.orders                                                                                                           │
-│      mysql.users [restric││  columns:                                                                                                                        │
-│                          ││  defaults:                                                                                                                       │
-│                          ││  indexes:                                                                                                                        │
-│                          ││  constraints:                                                                                                                    │
-│                          ││  foreign_keys:                                                                                                                   │
-│                          ││error: columns are required                                                                                                       │
+┌  Sidebar─────────────────┐ SQL │ Data                                                                                                                         
+│Connections  [n]ew [e]dit │ scratch.sql ×  +                                                                                                                   
+│  ● local▾  [offline]     │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│>   ▸ public              ││   1▸select 1                                                                                                                     │
+│      mysql.users [restric││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
+│                          ││             ┌Schema────────────────────────────────────────────────────────────────────┐                                         │
+│                          ││             │schema table                                                              │                                         │
+│                          ││             │> target: public.orders                                                   │                                         │
+│                          ││             │  columns:                                                                │                                         │
+│                          ││             │  defaults:                                                               │                                         │
+│                          ││             │  indexes:                                                                │                                         │
+│                          ││             │  constraints:                                                            │                                         │
+│                          ││             │  foreign_keys:                                                           │                                         │
+│                          ││             │error: columns are required                                               │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │  tab next field  enter apply  esc close                                  │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             │                                                                          │                                         │
+│                          ││             └──────────────────────────────────────────────────────────────────────────┘                                         │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

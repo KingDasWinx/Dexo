@@ -216,7 +216,7 @@ fn clicking_the_results_view_selector_lands_on_its_label() {
 
 #[test]
 fn clicking_workbench_tabs_matches_ctrl_number_shortcuts() {
-    for index in 0..4 {
+    for index in 0..2 {
         let mut mouse_model = Model::default();
         paint(&mut mouse_model);
         let (column, row) = mouse_model.hits.center(HitTarget::WorkbenchTab(index));

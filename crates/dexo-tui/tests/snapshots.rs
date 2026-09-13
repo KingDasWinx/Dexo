@@ -157,9 +157,9 @@ fn snapshot_review_and_related_tab() {
 #[test]
 fn snapshot_schema_editor_full() {
     let mut model = snapshot_model();
-    model.tabs.active = 2;
     model.schema_editor =
         dexo_tui::screens::schema_editor::SchemaEditor::table_form("public.orders");
+    model.schema_editor.open = true;
     model.schema_editor.set_field("columns", "");
     model.schema_editor.validate();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
@@ -171,10 +171,10 @@ fn snapshot_schema_editor_compact_and_preview() {
     use dexo_tui::update;
 
     let mut model = snapshot_model();
-    model.tabs.active = 2;
     model.focus = dexo_tui::model::Focus::Editor;
     model.schema_editor =
         dexo_tui::screens::schema_editor::SchemaEditor::table_form("public.orders");
+    model.schema_editor.open = true;
     update(&mut model, Action::OpenDdlPreview);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
 }

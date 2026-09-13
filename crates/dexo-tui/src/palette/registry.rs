@@ -553,22 +553,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 1 }),
         },
         CommandSpec {
-            id: "tab.ddl",
-            title: "Tab DDL",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+3"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 2 }),
-        },
-        CommandSpec {
-            id: "tab.properties",
-            title: "Tab Properties",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+4"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 3 }),
-        },
-        CommandSpec {
             id: "tab.next",
             title: "Next Tab",
             keywords: &["workbench"],
@@ -1127,8 +1111,6 @@ fn hidden(id: &str) -> bool {
             // tab switching
             | "tab.sql"
             | "tab.data"
-            | "tab.ddl"
-            | "tab.properties"
             | "tab.next"
             | "document.next"
             | "document.prev"

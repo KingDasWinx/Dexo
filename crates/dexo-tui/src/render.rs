@@ -149,6 +149,12 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.file_picker.open {
         render_file_picker(frame, model, hits);
     }
+    if model.inspector.open {
+        render_object_overlay(frame, model, hits);
+    }
+    if model.schema_editor.open {
+        render_schema_form(frame, model, hits);
+    }
     if model.data.viewer.is_some() {
         render_value_viewer(frame, model, hits);
     }
@@ -306,7 +312,7 @@ fn render_console_log(frame: &mut Frame, area: Rect, model: &Model) {
     render_panel_scrolled(frame, area, model, "Console", false, log.join("\n"), scroll);
 }
 
-fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, _hits: &mut HitMap) {
     if model.tabs.active == 0 && model.active_document().kind.is_table() {
         render_panel_scrolled(
             frame,
@@ -324,13 +330,6 @@ fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, hits: &mu
         return;
     }
     let (title, body) = editor_tab_view(model);
-    if model.tabs.active == 2 && model.inspector.ddl.is_none() && !overlay_blocks_workbench(model) {
-        register_form_fields(
-            hits,
-            area,
-            &crate::widgets::form::render_lines(&model.schema_editor),
-        );
-    }
     render_panel_scrolled(
         frame,
         area,
@@ -345,8 +344,6 @@ fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, hits: &mu
 fn editor_tab_view(model: &Model) -> (&'static str, String) {
     match model.tabs.active {
         1 => ("Data", data_tab_body(model)),
-        2 => ("DDL", ddl_tab_body(model)),
-        3 => ("Properties", properties_tab_body(model)),
         _ => ("Data", data_tab_body(model)),
     }
 }
@@ -376,19 +373,6 @@ fn data_tab_body(model: &Model) -> String {
         }
     }
     lines.join("\n")
-}
-
-fn ddl_tab_body(model: &Model) -> String {
-    if let Some(ddl) = &model.inspector.ddl {
-        let name = if model.inspector.qualified_name.is_empty() {
-            "DDL"
-        } else {
-            model.inspector.qualified_name.as_str()
-        };
-        format!("{name}\n\n{ddl}")
-    } else {
-        crate::widgets::form::render_lines(&model.schema_editor).join("\n")
-    }
 }
 
 fn properties_tab_body(model: &Model) -> String {
@@ -1474,6 +1458,55 @@ fn settings_option_lines(model: &Model) -> Vec<Line<'static>> {
     body
 }
 
+/// Object metadata belongs to the tree selection, not to the open document, so it is an
+/// overlay rather than a workbench tab -- the shape dbx uses for `DdlViewDialog`.
+fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    use crate::screens::object_inspector::InspectorFacet;
+
+    let area = frame.area();
+    let popup = centered(area, 84, area.height.saturating_sub(2).min(24));
+    let (title, body) = match model.inspector.facet {
+        InspectorFacet::Ddl => ("DDL", ddl_overlay_body(model)),
+        InspectorFacet::Properties => ("Properties", properties_tab_body(model)),
+    };
+    let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
+    lines.push(String::new());
+    lines.push("  up/down scroll  esc close".into());
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines.join("\n"))
+            .scroll((model.inspector.scroll, 0))
+            .block(overlay_block(model, title)),
+        popup,
+    );
+    register_overlay(hits, popup);
+}
+
+fn ddl_overlay_body(model: &Model) -> String {
+    match &model.inspector.ddl {
+        Some(ddl) if model.inspector.qualified_name.is_empty() => ddl.clone(),
+        Some(ddl) => format!("{}\n\n{ddl}", model.inspector.qualified_name),
+        None => "DDL is not available for this object.".into(),
+    }
+}
+
+fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    let popup = centered(area, 76, area.height.saturating_sub(2).min(20));
+    let fields = crate::widgets::form::render_lines(&model.schema_editor);
+    let mut lines = fields.clone();
+    lines.push(String::new());
+    lines.push("  tab next field  enter apply  esc close".into());
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).block(overlay_block(model, "Schema")),
+        popup,
+    );
+    register_overlay(hits, popup);
+    // the form's fields were clickable as a tab; keep them clickable as an overlay
+    register_form_fields(hits, popup, &fields);
+}
+
 fn render_value_viewer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let Some(view) = &model.data.viewer else {
         return;
@@ -1878,7 +1911,9 @@ mod tests {
     }
 
     #[test]
-    fn editor_tabs_are_not_all_sql() {
+    fn object_metadata_renders_as_overlays_not_tabs() {
+        use crate::screens::object_inspector::InspectorFacet;
+
         let mut model = Model {
             width: 100,
             height: 40,
@@ -1887,12 +1922,24 @@ mod tests {
         model.tabs.active = 1;
         let data = render_to_string(&model, 100, 40);
         assert!(data.contains("Open a table or run a query"));
-        model.tabs.active = 3;
+
+        model.inspector.open = true;
+        model.inspector.facet = InspectorFacet::Properties;
         let props = render_to_string(&model, 100, 40);
+        assert!(props.contains("Properties"), "{props}");
         assert!(props.contains("Select an object in Explorer"));
-        model.tabs.active = 2;
+
+        model.inspector.facet = InspectorFacet::Ddl;
         let ddl = render_to_string(&model, 100, 40);
-        assert!(ddl.contains("schema table") || ddl.contains("target:"));
+        assert!(ddl.contains("DDL is not available"), "{ddl}");
+
+        model.inspector.open = false;
+        model.schema_editor.open = true;
+        let form = render_to_string(&model, 100, 40);
+        assert!(
+            form.contains("target:") || form.contains("schema table"),
+            "{form}"
+        );
     }
 
     #[test]

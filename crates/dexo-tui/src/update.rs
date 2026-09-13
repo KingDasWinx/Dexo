@@ -522,22 +522,18 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::OpenObjectInspector => {
-            let effects = open_inspector(model);
-            model.tabs.active = 3;
-            effects
-        }
+        Action::OpenObjectInspector => open_inspector_facet(
+            model,
+            crate::screens::object_inspector::InspectorFacet::Properties,
+        ),
         Action::OpenObjectDdl => {
-            let effects = open_inspector(model);
-            model.tabs.active = 2;
-            effects
+            open_inspector_facet(model, crate::screens::object_inspector::InspectorFacet::Ddl)
         }
         Action::OpenObjectData => open_object_data(model),
-        Action::OpenDependencies => {
-            let effects = open_inspector(model);
-            model.tabs.active = 3;
-            effects
-        }
+        Action::OpenDependencies => open_inspector_facet(
+            model,
+            crate::screens::object_inspector::InspectorFacet::Properties,
+        ),
         Action::ExplorerUp => {
             move_sidebar_selection(model, -1);
             Vec::new()
@@ -912,7 +908,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             let sql = model.active_document().text();
             if !sql.trim().is_empty() {
                 model.schema_editor.apply_raw(sql);
-                model.tabs.active = 2;
+                model.schema_editor.open = true;
             } else {
                 model.messages.push("no SQL to apply".into());
             }
@@ -1648,6 +1644,14 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
         Some(OverlayKind::Admin) => mouse_admin(model, hit),
         Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
+        Some(OverlayKind::ObjectOverlay) => {
+            model.inspector.open = false;
+            Vec::new()
+        }
+        Some(OverlayKind::SchemaForm) => {
+            model.schema_editor.open = false;
+            Vec::new()
+        }
         Some(OverlayKind::ValueViewer) => {
             model.data.viewer = None;
             Vec::new()
@@ -2648,6 +2652,37 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.data.query_prompt.open {
         return handle_data_query_prompt_key(model, key);
     }
+    if model.schema_editor.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.schema_editor.open = false;
+                Vec::new()
+            }
+            KeyCode::Tab => {
+                model.schema_editor.focus_next();
+                Vec::new()
+            }
+            KeyCode::Enter => update(model, Action::OpenDdlPreview),
+            _ => Vec::new(),
+        };
+    }
+    if model.inspector.open {
+        return match key.code {
+            KeyCode::Esc => {
+                model.inspector.open = false;
+                Vec::new()
+            }
+            KeyCode::Up => {
+                model.inspector.scroll = model.inspector.scroll.saturating_sub(1);
+                Vec::new()
+            }
+            KeyCode::Down => {
+                model.inspector.scroll = model.inspector.scroll.saturating_add(1);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
     if model.data.viewer.is_some() {
         if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
             model.data.viewer = None;
@@ -3028,17 +3063,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn handle_editor_tab_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    let ddl_is_form = model.tabs.active == 2 && model.inspector.ddl.is_none();
     match key.code {
-        KeyCode::Tab if model.tabs.active == 2 => {
-            model.schema_editor.focus_next();
-        }
-        KeyCode::Up if ddl_is_form => {
-            model.schema_editor.focus_prev();
-        }
-        KeyCode::Down if ddl_is_form => {
-            model.schema_editor.focus_next();
-        }
         KeyCode::Up => {
             model.tabs.scroll = model.tabs.scroll.saturating_sub(1);
         }
@@ -4793,6 +4818,16 @@ fn reload_object_data(model: &mut Model) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+fn open_inspector_facet(
+    model: &mut Model,
+    facet: crate::screens::object_inspector::InspectorFacet,
+) -> Vec<Effect> {
+    let effects = open_inspector(model);
+    model.inspector.facet = facet;
+    model.inspector.scroll = 0;
+    effects
 }
 
 fn open_inspector(model: &mut Model) -> Vec<Effect> {
@@ -6814,6 +6849,54 @@ mod tests {
     /// A plan used to arrive and force `tabs.active = 4`, yanking the user out of the
     /// editor mid-keystroke. It belongs in the output pane, which nobody is looking at
     /// while they type.
+    /// DDL and Properties describe the tree selection, not the open document, so they
+    /// must not disturb it -- and they have to close.
+    #[test]
+    fn object_metadata_opens_as_an_overlay_and_closes() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        for (action, facet) in [
+            (
+                Action::OpenObjectDdl,
+                crate::screens::object_inspector::InspectorFacet::Ddl,
+            ),
+            (
+                Action::OpenObjectInspector,
+                crate::screens::object_inspector::InspectorFacet::Properties,
+            ),
+        ] {
+            let mut model = Model::default();
+            model.set_sql("select 1");
+            model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
+            model.explorer.replace_roots(dexo_driver_api::CatalogList {
+                objects: vec![dexo_driver_api::CatalogObject::new(
+                    dexo_driver_api::ObjectId::new("table:orders"),
+                    dexo_driver_api::ObjectKind::Table,
+                    dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "orders"),
+                    None,
+                )],
+                restrictions: vec![],
+            });
+            model
+                .explorer
+                .select(dexo_driver_api::ObjectId::new("table:orders"));
+            let document = model.active_document().id.clone();
+            let tab = model.tabs.active;
+
+            update(&mut model, action);
+            assert!(model.inspector.open, "{facet:?} did not open");
+            assert_eq!(model.inspector.facet, facet);
+            assert_eq!(model.tabs.active, tab, "{facet:?} moved the workbench tab");
+            assert_eq!(model.active_document().id, document);
+
+            update(
+                &mut model,
+                Action::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+            );
+            assert!(!model.inspector.open, "{facet:?} would not close");
+        }
+    }
+
     #[test]
     fn explain_result_arrives_without_stealing_the_editor() {
         let mut model = Model::default();

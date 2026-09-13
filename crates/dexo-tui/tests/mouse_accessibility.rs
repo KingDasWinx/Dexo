@@ -213,8 +213,8 @@ fn click_workbench_tab_switches_tab() {
     paint(&mut model);
     click_target(&mut model, HitTarget::WorkbenchTab(1));
     assert_eq!(model.tabs.active, 1);
-    click_target(&mut model, HitTarget::WorkbenchTab(2));
-    assert_eq!(model.tabs.active, 2);
+    click_target(&mut model, HitTarget::WorkbenchTab(0));
+    assert_eq!(model.tabs.active, 0);
 }
 
 #[test]

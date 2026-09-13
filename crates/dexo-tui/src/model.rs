@@ -126,12 +126,7 @@ impl Default for TabsState {
     fn default() -> Self {
         Self {
             active: 0,
-            titles: vec![
-                "SQL".into(),
-                "Data".into(),
-                "DDL".into(),
-                "Properties".into(),
-            ],
+            titles: vec!["SQL".into(), "Data".into()],
             scroll: 0,
         }
     }
