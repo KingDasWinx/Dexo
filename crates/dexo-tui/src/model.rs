@@ -297,12 +297,42 @@ impl ResultTab {
     }
 }
 
-/// How many toast ticks a message survives. The tick only runs while a toast is up.
-pub const TOAST_TICKS: u8 = 4;
+/// How a message reads at a glance. Nothing else in the app records these -- the log is
+/// never rendered -- so the toast is the only chance the user gets to see one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    /// It happened.
+    Info,
+    /// You asked, and a precondition stopped it. Nothing is broken.
+    Warn,
+    /// It failed.
+    Error,
+}
+
+impl Severity {
+    /// Ticks the toast survives. Zero means it stays until dismissed: an error is the one
+    /// thing here you cannot afford to blink and miss.
+    pub fn ticks(self) -> u8 {
+        match self {
+            Self::Info => 4,
+            Self::Warn => 6,
+            Self::Error => 0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Toast {
     pub message: String,
+    pub severity: Severity,
     pub ticks_left: u8,
 }
 
@@ -315,11 +345,26 @@ pub struct Notifications {
 }
 
 impl Notifications {
-    /// Same signature as the `Vec::push` this replaced, so every call site is unchanged.
-    pub fn push(&mut self, message: String) {
+    /// It happened.
+    pub fn info(&mut self, message: String) {
+        self.emit(Severity::Info, message);
+    }
+
+    /// You asked, and a precondition stopped it.
+    pub fn warn(&mut self, message: String) {
+        self.emit(Severity::Warn, message);
+    }
+
+    /// It failed.
+    pub fn error(&mut self, message: String) {
+        self.emit(Severity::Error, message);
+    }
+
+    fn emit(&mut self, severity: Severity, message: String) {
         self.toast = Some(Toast {
             message: message.clone(),
-            ticks_left: TOAST_TICKS,
+            severity,
+            ticks_left: severity.ticks(),
         });
         self.entries.push(message);
     }
@@ -340,18 +385,20 @@ impl Notifications {
         self.toast = None;
     }
 
-    /// Ages the visible toast; returns true while one is still on screen.
-    pub fn tick(&mut self) -> bool {
+    /// True while a toast is up that will age out on its own -- the clock runs for those
+    /// only, so a sticky error costs nothing.
+    pub fn expires(&self) -> bool {
+        self.toast
+            .as_ref()
+            .is_some_and(|toast| toast.ticks_left > 0)
+    }
+
+    /// Ages the visible toast. A sticky one (`ticks_left == 0`) is left alone.
+    pub fn tick(&mut self) {
         match &mut self.toast {
-            Some(toast) if toast.ticks_left > 1 => {
-                toast.ticks_left -= 1;
-                true
-            }
-            Some(_) => {
-                self.toast = None;
-                false
-            }
-            None => false,
+            Some(toast) if toast.ticks_left > 1 => toast.ticks_left -= 1,
+            Some(toast) if toast.ticks_left == 1 => self.toast = None,
+            _ => {}
         }
     }
 }

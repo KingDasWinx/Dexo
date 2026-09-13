@@ -244,7 +244,7 @@ mod tests {
         let mut model = Model::default();
         model
             .messages
-            .push("Save the untitled document before closing it.".into());
+            .warn("Save the untitled document before closing it.".into());
 
         let view = render_to_string(&model, 120, 40);
         let footer = view.lines().last().unwrap();
@@ -254,8 +254,8 @@ mod tests {
         );
         assert!(view.contains("Save the untitled"), "the toast never showed");
 
-        // it ages out on its own
-        for _ in 0..crate::model::TOAST_TICKS {
+        // a warning ages out on its own
+        for _ in 0..crate::model::Severity::Warn.ticks() {
             update(&mut model, Action::ToastTick);
         }
         assert!(model.messages.toast.is_none());
@@ -267,7 +267,7 @@ mod tests {
         assert_eq!(model.messages.iter().count(), 1);
 
         // Esc clears it without stealing the key from whatever is open.
-        model.messages.push("second".into());
+        model.messages.warn("second".into());
         model.help.open = true;
         update(
             &mut model,
@@ -278,6 +278,35 @@ mod tests {
         );
         assert!(model.messages.toast.is_none(), "Esc left the toast up");
         assert!(!model.help.open, "the toast ate the overlay's Esc");
+    }
+
+    /// Nothing else in the app records a message, so an error that blinks out is lost.
+    #[test]
+    fn an_error_toast_stays_until_it_is_dismissed() {
+        use crate::action::Action;
+        use crate::render::render_to_string;
+        use crate::update::update;
+
+        let mut model = Model::default();
+        model
+            .messages
+            .error("relation \"orders\" does not exist".into());
+        for _ in 0..50 {
+            update(&mut model, Action::ToastTick);
+        }
+        let view = render_to_string(&model, 120, 40);
+        assert!(view.contains("does not exist"), "the error aged out");
+        assert!(
+            view.contains("error"),
+            "the toast never said it was an error"
+        );
+        assert!(
+            !model.messages.expires(),
+            "a sticky toast is running the clock"
+        );
+
+        update(&mut model, Action::DismissToast);
+        assert!(model.messages.toast.is_none());
     }
 
     #[test]

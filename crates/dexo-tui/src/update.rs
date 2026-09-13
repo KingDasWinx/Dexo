@@ -171,7 +171,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 if let Some(tab) = model.results.tabs.get_mut(index) {
                     tab.notices.push(message.clone());
                 }
-                model.messages.push(message);
+                model.messages.info(message);
             }
             Vec::new()
         }
@@ -226,7 +226,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::OperationFailed { message, .. } => {
             model.active_operation = None;
             model.active_query = None;
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
         Action::OperationCancelled(_) => {
@@ -278,7 +278,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 }
                 None => model
                     .messages
-                    .push("No saved connection to edit — press n to add one.".into()),
+                    .warn("No saved connection to edit — press n to add one.".into()),
             }
             Vec::new()
         }
@@ -326,7 +326,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                     }),
             );
             sync_explorer_connections(model);
-            model.messages.push(format!("saved {}", profile.name));
+            model.messages.info(format!("saved {}", profile.name));
             Vec::new()
         }
         Action::ProfileDeleted { name } => {
@@ -354,15 +354,15 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.explorer.stale = false;
             }
             sync_explorer_connections(model);
-            model.messages.push(format!("deleted {name}"));
+            model.messages.info(format!("deleted {name}"));
             effects
         }
         Action::ConnectionTested { name, ok, message } => {
-            model.messages.push(if ok {
-                format!("{name} ok")
+            if ok {
+                model.messages.info(format!("{name} ok"));
             } else {
-                format!("{name}: {message}")
-            });
+                model.messages.error(format!("{name}: {message}"));
+            }
             Vec::new()
         }
         Action::SessionClosed { session } => {
@@ -418,7 +418,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::CancelQuery => cancel_query(model),
         Action::BeginTransaction => {
             if model.connection.read_only {
-                model.messages.push("connection is read-only".into());
+                model.messages.warn("connection is read-only".into());
                 return Vec::new();
             }
             if model.transaction == TransactionState::Idle {
@@ -517,7 +517,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 if let Some(parent) = parent {
                     model.explorer.set_error(&parent, message, retryable);
                 } else {
-                    model.messages.push(message);
+                    model.messages.error(message);
                 }
             }
             Vec::new()
@@ -707,7 +707,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             if generation == model.session_generation {
                 model.data.loading = false;
                 model.data.last_error = Some(message.clone());
-                model.messages.push(message);
+                model.messages.error(message);
             }
             Vec::new()
         }
@@ -731,7 +731,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::TableColumnsFailed { generation, message } => {
             if generation == model.session_generation {
-                model.messages.push(message);
+                model.messages.error(message);
             }
             Vec::new()
         }
@@ -759,7 +759,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         } => {
             if generation == model.session_generation {
                 model.data.fail_apply(message.clone());
-                model.messages.push(message);
+                model.messages.error(message);
             }
             Vec::new()
         }
@@ -803,7 +803,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ClipboardFailed { message } => {
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
         Action::OfflineCatalogLoaded {
@@ -823,7 +823,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 if let Some(created_at) = created_at {
                     model
                         .messages
-                        .push(format!("offline catalog from {created_at}"));
+                        .info(format!("offline catalog from {created_at}"));
                 }
                 return catalog_followup_effects(model, false);
             }
@@ -896,7 +896,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.schema_editor.apply_raw(sql);
                 model.schema_editor.open = true;
             } else {
-                model.messages.push("no SQL to apply".into());
+                model.messages.warn("no SQL to apply".into());
             }
             Vec::new()
         }
@@ -954,7 +954,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SecurityFailed { message } => {
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
         Action::OpenTransfer => {
@@ -1207,7 +1207,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.editor.snippets = snippets;
             model.editor.snippet_open = !model.editor.snippets.is_empty();
             if model.editor.snippets.is_empty() {
-                model.messages.push("no snippets available".into());
+                model.messages.warn("no snippets available".into());
             }
             Vec::new()
         }
@@ -1239,7 +1239,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SchemaApplied { message } => {
-            model.messages.push(message);
+            model.messages.info(message);
             model.schema_editor.preview = None;
             Vec::new()
         }
@@ -1266,7 +1266,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.diagnostic_preview = Some(preview.clone());
             model.diagnostics.preview = preview.clone();
             model.diagnostics.open = true;
-            model.messages.push(preview);
+            model.messages.info(preview);
             Vec::new()
         }
         Action::McpProfilesLoaded { profiles } => {
@@ -1344,7 +1344,9 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::DocumentConflict { path } => {
             // The write never landed, so any tab waiting on it stays open.
             model.pending_document_close = None;
-            model.messages.push(format!("file changed on disk: {path}"));
+            model
+                .messages
+                .error(format!("file changed on disk: {path}"));
             Vec::new()
         }
         Action::ResultsUp => {
@@ -1533,7 +1535,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ProjectSwitchFailed { message } => {
             model.projects.pending = None;
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
         Action::ProjectDeletePreviewed { project, preview } => {
@@ -3046,7 +3048,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         Ok(None) => model.pending_chord.keys.clear(),
         Err(conflict) => {
             model.pending_chord.keys.clear();
-            model.messages.push(format!(
+            model.messages.error(format!(
                 "keymap conflict {}: {}",
                 conflict.chord,
                 conflict.commands.join(" / ")
@@ -3334,7 +3336,7 @@ fn close_selected_session(model: &mut Model) -> Vec<Effect> {
     let Some(connection_name) = connection_name else {
         model
             .messages
-            .push("select a connection to disconnect".into());
+            .warn("select a connection to disconnect".into());
         return Vec::new();
     };
 
@@ -3354,7 +3356,7 @@ fn close_selected_session(model: &mut Model) -> Vec<Effect> {
     else {
         model
             .messages
-            .push(format!("{connection_name} is disconnected"));
+            .warn(format!("{connection_name} is disconnected"));
         return Vec::new();
     };
 
@@ -4348,7 +4350,7 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     if model.active_session.is_none() {
         model
             .messages
-            .push("connect a session to refresh the catalog".into());
+            .warn("connect a session to refresh the catalog".into());
         return Vec::new();
     }
     let operation = crate::runtime::OperationId::new();
@@ -4401,7 +4403,7 @@ fn submit_insert_row(model: &mut Model) -> Vec<Effect> {
     model.data.changes.insert(values.clone());
     if !model.data.changes.errors().is_empty() {
         for error in model.data.changes.errors().to_vec() {
-            model.messages.push(error);
+            model.messages.error(error);
         }
         return Vec::new();
     }
@@ -4468,7 +4470,7 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
         }
         _ => {
             let Some(identity) = row_identity_at(model, row_index) else {
-                model.messages.push(
+                model.messages.warn(
                     "this table has no primary key or unique column, so rows cannot be deleted"
                         .into(),
                 );
@@ -4559,7 +4561,7 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
     if model.active_session.is_none() {
         model
             .messages
-            .push("connect a session to browse table data".into());
+            .warn("connect a session to browse table data".into());
         return Vec::new();
     }
     let target = dexo_app::parse_qualified(&node.qualified);
@@ -4624,7 +4626,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
             ]
         }
         Err(message) => {
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
     }
@@ -4697,7 +4699,7 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
     let page = match dexo_driver_api::Page::new(model.data.page_offset, model.data.page_limit) {
         Ok(page) => page,
         Err(error) => {
-            model.messages.push(error.to_string());
+            model.messages.error(error.to_string());
             return Vec::new();
         }
     };
@@ -4720,7 +4722,7 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
             if let Some(tab) = model.results.tabs.get_mut(model.results.active) {
                 tab.local_only = Some(reason.clone());
             }
-            model.messages.push(format!("local-only: {reason}"));
+            model.messages.warn(format!("local-only: {reason}"));
             Vec::new()
         }
     }
@@ -4798,7 +4800,7 @@ fn reload_object_data(model: &mut Model) -> Vec<Effect> {
             generation: model.session_generation,
         }],
         Err(message) => {
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
     }
@@ -4835,7 +4837,7 @@ fn goto_definition(model: &mut Model) -> Vec<Effect> {
     let cursor = model.active_document().cursor();
     let catalog = dexo_app::SnapshotCatalog::new(flatten_explorer(&model.explorer));
     let Some(target) = dexo_sql::definition_at(&sql, cursor, &catalog) else {
-        model.messages.push("no definition at cursor".into());
+        model.messages.warn("no definition at cursor".into());
         return Vec::new();
     };
     let wanted = target.display_unquoted();
@@ -4900,7 +4902,7 @@ fn copy_ddl(model: &mut Model) -> Vec<Effect> {
     match &model.inspector.ddl {
         Some(sql) => vec![Effect::CopyToClipboard { text: sql.clone() }],
         None => {
-            model.messages.push("DDL is not loaded".into());
+            model.messages.warn("DDL is not loaded".into());
             Vec::new()
         }
     }
@@ -4916,7 +4918,7 @@ fn inspect_selected(model: &mut Model) -> Vec<Effect> {
                 let Some(session) = model.active_session else {
                     model
                         .messages
-                        .push("connect a session to fetch the value".into());
+                        .warn("connect a session to fetch the value".into());
                     return Vec::new();
                 };
                 return vec![Effect::FetchValue {
@@ -5002,13 +5004,13 @@ fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMet
 
 fn open_related(model: &mut Model) -> Vec<Effect> {
     let Some(fk) = model.data.related_fk.clone() else {
-        model.messages.push("no related foreign key".into());
+        model.messages.warn("no related foreign key".into());
         return Vec::new();
     };
     let Some(filter) = related_filter(&fk, &model.data.related_row) else {
         model
             .messages
-            .push("foreign key is null; navigation disabled".into());
+            .warn("foreign key is null; navigation disabled".into());
         return Vec::new();
     };
     let title = fk.referenced_table.display_unquoted();
@@ -5060,12 +5062,12 @@ fn copy_grid(model: &mut Model, format: dexo_app::data::CopyFormat) -> Vec<Effec
         Ok(text) if text.len() > 8 * 1024 * 1024 => {
             model
                 .messages
-                .push("selection too large for clipboard; export to a file".into());
+                .warn("selection too large for clipboard; export to a file".into());
             Vec::new()
         }
         Ok(text) => vec![Effect::CopyToClipboard { text }],
         Err(message) => {
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
     }
@@ -5073,7 +5075,7 @@ fn copy_grid(model: &mut Model, format: dexo_app::data::CopyFormat) -> Vec<Effec
 
 fn apply_changes(model: &mut Model) -> Vec<Effect> {
     if model.connection.read_only {
-        model.messages.push("connection is read-only".into());
+        model.messages.warn("connection is read-only".into());
         return Vec::new();
     }
     if let Some(review) = &model.data.review
@@ -5082,13 +5084,13 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
     {
         model
             .messages
-            .push("type the target to confirm production apply".into());
+            .warn("type the target to confirm production apply".into());
         return Vec::new();
     }
     let Some(session) = model.active_session else {
         model
             .messages
-            .push("connect a session to apply changes".into());
+            .warn("connect a session to apply changes".into());
         return Vec::new();
     };
     match dexo_app::data::mutations_for(model.data.target.clone(), &model.data.changes) {
@@ -5099,7 +5101,7 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
             generation: model.session_generation,
         }],
         Err(error) => {
-            model.messages.push(error.to_string());
+            model.messages.error(error.to_string());
             Vec::new()
         }
     }
@@ -5166,7 +5168,7 @@ fn apply_ddl(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     let Some(session) = model.active_session else {
-        model.messages.push("ddl queued".into());
+        model.messages.info("ddl queued".into());
         model.schema_editor.preview = None;
         return Vec::new();
     };
@@ -5389,7 +5391,7 @@ fn close_active_document(model: &mut Model) -> Vec<Effect> {
     if is_dirty && !has_path {
         model
             .messages
-            .push("Save the untitled document before closing it.".into());
+            .warn("Save the untitled document before closing it.".into());
         return Vec::new();
     }
     if is_dirty {
@@ -5403,7 +5405,7 @@ fn close_active_document(model: &mut Model) -> Vec<Effect> {
         });
         model
             .messages
-            .push("Saving dirty file before closing it.".into());
+            .info("Saving dirty file before closing it.".into());
         return save_active_document(model);
     }
     remove_document(model, model.active_document);
@@ -5967,7 +5969,7 @@ fn switch_project(model: &mut Model, name: String) -> Vec<Effect> {
 fn start_switch(model: &mut Model, target: dexo_app::Project) -> Vec<Effect> {
     match crate::runtime::project_manager::begin_switch(model, target) {
         Err(message) => {
-            model.messages.push(message);
+            model.messages.error(message);
             Vec::new()
         }
         Ok(switch) => {
@@ -5997,7 +5999,7 @@ fn confirm_project_delete(model: &mut Model) -> Vec<Effect> {
     if delete.typed != delete.project.name {
         model
             .messages
-            .push("type the project name to confirm".into());
+            .warn("type the project name to confirm".into());
         model.projects.delete = Some(delete);
         return Vec::new();
     }
@@ -6274,7 +6276,7 @@ fn open_snippets(model: &mut Model) -> Vec<Effect> {
 fn open_parameters(model: &mut Model) -> Vec<Effect> {
     crate::screens::editor::refresh_intelligence(model, false);
     if model.editor.parameters.is_empty() {
-        model.messages.push("no query parameters".into());
+        model.messages.warn("no query parameters".into());
         return Vec::new();
     }
     model.editor.parameter_index = model
@@ -6379,7 +6381,7 @@ fn touch_recent_sql_file(model: &mut Model, path: &std::path::Path) -> Vec<Effec
 
 fn open_document_path(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect> {
     if path.is_dir() {
-        model.messages.push("choose a file, not a directory".into());
+        model.messages.warn("choose a file, not a directory".into());
         return Vec::new();
     }
     let normalized = normalize_document_path(&path);
@@ -6514,7 +6516,7 @@ fn palette_select(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     if let Some(reason) = &entry.disabled_reason {
-        model.messages.push(reason.clone());
+        model.messages.warn(reason.clone());
         return Vec::new();
     }
     let invocation = entry.invocation.clone();

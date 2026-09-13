@@ -5,7 +5,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
 use crate::layout::LayoutPlan;
-use crate::model::{Focus, Model};
+use crate::model::{Focus, Model, Severity};
 use crate::mouse::{
     HitButton, HitMap, HitTarget, PaneEdge, overlay_blocks_workbench, popup_inner, register_label,
     register_line, register_overlay,
@@ -1445,7 +1445,8 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 /// Messages used to be appended to the status bar, which is the one place a user never
-/// looks after acting. This lands where the eye already is, and gets out of the way.
+/// looks after acting. This lands where the eye already is, and gets out of the way --
+/// except for an error, which stays until dismissed because nothing else records it.
 fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let Some(toast) = &model.messages.toast else {
         return;
@@ -1456,6 +1457,18 @@ fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if width < 6 || area.height < 4 {
         return;
     }
+    // The label carries the severity on its own, so the colour is reinforcement and
+    // never the only signal.
+    let role = match toast.severity {
+        Severity::Info => Role::Muted,
+        Severity::Warn => Role::Warning,
+        Severity::Error => Role::Error,
+    };
+    let style = model.theme.style(role, model.capabilities);
+    let block = Block::bordered()
+        .style(model.theme.base(model.capabilities))
+        .title(Span::styled(toast.severity.label(), style))
+        .border_style(style);
     let popup = Rect::new(
         area.x + area.width.saturating_sub(width + 1),
         area.y + 1,
@@ -1463,7 +1476,7 @@ fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         3,
     );
     frame.render_widget(Clear, popup);
-    frame.render_widget(Paragraph::new(text).block(overlay_block(model, "!")), popup);
+    frame.render_widget(Paragraph::new(text).block(block), popup);
     register_overlay(hits, popup);
 }
 

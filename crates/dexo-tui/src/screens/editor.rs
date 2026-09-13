@@ -199,7 +199,7 @@ pub fn apply_format(model: &mut Model) {
             model.set_sql(&formatted);
             refresh_intelligence(model, false);
         }
-        Err(error) => model.messages.push(error.to_string()),
+        Err(error) => model.messages.error(error.to_string()),
     }
 }
 
