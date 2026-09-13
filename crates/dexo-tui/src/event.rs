@@ -86,8 +86,25 @@ async fn run_loop(
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let mut hits = crate::mouse::HitMap::default();
-        terminal.draw(|frame| crate::render::render(frame, &model, &mut hits))?;
+        let mut drawn = ratatui::layout::Rect::default();
+        terminal.draw(|frame| {
+            drawn = frame.area();
+            crate::render::render(frame, &model, &mut hits);
+        })?;
         model.hits = hits;
+        // crossterm only reports a resize when the size *changes*, so a terminal the user
+        // never resizes left the model on `Model::default()`'s 160x50 for the whole
+        // session -- every layout number computed for a screen that was not there.
+        if (model.width, model.height) != (drawn.width, drawn.height) {
+            let _ = crate::update::update(
+                &mut model,
+                Action::Resize {
+                    width: drawn.width,
+                    height: drawn.height,
+                },
+            );
+            continue;
+        }
         tokio::select! {
             terminal_event = events.next() => {
                 let Some(event) = terminal_event else { break };
