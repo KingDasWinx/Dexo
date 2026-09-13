@@ -64,7 +64,7 @@ fn alt_arrows_cycle_document_tabs_and_the_new_button() {
 
 #[test]
 fn alt_arrows_do_not_cycle_document_tabs_outside_the_editor() {
-    for focus in [Focus::Explorer, Focus::Results, Focus::Inspector] {
+    for focus in [Focus::Explorer, Focus::Results] {
         for action in [alt_left(), alt_right()] {
             let mut model = two_documents();
             model.focus = focus;
@@ -97,18 +97,10 @@ fn alt_arrows_resize_the_focused_side_pane_toward_its_border() {
     update(&mut model, alt_left());
     assert_eq!(model.panes.explorer_width, explorer_width);
 
-    model.focus = Focus::Inspector;
-    let inspector_width = model.panes.inspector_width;
-    update(&mut model, alt_left());
-    assert_eq!(model.panes.inspector_width, inspector_width + 2);
-    update(&mut model, alt_right());
-    assert_eq!(model.panes.inspector_width, inspector_width);
-
     model.focus = Focus::Results;
     update(&mut model, alt_left());
     update(&mut model, alt_right());
     assert_eq!(model.panes.explorer_width, explorer_width);
-    assert_eq!(model.panes.inspector_width, inspector_width);
 }
 
 #[test]

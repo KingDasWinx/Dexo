@@ -39,34 +39,26 @@ impl LayoutPreset {
         let panes = match self {
             Self::Normal => PaneLayout {
                 explorer_visible: true,
-                inspector_visible: true,
                 results_visible: true,
                 explorer_width: 28,
-                inspector_width: 28,
                 results_height: 12,
             },
             Self::ResultsWide => PaneLayout {
                 explorer_visible: true,
-                inspector_visible: false,
                 results_visible: true,
                 explorer_width: 22,
-                inspector_width: 28,
                 results_height: (height.saturating_mul(55) / 100).max(10),
             },
             Self::EditorWide => PaneLayout {
                 explorer_visible: true,
-                inspector_visible: true,
                 results_visible: true,
                 explorer_width: 22,
-                inspector_width: 22,
                 results_height: 5,
             },
             Self::ExplorerWide => PaneLayout {
                 explorer_visible: true,
-                inspector_visible: true,
                 results_visible: true,
                 explorer_width: (width.saturating_mul(40) / 100).max(24),
-                inspector_width: 22,
                 results_height: 10,
             },
         };
@@ -83,7 +75,6 @@ pub struct LayoutPlan {
     pub document_tabs: Rect,
     pub content: Rect,
     pub results: Rect,
-    pub inspector: Rect,
     pub status: Rect,
 }
 
@@ -119,10 +110,8 @@ impl LayoutPlan {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct PaneLayout {
     pub explorer_visible: bool,
-    pub inspector_visible: bool,
     pub results_visible: bool,
     pub explorer_width: u16,
-    pub inspector_width: u16,
     pub results_height: u16,
 }
 
@@ -131,14 +120,9 @@ impl PaneLayout {
         let max_side = width.saturating_div(2).max(8);
         let max_results = height.saturating_sub(6).max(3);
         self.explorer_width = self.explorer_width.min(max_side).max(8);
-        self.inspector_width = self.inspector_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
-        if width < 80 {
-            self.inspector_visible = false;
-        }
         if width < 60 || height < 24 {
             self.explorer_visible = false;
-            self.inspector_visible = false;
             self.results_visible = false;
         }
         self
@@ -164,25 +148,12 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bool)
         body.width,
         22,
     );
-    let inspector_w = pane_width(
-        panes,
-        |p| p.inspector_visible,
-        |p| p.inspector_width,
-        body.width,
-        22,
-    );
-    let center_w = body.width.saturating_sub(explorer_w + inspector_w);
+    let center_w = body.width.saturating_sub(explorer_w);
     let explorer = Rect::new(body.x, body.y, explorer_w, body.height);
     let center = Rect::new(
         body.x.saturating_add(explorer_w),
         body.y,
         center_w,
-        body.height,
-    );
-    let inspector = Rect::new(
-        body.x.saturating_add(explorer_w + center_w),
-        body.y,
-        inspector_w,
         body.height,
     );
     let tabs_h = 1.min(center.height);
@@ -226,7 +197,6 @@ fn full_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bool)
         document_tabs,
         content,
         results,
-        inspector,
         status,
     }
 }
@@ -305,7 +275,6 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bo
         center.width,
         results_h,
     );
-    // ponytail: reduced mode hides the inspector pane; restore a split when users persist pane sizes
     LayoutPlan {
         mode: LayoutMode::Reduced,
         context,
@@ -314,7 +283,6 @@ fn reduced_layout(area: Rect, panes: Option<&PaneLayout>, show_document_tabs: bo
         document_tabs,
         content,
         results,
-        inspector: Rect::new(0, 0, 0, 0),
         status,
     }
 }
@@ -347,7 +315,6 @@ fn compact_layout(area: Rect, show_document_tabs: bool) -> LayoutPlan {
         document_tabs,
         content,
         results: Rect::new(0, 0, 0, 0),
-        inspector: Rect::new(0, 0, 0, 0),
         status,
     }
 }
@@ -376,16 +343,13 @@ mod tests {
         use super::PaneLayout;
         let huge = PaneLayout {
             explorer_visible: true,
-            inspector_visible: true,
             results_visible: true,
             explorer_width: 400,
-            inspector_width: 400,
             results_height: 400,
         }
         .clamp(160, 50);
         let plan = LayoutPlan::for_area_with(Rect::new(0, 0, 160, 50), Some(&huge));
         assert!(plan.explorer.width <= 80);
-        assert!(plan.inspector.width <= 80);
         assert!(plan.results.height <= 44);
         let compact = huge.clamp(50, 18);
         assert!(!compact.explorer_visible);
@@ -395,13 +359,11 @@ mod tests {
     }
 
     #[test]
-    fn results_wide_hides_inspector_and_grows_results() {
+    fn results_wide_grows_results() {
         use super::{LayoutPlan, LayoutPreset};
         let panes = LayoutPreset::ResultsWide.apply(160, 50);
-        assert!(!panes.inspector_visible);
         assert!(panes.results_height >= 12);
         let plan = LayoutPlan::for_area_with(Rect::new(0, 0, 160, 50), Some(&panes));
-        assert_eq!(plan.inspector.width, 0);
         assert!(plan.results.height >= plan.content.height);
     }
 

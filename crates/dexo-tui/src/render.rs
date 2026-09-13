@@ -56,9 +56,6 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                     hits.register(HitTarget::Grid, plan.content);
                 }
                 crate::widgets::grid::render(frame, plan.content, model, hits);
-                if !overlay_blocks_workbench(model) {
-                    hits.register(HitTarget::Inspector, plan.inspector);
-                }
                 render_console_log(frame, plan.results, model);
             } else {
                 if !overlay_blocks_workbench(model) {
@@ -67,17 +64,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 render_editor_content(frame, plan.content, model, hits);
                 if !overlay_blocks_workbench(model) {
                     hits.register(HitTarget::Grid, plan.results);
-                    hits.register(HitTarget::Inspector, plan.inspector);
                 }
                 crate::widgets::grid::render(frame, plan.results, model, hits);
             }
-            render_inspector_panel(
-                frame,
-                plan.inspector,
-                model,
-                model.focus == Focus::Inspector,
-                hits,
-            );
         }
     }
     if !overlay_blocks_workbench(model) && plan.mode != crate::layout::LayoutMode::Compact {
@@ -160,6 +149,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.file_picker.open {
         render_file_picker(frame, model, hits);
     }
+    if model.data.viewer.is_some() {
+        render_value_viewer(frame, model, hits);
+    }
     if model.editor.completion_open {
         render_completion(frame, model, hits);
     }
@@ -185,12 +177,6 @@ fn register_pane_dividers(hits: &mut HitMap, plan: LayoutPlan) {
         hits.register(
             HitTarget::PaneDivider(PaneEdge::Results),
             Rect::new(plan.results.x, plan.results.y, plan.results.width, 1),
-        );
-    }
-    if plan.inspector.width > 0 {
-        hits.register(
-            HitTarget::PaneDivider(PaneEdge::Inspector),
-            Rect::new(plan.inspector.x, plan.inspector.y, 1, plan.inspector.height),
         );
     }
 }
@@ -293,12 +279,6 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             }
             crate::widgets::grid::render(frame, area, model, hits);
         }
-        Focus::Inspector => {
-            if interactive {
-                hits.register(HitTarget::Inspector, area);
-            }
-            render_inspector_panel(frame, area, model, true, hits);
-        }
     }
 }
 
@@ -317,10 +297,6 @@ fn context_line(model: &Model) -> String {
             &model.schema
         }
     )
-}
-
-fn inspector_title() -> String {
-    "Inspector".into()
 }
 
 fn render_console_log(frame: &mut Frame, area: Rect, model: &Model) {
@@ -473,127 +449,6 @@ fn properties_tab_body(model: &Model) -> String {
     lines.join("\n")
 }
 
-pub(crate) fn inspector_body(model: &Model) -> String {
-    if model.inspector.open {
-        let mut body = describe_object_inspector(&model.inspector);
-        if !model.results.columns().is_empty() {
-            body.push('\n');
-            for column in model.results.columns() {
-                let null = if column.nullable { "null" } else { "not null" };
-                body.push_str(&format!("{} {} {null}\n", column.name, column.type_name));
-            }
-        }
-        return body;
-    }
-    if let Some(view) = &model.data.viewer {
-        return crate::widgets::viewer::describe(view);
-    }
-    if model.results.columns().is_empty() {
-        "No selection".into()
-    } else {
-        model
-            .results
-            .columns()
-            .iter()
-            .map(|column| column.name.as_str())
-            .collect::<Vec<_>>()
-            .join("\n")
-    }
-}
-
-fn describe_object_inspector(
-    inspector: &crate::screens::object_inspector::ObjectInspector,
-) -> String {
-    let mut lines = Vec::new();
-    if inspector.qualified_name.is_empty() {
-        lines.push("loading…".into());
-    } else {
-        lines.push(inspector.qualified_name.clone());
-    }
-    if let Some(error) = &inspector.error {
-        lines.push(format!("error: {error}"));
-    }
-    for restriction in &inspector.restrictions {
-        lines.push(format!("restricted: {restriction}"));
-    }
-    if let Some(object) = &inspector.object {
-        lines.push(format!("kind: {}", object.kind.as_str()));
-    }
-    match inspector.tab {
-        crate::screens::object_inspector::InspectorTab::Ddl => {
-            if let Some(ddl) = &inspector.ddl {
-                lines.push(ddl.clone());
-            }
-        }
-        crate::screens::object_inspector::InspectorTab::Dependencies => {
-            if !inspector.dependencies.is_empty() {
-                lines.push(format!(
-                    "deps: {}",
-                    inspector
-                        .dependencies
-                        .iter()
-                        .map(|id| id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            if !inspector.dependents.is_empty() {
-                lines.push(format!(
-                    "dependents: {}",
-                    inspector
-                        .dependents
-                        .iter()
-                        .map(|id| id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-        }
-        crate::screens::object_inspector::InspectorTab::Privileges => {
-            if !inspector.effective_privileges.is_empty() {
-                lines.push(format!(
-                    "privileges: {}",
-                    inspector.effective_privileges.join(", ")
-                ));
-            }
-        }
-        crate::screens::object_inspector::InspectorTab::Properties => {
-            if let Some(ddl) = &inspector.ddl {
-                lines.push(ddl.clone());
-            }
-            if !inspector.dependencies.is_empty() {
-                lines.push(format!(
-                    "deps: {}",
-                    inspector
-                        .dependencies
-                        .iter()
-                        .map(|id| id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            if !inspector.dependents.is_empty() {
-                lines.push(format!(
-                    "dependents: {}",
-                    inspector
-                        .dependents
-                        .iter()
-                        .map(|id| id.as_str())
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                ));
-            }
-            if !inspector.effective_privileges.is_empty() {
-                lines.push(format!(
-                    "privileges: {}",
-                    inspector.effective_privileges.join(", ")
-                ));
-            }
-        }
-    }
-    lines.join("\n")
-}
-
 fn explorer_body(model: &Model, area: Rect) -> String {
     let rows = area.height.saturating_sub(2) as usize;
     crate::widgets::object_tree::render_sidebar(
@@ -622,84 +477,6 @@ fn render_panel(
     body: String,
 ) {
     render_panel_scrolled(frame, area, model, title, focused, body, 0);
-}
-
-fn render_inspector_panel(
-    frame: &mut Frame,
-    area: Rect,
-    model: &Model,
-    focused: bool,
-    hits: &mut HitMap,
-) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    if area.width < 2 || area.height < 2 {
-        frame.render_widget(
-            Paragraph::new(inspector_body(model)).scroll((model.inspector.scroll, 0)),
-            area,
-        );
-        return;
-    }
-
-    let block = pane_block(model, &inspector_title(), focused);
-    let inner = block.inner(area);
-    frame.render_widget(block, area);
-    if inner.height == 0 {
-        return;
-    }
-
-    let tabs = [
-        (
-            "Props",
-            crate::screens::object_inspector::InspectorTab::Properties,
-        ),
-        ("DDL", crate::screens::object_inspector::InspectorTab::Ddl),
-        (
-            "Deps",
-            crate::screens::object_inspector::InspectorTab::Dependencies,
-        ),
-        (
-            "Privs",
-            crate::screens::object_inspector::InspectorTab::Privileges,
-        ),
-    ];
-    let mut tab_line = String::new();
-    let mut x = inner.x;
-    for (index, (label, tab)) in tabs.iter().enumerate() {
-        if index > 0 {
-            tab_line.push(' ');
-            x = x.saturating_add(1);
-        }
-        let text = if model.inspector.tab == *tab {
-            format!("[{label}]")
-        } else {
-            (*label).into()
-        };
-        let width = text.len() as u16;
-        let remaining = inner.x.saturating_add(inner.width).saturating_sub(x);
-        hits.register(
-            HitTarget::InspectorTab(index),
-            Rect::new(x, inner.y, width.min(remaining), 1),
-        );
-        tab_line.push_str(&text);
-        x = x.saturating_add(width);
-    }
-    frame.render_widget(
-        Paragraph::new(tab_line),
-        Rect::new(inner.x, inner.y, inner.width, 1),
-    );
-
-    let body = Rect::new(
-        inner.x,
-        inner.y.saturating_add(1),
-        inner.width,
-        inner.height.saturating_sub(1),
-    );
-    frame.render_widget(
-        Paragraph::new(inspector_body(model)).scroll((model.inspector.scroll, 0)),
-        body,
-    );
 }
 
 fn render_panel_scrolled(
@@ -1696,6 +1473,27 @@ fn settings_option_lines(model: &Model) -> Vec<Line<'static>> {
         muted,
     )));
     body
+}
+
+fn render_value_viewer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let Some(view) = &model.data.viewer else {
+        return;
+    };
+    let area = frame.area();
+    let popup = centered(area, 72, area.height.saturating_sub(2).min(20));
+    let mut lines: Vec<String> = crate::widgets::viewer::describe(view)
+        .lines()
+        .map(str::to_string)
+        .collect();
+    lines.push(String::new());
+    lines.push("  esc close".into());
+    paint_popup(
+        frame,
+        popup,
+        overlay_block(model, "Value"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
 }
 
 fn render_recovery(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

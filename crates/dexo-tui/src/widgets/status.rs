@@ -72,7 +72,6 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         crate::model::Focus::Explorer => "Explorer",
         crate::model::Focus::Editor | crate::model::Focus::Palette => "Editor",
         crate::model::Focus::Results => "Results",
-        crate::model::Focus::Inspector => "Inspector",
     };
     spans.push(Span::styled(
         format!("FOCUS: {focus_name}  "),
@@ -140,23 +139,26 @@ mod tests {
             ..Model::default()
         };
         model.connections.load_profiles(vec![profile("prod")]);
-        model.explorer.sync_connection_roots(&model.connections.profiles, "");
+        model
+            .explorer
+            .sync_connection_roots(&model.connections.profiles, "");
         model.explorer.select(connection_id("prod"));
-        assert_eq!(
-            footer_hint(&model),
-            Some("Enter connect  n new  e edit")
-        );
+        assert_eq!(footer_hint(&model), Some("Enter connect  n new  e edit"));
 
-        model.connections.upsert_session(crate::screens::connections::SessionRow {
-            id: crate::runtime::SessionId(uuid::Uuid::new_v4()),
-            connection: "prod".into(),
-            transaction: dexo_driver_api::TransactionState::Idle,
-            generation: 1,
-            environment: "local".into(),
-            read_only: false,
-            driver: "postgres".into(),
-        });
-        model.explorer.sync_connection_roots(&model.connections.profiles, "prod");
+        model
+            .connections
+            .upsert_session(crate::screens::connections::SessionRow {
+                id: crate::runtime::SessionId(uuid::Uuid::new_v4()),
+                connection: "prod".into(),
+                transaction: dexo_driver_api::TransactionState::Idle,
+                generation: 1,
+                environment: "local".into(),
+                read_only: false,
+                driver: "postgres".into(),
+            });
+        model
+            .explorer
+            .sync_connection_roots(&model.connections.profiles, "prod");
         model.explorer.select(connection_id("prod"));
         assert_eq!(
             footer_hint(&model),

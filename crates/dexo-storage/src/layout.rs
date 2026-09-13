@@ -9,10 +9,8 @@ pub const LAYOUT_VERSION: u32 = 2;
 pub struct WorkbenchLayout {
     pub version: u32,
     pub explorer_visible: bool,
-    pub inspector_visible: bool,
     pub results_visible: bool,
     pub explorer_width: u16,
-    pub inspector_width: u16,
     pub results_height: u16,
     pub focused_panel: String,
     pub active_tab: usize,
@@ -32,10 +30,8 @@ impl Default for WorkbenchLayout {
         Self {
             version: LAYOUT_VERSION,
             explorer_visible: true,
-            inspector_visible: true,
             results_visible: true,
             explorer_width: 28,
-            inspector_width: 28,
             results_height: 12,
             focused_panel: "editor".into(),
             active_tab: 0,
@@ -59,14 +55,9 @@ impl WorkbenchLayout {
         let max_side = width.saturating_div(2).max(8);
         let max_results = height.saturating_sub(6).max(3);
         self.explorer_width = self.explorer_width.min(max_side).max(8);
-        self.inspector_width = self.inspector_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
-        if width < 80 {
-            self.inspector_visible = false;
-        }
         if width < 60 || height < 24 {
             self.explorer_visible = false;
-            self.inspector_visible = false;
             self.results_visible = false;
         }
         self
@@ -231,13 +222,11 @@ mod tests {
     fn clamp_fits_compact_terminal() {
         let layout = WorkbenchLayout {
             explorer_width: 200,
-            inspector_width: 200,
             results_height: 80,
             ..WorkbenchLayout::default()
         }
         .clamp(50, 18);
         assert!(!layout.explorer_visible);
-        assert!(!layout.inspector_visible);
         assert!(!layout.results_visible);
         assert!(layout.explorer_width <= 25);
         assert!(layout.results_height <= 18);

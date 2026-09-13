@@ -17,9 +17,7 @@ const COMMAND_IDS: &[&str] = &[
     "focus.explorer",
     "focus.editor",
     "focus.results",
-    "focus.inspector",
     "layout.cycle",
-    "layout.hide_inspector",
     "layout.hide_explorer",
     "layout.hide_results",
     "layout.reset",
@@ -27,8 +25,6 @@ const COMMAND_IDS: &[&str] = &[
     "layout.results_shrink",
     "layout.explorer_grow",
     "layout.explorer_shrink",
-    "layout.inspector_grow",
-    "layout.inspector_shrink",
     "data.copy.csv",
     "data.copy.text",
     "data.copy.json",
@@ -87,7 +83,6 @@ const COMMAND_IDS: &[&str] = &[
     "results.select_column",
     "results.next_tab",
     "results.prev_tab",
-    "inspector.next_tab",
     "settings.mode",
     "settings.accent",
     "settings.keymap",
@@ -216,8 +211,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 140);
-    assert_eq!(actual.len(), 140, "duplicate command id");
+    assert_eq!(specs.len(), 135);
+    assert_eq!(actual.len(), 135, "duplicate command id");
     assert_eq!(actual, expected);
 }
 

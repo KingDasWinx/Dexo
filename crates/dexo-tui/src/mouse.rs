@@ -8,7 +8,6 @@ use unicode_width::UnicodeWidthStr;
 pub enum PaneEdge {
     Explorer,
     Results,
-    Inspector,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -25,8 +24,6 @@ pub enum HitTarget {
     SidebarConnection(usize),
     Editor,
     PaneDivider(PaneEdge),
-    Inspector,
-    InspectorTab(usize),
     Grid,
     GridRow(usize),
     GridCell { row: usize, col: usize },
@@ -95,6 +92,7 @@ pub enum OverlayKind {
     Security,
     Admin,
     McpProfiles,
+    ValueViewer,
     Connections,
     Projects,
     ConfigTransfer,
@@ -174,6 +172,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.editor.snippet_open, OverlayKind::Snippets),
         (model.editor.history_open, OverlayKind::History),
         (model.editor.parameter_prompt, OverlayKind::Parameters),
+        (model.data.viewer.is_some(), OverlayKind::ValueViewer),
         (model.editor.completion_open, OverlayKind::Completion),
         (model.file_picker.open, OverlayKind::FilePicker),
         (model.mcp_audit.open, OverlayKind::McpAudit),

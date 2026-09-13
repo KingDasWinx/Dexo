@@ -167,7 +167,6 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("layout", "Layout"),
     ("focus", "Focus"),
     ("tab", "Tab"),
-    ("inspector", "Inspector"),
     ("workbench", "Workbench"),
     ("palette", "Workbench"),
     ("help", "Workbench"),
@@ -348,10 +347,8 @@ mod tests {
 
         update(&mut model, Action::CycleLayout);
         assert_eq!(model.layout_preset, LayoutPreset::ResultsWide);
-        assert!(!model.panes.inspector_visible);
         update(&mut model, Action::ResetLayout);
         assert_eq!(model.layout_preset, LayoutPreset::Normal);
-        assert!(model.panes.inspector_visible);
 
         update(&mut model, Action::Focus(FocusTarget::Results));
         model.results = crate::model::ResultsState::default();

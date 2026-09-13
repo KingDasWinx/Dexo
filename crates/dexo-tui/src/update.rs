@@ -9,7 +9,6 @@ use crate::layout::LayoutPlan;
 use crate::model::{DragKind, DragState, Focus, Model};
 use crate::mouse::{HitButton, HitTarget, OverlayKind, PaneEdge, note_click, top_overlay};
 use ratatui::layout::{Position, Rect};
-use ratatui::widgets::Block;
 
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     match action {
@@ -523,16 +522,20 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::OpenObjectInspector => open_inspector(model),
+        Action::OpenObjectInspector => {
+            let effects = open_inspector(model);
+            model.tabs.active = 3;
+            effects
+        }
         Action::OpenObjectDdl => {
             let effects = open_inspector(model);
-            model.inspector.tab = crate::screens::object_inspector::InspectorTab::Ddl;
+            model.tabs.active = 2;
             effects
         }
         Action::OpenObjectData => open_object_data(model),
         Action::OpenDependencies => {
             let effects = open_inspector(model);
-            model.inspector.tab = crate::screens::object_inspector::InspectorTab::Dependencies;
+            model.tabs.active = 3;
             effects
         }
         Action::ExplorerUp => {
@@ -655,10 +658,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.results.active = index;
             }
             model.focus = Focus::Results;
-            Vec::new()
-        }
-        Action::InspectorNextTab => {
-            select_inspector_tab(model, model.inspector.tab.next());
             Vec::new()
         }
         Action::NextDataPage => {
@@ -1404,16 +1403,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             apply_layout_preset(model, crate::layout::LayoutPreset::Normal);
             Vec::new()
         }
-        Action::HideInspector => {
-            model.panes.inspector_visible = !model.panes.inspector_visible;
-            if !model.panes.inspector_visible && model.focus == Focus::Inspector {
-                model.focus = Focus::Editor;
-            }
-            model.panes = model.panes.clamp(model.width, model.height);
-            model.layout_dirty = true;
-            model.sync_grid_viewport();
-            Vec::new()
-        }
         Action::HideExplorer => {
             model.panes.explorer_visible = !model.panes.explorer_visible;
             if !model.panes.explorer_visible && model.focus == Focus::Explorer {
@@ -1448,14 +1437,6 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ShrinkExplorer => {
             adjust_explorer_width(model, -2);
-            Vec::new()
-        }
-        Action::GrowInspector => {
-            adjust_inspector_width(model, 2);
-            Vec::new()
-        }
-        Action::ShrinkInspector => {
-            adjust_inspector_width(model, -2);
             Vec::new()
         }
         Action::Quit => {
@@ -1604,10 +1585,6 @@ fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
             model.panes.results_visible = true;
             Focus::Results
         }
-        FocusTarget::Inspector => {
-            model.panes.inspector_visible = true;
-            Focus::Inspector
-        }
     };
     model.panes = model.panes.clamp(model.width, model.height);
     model.sync_grid_viewport();
@@ -1659,6 +1636,10 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
         Some(OverlayKind::Admin) => mouse_admin(model, hit),
         Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
+        Some(OverlayKind::ValueViewer) => {
+            model.data.viewer = None;
+            Vec::new()
+        }
         Some(OverlayKind::Connections) => mouse_connections(model, hit, doubled),
         Some(OverlayKind::Projects) => mouse_projects(model, hit, doubled),
         Some(OverlayKind::ConfigTransfer) => mouse_config_transfer(model, hit),
@@ -2199,11 +2180,6 @@ fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     }
 }
 
-fn select_inspector_tab(model: &mut Model, tab: crate::screens::object_inspector::InspectorTab) {
-    model.inspector.tab = tab;
-    model.inspector.scroll = 0;
-}
-
 fn mouse_workbench(
     model: &mut Model,
     mouse: MouseEvent,
@@ -2232,14 +2208,6 @@ fn mouse_workbench(
             start_pane_drag(model, edge, mouse);
             Vec::new()
         }
-        Some(HitTarget::InspectorTab(index)) => {
-            let effects = update(model, Action::Focus(FocusTarget::Inspector));
-            if let Some(tab) = crate::screens::object_inspector::InspectorTab::from_index(index) {
-                select_inspector_tab(model, tab);
-            }
-            effects
-        }
-        Some(HitTarget::Inspector) => update(model, Action::Focus(FocusTarget::Inspector)),
         Some(HitTarget::Explorer) => update(model, Action::Focus(FocusTarget::Explorer)),
         Some(HitTarget::ExplorerNode(index)) => {
             crate::screens::editor::end_typing(model);
@@ -2355,7 +2323,6 @@ fn start_pane_drag(model: &mut Model, edge: PaneEdge, mouse: MouseEvent) {
     let start_value = match edge {
         PaneEdge::Explorer => model.panes.explorer_width,
         PaneEdge::Results => model.panes.results_height,
-        PaneEdge::Inspector => model.panes.inspector_width,
     };
     model.drag = Some(DragState {
         kind: DragKind::PaneDivider(edge),
@@ -2409,13 +2376,11 @@ fn resize_pane_drag(model: &mut Model, mouse: MouseEvent) {
     let delta = match edge {
         PaneEdge::Explorer => i32::from(mouse.column) - i32::from(origin_x),
         PaneEdge::Results => i32::from(origin_y) - i32::from(mouse.row),
-        PaneEdge::Inspector => i32::from(origin_x) - i32::from(mouse.column),
     };
     let value = (i32::from(start_value) + delta).clamp(0, i32::from(u16::MAX)) as u16;
     match edge {
         PaneEdge::Explorer => model.panes.explorer_width = value,
         PaneEdge::Results => model.panes.results_height = value,
-        PaneEdge::Inspector => model.panes.inspector_width = value,
     }
     model.panes = model.panes.clamp(model.width, model.height);
     model.sync_grid_viewport();
@@ -2568,10 +2533,6 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     match model.hits.at(mouse.column, mouse.row) {
-        Some(HitTarget::Inspector | HitTarget::InspectorTab(_)) => {
-            scroll_inspector(model, delta);
-            Vec::new()
-        }
         Some(
             HitTarget::Explorer | HitTarget::ExplorerNode(_) | HitTarget::SidebarConnection(_),
         ) => {
@@ -2627,7 +2588,6 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
                 }
                 Vec::new()
             }
-            Focus::Inspector => Vec::new(),
         },
     }
 }
@@ -2637,27 +2597,6 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
         Vec::new()
     } else {
         update(model, action)
-    }
-}
-
-fn scroll_inspector(model: &mut Model, delta: i32) {
-    let plan = LayoutPlan::for_area_with_document_tabs(
-        Rect::new(0, 0, model.width, model.height),
-        Some(&model.panes),
-        model.tabs.active == 0,
-    );
-    let visible_rows = Block::bordered()
-        .inner(plan.inspector)
-        .height
-        .saturating_sub(1) as usize;
-    let max_scroll = crate::render::inspector_body(model)
-        .lines()
-        .count()
-        .saturating_sub(visible_rows) as u16;
-    if delta < 0 {
-        model.inspector.scroll = model.inspector.scroll.saturating_sub(1);
-    } else {
-        model.inspector.scroll = model.inspector.scroll.saturating_add(1).min(max_scroll);
     }
 }
 
@@ -2688,6 +2627,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.data.query_prompt.open {
         return handle_data_query_prompt_key(model, key);
+    }
+    if model.data.viewer.is_some() {
+        if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
+            model.data.viewer = None;
+        }
+        return Vec::new();
     }
     if model.file_picker.open {
         return handle_file_picker_key(model, key);
@@ -3093,7 +3038,6 @@ fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
     match model.focus {
         Focus::Explorer => KeyContext::Explorer,
         Focus::Results => KeyContext::Results,
-        Focus::Inspector => KeyContext::Inspector,
         Focus::Editor | Focus::Palette => KeyContext::Editor,
     }
 }
@@ -3934,15 +3878,6 @@ fn adjust_explorer_width(model: &mut Model, delta: i16) {
     model.layout_dirty = true;
 }
 
-fn adjust_inspector_width(model: &mut Model, delta: i16) {
-    let next = (model.panes.inspector_width as i16 + delta).max(8) as u16;
-    model.panes.inspector_visible = true;
-    model.panes.inspector_width = next;
-    model.panes = model.panes.clamp(model.width, model.height);
-    model.sync_grid_viewport();
-    model.layout_dirty = true;
-}
-
 fn active_connection_uuid(model: &Model) -> Option<String> {
     let name = model.connection.name.as_str();
     if name.is_empty() {
@@ -4180,10 +4115,8 @@ fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>
         return;
     };
     model.panes.explorer_visible = layout.explorer_visible;
-    model.panes.inspector_visible = layout.inspector_visible;
     model.panes.results_visible = layout.results_visible;
     model.panes.explorer_width = layout.explorer_width;
-    model.panes.inspector_width = layout.inspector_width;
     model.panes.results_height = layout.results_height;
     model.tabs.active = layout.active_tab;
     if !layout.tabs.is_empty() {
@@ -4377,7 +4310,6 @@ fn open_selected_table(model: &mut Model) -> Vec<Effect> {
     {
         model.focus = Focus::Results;
         model.panes.results_visible = true;
-        model.panes.inspector_visible = true;
     }
     effects
 }
@@ -6619,24 +6551,6 @@ mod tests {
         );
         assert!(model.panes.results_visible);
         assert_eq!(model.focus, Focus::Results);
-    }
-
-    #[test]
-    fn alt_i_hides_and_reshows_the_inspector_panel() {
-        let mut model = Model::default();
-        assert!(model.panes.inspector_visible);
-
-        update(
-            &mut model,
-            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT)),
-        );
-        assert!(!model.panes.inspector_visible);
-
-        update(
-            &mut model,
-            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::ALT)),
-        );
-        assert!(model.panes.inspector_visible);
     }
 
     #[test]

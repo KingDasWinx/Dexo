@@ -8,7 +8,6 @@ pub enum KeyContext {
     Editor,
     Explorer,
     Results,
-    Inspector,
     Palette,
     Modal,
 }
@@ -190,7 +189,7 @@ impl Keymap {
                 KeyContext::Editor => buckets[0].1.push(entry),
                 KeyContext::Results => buckets[1].1.push(entry),
                 KeyContext::Explorer => buckets[2].1.push(entry),
-                KeyContext::Inspector | KeyContext::Global => buckets[3].1.push(entry),
+                KeyContext::Global => buckets[3].1.push(entry),
                 KeyContext::Palette | KeyContext::Modal => buckets[4].1.push(entry),
             }
         }
@@ -330,7 +329,6 @@ fn parse_context(name: &str) -> Result<KeyContext, KeymapError> {
         "editor" => Ok(KeyContext::Editor),
         "explorer" => Ok(KeyContext::Explorer),
         "results" => Ok(KeyContext::Results),
-        "inspector" => Ok(KeyContext::Inspector),
         "palette" => Ok(KeyContext::Palette),
         "modal" => Ok(KeyContext::Modal),
         other => Err(KeymapError {
@@ -401,10 +399,8 @@ profile = "default"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
-"alt+4" = "focus.inspector"
 "alt+e" = "layout.hide_explorer"
 "alt+r" = "layout.hide_results"
-"alt+i" = "layout.hide_inspector"
 "alt+-" = "layout.results_shrink"
 "alt+=" = "layout.results_grow"
 "alt+[" = "layout.explorer_shrink"
@@ -443,14 +439,6 @@ profile = "default"
 "alt+down" = "layout.results_shrink"
 "ctrl+w" = "document.close"
 "f2" = "document.rename"
-[inspector]
-"tab" = "inspector.next_tab"
-"?" = "help.open"
-"alt+=" = "layout.inspector_grow"
-"alt+-" = "layout.inspector_shrink"
-"alt++" = "layout.inspector_grow"
-"alt+left" = "layout.inspector_grow"
-"alt+right" = "layout.inspector_shrink"
 [results]
 "up" = "results.up"
 "down" = "results.down"
@@ -490,10 +478,8 @@ profile = "vim"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
-"alt+4" = "focus.inspector"
 "alt+e" = "layout.hide_explorer"
 "alt+r" = "layout.hide_results"
-"alt+i" = "layout.hide_inspector"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
@@ -524,11 +510,6 @@ profile = "vim"
 "alt+-" = "layout.explorer_shrink"
 "alt+left" = "layout.explorer_shrink"
 "alt+right" = "layout.explorer_grow"
-[inspector]
-"alt+=" = "layout.inspector_grow"
-"alt+-" = "layout.inspector_shrink"
-"alt+left" = "layout.inspector_grow"
-"alt+right" = "layout.inspector_shrink"
 [results]
 "k" = "results.up"
 "j" = "results.down"
@@ -561,10 +542,8 @@ profile = "emacs"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
-"alt+4" = "focus.inspector"
 "alt+e" = "layout.hide_explorer"
 "alt+r" = "layout.hide_results"
-"alt+i" = "layout.hide_inspector"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
@@ -595,11 +574,6 @@ profile = "emacs"
 "alt+-" = "layout.explorer_shrink"
 "alt+left" = "layout.explorer_shrink"
 "alt+right" = "layout.explorer_grow"
-[inspector]
-"alt+=" = "layout.inspector_grow"
-"alt+-" = "layout.inspector_shrink"
-"alt+left" = "layout.inspector_grow"
-"alt+right" = "layout.inspector_shrink"
 [results]
 "ctrl+p" = "results.up"
 "ctrl+n" = "results.down"
@@ -710,12 +684,6 @@ mod tests {
             for (context, chord, command) in [
                 (KeyContext::Explorer, "alt+left", "layout.explorer_shrink"),
                 (KeyContext::Explorer, "alt+right", "layout.explorer_grow"),
-                (KeyContext::Inspector, "alt+left", "layout.inspector_grow"),
-                (
-                    KeyContext::Inspector,
-                    "alt+right",
-                    "layout.inspector_shrink",
-                ),
                 (KeyContext::Results, "alt+up", "layout.results_grow"),
                 (KeyContext::Results, "alt+down", "layout.results_shrink"),
                 (KeyContext::Editor, "alt+up", "layout.results_grow"),
@@ -743,7 +711,6 @@ mod tests {
             for (chord, command) in [
                 ("alt+e", "layout.hide_explorer"),
                 ("alt+r", "layout.hide_results"),
-                ("alt+i", "layout.hide_inspector"),
             ] {
                 assert_eq!(
                     keymap

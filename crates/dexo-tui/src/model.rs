@@ -43,7 +43,6 @@ pub enum Focus {
     Explorer,
     Editor,
     Results,
-    Inspector,
     Palette,
 }
 
@@ -1265,10 +1264,8 @@ impl Default for Model {
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,
-                inspector_visible: true,
                 results_visible: true,
                 explorer_width: 28,
-                inspector_width: 28,
                 results_height: 12,
             },
             mouse: true,
@@ -1413,10 +1410,8 @@ impl Model {
         dexo_storage::WorkbenchLayout {
             version: dexo_storage::LAYOUT_VERSION,
             explorer_visible: self.panes.explorer_visible,
-            inspector_visible: self.panes.inspector_visible,
             results_visible: self.panes.results_visible,
             explorer_width: self.panes.explorer_width,
-            inspector_width: self.panes.inspector_width,
             results_height: self.panes.results_height,
             focused_panel: format!("{:?}", self.focus).to_ascii_lowercase(),
             active_tab: self.tabs.active,

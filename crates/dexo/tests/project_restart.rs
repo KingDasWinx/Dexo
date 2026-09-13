@@ -88,7 +88,6 @@ fn restart_restores_project_documents_layout_and_active_items() {
     assert_eq!(restored, expected);
     let compact = WorkbenchLayout {
         explorer_width: 200,
-        inspector_width: 200,
         results_height: 80,
         ..WorkbenchLayout::default()
     }

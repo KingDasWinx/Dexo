@@ -135,28 +135,12 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::Results)),
         },
         CommandSpec {
-            id: "focus.inspector",
-            title: "Focus Inspector",
-            keywords: &["details", "side"],
-            shortcut: Some("Alt+4"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::Inspector)),
-        },
-        CommandSpec {
             id: "layout.cycle",
             title: "Cycle Layout",
             keywords: &["preset", "panes", "split"],
             shortcut: Some("F10"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::CycleLayout),
-        },
-        CommandSpec {
-            id: "layout.hide_inspector",
-            title: "Hide Inspector",
-            keywords: &["layout", "pane", "toggle"],
-            shortcut: Some("Alt+I"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::HideInspector),
         },
         CommandSpec {
             id: "layout.hide_explorer",
@@ -213,22 +197,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: Some("Alt+["),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ShrinkExplorer),
-        },
-        CommandSpec {
-            id: "layout.inspector_grow",
-            title: "Grow Inspector Pane",
-            keywords: &["split", "width"],
-            shortcut: Some("Alt+="),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::GrowInspector),
-        },
-        CommandSpec {
-            id: "layout.inspector_shrink",
-            title: "Shrink Inspector Pane",
-            keywords: &["split", "width"],
-            shortcut: Some("Alt+-"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::ShrinkInspector),
         },
         CommandSpec {
             id: "data.copy.csv",
@@ -721,14 +689,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::PrevResultTab),
         },
         CommandSpec {
-            id: "inspector.next_tab",
-            title: "Next Inspector Tab",
-            keywords: &["ddl", "privileges"],
-            shortcut: Some("Tab"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::InspectorNextTab),
-        },
-        CommandSpec {
             id: "settings.mode",
             title: "Toggle Light/Dark Mode",
             keywords: &["dark", "light", "contrast"],
@@ -1166,16 +1126,12 @@ fn hidden(id: &str) -> bool {
             | "focus.explorer"
             | "focus.editor"
             | "focus.results"
-            | "focus.inspector"
-            | "layout.hide_inspector"
             | "layout.hide_explorer"
             | "layout.hide_results"
             | "layout.results_grow"
             | "layout.results_shrink"
             | "layout.explorer_grow"
             | "layout.explorer_shrink"
-            | "layout.inspector_grow"
-            | "layout.inspector_shrink"
             // tab switching
             | "tab.sql"
             | "tab.data"
@@ -1187,7 +1143,6 @@ fn hidden(id: &str) -> bool {
             | "document.prev"
             | "document.prev_focus"
             | "document.next_focus"
-            | "inspector.next_tab"
             | "results.next_tab"
             | "results.prev_tab"
             // already a labelled row inside the Settings screen

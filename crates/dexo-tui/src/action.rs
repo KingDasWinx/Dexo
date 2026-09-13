@@ -176,7 +176,6 @@ pub enum Action {
     SelectResultTab {
         index: usize,
     },
-    InspectorNextTab,
     NextDataPage,
     PrevDataPage,
     SaveActiveDocument,
@@ -358,15 +357,12 @@ pub enum Action {
     ToggleHelp,
     CycleLayout,
     ResetLayout,
-    HideInspector,
     HideExplorer,
     HideResults,
     GrowResults,
     ShrinkResults,
     GrowExplorer,
     ShrinkExplorer,
-    GrowInspector,
-    ShrinkInspector,
     RefreshSqlIntelligence,
     FormatSql,
     EditorUndo,
@@ -481,7 +477,6 @@ pub enum FocusTarget {
     Explorer,
     Editor,
     Results,
-    Inspector,
 }
 
 #[derive(Clone, Debug)]
