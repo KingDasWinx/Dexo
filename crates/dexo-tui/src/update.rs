@@ -575,16 +575,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        // Gated on the editor focus while the strip was only drawn there. It is always
+        // on screen now, and a table document never holds the editor focus at all.
         Action::NextDocumentTabFocus => {
-            if model.focus == Focus::Editor {
-                model.advance_document_tab_focus(1);
-            }
+            model.advance_document_tab_focus(1);
             Vec::new()
         }
         Action::PrevDocumentTabFocus => {
-            if model.focus == Focus::Editor {
-                model.advance_document_tab_focus(-1);
-            }
+            model.advance_document_tab_focus(-1);
             Vec::new()
         }
         Action::ScrollDocumentTabsPrev => {
@@ -6868,6 +6866,33 @@ mod tests {
             dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), name),
             None,
         )
+    }
+
+    /// The document strip is always on screen now, so switching files is a workspace
+    /// action, not an editor one. Alt+Left/Right lived in the `[editor]` context and the
+    /// action itself bailed unless the focus was the editor -- a table document, whose
+    /// grid takes the editor's pane, has neither.
+    #[test]
+    fn alt_arrows_switch_documents_from_the_results_pane() {
+        use crate::action::FocusTarget;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+        let mut model = Model::default();
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+            ));
+        model.active_document = 1;
+        model.focus_active_document_tab();
+        update(&mut model, Action::Focus(FocusTarget::Editor));
+        assert_eq!(model.effective_focus(), Focus::Results);
+
+        let alt = |code| Action::Key(KeyEvent::new(code, KeyModifiers::ALT));
+        update(&mut model, alt(KeyCode::Left));
+        assert_eq!(model.active_document, 0, "alt+left switched nothing");
+        update(&mut model, alt(KeyCode::Right));
+        assert_eq!(model.active_document, 1, "alt+right switched nothing");
     }
 
     /// A table document puts the grid in pane 2 and the console in pane 3. Alt+2 and

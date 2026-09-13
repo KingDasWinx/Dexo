@@ -62,26 +62,32 @@ fn alt_arrows_cycle_document_tabs_and_the_new_button() {
     assert_eq!(model.document_tab_focus, DocumentTabFocus::New);
 }
 
+/// The document strip is always on screen, so switching files works from the output
+/// pane too -- a table document renders its grid there and never holds the editor focus
+/// at all. The Explorer is the exception: it binds these keys to resizing itself.
 #[test]
-fn alt_arrows_do_not_cycle_document_tabs_outside_the_editor() {
-    for focus in [Focus::Explorer, Focus::Results] {
-        for action in [alt_left(), alt_right()] {
-            let mut model = two_documents();
-            model.focus = focus;
+fn alt_arrows_switch_documents_everywhere_but_the_explorer() {
+    let mut model = two_documents();
+    model.focus = Focus::Results;
 
-            update(&mut model, action);
+    update(&mut model, alt_right());
+    assert_eq!(model.active_document, 1);
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(1));
+    assert_eq!(
+        model.focus,
+        Focus::Editor,
+        "switching files lands in the file"
+    );
 
-            assert_eq!(
-                model.active_document, 0,
-                "active document changed in {focus:?}"
-            );
-            assert_eq!(
-                model.document_tab_focus,
-                DocumentTabFocus::Document(0),
-                "document tab focus changed in {focus:?}"
-            );
-            assert_eq!(model.focus, focus, "workbench focus changed in {focus:?}");
-        }
+    for action in [alt_left(), alt_right()] {
+        let mut model = two_documents();
+        model.focus = Focus::Explorer;
+
+        update(&mut model, action);
+
+        assert_eq!(model.active_document, 0, "the sidebar switched a document");
+        assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(0));
+        assert_eq!(model.focus, Focus::Explorer);
     }
 }
 
@@ -128,16 +134,21 @@ fn alt_up_down_resize_results_height_from_editor_or_results() {
 }
 
 #[test]
-fn document_tab_focus_actions_are_ignored_outside_the_editor() {
-    for action in [Action::NextDocumentTabFocus, Action::PrevDocumentTabFocus] {
+fn document_tab_focus_actions_work_from_any_pane() {
+    // Both are palette commands. They used to bail unless the focus was the editor,
+    // which made them silently inert from everywhere the palette can be opened.
+    // Two documents plus the new-document slot, so stepping back from the first wraps
+    // onto that slot rather than onto a document.
+    for (action, expected) in [
+        (Action::NextDocumentTabFocus, DocumentTabFocus::Document(1)),
+        (Action::PrevDocumentTabFocus, DocumentTabFocus::New),
+    ] {
         let mut model = two_documents();
-        let before = model.document_tab_focus;
 
+        let label = format!("{action:?}");
         update(&mut model, action);
 
-        assert_eq!(model.active_document, 0);
-        assert_eq!(model.document_tab_focus, before);
-        assert_eq!(model.focus, Focus::Explorer);
+        assert_eq!(model.document_tab_focus, expected, "{label} did nothing");
     }
 }
 
