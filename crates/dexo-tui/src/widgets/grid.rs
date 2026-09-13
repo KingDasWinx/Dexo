@@ -482,8 +482,8 @@ mod tests {
     fn the_cursor_reaches_the_last_row_the_pane_paints() {
         use crate::model::EditorDocument;
 
-        for w in [60u16, 80, 100, 120, 160, 200] {
-            for h in [20u16, 24, 30, 40, 50] {
+        for w in [60u16, 80, 100, 120, 160, 267] {
+            for h in [20u16, 24, 30, 40, 59] {
                 for table in [false, true] {
                     let mut model = Model::default();
                     if table {
