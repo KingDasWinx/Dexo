@@ -4227,7 +4227,7 @@ fn ensure_result_tab<'a>(
             format!("result {}", next + 1),
         );
         tab.status = crate::model::OperationStatus::Running;
-        model.results.tabs.push(tab);
+        model.results.push_tab(tab);
     }
     let tab = &mut model.results.tabs[index];
     tab.key = crate::model::ResultKey {
@@ -4815,8 +4815,7 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
     );
     tab.source_sql = source_sql;
     tab.status = crate::model::OperationStatus::Running;
-    model.results.tabs = vec![tab];
-    model.results.active = 0;
+    model.results.replace_tabs(tab);
     model.active_operation = Some(operation);
     vec![Effect::StartScript(crate::action::ScriptRequest {
         key,

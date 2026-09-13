@@ -436,7 +436,7 @@ impl Notifications {
     }
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResultsState {
     pub tabs: Vec<ResultTab>,
     pub active: usize,
@@ -447,6 +447,9 @@ pub struct ResultsState {
     /// that had nothing to do with it.
     pub explain_scroll: u16,
     pub messages_scroll: u16,
+    /// Last size the output pane handed down. Kept so a tab created between two syncs
+    /// is born the right size instead of with `GridViewport`'s defaults.
+    viewport_size: (u16, u16),
 }
 
 /// Views of the output pane, in selector order.
@@ -472,7 +475,44 @@ impl ResultsView {
     }
 }
 
+impl Default for ResultsState {
+    fn default() -> Self {
+        let empty = GridViewport::default();
+        Self {
+            tabs: Vec::new(),
+            active: 0,
+            view: ResultsView::default(),
+            explain_scroll: 0,
+            messages_scroll: 0,
+            viewport_size: (empty.width as u16, empty.height as u16),
+        }
+    }
+}
+
 impl ResultsState {
+    /// Every tab is drawn in the same pane, so the pane sizes all of them. Sizing only
+    /// the active one left the others believing in `GridViewport::default()`, and
+    /// switching to one walked the cursor past the rows the pane paints.
+    pub fn set_viewport_size(&mut self, width: u16, height: u16) {
+        self.viewport_size = (width, height);
+        for tab in &mut self.tabs {
+            tab.grid.set_viewport_size(width, height);
+        }
+    }
+
+    pub fn push_tab(&mut self, mut tab: ResultTab) {
+        let (width, height) = self.viewport_size;
+        tab.grid.set_viewport_size(width, height);
+        self.tabs.push(tab);
+    }
+
+    /// Replaces every result set with one, as reloading a table's data does.
+    pub fn replace_tabs(&mut self, tab: ResultTab) {
+        self.tabs.clear();
+        self.active = 0;
+        self.push_tab(tab);
+    }
+
     fn grid(&self) -> &GridModel {
         self.tabs
             .get(self.active)
@@ -482,7 +522,7 @@ impl ResultsState {
 
     fn grid_mut(&mut self) -> &mut GridModel {
         if self.tabs.is_empty() {
-            self.tabs.push(ResultTab::new(
+            self.push_tab(ResultTab::new(
                 ResultKey {
                     operation: OperationKey::new(OperationId::new(), "", "", 0),
                     index: 0,

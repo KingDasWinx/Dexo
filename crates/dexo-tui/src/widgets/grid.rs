@@ -571,6 +571,98 @@ mod tests {
         assert_eq!(grid.viewport().column_offset, 0);
     }
 
+    /// The cursor must always be on a row the pane paints, at every size, in either pane
+    /// the grid can occupy, and in any result set. Each of these has drifted on its own.
+    #[test]
+    fn the_cursor_is_painted_at_every_size_and_in_every_result_set() {
+        use crate::model::{EditorDocument, GridModel, ResultTab};
+
+        for (w, h) in [(100u16, 24u16), (160, 50), (80, 24), (120, 35), (200, 60)] {
+            for table in [false, true] {
+                let mut model = Model::default();
+                if table {
+                    model
+                        .documents
+                        .push(EditorDocument::new_table(dexo_app::parse_qualified(
+                            "public.orders",
+                        )));
+                    model.active_document = 1;
+                }
+                *model.results = GridModel::sample_rows(500);
+                model.apply_size(w, h);
+
+                let key = model.results.tabs[0].key.clone();
+                let mut second = ResultTab::new(key, "result 2");
+                second.grid = GridModel::sample_rows(500);
+                model.results.push_tab(second);
+
+                for index in [0, 1] {
+                    update(&mut model, Action::SelectResultTab { index });
+                    for step in 0..30 {
+                        update(&mut model, Action::ResultsDown);
+                        if step % 7 == 0 {
+                            update(&mut model, Action::ResultsPageDown);
+                        }
+                        let cursor = model.results.cursor_row().expect("cursor");
+                        let view = render_to_string(&model, w, h);
+                        assert!(
+                            view.contains(&format!("▸ {cursor} ")),
+                            "{w}x{h} table={table} set={index}: \
+                             the cursor is on row {cursor}, which the pane does not paint"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    /// Every result tab is drawn in the same pane, so every one has to be sized by it.
+    /// Only the active tab ever was: any other kept `GridViewport::default()`'s twenty
+    /// rows, and walking down it moved the cursor past what the pane paints without ever
+    /// scrolling -- the selection simply stopped being on screen.
+    #[test]
+    fn every_result_tab_is_sized_by_the_pane_that_draws_it() {
+        use crate::model::{EditorDocument, GridModel, ResultTab};
+
+        // a table document, whose grid height actually tracks the terminal
+        let mut model = Model::default();
+        model
+            .documents
+            .push(EditorDocument::new_table(dexo_app::parse_qualified(
+                "public.orders",
+            )));
+        model.active_document = 1;
+        *model.results = GridModel::sample_rows(500);
+        model.apply_size(100, 24);
+
+        let key = model.results.tabs[0].key.clone();
+        let mut second = ResultTab::new(key, "result 2");
+        second.grid = GridModel::sample_rows(500);
+        model.results.push_tab(second);
+        // resize after the tab exists: the pane has to reach every tab, not just the
+        // one that happens to be on screen when it changes size
+        model.apply_size(120, 35);
+        let painted = model.results.viewport().height;
+        assert!(painted > 20, "pick a size where the two differ: {painted}");
+        update(&mut model, Action::SelectResultTab { index: 1 });
+
+        assert_eq!(
+            model.results.viewport().height,
+            painted,
+            "the second result set is sized by something other than its pane"
+        );
+
+        for _ in 0..(painted + 4) {
+            update(&mut model, Action::ResultsDown);
+        }
+        let cursor = model.results.cursor_row().expect("cursor");
+        let view = render_to_string(&model, 120, 35);
+        assert!(
+            view.contains(&format!("▸ {cursor} ")),
+            "the cursor walked off the pane at row {cursor}:\n{view}"
+        );
+    }
+
     /// A table document has no editor: the grid takes that slot and the bottom pane is
     /// just a log. Sharing the editor's split left the grid -- the entire screen there --
     /// with four rows out of twenty-four.
