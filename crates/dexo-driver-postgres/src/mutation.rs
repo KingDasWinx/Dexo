@@ -24,18 +24,12 @@ fn qualify(name: &QualifiedName) -> String {
     parts.join(".")
 }
 
+/// The same binding the query path uses. Boxing a `String` here instead meant its
+/// `ToSql::accepts` decided the statement: writing a date, a number or anything else
+/// non-textual failed with "postgres query failed", because the value went out as a
+/// binary payload for a type that is not text.
 fn to_box(value: &DbValue) -> Box<dyn ToSql + Sync + Send> {
-    match value {
-        DbValue::Null => Box::new(Option::<i32>::None),
-        DbValue::Bool(value) => Box::new(*value),
-        DbValue::I64(value) => Box::new(*value),
-        DbValue::U64(value) => Box::new(i64::try_from(*value).unwrap_or(i64::MAX)),
-        DbValue::Decimal(value) | DbValue::Text(value) | DbValue::Json(value) => {
-            Box::new(value.clone())
-        }
-        DbValue::Bytes(value) => Box::new(value.clone()),
-        DbValue::Native { text, .. } => Box::new(text.clone()),
-    }
+    Box::new(crate::params::PgParam::from_value(value))
 }
 
 struct Binder {
