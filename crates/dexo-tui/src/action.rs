@@ -322,8 +322,9 @@ pub enum Action {
     AdminResume,
     ConfirmAdmin,
     OpenMcpProfiles,
-    ConfirmMcpEnable,
+    ToggleMcpProfile,
     RevokeAllMcpGrants,
+    RevokeProfileGrants,
     McpGrantsRevoked {
         count: usize,
     },
@@ -702,8 +703,9 @@ pub enum Effect {
     LoadMcpProfiles,
     LoadConnectionProfiles,
     LoadMcpAudit,
-    EnableMcpProfile {
+    SetMcpProfileEnabled {
         name: String,
+        enabled: bool,
     },
     RevokeMcpGrants {
         profile: String,

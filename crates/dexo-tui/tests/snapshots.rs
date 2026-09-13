@@ -246,8 +246,8 @@ fn snapshot_mcp_profiles_preview_and_confirm() {
     model.mcp_profiles = dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
     // enabling arms on the first press and commits on the second
-    update(&mut model, Action::ConfirmMcpEnable);
-    update(&mut model, Action::ConfirmMcpEnable);
+    update(&mut model, Action::ToggleMcpProfile);
+    update(&mut model, Action::ToggleMcpProfile);
     update(&mut model, Action::RevokeAllMcpGrants);
     insta::assert_snapshot!(render_to_string(&model, 60, 20));
 }

@@ -320,7 +320,9 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
-            crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
+            crate::Effect::SetMcpProfileEnabled { name, enabled } => {
+                self.set_mcp_profile_enabled(name, enabled).await
+            }
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
             crate::Effect::WriteDiagnostics { path, bundle } => {
@@ -1456,7 +1458,7 @@ impl WorkbenchRuntime {
         self.emit(Action::McpAuditLoaded { events }).await;
     }
 
-    async fn enable_mcp_profile(&self, name: String) {
+    async fn set_mcp_profile_enabled(&self, name: String, enabled: bool) {
         let Ok(paths) = AppPaths::discover() else {
             return;
         };
@@ -1465,7 +1467,7 @@ impl WorkbenchRuntime {
         };
         let repo = dexo_storage::McpProfileRepository::new(db.connection());
         if let Ok(Some(mut profile)) = repo.get_by_name(&name) {
-            profile.enabled = true;
+            profile.enabled = enabled;
             let _ = repo.save(&profile);
         }
         self.load_mcp_profiles().await;
@@ -1473,14 +1475,32 @@ impl WorkbenchRuntime {
 
     async fn revoke_mcp(&self, profile: String) {
         let Ok(paths) = AppPaths::discover() else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
             return;
         };
         let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
             return;
         };
         use dexo_app::mcp::GrantLedger;
-        let _ = ledger.revoke_profile(&profile);
-        self.load_mcp_audit().await;
+        match ledger.revoke_profile(&profile) {
+            Ok(count) => {
+                self.emit(Action::McpGrantsRevoked { count }).await;
+                self.load_mcp_audit().await;
+            }
+            Err(error) => {
+                self.emit(Action::McpRevokeFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
     }
 
     async fn revoke_all_mcp(&self) {

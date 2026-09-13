@@ -17,7 +17,7 @@ default  no connection  —
 │             │grant data_write data_insert 900s                                     │             │
 │             │diff profile db.public.* -> grant db.public.items                     │             │
 │             │confirm revoke all grants                                             │             │
-│             │                                                                      │             │
+│             │e enable/disable  r revoke profile  R revoke all  up/down select  esc │             │
 │             │                                                                      │─────────────┘
 │             │                                                                      │─────────────┐
 │             └──────────────────────────────────────────────────────────────────────┘             │

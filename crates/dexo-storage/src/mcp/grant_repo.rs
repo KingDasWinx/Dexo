@@ -77,12 +77,12 @@ pub fn revoke(conn: &Connection, id: Uuid) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub fn revoke_profile(conn: &Connection, profile: &str) -> anyhow::Result<()> {
-    conn.execute(
+pub fn revoke_profile(conn: &Connection, profile: &str) -> anyhow::Result<usize> {
+    let revoked = conn.execute(
         "UPDATE mcp_grants SET remaining_uses = 0, revoked = 1, revision = revision + 1 WHERE profile_name = ?1",
         params![profile],
     )?;
-    Ok(())
+    Ok(revoked)
 }
 
 pub fn revoke_all(conn: &Connection) -> anyhow::Result<usize> {

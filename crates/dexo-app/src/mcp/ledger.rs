@@ -16,7 +16,7 @@ pub trait GrantLedger: Send + Sync {
     fn insert_grant(&self, grant: Grant) -> Result<(), AppError>;
     fn consume(&self, id: Uuid, now: i64) -> Result<Grant, AppError>;
     fn revoke(&self, id: Uuid) -> Result<(), AppError>;
-    fn revoke_profile(&self, profile: &str) -> Result<(), AppError>;
+    fn revoke_profile(&self, profile: &str) -> Result<usize, AppError>;
     fn reserve_operation(&self, record: OperationRecord) -> Result<OperationRecord, AppError>;
     fn lookup_operation(
         &self,
@@ -111,16 +111,18 @@ impl GrantLedger for MemoryGrantLedger {
         }
     }
 
-    fn revoke_profile(&self, profile: &str) -> Result<(), AppError> {
+    fn revoke_profile(&self, profile: &str) -> Result<usize, AppError> {
         let mut inner = self.inner.lock().expect("ledger");
+        let mut revoked = 0;
         for grant in &mut inner.grants {
-            if grant.profile == profile {
+            if grant.profile == profile && !grant.revoked {
                 grant.remaining_uses = 0;
                 grant.revoked = true;
+                revoked += 1;
             }
         }
         inner.revision += 1;
-        Ok(())
+        Ok(revoked)
     }
 
     fn reserve_operation(&self, record: OperationRecord) -> Result<OperationRecord, AppError> {

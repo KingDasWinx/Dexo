@@ -1038,25 +1038,28 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
             model.mcp_profiles.open = true;
             vec![Effect::LoadMcpProfiles]
         }
-        Action::ConfirmMcpEnable => {
-            if model.mcp_profiles.enable_selected() {
-                vec![Effect::EnableMcpProfile {
-                    name: model.mcp_profiles.name.clone(),
-                }]
-            } else {
-                Vec::new()
-            }
-        }
+        Action::ToggleMcpProfile => match model.mcp_profiles.toggle_selected() {
+            Some(enabled) => vec![Effect::SetMcpProfileEnabled {
+                name: model.mcp_profiles.name.clone(),
+                enabled,
+            }],
+            None => Vec::new(),
+        },
+        Action::RevokeProfileGrants => match model.mcp_profiles.revoke_profile() {
+            Some(profile) => vec![Effect::RevokeMcpGrants { profile }],
+            None => Vec::new(),
+        },
         Action::RevokeAllMcpGrants => {
             model.mcp_audit.open = false;
             model.mcp_profiles.open = true;
-            model.mcp_profiles.confirm_revoke = true;
+            model.mcp_profiles.confirm_revoke =
+                Some(crate::screens::mcp_profiles::RevokeScope::All);
             model.mcp_profiles.preview = "confirm revoke all grants".into();
             Vec::new()
         }
         Action::McpGrantsRevoked { count } => {
             model.mcp_profiles.grants.clear();
-            model.mcp_profiles.confirm_revoke = false;
+            model.mcp_profiles.confirm_revoke = None;
             model.mcp_profiles.preview = format!("revoked {count} grants");
             Vec::new()
         }
@@ -2154,10 +2157,9 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
             Vec::new()
         }
         Some(HitTarget::Button(HitButton::Revoke)) => {
-            if model.mcp_profiles.confirm_revoke {
+            if model.mcp_profiles.revoke_all() {
                 vec![Effect::RevokeAllMcpGrants]
             } else {
-                model.mcp_profiles.revoke_all();
                 Vec::new()
             }
         }
@@ -2926,7 +2928,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return match key.code {
             KeyCode::Esc => {
                 model.mcp_profiles.open = false;
-                model.mcp_profiles.confirm_revoke = false;
+                model.mcp_profiles.confirm_revoke = None;
                 Vec::new()
             }
             KeyCode::Up => {
@@ -2937,13 +2939,23 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.mcp_profiles.select_next();
                 Vec::new()
             }
-            KeyCode::Enter | KeyCode::Char('r') if model.mcp_profiles.confirm_revoke => {
-                vec![Effect::RevokeAllMcpGrants]
-            }
-            KeyCode::Char('e') => update(model, Action::ConfirmMcpEnable),
-            KeyCode::Char('r') => {
-                model.mcp_profiles.revoke_all();
-                Vec::new()
+            KeyCode::Enter => match model.mcp_profiles.confirm_pending_revoke() {
+                Some(crate::screens::mcp_profiles::RevokeScope::Profile(profile)) => {
+                    vec![Effect::RevokeMcpGrants { profile }]
+                }
+                Some(crate::screens::mcp_profiles::RevokeScope::All) => {
+                    vec![Effect::RevokeAllMcpGrants]
+                }
+                None => Vec::new(),
+            },
+            KeyCode::Char('e') => update(model, Action::ToggleMcpProfile),
+            KeyCode::Char('r') => update(model, Action::RevokeProfileGrants),
+            KeyCode::Char('R') => {
+                if model.mcp_profiles.revoke_all() {
+                    vec![Effect::RevokeAllMcpGrants]
+                } else {
+                    Vec::new()
+                }
             }
             _ => Vec::new(),
         };

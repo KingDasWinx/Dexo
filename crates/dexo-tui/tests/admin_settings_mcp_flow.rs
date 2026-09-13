@@ -199,12 +199,81 @@ fn enabling_an_mcp_profile_takes_two_presses() {
 
     let effects = update(&mut model, Action::Key(key('e')));
     assert!(
-        effects
-            .iter()
-            .any(|effect| matches!(effect, dexo_tui::Effect::EnableMcpProfile { .. })),
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::SetMcpProfileEnabled { enabled: true, .. }
+        )),
         "{effects:?}"
     );
     assert!(model.mcp_profiles.enabled);
+}
+
+/// Disabling only takes access away, so it commits on the first press. Enabling grants
+/// it, so it still arms first. The asymmetry is the point.
+#[test]
+fn disabling_a_profile_takes_one_press_while_enabling_takes_two() {
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    update(&mut model, Action::Key(key('e')));
+    update(&mut model, Action::Key(key('e')));
+    assert!(model.mcp_profiles.enabled);
+
+    let effects = update(&mut model, Action::Key(key('e')));
+    assert!(!model.mcp_profiles.enabled, "one press must disable");
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::SetMcpProfileEnabled { enabled: false, .. }
+        )),
+        "{effects:?}"
+    );
+
+    // and it is armed again on the way back up
+    let armed = update(&mut model, Action::Key(key('e')));
+    assert!(armed.is_empty());
+    assert!(!model.mcp_profiles.enabled);
+}
+
+/// `r` acts on the selected row; the global sweep moved to `R`. A screen listing
+/// profiles where an unmodified key hits everything is the surprising one.
+#[test]
+fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    let armed = update(&mut model, Action::Key(key('r')));
+    assert!(armed.is_empty(), "per-profile revoke must arm first");
+    assert!(
+        model
+            .mcp_profiles
+            .preview
+            .contains("confirm revoke grants for")
+    );
+
+    let effects = update(&mut model, Action::Key(key('r')));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::RevokeMcpGrants { profile } if profile == "assistant"
+        )),
+        "{effects:?}"
+    );
+
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    update(&mut model, Action::Key(key('R')));
+    let effects = update(&mut model, Action::Key(key('R')));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::RevokeAllMcpGrants)),
+        "{effects:?}"
+    );
 }
 
 /// Moving the cursor must not let a confirmation armed on one profile commit on
