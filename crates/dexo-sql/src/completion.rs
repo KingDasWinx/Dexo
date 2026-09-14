@@ -1,3 +1,4 @@
+use crate::context::{CursorContext, Intent, RowSource, analyze};
 use crate::dialect::Dialect;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -87,16 +88,27 @@ pub fn complete(
     sql: &str,
     cursor: usize,
     catalog: &dyn Catalog,
-    _dialect: Dialect,
+    dialect: Dialect,
 ) -> Vec<CompletionItem> {
     let cursor = cursor.min(sql.len());
-    let prefix = &sql[..cursor];
-    if let Some(alias) = alias_before_dot(prefix)
-        && let Some(table) = resolve_alias(sql, alias, catalog)
+    complete_with(&analyze(sql, cursor, dialect), catalog)
+}
+
+/// The same, for a caller that has already analysed the cursor. The editor needs the
+/// context anyway -- to decide whether to open the popup at all -- and the two must not
+/// arrive at different answers about what is being typed.
+pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<CompletionItem> {
+    if context.intent == Intent::Suppressed {
+        return Vec::new();
+    }
+    if let Some(source) = context.target()
+        && let Some(table) = resolve_source(source, catalog)
     {
+        let token = context.prefix.to_ascii_lowercase();
         let mut items: Vec<_> = table
             .columns
             .iter()
+            .filter(|column| token.is_empty() || column.to_ascii_lowercase().starts_with(&token))
             .map(|column| CompletionItem {
                 label: column.clone(),
                 kind: CompletionKind::Column,
@@ -109,7 +121,7 @@ pub fn complete(
         items.sort_by(|a, b| a.label.cmp(&b.label));
         return items;
     }
-    let token = current_token(prefix);
+    let token = context.prefix.to_ascii_lowercase();
     let mut items = Vec::new();
     for table in catalog.tables() {
         let rank = table_rank(&table);
@@ -165,15 +177,6 @@ fn table_rank(table: &TableInfo) -> u8 {
     }
 }
 
-fn alias_before_dot(prefix: &str) -> Option<&str> {
-    let trimmed = prefix.trim_end();
-    let trimmed = trimmed.strip_suffix('.')?;
-    let ident = trimmed
-        .rsplit(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
-        .next()?;
-    if ident.is_empty() { None } else { Some(ident) }
-}
-
 pub fn current_token(prefix: &str) -> String {
     prefix
         .rsplit(|ch: char| !ch.is_ascii_alphanumeric() && ch != '_')
@@ -182,21 +185,20 @@ pub fn current_token(prefix: &str) -> String {
         .to_ascii_lowercase()
 }
 
-fn resolve_alias(sql: &str, alias: &str, catalog: &dyn Catalog) -> Option<TableInfo> {
-    let hay = sql.to_ascii_lowercase();
-    let alias_l = alias.to_ascii_lowercase();
-    for table in catalog.tables() {
-        let name = table.name.to_ascii_lowercase();
-        let qualified = table.qualified.to_ascii_lowercase();
-        if hay.contains(&format!("{qualified} {alias_l}"))
-            || hay.contains(&format!("{qualified} as {alias_l}"))
-            || hay.contains(&format!("{name} {alias_l}"))
-            || hay.contains(&format!("{name} as {alias_l}"))
-        {
-            return Some(table);
-        }
-    }
-    None
+/// The catalog entry a row source names. Matching used to be `sql.contains("users u")`
+/// over the whole lowercased buffer, which found `users_archive ua` and reached into
+/// other statements; the name now comes from the parsed FROM list instead.
+pub fn resolve_source(source: &RowSource, catalog: &dyn Catalog) -> Option<TableInfo> {
+    let wanted = source.name.to_ascii_lowercase();
+    let schema = source.schema.as_ref().map(|s| s.to_ascii_lowercase());
+    catalog
+        .tables()
+        .into_iter()
+        .filter(|table| table.name.to_ascii_lowercase() == wanted)
+        .find(|table| match &schema {
+            Some(schema) => table.schema.to_ascii_lowercase() == *schema,
+            None => true,
+        })
 }
 
 fn split_qualified(qualified: &str) -> (String, String) {

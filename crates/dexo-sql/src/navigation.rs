@@ -1,6 +1,8 @@
 use dexo_driver_api::QualifiedName;
 
-use crate::completion::{Catalog, TableInfo};
+use crate::completion::{Catalog, resolve_source};
+use crate::context::analyze;
+use crate::dialect::Dialect;
 
 pub fn definition_at(sql: &str, cursor: usize, catalog: &dyn Catalog) -> Option<QualifiedName> {
     let token = token_around(sql, cursor);
@@ -12,7 +14,14 @@ pub fn definition_at(sql: &str, cursor: usize, catalog: &dyn Catalog) -> Option<
         None => (None, token),
     };
     if let Some(alias) = qualifier {
-        let table = resolve_table(sql, alias, catalog)?;
+        // The same FROM-list resolution completion uses: this file carried a copy of
+        // the old `sql.contains("users u")` scan, with the same two defects.
+        let context = analyze(sql, cursor, Dialect::Postgres);
+        let source = context
+            .row_sources
+            .iter()
+            .find(|source| source.qualifier().eq_ignore_ascii_case(alias))?;
+        let table = resolve_source(source, catalog)?;
         if table
             .columns
             .iter()
@@ -52,23 +61,6 @@ fn token_around(sql: &str, cursor: usize) -> &str {
         }
     }
     sql.get(start..end).unwrap_or("")
-}
-
-fn resolve_table(sql: &str, alias: &str, catalog: &dyn Catalog) -> Option<TableInfo> {
-    let hay = sql.to_ascii_lowercase();
-    let alias_l = alias.to_ascii_lowercase();
-    for table in catalog.tables() {
-        let name = table.name.to_ascii_lowercase();
-        let qualified = table.qualified.to_ascii_lowercase();
-        if hay.contains(&format!("{qualified} {alias_l}"))
-            || hay.contains(&format!("{qualified} as {alias_l}"))
-            || hay.contains(&format!("{name} {alias_l}"))
-            || hay.contains(&format!("{name} as {alias_l}"))
-        {
-            return Some(table);
-        }
-    }
-    None
 }
 
 fn split_target(qualified: &str, column: Option<&str>) -> QualifiedName {

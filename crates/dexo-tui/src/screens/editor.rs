@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
     CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete, current_token, expand_placeholders, format_sql, named_parameters,
+    complete_with, current_token, expand_placeholders, format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -183,21 +183,27 @@ fn sync_catalog(model: &mut Model) {
 fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
     let at = byte_cursor.min(sql.len());
     let dialect = editor_dialect(model);
+    // One analysis, shared: deciding whether to open the popup and deciding what goes in
+    // it have to agree about what is being typed.
+    let context = dexo_sql::analyze(sql, at, dialect);
     // Inside a string literal or a comment nothing the catalog knows is an answer, and
     // a popup there reads as the editor not understanding what you are writing.
-    if dexo_sql::suppressed_at(sql, at, dialect) {
+    if context.intent == dexo_sql::Intent::Suppressed {
+        close_completion(model);
+        return;
+    }
+    // Typing opens the popup only where an identifier is being written, or right after
+    // a dot. Asking for it explicitly always opens it.
+    if live && context.prefix.is_empty() && context.qualifier.is_empty() {
         close_completion(model);
         return;
     }
     sync_catalog(model);
     let items = match &model.editor.catalog_snapshot {
-        Some(snapshot) => complete(sql, at, snapshot, dialect),
-        None => complete(sql, at, &model.editor.catalog, dialect),
+        Some(snapshot) => complete_with(&context, snapshot),
+        None => complete_with(&context, &model.editor.catalog),
     };
-    let prefix = &sql[..at];
-    let token = current_token(prefix);
-    let after_dot = prefix.trim_end().ends_with('.');
-    if items.is_empty() || (live && token.is_empty() && !after_dot) {
+    if items.is_empty() {
         close_completion(model);
         return;
     }

@@ -1,4 +1,5 @@
 pub mod completion;
+pub mod context;
 pub mod derived;
 pub mod diagnostic;
 pub mod dialect;
@@ -13,7 +14,11 @@ pub mod snippet;
 pub mod statement;
 
 pub use completion::{
-    Catalog, CompletionItem, CompletionKind, FakeCatalog, complete, current_token, labels,
+    Catalog, CompletionItem, CompletionKind, FakeCatalog, complete, complete_with, current_token,
+    labels,
+};
+pub use context::{
+    Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, analyze,
 };
 pub use derived::{derive_page, filter_values};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
