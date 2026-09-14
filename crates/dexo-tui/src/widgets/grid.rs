@@ -361,20 +361,25 @@ mod tests {
             nullable: false,
         }]);
         grid.append_rows((1..=200).map(|id| vec![DbValue::I64(id)]).collect());
+        let pad = crate::model::COLUMN_PADDING;
         grid.set_viewport_size(40, 10);
-        assert_eq!(grid.column_widths()[0], 2, "first rows only need two digits");
+        assert_eq!(
+            grid.column_widths()[0],
+            2 + pad,
+            "first rows only need two digits"
+        );
 
         grid.scroll_rows(120);
         assert_eq!(
             grid.column_widths()[0],
-            3,
+            3 + pad,
             "three-digit ids must not be clipped once they scroll into view"
         );
 
         grid.scroll_rows(-120);
         assert_eq!(
             grid.column_widths()[0],
-            3,
+            3 + pad,
             "widths must not shrink back and make the grid jitter"
         );
     }
@@ -869,4 +874,5 @@ mod tests {
         update(&mut model, Action::ResultsUp);
         assert_eq!(model.results.messages_scroll, 1);
     }
+
 }

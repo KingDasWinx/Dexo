@@ -990,6 +990,7 @@ impl GridModel {
                 header
                     .max(body)
                     .clamp(1, 40)
+                    .saturating_add(COLUMN_PADDING)
                     .max(previous.get(index).copied().unwrap_or(0))
             })
             .collect();
@@ -1082,6 +1083,12 @@ pub fn truncate_cell(text: &str, width: usize) -> String {
     out.push('…');
     out
 }
+
+/// Breathing room past the widest value in a column. Sized to the content alone, the
+/// columns sat one space apart with the rest of the pane empty next to them. It is part
+/// of the natural width, so `allocate_column_widths` gives it up like any other
+/// character when the row stops fitting.
+pub const COLUMN_PADDING: u16 = 2;
 
 /// Fits `natural` column widths into `available` terminal columns.
 ///
