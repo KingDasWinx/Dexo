@@ -228,9 +228,17 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
                 .zebra(row.source_index % 2 == 1, model.capabilities)
         };
         let (row_widths, row_overflowed) = if is_active || is_sel {
+            let marker = sel_marker.chars().count() + 1;
             spans.push(Span::styled(format!("{sel_marker} "), row_style));
-            remaining = remaining.saturating_sub(sel_marker.chars().count() + 1);
-            allocate_column_widths(&natural_widths, remaining)
+            remaining = remaining.saturating_sub(marker);
+            // The marker takes the first column's breathing room instead of pushing the
+            // row sideways: re-fitting the widths here left every column on the cursor
+            // row two characters off from the header above it.
+            let mut widths = cell_widths.clone();
+            if let Some(first) = widths.first_mut() {
+                *first = first.saturating_sub(marker as u16).max(1);
+            }
+            (widths, overflowed)
         } else {
             (cell_widths.clone(), overflowed)
         };
@@ -875,4 +883,56 @@ mod tests {
         assert_eq!(model.results.messages_scroll, 1);
     }
 
+    /// Columns are sized to their widest value plus `COLUMN_PADDING`, and the selection
+    /// marker spends the first column's share of it -- re-fitting the widths for the
+    /// marker used to slide every column on the cursor row two characters right of the
+    /// header above it.
+    #[test]
+    fn the_cursor_row_lines_up_with_the_header() {
+        use crate::model::{COLUMN_PADDING, Model};
+        use dexo_driver_api::{ColumnMeta, DbValue};
+
+        let mut model = Model::default();
+        model.results.set_columns(
+            ["id", "name"]
+                .iter()
+                .map(|name| ColumnMeta {
+                    name: (*name).into(),
+                    type_name: "text".into(),
+                    nullable: true,
+                })
+                .collect(),
+        );
+        model.results.append_rows(
+            (2..5)
+                .map(|i| vec![DbValue::I64(i), DbValue::Text(format!("Marca {i}"))])
+                .collect(),
+        );
+        model.apply_size(120, 24);
+        model.results.select_row(1);
+
+        assert_eq!(
+            model.results.column_widths()[0],
+            "id".len() as u16 + COLUMN_PADDING,
+            "a column no wider than its header must still carry its breathing room"
+        );
+        let view = render_to_string(&model, 120, 24);
+        // Counted in characters: the borders around the pane are multi-byte, and so is
+        // the marker on the cursor row.
+        let column_of = |needle: &str| {
+            view.lines()
+                .find_map(|line| line.find(needle).map(|at| line[..at].chars().count()))
+                .unwrap_or_else(|| panic!("{needle} is not on screen:\n{view}"))
+        };
+        assert_eq!(
+            column_of("Marca 3"),
+            column_of("Marca 2"),
+            "the cursor row does not line up with the rows around it:\n{view}"
+        );
+        assert_eq!(
+            column_of("Marca 2"),
+            column_of("name"),
+            "the rows do not line up with the header:\n{view}"
+        );
+    }
 }
