@@ -329,6 +329,35 @@ impl WorkbenchRuntime {
                 diagnostic_manager::write(bundle, path, self.action_tx.clone()).await;
             }
             crate::Effect::RunTransfer(request) => self.dispatch_transfer(request).await,
+            crate::Effect::SearchCompletionObjects {
+                connection_id,
+                database_name,
+                document,
+                revision,
+                query,
+                limit,
+            } => {
+                // Spawned, never awaited here: this arm runs on the loop that also draws
+                // frames, and the search opens the catalog snapshot on disk.
+                if let Some(storage) = self.storage.clone() {
+                    let action_tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        if let Ok(objects) = storage
+                            .search_catalog_objects(connection_id, database_name, query, limit)
+                            .await
+                            && !objects.is_empty()
+                        {
+                            let _ = action_tx
+                                .send(Action::CompletionObjectsLoaded {
+                                    document,
+                                    revision,
+                                    objects,
+                                })
+                                .await;
+                        }
+                    });
+                }
+            }
             crate::Effect::LoadSnippets => {
                 if let Some(storage) = &self.storage
                     && let Ok(snippets) = storage.list_snippets().await

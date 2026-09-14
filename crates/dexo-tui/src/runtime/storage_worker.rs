@@ -51,6 +51,17 @@ pub enum StorageCommand {
     ListSnippets {
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_sql::Snippet>>>,
     },
+    /// Names matching `query` from the captured catalog snapshot. The in-memory catalog
+    /// only holds what the user expanded in the sidebar; the snapshot holds everything
+    /// the connection ever reported, and reading it is a disk hit that has no business
+    /// on the keystroke path.
+    SearchCatalogObjects {
+        connection_id: String,
+        database_name: String,
+        query: String,
+        limit: usize,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_driver_api::CatalogObject>>>,
+    },
     DeleteSnippet {
         id: String,
     },
@@ -174,6 +185,26 @@ impl StorageWorker {
                         StorageCommand::DeleteSnippet { id } => {
                             let repo = SnippetRepository::new(db.connection());
                             let _ = repo.delete(&id);
+                        }
+                        StorageCommand::SearchCatalogObjects {
+                            connection_id,
+                            database_name,
+                            query,
+                            limit,
+                            reply,
+                        } => {
+                            let cache = dexo_storage::CatalogCache::new(db.connection());
+                            let result =
+                                cache
+                                    .load_latest(&connection_id, &database_name)
+                                    .map(|objects| {
+                                        dexo_app::search_with_usage(objects, &[], &[], &query)
+                                            .into_iter()
+                                            .map(|hit| hit.object)
+                                            .take(limit)
+                                            .collect()
+                                    });
+                            let _ = reply.send(result);
                         }
                         StorageCommand::CheckpointRecovery(request) => {
                             let repo = RecoveryRepository::new(db.connection());
@@ -342,6 +373,24 @@ impl StorageWorker {
     pub async fn list_snippets(&self) -> anyhow::Result<Vec<dexo_sql::Snippet>> {
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.tx.send(StorageCommand::ListSnippets { reply })?;
+        receive.await?
+    }
+
+    pub async fn search_catalog_objects(
+        &self,
+        connection_id: String,
+        database_name: String,
+        query: String,
+        limit: usize,
+    ) -> anyhow::Result<Vec<dexo_driver_api::CatalogObject>> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx.send(StorageCommand::SearchCatalogObjects {
+            connection_id,
+            database_name,
+            query,
+            limit,
+            reply,
+        })?;
         receive.await?
     }
 

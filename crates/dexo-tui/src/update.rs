@@ -1167,6 +1167,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::RefreshSqlIntelligence => {
             crate::screens::editor::refresh_intelligence(model, true);
+            crate::screens::editor::take_completion_effects(model)
+        }
+        Action::CompletionObjectsLoaded {
+            document,
+            revision,
+            objects,
+        } => {
+            crate::screens::editor::merge_completion_objects(model, &document, revision, objects);
             Vec::new()
         }
         Action::FormatSql => {
@@ -3100,7 +3108,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.focus_active_document_tab();
         }
         crate::screens::editor::refresh_intelligence(model, false);
-        return Vec::new();
+        return crate::screens::editor::take_completion_effects(model);
     }
     Vec::new()
 }
@@ -4288,7 +4296,7 @@ fn catalog_generation_matches(model: &Model, session: &str, generation: u64) -> 
     session == current && generation == model.session_generation
 }
 
-fn catalog_database(model: &Model) -> String {
+pub(crate) fn catalog_database(model: &Model) -> String {
     if model.schema.is_empty() {
         model.connection.name.clone()
     } else {

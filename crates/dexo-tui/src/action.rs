@@ -131,6 +131,14 @@ pub enum Action {
     ExplorerCopyName,
     RefreshCatalogNode,
     RefreshCatalogAll,
+    /// Names the snapshot search turned up. Late by definition, so it carries the
+    /// document and its revision: by the time it lands the buffer may have moved on, and
+    /// a stale list replacing a fresher one is worse than no list at all.
+    CompletionObjectsLoaded {
+        document: String,
+        revision: u64,
+        objects: Vec<dexo_driver_api::CatalogObject>,
+    },
     CatalogLoaded {
         operation: crate::runtime::OperationId,
         session: String,
@@ -802,6 +810,17 @@ pub enum Effect {
         connection_id: String,
         database_name: String,
         generation: u64,
+    },
+    /// Object names for the completion popup, from the captured snapshot rather than the
+    /// handful of objects the sidebar has loaded. Never columns: those come from what is
+    /// already in memory, and waiting on disk for them would stutter the typing.
+    SearchCompletionObjects {
+        connection_id: String,
+        database_name: String,
+        document: String,
+        revision: u64,
+        query: String,
+        limit: usize,
     },
     LoadObjectUsage {
         project_id: String,

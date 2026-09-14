@@ -51,6 +51,9 @@ pub struct EditorState {
     /// cursor is on. Tab walks forward through them and Shift+Tab back.
     snippet_stops: Vec<std::ops::Range<usize>>,
     snippet_stop: usize,
+    /// A search the popup would like answered from the catalog snapshot. Drained by
+    /// `update`, which is the only place that can turn it into an effect.
+    completion_request: Option<(String, u64, String)>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -94,6 +97,7 @@ impl Clone for EditorState {
             completion_alias: false,
             snippet_stops: Vec::new(),
             snippet_stop: 0,
+            completion_request: None,
         }
     }
 }
@@ -146,6 +150,7 @@ impl Default for EditorState {
             completion_alias: false,
             snippet_stops: Vec::new(),
             snippet_stop: 0,
+            completion_request: None,
         }
     }
 }
@@ -243,10 +248,106 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
     // An alias is only worth offering where a table reference actually starts.
     model.editor.completion_alias =
         context.intent == dexo_sql::Intent::Table && context.qualifier.is_empty();
+    request_more_objects(model, &context, items.len());
     model.editor.completions = items;
     model.editor.completion_open = true;
     model.editor.completion_selected = 0;
     model.editor.completion_offset = 0;
+}
+
+/// Asks the snapshot for more names when the objects in memory did not fill the list.
+/// The in-memory catalog only holds what has been expanded in the sidebar, so on a large
+/// database the table you want is usually not in it yet. Never for columns: those are
+/// answered from memory or not at all.
+fn request_more_objects(model: &mut Model, context: &dexo_sql::CursorContext, found: usize) {
+    model.editor.completion_request = None;
+    let names = matches!(
+        context.intent,
+        dexo_sql::Intent::Table | dexo_sql::Intent::Schema | dexo_sql::Intent::Routine
+    );
+    // A prefix of one character matches most of a catalog; a full list already answers
+    // the question. Either way the disk read would buy nothing.
+    if !names || context.prefix.chars().count() < 2 || found >= dexo_sql::rank::CAP {
+        return;
+    }
+    if model.connection.name.is_empty() {
+        return;
+    }
+    let document = model.active_document();
+    model.editor.completion_request = Some((
+        document.id.clone(),
+        document.sql.revision(),
+        context.prefix.clone(),
+    ));
+}
+
+/// Turns a pending search into an effect. Separate from the analysis because only
+/// `update` can emit effects.
+pub fn take_completion_effects(model: &mut Model) -> Vec<crate::Effect> {
+    let Some((document, revision, query)) = model.editor.completion_request.take() else {
+        return Vec::new();
+    };
+    vec![crate::Effect::SearchCompletionObjects {
+        connection_id: model.connection.name.clone(),
+        database_name: crate::update::catalog_database(model),
+        document,
+        revision,
+        query,
+        limit: dexo_sql::rank::CAP,
+    }]
+}
+
+/// Folds names that arrived from the snapshot into the open popup. They are late by
+/// definition, so anything that moved on since the request was made discards them.
+pub fn merge_completion_objects(
+    model: &mut Model,
+    document: &str,
+    revision: u64,
+    objects: Vec<dexo_driver_api::CatalogObject>,
+) {
+    if !model.editor.completion_open {
+        return;
+    }
+    let current = model.active_document();
+    if current.id != document || current.sql.revision() != revision {
+        return;
+    }
+    let sql = current.text();
+    let at = current.byte_cursor();
+    let dialect = editor_dialect(model);
+    let context = dexo_sql::analyze(&sql, at, dialect);
+    let snapshot = dexo_app::SnapshotCatalog::new(objects);
+    // The same engine, over a different catalog: whatever the position wanted, it wants
+    // from these too.
+    let arriving = complete_with(&context, &snapshot);
+    if arriving.is_empty() {
+        return;
+    }
+    // The user may already be on an item; keep them on it by name. Restoring the index
+    // instead would move the selection out from under them as the list reorders.
+    let selected = model
+        .editor
+        .completions
+        .get(model.editor.completion_selected)
+        .map(|item| item.label.clone());
+    let mut merged = std::mem::take(&mut model.editor.completions);
+    merged.extend(arriving);
+    model.editor.completions = dexo_sql::rank::finish(merged);
+    model.editor.completion_selected = selected
+        .and_then(|label| {
+            model
+                .editor
+                .completions
+                .iter()
+                .position(|item| item.label == label)
+        })
+        .unwrap_or(0);
+    model.editor.completion_offset = crate::palette::scroll_to_selection(
+        model.editor.completion_selected,
+        model.editor.completion_offset,
+        model.editor.completions.len(),
+        8,
+    );
 }
 
 fn suggest_live(model: &mut Model) {
