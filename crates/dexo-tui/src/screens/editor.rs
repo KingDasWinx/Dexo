@@ -37,6 +37,11 @@ pub struct EditorState {
     pub history_confirm_clear: bool,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
+    /// The completion catalog built from the explorer tree, and the tree revision it was
+    /// built from. `flatten()` walks and clones the whole tree, so doing it for every
+    /// character typed is a cost the editor cannot afford.
+    catalog_revision: Option<u64>,
+    catalog_snapshot: Option<dexo_app::SnapshotCatalog>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -74,6 +79,8 @@ impl Clone for EditorState {
             history_confirm_clear: self.history_confirm_clear,
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
+            catalog_revision: None,
+            catalog_snapshot: None,
         }
     }
 }
@@ -120,6 +127,8 @@ impl Default for EditorState {
             history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::table("public.users", ["id", "email"]),
+            catalog_revision: None,
+            catalog_snapshot: None,
         }
     }
 }
@@ -134,8 +143,7 @@ fn editor_dialect(model: &Model) -> Dialect {
 
 pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
-    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    let byte_cursor = model.active_document().byte_cursor();
     let old = std::mem::take(&mut model.editor.last_sql);
     let parsed = model.editor.parser.parse_edited(&old, &sql);
     model.editor.last_sql = sql.clone();
@@ -153,15 +161,25 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
+/// Rebuilds the completion catalog only when the explorer tree actually changed.
+fn sync_catalog(model: &mut Model) {
+    let revision = model.explorer.revision();
+    if model.editor.catalog_revision == Some(revision) {
+        return;
+    }
+    let objects = model.explorer.flatten();
+    model.editor.catalog_revision = Some(revision);
+    model.editor.catalog_snapshot =
+        (!objects.is_empty()).then(|| dexo_app::SnapshotCatalog::new(objects));
+}
+
 fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
     let at = byte_cursor.min(sql.len());
     let dialect = editor_dialect(model);
-    let objects = model.explorer.flatten();
-    let items = if objects.is_empty() {
-        complete(sql, at, &model.editor.catalog, dialect)
-    } else {
-        let snapshot = dexo_app::SnapshotCatalog::new(objects);
-        complete(sql, at, &snapshot, dialect)
+    sync_catalog(model);
+    let items = match &model.editor.catalog_snapshot {
+        Some(snapshot) => complete(sql, at, snapshot, dialect),
+        None => complete(sql, at, &model.editor.catalog, dialect),
     };
     let prefix = &sql[..at];
     let token = current_token(prefix);
@@ -181,8 +199,7 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
 
 fn suggest_live(model: &mut Model) {
     let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
-    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    let byte_cursor = model.active_document().byte_cursor();
     apply_completions(model, &sql, byte_cursor, true);
 }
 

@@ -1,3 +1,5 @@
+use std::collections::HashMap;
+
 use dexo_driver_api::{
     CatalogList, CatalogListOptions, CatalogObject, CatalogReader, DdlOutcome, ObjectDdl, ObjectId,
     ObjectKind, QualifiedName,
@@ -108,11 +110,29 @@ fn matches_restricted(
 
 pub struct SnapshotCatalog {
     objects: Vec<CatalogObject>,
+    /// Columns grouped by the table that owns them, built once. Matching them with a
+    /// nested scan per table made this O(tables x objects), on a path that runs for
+    /// every character typed in the editor.
+    columns: HashMap<ObjectId, Vec<String>>,
 }
 
 impl SnapshotCatalog {
     pub fn new(objects: Vec<CatalogObject>) -> Self {
-        Self { objects }
+        let mut columns: HashMap<ObjectId, Vec<String>> = HashMap::new();
+        for object in &objects {
+            if object.kind != ObjectKind::Column {
+                continue;
+            }
+            let Some(parent) = object.parent.clone() else {
+                continue;
+            };
+            let name = object.qualified_name.object();
+            columns
+                .entry(parent)
+                .or_default()
+                .push(name.rsplit('.').next().unwrap_or(name).to_string());
+        }
+        Self { objects, columns }
     }
 
     pub fn objects(&self) -> &[CatalogObject] {
@@ -131,23 +151,7 @@ impl Catalog for SnapshotCatalog {
                 )
             })
             .map(|object| {
-                let columns = self
-                    .objects
-                    .iter()
-                    .filter(|child| {
-                        child.kind == ObjectKind::Column
-                            && child.parent.as_ref() == Some(&object.id)
-                    })
-                    .map(|child| {
-                        child
-                            .qualified_name
-                            .object()
-                            .rsplit('.')
-                            .next()
-                            .unwrap_or(child.qualified_name.object())
-                            .to_string()
-                    })
-                    .collect();
+                let columns = self.columns.get(&object.id).cloned().unwrap_or_default();
                 TableInfo {
                     qualified: object.qualified_name.display_unquoted(),
                     schema: object.qualified_name.schema().unwrap_or("").to_string(),

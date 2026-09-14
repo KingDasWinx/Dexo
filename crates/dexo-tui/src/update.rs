@@ -4894,7 +4894,7 @@ fn load_inspector(model: &mut Model) -> Vec<Effect> {
 
 fn goto_definition(model: &mut Model) -> Vec<Effect> {
     let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
+    let cursor = model.active_document().byte_cursor();
     let catalog = dexo_app::SnapshotCatalog::new(flatten_explorer(&model.explorer));
     let Some(target) = dexo_sql::definition_at(&sql, cursor, &catalog) else {
         model.messages.warn("no definition at cursor".into());

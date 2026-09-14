@@ -191,9 +191,22 @@ pub struct ExplorerState {
     pub include_system: bool,
     pub stale: bool,
     pub offset: usize,
+    /// Bumped by the methods that change which objects are in the tree. The editor
+    /// builds its completion catalog from `flatten()`, which walks and clones the whole
+    /// tree; doing that for every character typed is the kind of cost that shows up as a
+    /// stutter, so it rebuilds only when this moves.
+    pub revision: u64,
 }
 
 impl ExplorerState {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     #[cfg(test)]
     pub fn fixture() -> Self {
         let schema = ExplorerNode {
@@ -251,6 +264,7 @@ impl ExplorerState {
     }
 
     pub fn clear(&mut self) {
+        self.touch();
         self.roots.clear();
         self.selected = None;
         self.selected_connection = None;
@@ -264,6 +278,7 @@ impl ExplorerState {
         profiles: &[crate::screens::connections::ConnectionRow],
         active_connection: &str,
     ) {
+        self.touch();
         let mut next = Vec::with_capacity(profiles.len());
         for row in profiles {
             let id = connection_id(&row.profile.name);
@@ -331,6 +346,7 @@ impl ExplorerState {
     /// every captured object (schemas, tables, columns, indexes, constraints...)
     /// as flat siblings. Leaves sibling connection nodes untouched.
     pub fn restore_connection_catalog(&mut self, connection_name: &str, page: CatalogList) {
+        self.touch();
         let id = connection_id(connection_name);
         let mut by_parent: std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>> =
             std::collections::HashMap::new();
@@ -586,10 +602,12 @@ impl ExplorerState {
     }
 
     pub fn apply_children(&mut self, parent: &ObjectId, page: CatalogList) {
+        self.touch();
         Self::apply_in(&mut self.roots, parent, page);
     }
 
     pub fn replace_roots(&mut self, page: CatalogList) {
+        self.touch();
         self.roots = page
             .objects
             .into_iter()
@@ -713,38 +731,46 @@ impl ExplorerState {
         true
     }
 
+    /// The tree as catalog objects. `parent` has to name the nearest ancestor a driver
+    /// actually issued an id for -- a column's table, not the synthetic "Columns" folder
+    /// it is drawn under -- because that link is what `SnapshotCatalog` matches columns
+    /// on. Passing `None` here left every table with no columns, so completion after
+    /// `alias.` had nothing to offer.
     pub fn flatten(&self) -> Vec<CatalogObject> {
         let mut out = Vec::new();
-        fn walk(nodes: &[ExplorerNode], out: &mut Vec<CatalogObject>) {
+        fn walk(nodes: &[ExplorerNode], parent: Option<&ObjectId>, out: &mut Vec<CatalogObject>) {
             for node in nodes {
-                if is_connection_node(node) {
-                    walk(&node.children, out);
-                    continue;
-                }
-                if is_folder_node(node) {
-                    walk(&node.children, out);
+                if is_connection_node(node) || is_folder_node(node) {
+                    // Synthetic: it has no driver counterpart, so it cannot be a parent.
+                    walk(&node.children, parent, out);
                     continue;
                 }
                 let mut object = CatalogObject::new(
                     node.id.clone(),
                     node.kind.clone(),
                     dexo_app::parse_qualified(&node.qualified),
-                    None,
+                    parent.cloned(),
                 );
                 if node.favorite {
                     object
                         .attributes
                         .insert("favorite".into(), serde_json::json!(true));
                 }
+                if let Some(type_name) = &node.type_name {
+                    object
+                        .attributes
+                        .insert("type".into(), serde_json::json!(type_name));
+                }
                 out.push(object);
-                walk(&node.children, out);
+                walk(&node.children, Some(&node.id), out);
             }
         }
-        walk(&self.roots, &mut out);
+        walk(&self.roots, None, &mut out);
         out
     }
 
     pub fn apply_favorites(&mut self, ids: &[String]) {
+        self.touch();
         fn walk(nodes: &mut [ExplorerNode], ids: &[String]) {
             for node in nodes {
                 node.favorite = ids.iter().any(|id| id == node.id.as_str());
@@ -755,6 +781,7 @@ impl ExplorerState {
     }
 
     pub fn toggle_favorite(&mut self, id: &ObjectId) {
+        self.touch();
         Self::toggle_in(&mut self.roots, id);
     }
 

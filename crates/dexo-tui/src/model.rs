@@ -1338,6 +1338,18 @@ impl EditorDocument {
         self.sql.cursor()
     }
 
+    /// The cursor as a byte offset. `SqlDocument` counts the cursor in chars, while
+    /// everything in `dexo-sql` that scans the text indexes bytes; handing one the
+    /// other's number silently reads the wrong span as soon as the buffer holds a
+    /// non-ASCII character.
+    pub fn byte_cursor(&self) -> usize {
+        let text = self.text();
+        text.char_indices()
+            .nth(self.cursor())
+            .map(|(at, _)| at)
+            .unwrap_or(text.len())
+    }
+
     pub fn selection(&self) -> Option<Range<usize>> {
         let anchor = self.anchor?;
         let cursor = self.sql.cursor();
