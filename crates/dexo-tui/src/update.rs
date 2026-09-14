@@ -5580,6 +5580,7 @@ fn persist_settings(model: &Model) {
             run_statement: "Ctrl+Enter".into(),
             profile: model.keymap.name.clone(),
         },
+        completion_trigger: model.settings.completion_trigger,
         ..manager.active.clone()
     };
     let _ = manager.save(&paths.data_dir, next);
@@ -5604,6 +5605,7 @@ fn apply_saved_settings(model: &mut Model) {
     };
     model.settings.mode = mode.as_key().into();
     model.settings.accent = manager.active.accent.clone();
+    model.settings.completion_trigger = manager.active.completion_trigger;
     model.theme = crate::theme::theme_for(mode, &model.settings.accent);
     sync_settings_screen(model);
 }

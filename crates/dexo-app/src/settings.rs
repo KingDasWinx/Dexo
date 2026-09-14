@@ -62,6 +62,11 @@ pub struct SettingsFile {
     pub animation: bool,
     pub unicode: UnicodeMode,
     pub recovery_interval_secs: u64,
+    /// Additive, so it must have a serde default: `load_settings` falls back to the
+    /// whole default file on any deserialize failure, and a missing field would take
+    /// the user's theme and keymap down with it.
+    #[serde(default)]
+    pub completion_trigger: dexo_sql::TriggerMode,
 }
 
 impl Default for SettingsFile {
@@ -71,6 +76,7 @@ impl Default for SettingsFile {
             mode: ModeId::Dark,
             accent: default_accent(),
             keymap: KeymapConfig::default(),
+            completion_trigger: dexo_sql::TriggerMode::default(),
             mouse: true,
             animation: true,
             unicode: UnicodeMode::Unicode,

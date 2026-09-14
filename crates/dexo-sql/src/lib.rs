@@ -19,7 +19,8 @@ pub use completion::{
     current_token, labels,
 };
 pub use context::{
-    Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, analyze,
+    Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, TriggerMode,
+    TriggerOrigin, analyze, should_open, suggest_alias,
 };
 pub use derived::{derive_page, filter_values};
 pub use diagnostic::{Diagnostic, DiagnosticSource};

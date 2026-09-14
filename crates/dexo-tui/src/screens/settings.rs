@@ -27,6 +27,7 @@ pub struct SettingsScreen {
     pub unicode: bool,
     pub confirm_reset: bool,
     pub focus: usize,
+    pub completion_trigger: dexo_sql::TriggerMode,
 }
 
 impl Default for SettingsScreen {
@@ -36,6 +37,7 @@ impl Default for SettingsScreen {
             mode: crate::theme::Mode::Dark.as_key().into(),
             accent: crate::theme::DEFAULT_ACCENT.into(),
             keymap: "default".into(),
+            completion_trigger: dexo_sql::TriggerMode::default(),
             mouse: true,
             animation: true,
             unicode: true,

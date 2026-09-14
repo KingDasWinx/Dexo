@@ -160,6 +160,92 @@ const COLUMN_WORDS: &[&str] = &[
     "where", "on", "and", "or", "having", "by", "select", "when", "then", "else", "case",
 ];
 
+/// When typing is allowed to open the popup on its own.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum TriggerMode {
+    /// Only when asked for, with Ctrl+Space.
+    Manual,
+    /// Once an identifier has been started, or after a dot.
+    RequirePrefix,
+    /// Also where the position itself says what belongs there: after FROM, after ON,
+    /// inside a WHERE clause.
+    #[default]
+    Positional,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TriggerOrigin {
+    Typing,
+    Explicit,
+}
+
+/// Whether the popup should be on screen. Asking for it explicitly always works, except
+/// inside a string or a comment, where there is nothing to offer either way.
+pub fn should_open(mode: TriggerMode, context: &CursorContext, origin: TriggerOrigin) -> bool {
+    if context.intent == Intent::Suppressed {
+        return false;
+    }
+    if origin == TriggerOrigin::Explicit {
+        return true;
+    }
+    let started = !context.prefix.is_empty() || !context.qualifier.is_empty();
+    match mode {
+        TriggerMode::Manual => false,
+        TriggerMode::RequirePrefix => started,
+        TriggerMode::Positional => {
+            started
+                || matches!(
+                    context.intent,
+                    Intent::Table
+                        | Intent::Column
+                        | Intent::JoinCondition
+                        | Intent::InsertColumn
+                        | Intent::UpdateColumn
+                        | Intent::Routine
+                        | Intent::Schema
+                )
+        }
+    }
+}
+
+/// A short alias for a table, the way someone would write it by hand: initials for a
+/// name made of words, otherwise the leading letters. Never one of the words that would
+/// end the table reference it is attached to, and never one already taken.
+pub fn suggest_alias(name: &str, taken: &[String]) -> Option<String> {
+    let words: Vec<&str> = name
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|word| !word.is_empty())
+        .collect();
+    if words.is_empty() {
+        return None;
+    }
+    let initials: String = words
+        .iter()
+        .filter_map(|word| word.chars().next())
+        .collect::<String>()
+        .to_ascii_lowercase();
+    let first = words[0].to_ascii_lowercase();
+    let mut candidates = vec![initials.clone()];
+    for take in 1..=3 {
+        if first.chars().count() >= take {
+            candidates.push(first.chars().take(take).collect());
+        }
+    }
+    for suffix in 2..=9 {
+        candidates.push(format!("{initials}{suffix}"));
+    }
+    candidates.into_iter().find(|candidate| {
+        !candidate.is_empty()
+            && !CLAUSE_WORDS
+                .iter()
+                .any(|word| candidate.eq_ignore_ascii_case(word))
+            && !taken
+                .iter()
+                .any(|word| word.eq_ignore_ascii_case(candidate))
+    })
+}
+
 pub fn analyze(sql: &str, cursor: usize, dialect: Dialect) -> CursorContext {
     let cursor = cursor.min(sql.len());
     let tokens = tokenize(sql, dialect);

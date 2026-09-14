@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
     CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete_with, current_token, expand_placeholders, format_sql, named_parameters,
+    complete_with, expand_placeholders, format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -42,6 +42,11 @@ pub struct EditorState {
     /// for every character typed is a cost the editor cannot afford.
     catalog_key: Option<(u64, u64)>,
     catalog_snapshot: Option<dexo_app::SnapshotCatalog>,
+    /// The bytes the open popup's items would replace, and whether accepting a table
+    /// there should bring an alias with it. Both come from the analysis that built the
+    /// list, so accepting cannot disagree with it about what is being replaced.
+    completion_replace: std::ops::Range<usize>,
+    completion_alias: bool,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -81,6 +86,8 @@ impl Clone for EditorState {
             catalog: self.catalog.clone(),
             catalog_key: None,
             catalog_snapshot: None,
+            completion_replace: 0..0,
+            completion_alias: false,
         }
     }
 }
@@ -129,6 +136,8 @@ impl Default for EditorState {
             catalog: FakeCatalog::table("public.users", ["id", "email"]),
             catalog_key: None,
             catalog_snapshot: None,
+            completion_replace: 0..0,
+            completion_alias: false,
         }
     }
 }
@@ -204,9 +213,12 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
         close_completion(model);
         return;
     }
-    // Typing opens the popup only where an identifier is being written, or right after
-    // a dot. Asking for it explicitly always opens it.
-    if live && context.prefix.is_empty() && context.qualifier.is_empty() {
+    let origin = if live {
+        dexo_sql::TriggerOrigin::Typing
+    } else {
+        dexo_sql::TriggerOrigin::Explicit
+    };
+    if !dexo_sql::should_open(model.settings.completion_trigger, &context, origin) {
         close_completion(model);
         return;
     }
@@ -219,6 +231,10 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
         close_completion(model);
         return;
     }
+    model.editor.completion_replace = context.replace.clone();
+    // An alias is only worth offering where a table reference actually starts.
+    model.editor.completion_alias =
+        context.intent == dexo_sql::Intent::Table && context.qualifier.is_empty();
     model.editor.completions = items;
     model.editor.completion_open = true;
     model.editor.completion_selected = 0;
@@ -274,7 +290,27 @@ pub fn accept_completion(model: &mut Model) {
     let Some(item) = model.editor.completions.get(index).cloned() else {
         return;
     };
-    replace_current_token(model, &item.label);
+    let dialect = editor_dialect(model);
+    let mut text = match item.kind {
+        // A join condition is already written out; quoting it would break it.
+        dexo_sql::CompletionKind::Keyword | dexo_sql::CompletionKind::Snippet => item.label.clone(),
+        _ => dialect.quote_if_needed(&item.label),
+    };
+    if model.editor.completion_alias && item.kind == dexo_sql::CompletionKind::Table {
+        let sql = model.active_document().text();
+        let context = dexo_sql::analyze(&sql, model.editor.completion_replace.start, dialect);
+        let taken: Vec<String> = context
+            .row_sources
+            .iter()
+            .map(|source| source.qualifier().to_string())
+            .collect();
+        if let Some(alias) = dexo_sql::suggest_alias(&item.label, &taken) {
+            text.push(' ');
+            text.push_str(&alias);
+        }
+    }
+    let range = model.editor.completion_replace.clone();
+    replace_range(model, range, &text);
     model.editor.completion_open = false;
     model.editor.completions.clear();
     refresh_intelligence(model, false);
@@ -295,12 +331,10 @@ pub fn move_completion(model: &mut Model, delta: i32) {
     );
 }
 
-fn replace_current_token(model: &mut Model, text: &str) {
-    let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
-    let prefix: String = sql.chars().take(cursor).collect();
-    let token_chars = current_token(&prefix).chars().count();
-    let start = cursor.saturating_sub(token_chars);
+/// Replaces a byte range, which is what the analysis reports. Accepting used to
+/// recompute the token being replaced from the raw text, with its own idea of where one
+/// starts -- so a qualified or quoted name was replaced from the wrong place.
+fn replace_range(model: &mut Model, range: std::ops::Range<usize>, text: &str) {
     let doc = model.active_document_mut();
     if !doc.typing {
         doc.sql.end_group();
@@ -308,7 +342,7 @@ fn replace_current_token(model: &mut Model, text: &str) {
         doc.typing = true;
     }
     doc.anchor = None;
-    let _ = doc.sql.replace_chars(start..cursor, text);
+    let _ = doc.sql.replace_bytes(range, text);
     reveal_cursor(doc);
 }
 
