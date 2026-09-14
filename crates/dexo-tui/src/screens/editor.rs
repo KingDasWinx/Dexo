@@ -161,6 +161,13 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
+fn close_completion(model: &mut Model) {
+    model.editor.completions.clear();
+    model.editor.completion_open = false;
+    model.editor.completion_selected = 0;
+    model.editor.completion_offset = 0;
+}
+
 /// Rebuilds the completion catalog only when the explorer tree actually changed.
 fn sync_catalog(model: &mut Model) {
     let revision = model.explorer.revision();
@@ -176,6 +183,12 @@ fn sync_catalog(model: &mut Model) {
 fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
     let at = byte_cursor.min(sql.len());
     let dialect = editor_dialect(model);
+    // Inside a string literal or a comment nothing the catalog knows is an answer, and
+    // a popup there reads as the editor not understanding what you are writing.
+    if dexo_sql::suppressed_at(sql, at, dialect) {
+        close_completion(model);
+        return;
+    }
     sync_catalog(model);
     let items = match &model.editor.catalog_snapshot {
         Some(snapshot) => complete(sql, at, snapshot, dialect),
@@ -185,10 +198,7 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
     let token = current_token(prefix);
     let after_dot = prefix.trim_end().ends_with('.');
     if items.is_empty() || (live && token.is_empty() && !after_dot) {
-        model.editor.completions.clear();
-        model.editor.completion_open = false;
-        model.editor.completion_selected = 0;
-        model.editor.completion_offset = 0;
+        close_completion(model);
         return;
     }
     model.editor.completions = items;

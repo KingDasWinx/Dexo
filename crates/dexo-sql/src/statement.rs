@@ -172,23 +172,36 @@ fn skip_ws(sql: &str, mut i: usize) -> usize {
     while i < bytes.len() {
         match bytes[i] {
             b' ' | b'\t' | b'\r' | b'\n' => i += 1,
-            b'-' if bytes.get(i + 1) == Some(&b'-') => {
-                i += 2;
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(bytes.len());
-            }
-            _ => break,
+            _ => match skip_comment(sql, i) {
+                Some(next) => i = next,
+                None => break,
+            },
         }
     }
     i
+}
+
+/// The end of the comment starting at `i`, or `None` if one does not start there.
+/// Shared with the lexer, which needs comments as tokens rather than as whitespace.
+pub(crate) fn skip_comment(sql: &str, i: usize) -> Option<usize> {
+    let bytes = sql.as_bytes();
+    match bytes.get(i)? {
+        b'-' if bytes.get(i + 1) == Some(&b'-') => {
+            let mut end = i + 2;
+            while end < bytes.len() && bytes[end] != b'\n' {
+                end += 1;
+            }
+            Some(end)
+        }
+        b'/' if bytes.get(i + 1) == Some(&b'*') => {
+            let mut end = i + 2;
+            while end + 1 < bytes.len() && !(bytes[end] == b'*' && bytes[end + 1] == b'/') {
+                end += 1;
+            }
+            Some((end + 2).min(bytes.len()))
+        }
+        _ => None,
+    }
 }
 
 fn skip_atom(sql: &str, i: usize) -> usize {
@@ -197,9 +210,9 @@ fn skip_atom(sql: &str, i: usize) -> usize {
         return i;
     }
     match bytes[i] {
-        b'\'' => skip_quote(sql, i, b'\''),
-        b'"' => skip_quote(sql, i, b'"'),
-        b'`' => skip_quote(sql, i, b'`'),
+        b'\'' => skip_quote(sql, i, b'\'', false),
+        b'"' => skip_quote(sql, i, b'"', false),
+        b'`' => skip_quote(sql, i, b'`', false),
         b'$' => skip_dollar(sql, i).unwrap_or(i + 1),
         b'-' if bytes.get(i + 1) == Some(&b'-') => skip_ws(sql, i),
         b'/' if bytes.get(i + 1) == Some(&b'*') => skip_ws(sql, i),
@@ -208,10 +221,16 @@ fn skip_atom(sql: &str, i: usize) -> usize {
     }
 }
 
-fn skip_quote(sql: &str, start: usize, quote: u8) -> usize {
+/// The end of the quoted run starting at `start`. A doubled quote is an escaped
+/// quote everywhere; a backslash only in MySQL, so `escapes` says which.
+pub(crate) fn skip_quote(sql: &str, start: usize, quote: u8, escapes: bool) -> usize {
     let bytes = sql.as_bytes();
     let mut i = start + 1;
     while i < bytes.len() {
+        if escapes && bytes[i] == b'\\' && quote == b'\'' {
+            i += 2;
+            continue;
+        }
         if bytes[i] == quote {
             if bytes.get(i + 1) == Some(&quote) {
                 i += 2;
@@ -224,7 +243,7 @@ fn skip_quote(sql: &str, start: usize, quote: u8) -> usize {
     bytes.len()
 }
 
-fn skip_dollar(sql: &str, start: usize) -> Option<usize> {
+pub(crate) fn skip_dollar(sql: &str, start: usize) -> Option<usize> {
     let bytes = sql.as_bytes();
     if bytes.get(start) != Some(&b'$') {
         return None;
@@ -257,9 +276,9 @@ fn skip_balanced_paren(sql: &str, start: usize) -> Option<usize> {
             break;
         }
         match bytes[i] {
-            b'\'' => i = skip_quote(sql, i, b'\''),
-            b'"' => i = skip_quote(sql, i, b'"'),
-            b'`' => i = skip_quote(sql, i, b'`'),
+            b'\'' => i = skip_quote(sql, i, b'\'', false),
+            b'"' => i = skip_quote(sql, i, b'"', false),
+            b'`' => i = skip_quote(sql, i, b'`', false),
             b'$' => i = skip_dollar(sql, i).unwrap_or(i + 1),
             b'(' => {
                 depth += 1;
