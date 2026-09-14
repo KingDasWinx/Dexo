@@ -18,15 +18,33 @@ pub struct FunctionInfo {
     pub signature: String,
 }
 
+/// A foreign key as declared on one table, pointing at another. This is what turns
+/// "these two tables are in the same query" into an actual join condition.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ForeignKey {
+    pub local_columns: Vec<String>,
+    /// Qualified name of the table being referenced.
+    pub referenced: String,
+    pub referenced_columns: Vec<String>,
+}
+
 pub trait Catalog {
     fn tables(&self) -> Vec<TableInfo>;
     fn functions(&self) -> Vec<FunctionInfo>;
+
+    /// Foreign keys declared on `qualified`. Defaulted: a catalog that does not know
+    /// about constraints simply offers no join conditions.
+    fn foreign_keys(&self, qualified: &str) -> Vec<ForeignKey> {
+        let _ = qualified;
+        Vec::new()
+    }
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct FakeCatalog {
     tables: Vec<TableInfo>,
     functions: Vec<FunctionInfo>,
+    foreign_keys: Vec<(String, ForeignKey)>,
 }
 
 impl FakeCatalog {
@@ -55,6 +73,25 @@ impl FakeCatalog {
     }
 }
 
+impl FakeCatalog {
+    pub fn add_foreign_key(
+        &mut self,
+        table: &str,
+        local: impl IntoIterator<Item = impl Into<String>>,
+        referenced: &str,
+        referenced_columns: impl IntoIterator<Item = impl Into<String>>,
+    ) {
+        self.foreign_keys.push((
+            table.to_string(),
+            ForeignKey {
+                local_columns: local.into_iter().map(Into::into).collect(),
+                referenced: referenced.to_string(),
+                referenced_columns: referenced_columns.into_iter().map(Into::into).collect(),
+            },
+        ));
+    }
+}
+
 impl Catalog for FakeCatalog {
     fn tables(&self) -> Vec<TableInfo> {
         self.tables.clone()
@@ -62,6 +99,14 @@ impl Catalog for FakeCatalog {
 
     fn functions(&self) -> Vec<FunctionInfo> {
         self.functions.clone()
+    }
+
+    fn foreign_keys(&self, qualified: &str) -> Vec<ForeignKey> {
+        self.foreign_keys
+            .iter()
+            .filter(|(table, _)| table.eq_ignore_ascii_case(qualified))
+            .map(|(_, key)| key.clone())
+            .collect()
     }
 }
 
@@ -116,7 +161,11 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
                 push_columns(&mut items, &table, prefix);
             }
         }
-        Intent::Column | Intent::JoinCondition => {
+        Intent::JoinCondition => {
+            push_join_conditions(&mut items, context, catalog, prefix);
+            push_scope_columns(&mut items, context, catalog, prefix);
+        }
+        Intent::Column => {
             push_scope_columns(&mut items, context, catalog, prefix);
         }
         Intent::InsertColumn | Intent::UpdateColumn => {
@@ -173,6 +222,80 @@ fn push_columns(items: &mut Vec<CompletionItem>, table: &TableInfo, prefix: &str
             signature: None,
             score: score + boosts.total(),
         });
+    }
+}
+
+/// Whole join conditions, read off the foreign keys between the tables already in the
+/// statement: after `join orders o on`, `o.user_id = u.id` is almost always the answer,
+/// and it is the one thing here the database knows and the user would have to remember.
+fn push_join_conditions(
+    items: &mut Vec<CompletionItem>,
+    context: &CursorContext,
+    catalog: &dyn Catalog,
+    prefix: &str,
+) {
+    for (left_index, left) in context.row_sources.iter().enumerate() {
+        let Some(left_table) = resolve_source(left, catalog) else {
+            continue;
+        };
+        for key in catalog.foreign_keys(&left_table.qualified) {
+            for (right_index, right) in context.row_sources.iter().enumerate() {
+                if right_index == left_index {
+                    continue;
+                }
+                let Some(right_table) = resolve_source(right, catalog) else {
+                    continue;
+                };
+                if !references(&key.referenced, &right_table) {
+                    continue;
+                }
+                let condition = key
+                    .local_columns
+                    .iter()
+                    .zip(key.referenced_columns.iter())
+                    .map(|(local, referenced)| {
+                        format!(
+                            "{}.{local} = {}.{referenced}",
+                            left.qualifier(),
+                            right.qualifier()
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                if condition.is_empty() {
+                    continue;
+                }
+                // Matched against the whole condition, so typing either side finds it.
+                let Some(score) = rank::match_score(&condition, prefix) else {
+                    continue;
+                };
+                items.push(CompletionItem {
+                    label: condition,
+                    kind: CompletionKind::Snippet,
+                    detail: Some(format!("foreign key · {}", left_table.qualified)),
+                    target_id: Some(left_table.qualified.clone()),
+                    signature: None,
+                    score: score + rank::FOREIGN_KEY,
+                });
+            }
+        }
+    }
+}
+
+/// Whether a foreign key's referenced name is this table. The key names the table the
+/// way the database does -- `public.brands` -- while the catalog qualifies it with the
+/// database too, so the two are compared from the right.
+fn references(referenced: &str, table: &TableInfo) -> bool {
+    let mut parts = referenced.rsplit('.');
+    let Some(name) = parts.next() else {
+        return false;
+    };
+    if !name.eq_ignore_ascii_case(&table.name) {
+        return false;
+    }
+    match parts.next() {
+        Some(schema) => schema.eq_ignore_ascii_case(&table.schema),
+        None => true,
     }
 }
 

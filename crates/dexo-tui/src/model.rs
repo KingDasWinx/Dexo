@@ -1402,6 +1402,12 @@ pub struct Model {
     pub project_id: String,
     pub schema: String,
     pub explorer: ExplorerState,
+    /// Catalog objects exactly as the driver produced them. The explorer tree is a view:
+    /// it wraps objects in synthetic folders and keeps only what it draws, so a column's
+    /// type and a constraint's foreign key do not survive the trip into it. Completion
+    /// needs both, so they are kept here as well.
+    pub catalog_objects: Vec<dexo_driver_api::CatalogObject>,
+    pub catalog_revision: u64,
     pub inspector: ObjectInspector,
     pub data: DataScreen,
     pub schema_editor: SchemaEditor,
@@ -1505,6 +1511,8 @@ impl Default for Model {
             project_id: String::new(),
             schema: String::new(),
             explorer: ExplorerState::default(),
+            catalog_objects: Vec::new(),
+            catalog_revision: 0,
             inspector: ObjectInspector::default(),
             data: DataScreen::default(),
             schema_editor: SchemaEditor::default(),
@@ -1673,6 +1681,25 @@ impl Model {
             .saturating_sub(crate::widgets::grid::CHROME_ROWS)
             .max(1);
         self.results.set_viewport_size(width, height);
+    }
+
+    /// Folds a freshly loaded page of catalog objects into what completion reads,
+    /// replacing any it already had by id.
+    pub fn absorb_catalog(&mut self, objects: &[dexo_driver_api::CatalogObject]) {
+        if objects.is_empty() {
+            return;
+        }
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        for object in objects {
+            match self
+                .catalog_objects
+                .iter_mut()
+                .find(|existing| existing.id == object.id)
+            {
+                Some(existing) => *existing = object.clone(),
+                None => self.catalog_objects.push(object.clone()),
+            }
+        }
     }
 
     pub fn active_document(&self) -> &EditorDocument {

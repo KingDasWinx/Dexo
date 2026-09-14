@@ -37,10 +37,10 @@ pub struct EditorState {
     pub history_confirm_clear: bool,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
-    /// The completion catalog built from the explorer tree, and the tree revision it was
-    /// built from. `flatten()` walks and clones the whole tree, so doing it for every
-    /// character typed is a cost the editor cannot afford.
-    catalog_revision: Option<u64>,
+    /// The completion catalog, and the catalog and explorer revisions it was built from.
+    /// Building it walks and clones every object the connection has loaded, so doing it
+    /// for every character typed is a cost the editor cannot afford.
+    catalog_key: Option<(u64, u64)>,
     catalog_snapshot: Option<dexo_app::SnapshotCatalog>,
 }
 
@@ -79,7 +79,7 @@ impl Clone for EditorState {
             history_confirm_clear: self.history_confirm_clear,
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
-            catalog_revision: None,
+            catalog_key: None,
             catalog_snapshot: None,
         }
     }
@@ -127,7 +127,7 @@ impl Default for EditorState {
             history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::table("public.users", ["id", "email"]),
-            catalog_revision: None,
+            catalog_key: None,
             catalog_snapshot: None,
         }
     }
@@ -168,16 +168,28 @@ fn close_completion(model: &mut Model) {
     model.editor.completion_offset = 0;
 }
 
-/// Rebuilds the completion catalog only when the explorer tree actually changed.
+/// Rebuilds the completion catalog only when something it is built from actually
+/// changed: a page of catalog objects arriving, or the user starring something.
 fn sync_catalog(model: &mut Model) {
-    let revision = model.explorer.revision();
-    if model.editor.catalog_revision == Some(revision) {
+    let key = (model.catalog_revision, model.explorer.revision());
+    if model.editor.catalog_key == Some(key) {
         return;
     }
-    let objects = model.explorer.flatten();
-    model.editor.catalog_revision = Some(revision);
-    model.editor.catalog_snapshot =
-        (!objects.is_empty()).then(|| dexo_app::SnapshotCatalog::new(objects));
+    model.editor.catalog_key = Some(key);
+    if model.catalog_objects.is_empty() {
+        model.editor.catalog_snapshot = None;
+        return;
+    }
+    let favorites = model.explorer.favorite_ids();
+    let mut objects = model.catalog_objects.clone();
+    for object in &mut objects {
+        if favorites.contains(&object.id) {
+            object
+                .attributes
+                .insert("favorite".into(), serde_json::json!(true));
+        }
+    }
+    model.editor.catalog_snapshot = Some(dexo_app::SnapshotCatalog::new(objects));
 }
 
 fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {

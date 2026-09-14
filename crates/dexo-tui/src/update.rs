@@ -500,6 +500,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if !catalog_generation_matches(model, &session, generation) {
                 return Vec::new();
             }
+            model.absorb_catalog(&list.objects);
             let capture = replace_roots
                 || parent.as_ref()
                     == Some(&crate::screens::explorer::connection_id(&model.connection.name));
@@ -824,6 +825,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             created_at,
         } => {
             if generation == model.session_generation {
+                model.absorb_catalog(&list.objects);
                 if model.connection.name.is_empty() {
                     model.explorer.replace_roots(list);
                 } else {

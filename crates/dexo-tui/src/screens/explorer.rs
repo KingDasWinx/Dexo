@@ -203,6 +203,22 @@ impl ExplorerState {
         self.revision
     }
 
+    /// Ids the user starred. They live only in the tree, so the catalog has to come and
+    /// ask for them.
+    pub fn favorite_ids(&self) -> std::collections::HashSet<ObjectId> {
+        fn walk(nodes: &[ExplorerNode], out: &mut std::collections::HashSet<ObjectId>) {
+            for node in nodes {
+                if node.favorite {
+                    out.insert(node.id.clone());
+                }
+                walk(&node.children, out);
+            }
+        }
+        let mut out = std::collections::HashSet::new();
+        walk(&self.roots, &mut out);
+        out
+    }
+
     fn touch(&mut self) {
         self.revision = self.revision.wrapping_add(1);
     }

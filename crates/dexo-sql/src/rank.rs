@@ -101,6 +101,10 @@ impl Boosts {
     }
 }
 
+/// A join condition the database itself declared outranks anything spelled similarly.
+/// It is the one suggestion here that carries knowledge the user would have to look up.
+pub const FOREIGN_KEY: i32 = 3600;
+
 pub fn is_key_column(name: &str) -> bool {
     let lower = name.to_ascii_lowercase();
     lower == "id" || lower.ends_with("_id")

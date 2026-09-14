@@ -5,7 +5,7 @@ use dexo_driver_api::{
     ObjectKind, QualifiedName,
 };
 use dexo_sql::Catalog;
-use dexo_sql::completion::{FunctionInfo, TableInfo};
+use dexo_sql::completion::{ForeignKey, FunctionInfo, TableInfo};
 
 use crate::error::AppError;
 use crate::query_service::map_driver_error;
@@ -114,6 +114,9 @@ pub struct SnapshotCatalog {
     /// nested scan per table made this O(tables x objects), on a path that runs for
     /// every character typed in the editor.
     columns: HashMap<ObjectId, Vec<String>>,
+    /// Foreign keys by the qualified name of the table that declares them. Both drivers
+    /// already attach them to `ObjectKind::Constraint`; nothing read them until now.
+    foreign_keys: HashMap<String, Vec<ForeignKey>>,
 }
 
 impl SnapshotCatalog {
@@ -132,7 +135,30 @@ impl SnapshotCatalog {
                 .or_default()
                 .push(name.rsplit('.').next().unwrap_or(name).to_string());
         }
-        Self { objects, columns }
+        let by_id: HashMap<&ObjectId, &CatalogObject> =
+            objects.iter().map(|object| (&object.id, object)).collect();
+        let mut foreign_keys: HashMap<String, Vec<ForeignKey>> = HashMap::new();
+        for object in &objects {
+            if object.kind != ObjectKind::Constraint {
+                continue;
+            }
+            let Some(key) = foreign_key(object) else {
+                continue;
+            };
+            let Some(table) = object.parent.as_ref().and_then(|id| by_id.get(id)) else {
+                continue;
+            };
+            foreign_keys
+                .entry(table.qualified_name.display_unquoted())
+                .or_default()
+                .push(key);
+        }
+        drop(by_id);
+        Self {
+            objects,
+            columns,
+            foreign_keys,
+        }
     }
 
     pub fn objects(&self) -> &[CatalogObject] {
@@ -172,6 +198,13 @@ impl Catalog for SnapshotCatalog {
             .collect()
     }
 
+    fn foreign_keys(&self, qualified: &str) -> Vec<ForeignKey> {
+        self.foreign_keys
+            .get(qualified)
+            .cloned()
+            .unwrap_or_default()
+    }
+
     fn functions(&self) -> Vec<FunctionInfo> {
         self.objects
             .iter()
@@ -182,6 +215,46 @@ impl Catalog for SnapshotCatalog {
             })
             .collect()
     }
+}
+
+/// The foreign key a constraint object carries, if it is one. Both drivers write the
+/// same five attributes; the referenced table arrives as its parts.
+fn foreign_key(object: &CatalogObject) -> Option<ForeignKey> {
+    let strings = |name: &str| -> Vec<String> {
+        object
+            .attributes
+            .get(name)
+            .and_then(|value| value.as_array())
+            .map(|values| {
+                values
+                    .iter()
+                    .filter_map(|value| value.as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default()
+    };
+    let text = |name: &str| -> Option<String> {
+        object
+            .attributes
+            .get(name)
+            .and_then(|value| value.as_str())
+            .map(str::to_string)
+    };
+    let table = text("fk_table")?;
+    let local_columns = strings("fk_local");
+    let referenced_columns = strings("fk_referenced");
+    if local_columns.is_empty() || local_columns.len() != referenced_columns.len() {
+        return None;
+    }
+    let referenced = match text("fk_schema") {
+        Some(schema) => format!("{schema}.{table}"),
+        None => table,
+    };
+    Some(ForeignKey {
+        local_columns,
+        referenced,
+        referenced_columns,
+    })
 }
 
 pub fn parse_qualified(input: &str) -> QualifiedName {
