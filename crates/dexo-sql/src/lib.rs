@@ -10,6 +10,7 @@ pub mod lex;
 pub mod navigation;
 pub mod parameter;
 pub mod parse;
+pub mod rank;
 pub mod snippet;
 pub mod statement;
 

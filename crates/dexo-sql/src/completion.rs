@@ -1,5 +1,6 @@
-use crate::context::{CursorContext, Intent, RowSource, analyze};
+use crate::context::{Confidence, CursorContext, Intent, RowSource, RowSourceKind, analyze};
 use crate::dialect::Dialect;
+use crate::rank;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TableInfo {
@@ -64,7 +65,7 @@ impl Catalog for FakeCatalog {
     }
 }
 
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
 pub enum CompletionKind {
     Keyword,
     Table,
@@ -81,7 +82,10 @@ pub struct CompletionItem {
     pub detail: Option<String>,
     pub target_id: Option<String>,
     pub signature: Option<String>,
-    rank: u8,
+    /// How well this answers what was typed, and how much the position wanted it. Higher
+    /// sorts first. It was a private rank of 1 to 5 that only knew whether a table was
+    /// starred.
+    pub score: i32,
 }
 
 pub fn complete(
@@ -101,80 +105,165 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
     if context.intent == Intent::Suppressed {
         return Vec::new();
     }
-    if let Some(source) = context.target()
-        && let Some(table) = resolve_source(source, catalog)
-    {
-        let token = context.prefix.to_ascii_lowercase();
-        let mut items: Vec<_> = table
-            .columns
-            .iter()
-            .filter(|column| token.is_empty() || column.to_ascii_lowercase().starts_with(&token))
-            .map(|column| CompletionItem {
-                label: column.clone(),
-                kind: CompletionKind::Column,
-                detail: Some(table.qualified.clone()),
-                target_id: Some(format!("{}.{}", table.qualified, column)),
-                signature: None,
-                rank: 0,
-            })
-            .collect();
-        items.sort_by(|a, b| a.label.cmp(&b.label));
-        return items;
-    }
-    let token = context.prefix.to_ascii_lowercase();
+    let prefix = &context.prefix;
     let mut items = Vec::new();
+    match context.intent {
+        Intent::Suppressed => return Vec::new(),
+        Intent::AliasColumn => {
+            if let Some(source) = context.target()
+                && let Some(table) = resolve_source(source, catalog)
+            {
+                push_columns(&mut items, &table, prefix);
+            }
+        }
+        Intent::Column | Intent::JoinCondition => {
+            push_scope_columns(&mut items, context, catalog, prefix);
+        }
+        Intent::InsertColumn | Intent::UpdateColumn => {
+            let target = context
+                .row_sources
+                .iter()
+                .find(|source| source.kind == RowSourceKind::MutationTarget)
+                .or_else(|| context.row_sources.first());
+            if let Some(table) = target.and_then(|source| resolve_source(source, catalog)) {
+                push_columns(&mut items, &table, prefix);
+            }
+        }
+        Intent::Table | Intent::Schema => {
+            // A qualifier here names a schema: `public.` narrows the list to that
+            // schema's tables. If nothing matches it was not a schema after all, so
+            // offer the whole list rather than an empty popup.
+            let schema = context.qualifier.last().cloned();
+            push_tables(&mut items, catalog, prefix, schema.as_deref());
+            if items.is_empty() {
+                push_tables(&mut items, catalog, prefix, None);
+            }
+        }
+        Intent::Routine => push_functions(&mut items, catalog, prefix),
+        Intent::Keyword => {
+            // Nothing recognised, so nothing is ruled out.
+            push_tables(&mut items, catalog, prefix, None);
+            push_functions(&mut items, catalog, prefix);
+            push_keywords(&mut items, prefix);
+        }
+    }
+    // A recognised position that turned up nothing at all would leave the user staring at
+    // an empty box; keywords are always a legitimate answer.
+    if items.is_empty() && context.confidence != Confidence::High {
+        push_tables(&mut items, catalog, prefix, None);
+        push_keywords(&mut items, prefix);
+    }
+    rank::finish(items)
+}
+
+fn push_columns(items: &mut Vec<CompletionItem>, table: &TableInfo, prefix: &str) {
+    for column in &table.columns {
+        let Some(score) = rank::match_score(column, prefix) else {
+            continue;
+        };
+        let boosts = rank::Boosts {
+            key_column: rank::is_key_column(column),
+            ..Default::default()
+        };
+        items.push(CompletionItem {
+            label: column.clone(),
+            kind: CompletionKind::Column,
+            detail: Some(table.qualified.clone()),
+            target_id: Some(format!("{}.{}", table.qualified, column)),
+            signature: None,
+            score: score + boosts.total(),
+        });
+    }
+}
+
+/// Columns of every table this statement has in scope, each labelled with where it came
+/// from -- two tables in a join often share a column name.
+fn push_scope_columns(
+    items: &mut Vec<CompletionItem>,
+    context: &CursorContext,
+    catalog: &dyn Catalog,
+    prefix: &str,
+) {
+    for source in &context.row_sources {
+        let Some(table) = resolve_source(source, catalog) else {
+            continue;
+        };
+        let before = items.len();
+        push_columns(items, &table, prefix);
+        if context.row_sources.len() > 1 {
+            let qualifier = source.qualifier().to_string();
+            for item in &mut items[before..] {
+                item.detail = Some(format!("{qualifier} · {}", table.qualified));
+            }
+        }
+    }
+}
+
+fn push_tables(
+    items: &mut Vec<CompletionItem>,
+    catalog: &dyn Catalog,
+    prefix: &str,
+    schema: Option<&str>,
+) {
     for table in catalog.tables() {
-        let rank = table_rank(&table);
+        if let Some(schema) = schema
+            && !table.schema.eq_ignore_ascii_case(schema)
+        {
+            continue;
+        }
+        let Some(score) = rank::match_score(&table.name, prefix) else {
+            continue;
+        };
+        let boosts = rank::Boosts {
+            favorite: table.favorite,
+            recent: table.recency > 0,
+            ..Default::default()
+        };
         items.push(CompletionItem {
             label: table.name.clone(),
             kind: CompletionKind::Table,
             detail: Some(table.qualified.clone()),
             target_id: Some(table.qualified.clone()),
             signature: None,
-            rank,
+            score: score + boosts.total(),
         });
     }
+}
+
+fn push_functions(items: &mut Vec<CompletionItem>, catalog: &dyn Catalog, prefix: &str) {
     for function in catalog.functions() {
+        let Some(score) = rank::match_score(&function.name, prefix) else {
+            continue;
+        };
         items.push(CompletionItem {
             label: function.name.clone(),
             kind: CompletionKind::Function,
             detail: None,
             target_id: Some(function.name.clone()),
             signature: Some(function.signature.clone()),
-            rank: 4,
+            score,
         });
     }
+}
+
+fn push_keywords(items: &mut Vec<CompletionItem>, prefix: &str) {
     for keyword in KEYWORDS {
+        let Some(score) = rank::match_score(keyword, prefix) else {
+            continue;
+        };
         items.push(CompletionItem {
             label: (*keyword).into(),
             kind: CompletionKind::Keyword,
             detail: None,
             target_id: None,
             signature: None,
-            rank: 5,
+            score,
         });
     }
-    if !token.is_empty() {
-        items.retain(|item| item.label.to_ascii_lowercase().starts_with(&token));
-    }
-    items.sort_by(|a, b| a.rank.cmp(&b.rank).then_with(|| a.label.cmp(&b.label)));
-    items
 }
 
 pub fn labels(items: Vec<CompletionItem>) -> Vec<String> {
     items.into_iter().map(|item| item.label).collect()
-}
-
-fn table_rank(table: &TableInfo) -> u8 {
-    if table.favorite {
-        1
-    } else if table.recency > 0 {
-        2
-    } else if table.schema == "public" {
-        3
-    } else {
-        4
-    }
 }
 
 pub fn current_token(prefix: &str) -> String {
@@ -220,6 +309,8 @@ mod tests {
     use super::{FakeCatalog, complete, labels};
     use crate::dialect::Dialect;
 
+    /// `id` leads because a key column is what a statement usually reaches for, not
+    /// because of the alphabet -- the order used to be alphabetical.
     #[test]
     fn completes_columns_for_alias() {
         let catalog = FakeCatalog::table("public.users", ["id", "email"]);
@@ -229,7 +320,7 @@ mod tests {
             &catalog,
             Dialect::Postgres,
         );
-        assert_eq!(labels(items), ["email", "id"]);
+        assert_eq!(labels(items), ["id", "email"]);
     }
 
     #[test]
@@ -248,6 +339,6 @@ mod tests {
             Dialect::Mysql,
         ));
         assert_eq!(a, b);
-        assert_eq!(a, ["email", "id"]);
+        assert_eq!(a, ["id", "email"]);
     }
 }
