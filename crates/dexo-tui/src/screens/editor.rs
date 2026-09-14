@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
     CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete_with, expand_placeholders, format_sql, named_parameters,
+    complete_with, format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -47,6 +47,10 @@ pub struct EditorState {
     /// list, so accepting cannot disagree with it about what is being replaced.
     completion_replace: std::ops::Range<usize>,
     completion_alias: bool,
+    /// The holes an inserted snippet left behind, in characters, and which one the
+    /// cursor is on. Tab walks forward through them and Shift+Tab back.
+    snippet_stops: Vec<std::ops::Range<usize>>,
+    snippet_stop: usize,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -88,6 +92,8 @@ impl Clone for EditorState {
             catalog_snapshot: None,
             completion_replace: 0..0,
             completion_alias: false,
+            snippet_stops: Vec::new(),
+            snippet_stop: 0,
         }
     }
 }
@@ -138,6 +144,8 @@ impl Default for EditorState {
             catalog_snapshot: None,
             completion_replace: 0..0,
             completion_alias: false,
+            snippet_stops: Vec::new(),
+            snippet_stop: 0,
         }
     }
 }
@@ -281,8 +289,61 @@ pub fn insert_snippet_at(model: &mut Model, index: usize) {
         return;
     };
     model.editor.snippet_open = false;
-    insert_text(model, &expand_placeholders(&snippet.body));
+    let expansion = dexo_sql::expand(&snippet.body);
+    let at = model.active_document().cursor();
+    insert_text(model, &expansion.text);
+    // The holes are relative to the snippet; the document knows where it was put.
+    model.editor.snippet_stops = expansion
+        .stops
+        .into_iter()
+        .map(|stop| at + stop.start..at + stop.end)
+        .collect();
+    model.editor.snippet_stop = 0;
+    select_snippet_stop(model);
     refresh_intelligence(model, false);
+}
+
+/// Puts the cursor on the current hole, selecting whatever default text is in it so
+/// typing replaces it.
+fn select_snippet_stop(model: &mut Model) {
+    let Some(stop) = model
+        .editor
+        .snippet_stops
+        .get(model.editor.snippet_stop)
+        .cloned()
+    else {
+        return;
+    };
+    end_typing(model);
+    let doc = model.active_document_mut();
+    doc.anchor = if stop.start == stop.end {
+        None
+    } else {
+        Some(stop.start)
+    };
+    let _ = doc.sql.set_cursor(stop.end);
+    reveal_cursor(doc);
+}
+
+/// Moves to the next hole, or leaves the snippet when there are none left. Returns
+/// whether it did anything, so Tab can fall through to indenting.
+fn move_snippet_stop(model: &mut Model, delta: i32) -> bool {
+    if model.editor.snippet_stops.is_empty() {
+        return false;
+    }
+    let next = model.editor.snippet_stop as i32 + delta;
+    if next < 0 || next as usize >= model.editor.snippet_stops.len() {
+        // Walking past the last hole leaves the snippet. The selection goes with it --
+        // otherwise the next thing typed replaces the text in the hole just left.
+        model.editor.snippet_stops.clear();
+        model.editor.snippet_stop = 0;
+        let doc = model.active_document_mut();
+        doc.anchor = None;
+        return true;
+    }
+    model.editor.snippet_stop = next as usize;
+    select_snippet_stop(model);
+    true
 }
 
 pub fn accept_completion(model: &mut Model) {
@@ -406,7 +467,15 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             true
         }
         KeyCode::Tab => {
-            insert_text(model, "    ");
+            // Tab has three owners here, in this order: the open popup takes it, then an
+            // active snippet, and only then does it indent.
+            if !move_snippet_stop(model, 1) {
+                insert_text(model, "    ");
+            }
+            true
+        }
+        KeyCode::BackTab => {
+            move_snippet_stop(model, -1);
             true
         }
         KeyCode::Backspace => {
@@ -446,7 +515,40 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     }
 }
 
+/// Where an edit starts and how long the buffer was, so the snippet's remaining holes
+/// can be moved with the text. Without this, typing into one hole leaves every later one
+/// pointing at the wrong characters.
+fn edit_mark(model: &Model) -> (usize, usize) {
+    let doc = model.active_document();
+    let at = match doc.selection() {
+        Some(range) => range.start.min(doc.cursor()),
+        None => doc.cursor(),
+    };
+    (at, doc.text().chars().count())
+}
+
+fn shift_snippet_stops(model: &mut Model, mark: (usize, usize)) {
+    if model.editor.snippet_stops.is_empty() {
+        return;
+    }
+    let (at, before) = mark;
+    let after = model.active_document().text().chars().count();
+    if after == before {
+        return;
+    }
+    let shift = |value: &mut usize| {
+        if *value >= at {
+            *value = (*value as i64 + after as i64 - before as i64).max(at as i64) as usize;
+        }
+    };
+    for stop in &mut model.editor.snippet_stops {
+        shift(&mut stop.start);
+        shift(&mut stop.end);
+    }
+}
+
 fn insert_text(model: &mut Model, text: &str) {
+    let mark = edit_mark(model);
     let doc = model.active_document_mut();
     let range = doc.selection();
     if range.is_some() && doc.typing {
@@ -465,6 +567,7 @@ fn insert_text(model: &mut Model, text: &str) {
         doc.sql.insert(doc.sql.cursor(), text)
     };
     reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
 }
 
 fn insert_newline(model: &mut Model) {
@@ -476,6 +579,7 @@ fn insert_newline(model: &mut Model) {
 }
 
 fn backspace(model: &mut Model) {
+    let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
     if let Some(range) = doc.selection() {
@@ -488,9 +592,11 @@ fn backspace(model: &mut Model) {
         }
     }
     reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
 }
 
 fn delete(model: &mut Model) {
+    let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
     if let Some(range) = doc.selection() {
@@ -504,6 +610,7 @@ fn delete(model: &mut Model) {
         }
     }
     reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
 }
 
 pub fn undo(model: &mut Model) {

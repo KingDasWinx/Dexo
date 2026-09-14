@@ -31,5 +31,5 @@ pub use lex::{Token, TokenKind, suppressed_at, tokenize};
 pub use navigation::definition_at;
 pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
-pub use snippet::{Snippet, expand_placeholders};
+pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
 pub use statement::{StatementEffect, StatementSpan, split_statements, statement_at};
