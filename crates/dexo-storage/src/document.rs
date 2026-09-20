@@ -79,6 +79,18 @@ impl<'a> DocumentRepository<'a> {
         Ok(())
     }
 
+    /// Empties a project's document rows, and the project-less ones an older save path
+    /// left behind -- nothing reads those. The table is the snapshot of what is open,
+    /// not a library of everything ever typed: a flush clears it and writes back the
+    /// tabs that survived, so a closed tab cannot return on the next launch.
+    pub fn clear_project(&self, project_id: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM documents WHERE project_id = ?1 OR project_id IS NULL",
+            params![project_id],
+        )?;
+        Ok(())
+    }
+
     pub fn move_to_project(&self, id: &str, project_id: &str) -> anyhow::Result<()> {
         let changed = self.conn.execute(
             "UPDATE documents SET project_id = ?1 WHERE id = ?2",

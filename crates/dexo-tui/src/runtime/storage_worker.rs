@@ -231,21 +231,11 @@ impl StorageWorker {
                             }
                         }
                         StorageCommand::SaveDocument(request) => {
-                            let repo = DocumentRepository::new(db.connection());
-                            if repo
-                                .save(
-                                    &request.document,
-                                    None,
-                                    &request.document,
-                                    &request.content,
-                                    Some(request.path.to_string_lossy().as_ref()),
-                                    None,
-                                )
-                                .is_ok()
-                            {
-                                let _ = RecoveryRepository::new(db.connection())
-                                    .clear(&request.document);
-                            }
+                            // The file is on disk and `flush_documents` owns the row, so
+                            // writing one here only left an orphan: no project id, and the
+                            // document id where the title belongs.
+                            let _ =
+                                RecoveryRepository::new(db.connection()).clear(&request.document);
                         }
                         StorageCommand::TouchRecentSqlFile { project_id, path } => {
                             let _ = RecentItemsRepository::new(db.connection()).touch(
@@ -617,7 +607,11 @@ fn flush_documents(
     project_id: &str,
     documents: &[FlushedDocument],
 ) -> anyhow::Result<()> {
+    let tx = db.connection().unchecked_transaction()?;
     let repo = DocumentRepository::new(db.connection());
+    // Rewrite rather than upsert: the rows the user closed have to go, or every launch
+    // reopens every document the project ever held.
+    repo.clear_project(project_id)?;
     for document in documents {
         let path = document
             .path
@@ -632,6 +626,7 @@ fn flush_documents(
             None,
         )?;
     }
+    tx.commit()?;
     let recovery = RecoveryRepository::new(db.connection());
     for document in recovery.list_for_project(project_id)? {
         recovery.clear(&document.id)?;
