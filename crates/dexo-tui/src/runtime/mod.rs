@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use dexo_app::{
     ConnectionProfile, DriverRegistry, NewConnection, QueryService, SecretPersist,
@@ -123,6 +124,15 @@ impl SecretStore for SessionSecrets {
     }
 }
 
+/// How long a driver gets to answer before the connect is called a failure. An
+/// unroutable host otherwise leaves the dial hanging for the OS timeout, and the user
+/// sees a connection that never resolves either way.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A connect that finished, waiting for `Effect::AdoptSession` to move it into the
+/// registry. Parked rather than returned because the dialling runs in its own task.
+type OpenedSession = (u64, ConnectionProfile, Arc<dyn dexo_driver_api::Session>);
+
 pub struct WorkbenchRuntime {
     action_tx: tokio::sync::mpsc::Sender<Action>,
     storage: Option<StorageWorker>,
@@ -131,6 +141,7 @@ pub struct WorkbenchRuntime {
     secrets: SessionSecrets,
     query: QueryService,
     live: Arc<tokio::sync::Mutex<Option<query_runner::LiveQuery>>>,
+    opening: Arc<tokio::sync::Mutex<Option<OpenedSession>>>,
     transfer: transfer_manager::TransferManager,
 }
 
@@ -148,6 +159,7 @@ impl WorkbenchRuntime {
             secrets: SessionSecrets::default(),
             query: QueryService::new(Arc::new(TaskRegistry::default())),
             live: Arc::new(tokio::sync::Mutex::new(None)),
+            opening: Arc::new(tokio::sync::Mutex::new(None)),
             transfer: transfer_manager::TransferManager::default(),
         }
     }
@@ -168,6 +180,7 @@ impl WorkbenchRuntime {
             crate::Effect::ConnectProfile { profile, token } => {
                 self.connect_profile(profile, token).await
             }
+            crate::Effect::AdoptSession { token } => self.adopt_session(token).await,
             crate::Effect::SubmitSecret {
                 kind,
                 profile,
@@ -730,35 +743,84 @@ impl WorkbenchRuntime {
             .await;
             return;
         }
-        match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
-            Err(action) => self.emit(*action).await,
-            Ok(_) => match self.open_session(&profile).await {
-                Ok(session) => {
-                    let id = self.sessions.insert(profile.name.clone(), session);
-                    let generation = self
-                        .sessions
-                        .get(id)
-                        .map(|active| active.generation)
-                        .unwrap_or(1);
-                    let read_only =
-                        dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
-                            .map(|policy| policy.read_only)
-                            .unwrap_or(false);
-                    self.emit(Action::ConnectionChanged {
-                        name: profile.name,
-                        ready: true,
-                        environment: profile.environment,
-                        session: Some(id),
-                        generation,
-                        token,
-                        read_only,
-                        driver: profile.driver,
-                    })
-                    .await;
+        // Everything up to the dial is local and fast; the dial itself is spawned, or a
+        // host that never answers holds the whole event loop and the UI stops drawing.
+        let secret =
+            match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
+                Ok(secret) => secret,
+                Err(action) => return self.emit(*action).await,
+            };
+        let request = self
+            .drivers
+            .get(&profile.driver)
+            .map_err(|error| error.to_string())
+            .and_then(|factory| {
+                profile
+                    .connect_request(secret)
+                    .map(|(connect, _)| (factory, connect))
+                    .map_err(|error| error.to_string())
+            });
+        let (factory, connect) = match request {
+            Ok(pair) => pair,
+            Err(message) => return self.emit(Action::ConnectionFormError { message }).await,
+        };
+        let opening = Arc::clone(&self.opening);
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            let action = match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await
+            {
+                Ok(Ok(session)) => {
+                    *opening.lock().await = Some((token, profile, Arc::from(session)));
+                    Action::SessionOpened { token }
                 }
-                Err(message) => self.emit(Action::ConnectionFormError { message }).await,
-            },
+                Ok(Err(error)) => Action::ConnectionFormError {
+                    message: map_driver_error(error).to_string(),
+                },
+                Err(_) => Action::ConnectionFormError {
+                    message: format!(
+                        "{} did not answer within {}s",
+                        profile.name,
+                        CONNECT_TIMEOUT.as_secs()
+                    ),
+                },
+            };
+            let _ = action_tx.send(action).await;
+        });
+    }
+
+    /// Takes the session a spawned connect parked and publishes it. A token that no
+    /// longer matches means the user started another connect while this one dialled.
+    async fn adopt_session(&mut self, token: u64) {
+        let mut slot = self.opening.lock().await;
+        if slot.as_ref().is_none_or(|(opened, ..)| *opened != token) {
+            // A later connect has already parked over this one; taking the slot here
+            // would drop its session on the floor.
+            return;
         }
+        let Some((_, profile, session)) = slot.take() else {
+            return;
+        };
+        drop(slot);
+        let id = self.sessions.insert(profile.name.clone(), session);
+        let generation = self
+            .sessions
+            .get(id)
+            .map(|active| active.generation)
+            .unwrap_or(1);
+        let read_only = dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
+            .map(|policy| policy.read_only)
+            .unwrap_or(false);
+        self.emit(Action::ConnectionChanged {
+            name: profile.name,
+            ready: true,
+            environment: profile.environment,
+            session: Some(id),
+            generation,
+            token,
+            read_only,
+            driver: profile.driver,
+        })
+        .await;
     }
 
     async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId) {
@@ -894,9 +956,18 @@ impl WorkbenchRuntime {
         let (connect, _) = profile
             .connect_request(secret)
             .map_err(|error| error.to_string())?;
-        let boxed = factory
-            .connect(connect)
+        // These callers still dial on the event loop, so the cap is what keeps the UI
+        // from freezing for the OS timeout on an unroutable host.
+        // ponytail: spawn them like `connect_profile` if a 10s stall is still too long.
+        let boxed = tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect))
             .await
+            .map_err(|_| {
+                format!(
+                    "{} did not answer within {}s",
+                    profile.name,
+                    CONNECT_TIMEOUT.as_secs()
+                )
+            })?
             .map_err(map_driver_error)
             .map_err(|error| error.to_string())?;
         Ok(Arc::from(boxed))

@@ -45,11 +45,18 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             read_only,
             driver,
         } => {
+            let mut answered_connect = false;
             if let Some(pending) = model.connections.pending_connect {
                 if token != pending {
                     return Vec::new();
                 }
                 model.connections.pending_connect = None;
+                answered_connect = true;
+            }
+            if answered_connect && ready {
+                // Replaces the "Connecting…" toast; leaving that one up would read as a
+                // dial that never finished.
+                model.messages.info(format!("Connected to {name}"));
             }
             model.connection.name = name.clone();
             model.connection.ready = ready;
@@ -148,9 +155,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ConnectionFormError { message } => {
-            model.connection_form.set_error(message);
+            // Connecting from the sidebar leaves the form closed, and an error written
+            // to a closed widget is an error the user never sees.
+            model.connections.pending_connect = None;
+            if model.connection_form.open {
+                model.connection_form.set_error(message);
+            } else {
+                model.messages.error(message);
+            }
             Vec::new()
         }
+        Action::SessionOpened { token } => vec![Effect::AdoptSession { token }],
         Action::SaveConnection => save_connection(model),
         Action::QueryResultSetStarted { key, index } => {
             if operation_matches(model, &key) {
@@ -3473,6 +3488,11 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     }
     model.connect_token = model.connect_token.saturating_add(1);
     model.connections.pending_connect = Some(model.connect_token);
+    // The dial is spawned, so this toast paints on the very next frame and is the only
+    // thing telling the user the Enter landed at all.
+    model
+        .messages
+        .info(format!("Connecting to {}…", profile.name));
     vec![Effect::ConnectProfile {
         profile,
         token: model.connect_token,

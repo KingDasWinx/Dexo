@@ -36,6 +36,10 @@ pub enum Action {
     ConnectionFormError {
         message: String,
     },
+    /// A spawned connect parked its session and is waiting to be adopted.
+    SessionOpened {
+        token: u64,
+    },
     SecretRequired {
         purpose: crate::screens::secret_prompt::SecretPurpose,
         profile: ConnectionProfile,
@@ -597,6 +601,11 @@ pub enum Effect {
     },
     ConnectProfile {
         profile: ConnectionProfile,
+        token: u64,
+    },
+    /// Move the session a spawned connect parked into the registry. The registry needs
+    /// `&mut WorkbenchRuntime`, which the task doing the dialling cannot hold.
+    AdoptSession {
         token: u64,
     },
     SubmitSecret {
