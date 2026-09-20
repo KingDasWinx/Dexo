@@ -343,7 +343,7 @@ mod tests {
                 None,
             ));
         }
-        model.active_document = count - 1;
+        model.set_active_document(count - 1);
         model.document_tab_focus = DocumentTabFocus::Document(count - 1);
         model
     }

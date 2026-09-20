@@ -1978,7 +1978,7 @@ mod tests {
             crate::model::EditorDocument::new_unique("q2.sql", None, None),
         ];
         model.documents[1].sql.insert(0, "select 1").unwrap();
-        model.active_document = 1;
+        model.set_active_document(1);
 
         let frame = render_to_string(&model, 120, 35);
 

@@ -505,7 +505,7 @@ mod tests {
                             .push(EditorDocument::new_table(dexo_app::parse_qualified(
                                 "public.orders",
                             )));
-                        model.active_document = 1;
+                        model.set_active_document(1);
                     }
                     *model.results = GridModel::sample_rows(500);
                     model.focus = Focus::Results;
@@ -544,14 +544,15 @@ mod tests {
 
         for (w, h) in [(160u16, 50u16), (267, 59), (120, 35), (100, 30)] {
             let mut model = Model::default();
-            *model.results = GridModel::sample_rows(500);
-            model.apply_size(w, h);
-
             model
                 .documents
                 .push(EditorDocument::new_table(dexo_app::parse_qualified(
                     "public.orders",
                 )));
+            // Rows in the table tab's own pane, which no resize has sized yet: results
+            // are per document, so only the switch can derive its viewport.
+            *model.documents[1].results = GridModel::sample_rows(500);
+            model.apply_size(w, h);
             update(&mut model, Action::SelectDocument { index: 1 });
 
             for _ in 0..200 {
@@ -685,7 +686,7 @@ mod tests {
                         .push(EditorDocument::new_table(dexo_app::parse_qualified(
                             "public.orders",
                         )));
-                    model.active_document = 1;
+                    model.set_active_document(1);
                 }
                 *model.results = GridModel::sample_rows(500);
                 model.apply_size(w, h);
@@ -730,7 +731,7 @@ mod tests {
             .push(EditorDocument::new_table(dexo_app::parse_qualified(
                 "public.orders",
             )));
-        model.active_document = 1;
+        model.set_active_document(1);
         *model.results = GridModel::sample_rows(500);
         model.apply_size(100, 24);
 
@@ -777,11 +778,11 @@ mod tests {
             )));
         *model.results = crate::model::GridModel::sample_rows(200);
 
-        model.active_document = 0;
+        model.set_active_document(0);
         model.apply_size(100, 24);
         let in_editor = model.results.viewport().height;
 
-        model.active_document = 1;
+        model.set_active_document(1);
         model.apply_size(100, 24);
         let on_the_table = model.results.viewport().height;
 
@@ -811,7 +812,7 @@ mod tests {
             .push(EditorDocument::new_table(dexo_app::parse_qualified(
                 "public.orders",
             )));
-        model.active_document = 1;
+        model.set_active_document(1);
         *model.results = crate::model::GridModel::sample_rows(200);
         model.apply_size(120, 40);
 

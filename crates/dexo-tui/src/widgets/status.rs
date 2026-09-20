@@ -232,13 +232,13 @@ mod tests {
             .push(crate::model::EditorDocument::new_table(
                 dexo_app::parse_qualified("public.orders"),
             ));
-        model.active_document = 1;
+        model.set_active_document(1);
         assert_eq!(
             footer_hint(&model),
             Some("Enter actions  v view  n/p page  Ctrl+W close")
         );
 
-        model.active_document = 0;
+        model.set_active_document(0);
         assert_eq!(
             footer_hint(&model),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")

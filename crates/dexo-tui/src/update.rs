@@ -18,8 +18,15 @@ use ratatui::layout::{Position, Rect};
 /// place that assigns `active_document`, so the check lives where they all return.
 pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     let was_table = model.active_document().kind.is_table();
+    // Same reason as the viewport below: the document can change under any action, so
+    // the output pane follows it here rather than at each of the assignment sites.
+    // Before, so the action writes into the active document's pane; after, because the
+    // action may have switched documents and the next frame draws before the next
+    // action arrives.
+    let mut swapped = model.swap_results_to_active_document();
     let effects = dispatch(model, action);
-    if model.active_document().kind.is_table() != was_table {
+    swapped |= model.swap_results_to_active_document();
+    if swapped || model.active_document().kind.is_table() != was_table {
         model.sync_grid_viewport();
     }
     effects

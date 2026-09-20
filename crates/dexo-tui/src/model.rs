@@ -1231,6 +1231,9 @@ pub struct EditorDocument {
     pub anchor: Option<usize>,
     pub kind: DocumentKind,
     pub console_log: Vec<String>,
+    /// The output pane as this document last left it. Parked here while another
+    /// document is active, so a query run in one file cannot redraw another's grid.
+    pub results: ResultsState,
 }
 
 impl PartialEq for EditorDocument {
@@ -1267,6 +1270,7 @@ impl EditorDocument {
             typing: false,
             anchor: None,
             kind: DocumentKind::Console,
+            results: ResultsState::default(),
             console_log: Vec::new(),
         }
     }
@@ -1289,6 +1293,7 @@ impl EditorDocument {
             typing: false,
             anchor: None,
             kind: DocumentKind::Console,
+            results: ResultsState::default(),
             console_log: Vec::new(),
         }
     }
@@ -1319,6 +1324,7 @@ impl EditorDocument {
             typing: false,
             anchor: None,
             kind: DocumentKind::Table(target),
+            results: ResultsState::default(),
             console_log: Vec::new(),
         }
     }
@@ -1375,7 +1381,14 @@ pub struct Model {
     pub layout_mode: LayoutMode,
     pub connection: ConnectionStatus,
     pub transaction: TransactionState,
+    /// The output pane on screen. It belongs to `results_owner`; every other document
+    /// keeps its own in `EditorDocument::results` until it is activated again.
     pub results: ResultsState,
+    /// Document id whose results `self.results` currently holds. `None` before the
+    /// first swap: the pane cannot have been written for anyone but the active
+    /// document, so it is adopted rather than dropped. A `Some` id that no longer
+    /// matches a document means that document was closed, and its pane goes with it.
+    pub results_owner: Option<String>,
     pub palette: PaletteState,
     pub help: HelpState,
     pub onboarding: OnboardingState,
@@ -1492,6 +1505,7 @@ impl Default for Model {
             diagnostics: DiagnosticsScreen::default(),
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
+            results_owner: None,
             palette: PaletteState::default(),
             messages: Notifications::default(),
             documents: vec![EditorDocument::scratch()],
@@ -1664,6 +1678,46 @@ impl Model {
             panes.results_height = self.panes.console_height;
         }
         panes
+    }
+
+    /// Switches the active document and brings its output pane with it. Assigning
+    /// `active_document` on its own leaves `results_owner` behind, and the next
+    /// `update` then parks the pane under the document that no longer owns it.
+    pub fn set_active_document(&mut self, index: usize) {
+        if index >= self.documents.len() {
+            return;
+        }
+        self.active_document = index;
+        self.swap_results_to_active_document();
+    }
+
+    /// Parks the output pane under the document it belongs to and picks up the active
+    /// document's. Results are per document: a query run in one file must not redraw
+    /// another file's grid.
+    pub fn swap_results_to_active_document(&mut self) -> bool {
+        let Some(active) = self
+            .documents
+            .get(self.active_document)
+            .map(|d| d.id.clone())
+        else {
+            return false;
+        };
+        let Some(owner) = self.results_owner.replace(active.clone()) else {
+            return false;
+        };
+        if owner == active {
+            return false;
+        }
+        let parked = std::mem::take(&mut self.results);
+        if let Some(previous) = self
+            .documents
+            .iter_mut()
+            .find(|document| document.id == owner)
+        {
+            previous.results = parked;
+        }
+        self.results = std::mem::take(&mut self.documents[self.active_document].results);
+        true
     }
 
     pub fn sync_grid_viewport(&mut self) {
