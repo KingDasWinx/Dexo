@@ -581,6 +581,8 @@ impl TransferRequest {
 
 #[derive(Clone, Debug)]
 pub struct FlushedDocument {
+    /// `DocumentKind::storage_tag` -- `None` for an ordinary editor tab.
+    pub kind: Option<String>,
     pub id: String,
     pub title: String,
     pub content: String,

@@ -1214,6 +1214,21 @@ impl DocumentKind {
     pub fn is_table(&self) -> bool {
         matches!(self, DocumentKind::Table(_))
     }
+
+    /// How the kind is written on a stored document. An editor tab stores nothing;
+    /// a table browser stores the table it browses, or it comes back as an editor tab
+    /// and the next open of that table makes a second document instead of finding it.
+    pub fn storage_tag(&self) -> Option<String> {
+        match self {
+            Self::Console => None,
+            Self::Table(target) => Some(format!("table:{}", target.display_unquoted())),
+        }
+    }
+
+    pub fn from_storage_tag(tag: &str) -> Option<Self> {
+        tag.strip_prefix("table:")
+            .map(|target| Self::Table(dexo_app::parse_qualified(target)))
+    }
 }
 
 #[derive(Clone, Debug)]

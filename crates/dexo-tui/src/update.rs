@@ -4029,6 +4029,7 @@ fn flush_documents_effect(model: &Model) -> Effect {
             .documents
             .iter()
             .map(|document| crate::action::FlushedDocument {
+                kind: document.kind.storage_tag(),
                 id: document.id.clone(),
                 title: document.title.clone(),
                 content: document.text(),
@@ -4239,6 +4240,13 @@ fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::E
     document.id = stored.id;
     document.title = stored.title;
     document.path = stored.path.map(std::path::PathBuf::from);
+    if let Some(kind) = stored
+        .kind
+        .as_deref()
+        .and_then(crate::model::DocumentKind::from_storage_tag)
+    {
+        document.kind = kind;
+    }
     document
 }
 
@@ -7113,6 +7121,50 @@ mod tests {
         assert_eq!(model.focus, Focus::Editor, "explain moved the focus");
         assert_eq!(model.active_document().id, document);
         assert_eq!(model.results.view, crate::model::ResultsView::Explain);
+    }
+
+    /// A restored table browser has to still be a table browser. When the kind was left
+    /// out of the row, it came back as an ordinary editor tab, `document_index_for_table`
+    /// no longer recognised it, and the next open of that table pushed a second document
+    /// -- once per table per launch, which is how the tab strip fills with thousands of
+    /// duplicates of the same handful of tables.
+    #[test]
+    fn reopening_a_restored_table_finds_its_tab_instead_of_making_another() {
+        use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind};
+
+        let target = dexo_app::parse_qualified("public.brands");
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        model
+            .documents
+            .push(super::document_from_stored(dexo_storage::StoredDocument {
+                id: "doc-brands".into(),
+                project_id: Some("p1".into()),
+                title: "brands".into(),
+                content: "SELECT * FROM public.brands LIMIT 501".into(),
+                path: None,
+                fingerprint: None,
+                kind: crate::model::DocumentKind::Table(target.clone()).storage_tag(),
+            }));
+        assert!(model.documents[1].kind.is_table(), "the kind did not survive the row");
+
+        model.explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("table:brands"),
+                ObjectKind::Table,
+                target,
+                None,
+            )],
+            restrictions: vec![],
+        });
+        model.explorer.select(ObjectId::new("table:brands"));
+        update(&mut model, Action::ExplorerExpand);
+
+        assert_eq!(model.documents.len(), 2, "opening the table made a second tab");
+        assert_eq!(model.active_document().id, "doc-brands");
     }
 
     /// Opening a table loads its metadata so `explorer.ddl` and Properties have something

@@ -47,6 +47,7 @@ pub fn advance(model: &Model, switch: &ProjectSwitch) -> Vec<Effect> {
                 .documents
                 .iter()
                 .map(|document| crate::action::FlushedDocument {
+                    kind: document.kind.storage_tag(),
                     id: document.id.clone(),
                     title: document.title.clone(),
                     content: document.text(),

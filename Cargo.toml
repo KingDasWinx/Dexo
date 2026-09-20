@@ -1,3 +1,6 @@
+[profile.dev]
+debug = "line-tables-only"
+
 [profile.dist]
 inherits = "release"
 lto = "thin"

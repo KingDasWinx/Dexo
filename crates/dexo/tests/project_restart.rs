@@ -41,6 +41,7 @@ fn seed_and_shutdown(home: &std::path::Path, expected: &ExpectedWorkspace) {
             &expected.sql,
             None,
             None,
+            None,
         )
         .unwrap();
     let layout = WorkbenchLayout {
