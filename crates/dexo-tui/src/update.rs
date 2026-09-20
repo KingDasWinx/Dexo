@@ -3769,7 +3769,7 @@ fn move_palette_selection(model: &mut Model, delta: isize) {
         selected,
         model.palette.offset,
         count,
-        crate::palette::popup_list_rows(model.height),
+        crate::palette::popup_list_rows(model.height, count),
     );
 }
 fn complete_onboarding(model: &mut Model) -> Vec<Effect> {

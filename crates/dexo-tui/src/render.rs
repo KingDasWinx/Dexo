@@ -541,15 +541,15 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if area.width < 10 || area.height < 5 {
         return;
     }
+    let entries = palette_entries(model);
+    let visible = filter_entries(&entries, &model.palette.query);
     let width = area.width.clamp(10, crate::palette::POPUP_MAX_WIDTH);
-    let height = crate::palette::popup_height(area.height);
+    let height = crate::palette::popup_height(area.height, visible.len());
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 3;
     let popup = Rect::new(x, y, width, height);
-    let entries = palette_entries(model);
-    let visible = filter_entries(&entries, &model.palette.query);
     let mut lines = vec![format!("> {}", model.palette.query)];
-    let rows = crate::palette::popup_list_rows(area.height);
+    let rows = crate::palette::popup_list_rows(area.height, visible.len());
     let offset = scroll_to_selection(
         model.palette.selected,
         model.palette.offset,
@@ -557,49 +557,91 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         rows,
     );
     let browsing = model.palette.query.is_empty();
-    for (index, entry) in visible.iter().enumerate().skip(offset).take(rows) {
+    let inner_width = popup.width.saturating_sub(2) as usize;
+    let window: Vec<&&crate::palette::PaletteEntry> =
+        visible.iter().skip(offset).take(rows).collect();
+    // Searching, the categories line up in a column of their own; ragged labels glued to
+    // each title read as noise rather than as the qualifier they are.
+    let title_width = window
+        .iter()
+        .map(|entry| entry.title.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(inner_width.saturating_sub(CATEGORY_WIDTH + 4));
+    for (row, entry) in window.iter().enumerate() {
+        let index = offset + row;
         let marker = if index == model.palette.selected {
             ">"
         } else {
             " "
         };
-        // While browsing, print the category once per group and on the first visible
-        // row -- that second case is what keeps a heading on screen mid-scroll. While
-        // searching the order is relevance, so every row carries its own label.
         let label = crate::palette::category_label(entry.id);
-        let repeats = browsing
-            && index > offset
-            && visible
-                .get(index - 1)
-                .is_some_and(|prev| crate::palette::category_label(prev.id) == label);
-        let category = if repeats {
-            " ".repeat(CATEGORY_WIDTH)
+        // Browsing, the category is a heading: printed once per group and again on the
+        // first visible row so scrolling never loses it. Searching, the order is
+        // relevance, not category, so a leading gutter would indent every title behind
+        // dead space -- the label trails the title there instead.
+        let (category, title) = if browsing {
+            let repeats = row > 0 && crate::palette::category_label(window[row - 1].id) == label;
+            let gutter = if repeats {
+                " ".repeat(CATEGORY_WIDTH)
+            } else {
+                format!("{label:<CATEGORY_WIDTH$}")
+            };
+            (gutter, entry.title.to_string())
         } else {
-            format!("{label:<CATEGORY_WIDTH$}")
+            (
+                String::new(),
+                format!("{:<title_width$}  {label}", entry.title),
+            )
         };
-        let shortcut = entry
-            .shortcut
-            .map(|value| format!(" [{value}]"))
-            .unwrap_or_default();
-        let disabled = entry
-            .disabled_reason
-            .as_deref()
-            .map(|reason| format!(" ({reason})"))
-            .unwrap_or_default();
+        // The shortcut sits against the right edge so the keys read as one column
+        // instead of trailing each title at a different offset.
+        let shortcut = entry.shortcut.unwrap_or_default();
+        let used = 2 + category.chars().count() + title.chars().count();
+        let gap = inner_width
+            .saturating_sub(used + shortcut.chars().count())
+            .max(1);
         lines.push(format!(
-            "{marker} {category}{}{shortcut}{disabled}",
-            entry.title
+            "{marker} {category}{title}{}{shortcut}",
+            " ".repeat(gap)
         ));
     }
-    paint_popup(
-        frame,
+    // One footer line, for the selected command only. The reason used to trail every
+    // disabled row, which repeated "connect a session first" down the list and pushed
+    // the shortcuts off the popup.
+    let footer = visible
+        .get(model.palette.selected)
+        .and_then(|entry| entry.disabled_reason.clone())
+        .unwrap_or_default();
+    let list_lines = lines.len();
+    lines.push(footer);
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let body: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            // Unusable commands and the footer are dim; they also sort to the bottom, so
+            // the state survives a monochrome terminal.
+            let dim = i == list_lines
+                || (i > 0
+                    && visible
+                        .get(offset + i - 1)
+                        .is_some_and(|entry| entry.disabled_reason.is_some()));
+            if dim {
+                Line::styled(text.clone(), muted)
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, "Command Palette")),
         popup,
-        overlay_block(model, "Command Palette"),
-        lines.join("\n"),
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, _, rect| {
-        if i == 0 {
+        if i == 0 || i > list_lines {
             return;
         }
         hits.register(HitTarget::ListRow(offset.saturating_add(i - 1)), rect);

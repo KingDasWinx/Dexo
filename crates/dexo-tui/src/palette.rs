@@ -111,14 +111,26 @@ pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
     ]
 }
 
-/// Height the palette popup takes for a given terminal height.
-pub fn popup_height(term_height: u16) -> u16 {
-    term_height.clamp(5, POPUP_MAX_HEIGHT)
+/// Rows the popup spends on itself: two borders, the query line, and the footer that
+/// carries why the selected command cannot run.
+const POPUP_CHROME: u16 = 4;
+
+/// Height the popup takes for `count` matches. It shrinks to its content -- sizing it
+/// to the terminal left a column of blank rows under every short result list.
+pub fn popup_height(term_height: u16, count: usize) -> u16 {
+    let wanted = u16::try_from(count)
+        .unwrap_or(u16::MAX)
+        .saturating_add(POPUP_CHROME);
+    wanted
+        .clamp(POPUP_CHROME + 1, POPUP_MAX_HEIGHT)
+        .min(term_height.max(POPUP_CHROME + 1))
 }
 
-/// Popup list rows for a terminal height: the popup minus its border and query line.
-pub fn popup_list_rows(term_height: u16) -> usize {
-    popup_height(term_height).saturating_sub(3) as usize
+/// Command rows the popup can draw for `count` matches.
+pub fn popup_list_rows(term_height: u16, count: usize) -> usize {
+    popup_height(term_height, count)
+        .saturating_sub(POPUP_CHROME)
+        .max(1) as usize
 }
 
 /// Keep `selected` inside `[offset, offset + rows)`. Same rule as ratatui `ListState`.
@@ -191,17 +203,29 @@ pub fn category_label(id: &str) -> &str {
         .unwrap_or_else(|| id.split('.').next().unwrap_or(id))
 }
 
+/// Commands that cannot run sort after the ones that can. Ranking them by score alone
+/// put "Commit Transaction (connect a session first)" under the cursor for a query like
+/// `com`, so the default Enter did nothing.
+fn unusable(entry: &PaletteEntry) -> bool {
+    entry.disabled_reason.is_some()
+}
+
 pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a PaletteEntry> {
     if query.is_empty() {
         let mut browse: Vec<&PaletteEntry> = entries.iter().collect();
-        browse.sort_by_key(|entry| category_index(entry.id));
+        browse.sort_by_key(|entry| (unusable(entry), category_index(entry.id)));
         return browse;
     }
     let mut scored: Vec<(u8, &PaletteEntry)> = entries
         .iter()
         .filter_map(|entry| score(entry, query).map(|s| (s, entry)))
         .collect();
-    scored.sort_by(|a, b| b.0.cmp(&a.0).then_with(|| a.1.title.cmp(b.1.title)));
+    scored.sort_by(|a, b| {
+        unusable(a.1)
+            .cmp(&unusable(b.1))
+            .then_with(|| b.0.cmp(&a.0))
+            .then_with(|| a.1.title.cmp(b.1.title))
+    });
     scored.into_iter().map(|(_, entry)| entry).collect()
 }
 
@@ -306,7 +330,7 @@ mod tests {
             model.palette.selected,
             0,
             entries.len(),
-            popup_list_rows(model.height),
+            popup_list_rows(model.height, entries.len()),
         );
         let view = crate::render::render_to_string(&model, 80, 24);
         let ordered = filter_entries(&entries, "");
