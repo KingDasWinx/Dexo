@@ -20,7 +20,7 @@ pub use completion::{
 };
 pub use context::{
     Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, TriggerMode,
-    TriggerOrigin, analyze, should_open, suggest_alias,
+    TriggerOrigin, analyze, should_open,
 };
 pub use derived::{derive_page, filter_values};
 pub use diagnostic::{Diagnostic, DiagnosticSource};

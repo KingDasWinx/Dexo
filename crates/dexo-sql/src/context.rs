@@ -209,43 +209,6 @@ pub fn should_open(mode: TriggerMode, context: &CursorContext, origin: TriggerOr
     }
 }
 
-/// A short alias for a table, the way someone would write it by hand: initials for a
-/// name made of words, otherwise the leading letters. Never one of the words that would
-/// end the table reference it is attached to, and never one already taken.
-pub fn suggest_alias(name: &str, taken: &[String]) -> Option<String> {
-    let words: Vec<&str> = name
-        .split(|c: char| !c.is_ascii_alphanumeric())
-        .filter(|word| !word.is_empty())
-        .collect();
-    if words.is_empty() {
-        return None;
-    }
-    let initials: String = words
-        .iter()
-        .filter_map(|word| word.chars().next())
-        .collect::<String>()
-        .to_ascii_lowercase();
-    let first = words[0].to_ascii_lowercase();
-    let mut candidates = vec![initials.clone()];
-    for take in 1..=3 {
-        if first.chars().count() >= take {
-            candidates.push(first.chars().take(take).collect());
-        }
-    }
-    for suffix in 2..=9 {
-        candidates.push(format!("{initials}{suffix}"));
-    }
-    candidates.into_iter().find(|candidate| {
-        !candidate.is_empty()
-            && !CLAUSE_WORDS
-                .iter()
-                .any(|word| candidate.eq_ignore_ascii_case(word))
-            && !taken
-                .iter()
-                .any(|word| word.eq_ignore_ascii_case(candidate))
-    })
-}
-
 pub fn analyze(sql: &str, cursor: usize, dialect: Dialect) -> CursorContext {
     let cursor = cursor.min(sql.len());
     let tokens = tokenize(sql, dialect);

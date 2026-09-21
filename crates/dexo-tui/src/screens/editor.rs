@@ -46,7 +46,6 @@ pub struct EditorState {
     /// there should bring an alias with it. Both come from the analysis that built the
     /// list, so accepting cannot disagree with it about what is being replaced.
     completion_replace: std::ops::Range<usize>,
-    completion_alias: bool,
     /// The holes an inserted snippet left behind, in characters, and which one the
     /// cursor is on. Tab walks forward through them and Shift+Tab back.
     snippet_stops: Vec<std::ops::Range<usize>>,
@@ -94,7 +93,6 @@ impl Clone for EditorState {
             catalog_key: None,
             catalog_snapshot: None,
             completion_replace: 0..0,
-            completion_alias: false,
             snippet_stops: Vec::new(),
             snippet_stop: 0,
             completion_request: None,
@@ -147,7 +145,6 @@ impl Default for EditorState {
             catalog_key: None,
             catalog_snapshot: None,
             completion_replace: 0..0,
-            completion_alias: false,
             snippet_stops: Vec::new(),
             snippet_stop: 0,
             completion_request: None,
@@ -245,9 +242,6 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
         return;
     }
     model.editor.completion_replace = context.replace.clone();
-    // An alias is only worth offering where a table reference actually starts.
-    model.editor.completion_alias =
-        context.intent == dexo_sql::Intent::Table && context.qualifier.is_empty();
     request_more_objects(model, &context, items.len());
     model.editor.completions = items;
     model.editor.completion_open = true;
@@ -453,24 +447,11 @@ pub fn accept_completion(model: &mut Model) {
         return;
     };
     let dialect = editor_dialect(model);
-    let mut text = match item.kind {
+    let text = match item.kind {
         // A join condition is already written out; quoting it would break it.
         dexo_sql::CompletionKind::Keyword | dexo_sql::CompletionKind::Snippet => item.label.clone(),
         _ => dialect.quote_if_needed(&item.label),
     };
-    if model.editor.completion_alias && item.kind == dexo_sql::CompletionKind::Table {
-        let sql = model.active_document().text();
-        let context = dexo_sql::analyze(&sql, model.editor.completion_replace.start, dialect);
-        let taken: Vec<String> = context
-            .row_sources
-            .iter()
-            .map(|source| source.qualifier().to_string())
-            .collect();
-        if let Some(alias) = dexo_sql::suggest_alias(&item.label, &taken) {
-            text.push(' ');
-            text.push_str(&alias);
-        }
-    }
     let range = model.editor.completion_replace.clone();
     replace_range(model, range, &text);
     model.editor.completion_open = false;
