@@ -208,3 +208,28 @@ fn right_click_on_a_node_opens_its_menu() {
     assert!(model.node_menu.open, "right-click did not open the menu");
     assert_eq!(node_menu_kind(&model), Some(NodeMenuKind::Connection));
 }
+
+/// The header sheds from the left as the pane narrows. `Connections  [n]ew [e]dit` was
+/// already 25 cells against a sidebar that defaults to 22, so it was being cut mid-word
+/// before `[a]ctions` was ever added to it.
+#[test]
+fn the_sidebar_header_sheds_to_fit() {
+    use dexo_tui::widgets::object_tree::sidebar_header;
+
+    for width in [8usize, 12, 16, 20, 26, 40] {
+        let header = sidebar_header(width);
+        assert!(
+            header.chars().count() <= width,
+            "{width} cells overflowed with {header:?}"
+        );
+    }
+    assert_eq!(
+        sidebar_header(40),
+        "Connections  [n]ew [e]dit [a]ctions",
+        "a wide sidebar shows everything"
+    );
+    // The gateway to every other command outlives the label and `[e]dit`, which the
+    // menu itself carries.
+    assert!(sidebar_header(20).contains("[a]ctions"));
+    assert!(sidebar_header(26).contains("[a]ctions"));
+}

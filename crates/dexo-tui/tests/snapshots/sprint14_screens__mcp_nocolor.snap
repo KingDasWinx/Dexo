@@ -4,7 +4,7 @@ expression: "render_to_string(&model, 100, 30)"
 ---
 default  no connection  —                                                                           
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
-│Connections  [n]ew [e]dit │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
+│[n]ew [e]dit [a]ctions    │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
 │No connections — press n  ││   1                                                                  │
 │                          ││                                                                      │
 │             ┌MCP profiles──────────────────────────────────────────────────────────┐             │

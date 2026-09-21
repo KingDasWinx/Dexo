@@ -68,6 +68,7 @@ pub enum HitButton {
     ConfirmDelete,
     New,
     Edit,
+    Actions,
     Duplicate,
     Test,
     Delete,

@@ -4,7 +4,7 @@ expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ scratch.sql ×  users ×  +                                              
-│Connections  [n]ew [e]dit │┌▸ Results (0) crumbs:1────────────────────────────────────────────────┐
+│[n]ew [e]dit [a]ctions    │┌▸ Results (0) crumbs:1────────────────────────────────────────────────┐
 │  ● local▾  [offline]     ││[Grid] Explain  Messages                                              │
 │>   ▸ public              ││                                                                      │
 │      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │

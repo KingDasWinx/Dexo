@@ -2322,6 +2322,7 @@ fn mouse_workbench(
         Some(HitTarget::DocumentTabScrollNext) => update(model, Action::ScrollDocumentTabsNext),
         Some(HitTarget::Button(HitButton::New)) => update(model, Action::OpenConnectionForm),
         Some(HitTarget::Button(HitButton::Edit)) => update(model, Action::EditSelectedConnection),
+        Some(HitTarget::Button(HitButton::Actions)) => update(model, Action::OpenNodeMenu),
         Some(HitTarget::PaneDivider(edge))
             if matches!(mouse.kind, MouseEventKind::Down(MouseButton::Left)) =>
         {

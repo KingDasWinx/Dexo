@@ -57,17 +57,37 @@ pub fn render_lines(state: &ExplorerState) -> Vec<String> {
     render_visible(state, None)
 }
 
+/// The header line, trimmed to what `width` holds. The full form is 35 cells and the
+/// sidebar defaults to 22, so it was already being cut off mid-word; the label goes
+/// first, then `[e]dit`, which the actions menu carries anyway.
+pub fn sidebar_header(width: usize) -> &'static str {
+    const LADDER: [&str; 5] = [
+        "Connections  [n]ew [e]dit [a]ctions",
+        "[n]ew [e]dit [a]ctions",
+        "[n]ew [a]ctions",
+        "[a]ctions",
+        "[n]ew",
+    ];
+    LADDER
+        .into_iter()
+        .find(|line| line.chars().count() <= width)
+        .unwrap_or("")
+}
+
 pub fn render_sidebar(
     state: &ExplorerState,
     profiles: &[ConnectionRow],
     active_connection: &str,
     unicode: bool,
     viewport_rows: usize,
+    width: usize,
 ) -> Vec<String> {
     let layout = sidebar_layout(state, profiles.len(), active_connection, viewport_rows);
     let connected = if unicode { "●" } else { "*" };
     let offline = if unicode { "○" } else { "o" };
-    let mut lines = vec!["Connections  [n]ew [e]dit".into()];
+    // `viewport_rows` counts the rows, not the columns; the caller owns the width and
+    // hands it in through the same layout the hit map reads.
+    let mut lines = vec![sidebar_header(width).to_string()];
     if profiles.is_empty() {
         lines.push("No connections — press n".into());
         return lines;
@@ -381,7 +401,7 @@ mod tests {
     #[test]
     fn sidebar_empty_connections_shows_press_n_hint() {
         let explorer = ExplorerState::default();
-        let lines = super::render_sidebar(&explorer, &[], "", true, 8);
+        let lines = super::render_sidebar(&explorer, &[], "", true, 8, 40);
         let text = lines.join("\n");
         assert!(text.contains("No connections — press n"), "{text}");
     }
@@ -399,7 +419,8 @@ mod tests {
             false,
         );
         explorer.select(connection_id("prod"));
-        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 1)], "prod", true, 8);
+        let lines =
+            super::render_sidebar(&explorer, &[connection_row("prod", 1)], "prod", true, 8, 40);
         let text = lines.join("\n");
         assert!(text.contains("● prod"), "{text}");
         assert!(text.contains("▾"), "{text}");
@@ -412,7 +433,7 @@ mod tests {
         let mut explorer = ExplorerState::default();
         explorer.sync_connection_roots(&[connection_row("prod", 0)], "");
         explorer.select(connection_id("prod"));
-        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 0)], "", true, 8);
+        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 0)], "", true, 8, 40);
         let text = lines.join("\n");
         assert!(text.contains("○ prod"), "{text}");
         assert!(text.contains('▸'), "{text}");
@@ -423,7 +444,8 @@ mod tests {
     fn sidebar_ascii_offline_marker_is_visible() {
         let mut explorer = ExplorerState::default();
         explorer.sync_connection_roots(&[connection_row("prod", 0)], "");
-        let lines = super::render_sidebar(&explorer, &[connection_row("prod", 0)], "", false, 8);
+        let lines =
+            super::render_sidebar(&explorer, &[connection_row("prod", 0)], "", false, 8, 40);
         assert!(
             lines.iter().any(|line| line.contains(" o prod")),
             "{lines:?}"

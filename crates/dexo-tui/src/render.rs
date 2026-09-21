@@ -397,6 +397,7 @@ fn explorer_body(model: &Model, area: Rect) -> String {
         &model.connection.name,
         model.capabilities.unicode,
         rows.max(1),
+        area.width.saturating_sub(2) as usize,
     )
     .join("\n")
 }
@@ -477,20 +478,22 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
         return;
     }
     let inner = Block::bordered().inner(area);
-    register_label(
-        hits,
-        crate::mouse::line_rect(inner, 0),
-        "Connections  [n]ew [e]dit",
-        "[n]ew",
-        HitTarget::Button(HitButton::New),
-    );
-    register_label(
-        hits,
-        crate::mouse::line_rect(inner, 0),
-        "Connections  [n]ew [e]dit",
-        "[e]dit",
-        HitTarget::Button(HitButton::Edit),
-    );
+    // The same header the sidebar drew, so a click lands on the word under the cursor
+    // at every width rather than on where the word sits when the pane is wide.
+    let header = crate::widgets::object_tree::sidebar_header(inner.width as usize);
+    for (needle, target) in [
+        ("[n]ew", HitButton::New),
+        ("[e]dit", HitButton::Edit),
+        ("[a]ctions", HitButton::Actions),
+    ] {
+        register_label(
+            hits,
+            crate::mouse::line_rect(inner, 0),
+            header,
+            needle,
+            HitTarget::Button(target),
+        );
+    }
     let layout = crate::widgets::object_tree::sidebar_layout(
         &model.explorer,
         model.connections.profiles.len(),
