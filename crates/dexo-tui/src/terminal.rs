@@ -57,7 +57,6 @@ impl<B: TerminalControl> TerminalGuard<B> {
     pub fn start(backend: B) -> Result<Self, TuiError> {
         let mut guard = Self::enter(backend)?;
         guard.enable_raw()?;
-        guard.enable_paste()?;
         Ok(guard)
     }
 
@@ -92,6 +91,10 @@ impl<B: TerminalControl> TerminalGuard<B> {
             return Err(error);
         }
         self.raw = true;
+        // Bracketed paste belongs with raw mode: both say the app is driving the
+        // terminal now. Hanging it off `start` instead left the real entry path --
+        // `enter` then `enable_raw` -- without it, and only the tests with it.
+        self.enable_paste()?;
         match self.backend.keyboard_enhancement(true) {
             Ok(enabled) => self.keyboard_enhanced = enabled,
             Err(error) => {

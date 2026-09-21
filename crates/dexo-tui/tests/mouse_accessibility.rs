@@ -196,8 +196,8 @@ fn mouse_capture_trait_records_on_and_off() {
         vec![
             "enter",
             "raw_on",
-            "keyboard_on",
             "paste_on",
+            "keyboard_on",
             "mouse_on",
             "mouse_off",
             "paste_off",

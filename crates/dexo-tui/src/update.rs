@@ -557,6 +557,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             effects
         }
+        Action::PasteFromClipboard => vec![Effect::ReadClipboard],
         Action::MoveDocumentTabCursor(delta) => {
             model.move_tab_cursor(delta);
             Vec::new()

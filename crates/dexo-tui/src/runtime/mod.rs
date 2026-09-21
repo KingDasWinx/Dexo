@@ -515,6 +515,13 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
+            // ponytail: the read runs on the loop; spawn it if a Wayland round trip
+            // ever shows up as a stutter the way the connect did.
+            crate::Effect::ReadClipboard => match clipboard::read_text() {
+                Ok(text) if !text.is_empty() => self.emit(Action::Paste(text)).await,
+                Ok(_) => {}
+                Err(message) => self.emit(Action::ClipboardFailed { message }).await,
+            },
             crate::Effect::CopyToClipboard { text } => match clipboard::copy_text(text.clone()) {
                 Ok(()) => self.emit(Action::ClipboardWritten { text }).await,
                 Err(message) => self.emit(Action::ClipboardFailed { message }).await,

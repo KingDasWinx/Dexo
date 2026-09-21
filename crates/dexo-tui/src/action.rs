@@ -65,6 +65,8 @@ pub enum Action {
     MoveDocumentTabCursor(i32),
     /// A bracketed paste, arriving whole rather than as the keys it resembles.
     Paste(String),
+    /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
+    PasteFromClipboard,
     DuplicateConnection,
     TestConnection,
     DeleteConnection,
@@ -822,6 +824,7 @@ pub enum Effect {
         session: SessionId,
         generation: u64,
     },
+    ReadClipboard,
     CopyToClipboard {
         text: String,
     },

@@ -89,3 +89,45 @@ fn pasting_into_a_form_field_still_types() {
         "the paste did nothing in a form field"
     );
 }
+
+/// Bracketed paste rides with raw mode rather than with `TerminalGuard::start`. The
+/// real entry path is `enter` then `enable_raw` (`event.rs:44`), which `start` is not
+/// on, so hanging the mode off `start` turned it on for the tests and for nobody else.
+#[test]
+fn entering_raw_mode_turns_bracketed_paste_on() {
+    use dexo_tui::terminal::{RecordingTerminal, TerminalGuard};
+
+    let backend = RecordingTerminal::default();
+    let calls = backend.clone();
+    {
+        let mut guard = TerminalGuard::enter(backend).unwrap();
+        guard.enable_raw().unwrap();
+    }
+    let calls = calls.calls();
+    assert!(
+        calls.contains(&"paste_on"),
+        "the path the app actually takes never enabled it: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"paste_off"),
+        "the terminal was left in bracketed paste: {calls:?}"
+    );
+}
+
+/// Ctrl+V is not a paste gesture in most terminals -- Ghostty and Alacritty both put
+/// paste on Shift+Insert -- so the key arrives as a key and the editor has to fetch the
+/// clipboard itself. Without this, Ctrl+V did nothing at all.
+#[test]
+fn ctrl_v_reads_the_clipboard() {
+    let mut model = editor();
+    let effects = update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('v'), M::CONTROL)),
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::ReadClipboard)),
+        "Ctrl+V did not reach the clipboard: {effects:?}"
+    );
+}

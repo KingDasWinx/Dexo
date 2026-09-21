@@ -11,8 +11,8 @@ fn terminal_guard_restores_once() {
         vec![
             "enter",
             "raw_on",
-            "keyboard_on",
             "paste_on",
+            "keyboard_on",
             "paste_off",
             "keyboard_off",
             "raw_off",
@@ -34,8 +34,8 @@ fn terminal_guard_restores_on_panic() {
         vec![
             "enter",
             "raw_on",
-            "keyboard_on",
             "paste_on",
+            "keyboard_on",
             "paste_off",
             "keyboard_off",
             "raw_off",
@@ -58,8 +58,8 @@ fn terminal_guard_restore_is_idempotent() {
         vec![
             "enter",
             "raw_on",
-            "keyboard_on",
             "paste_on",
+            "keyboard_on",
             "paste_off",
             "keyboard_off",
             "raw_off",

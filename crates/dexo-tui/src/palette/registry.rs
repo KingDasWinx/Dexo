@@ -1057,6 +1057,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::EditorRedo),
         },
         CommandSpec {
+            id: "editor.paste",
+            title: "Paste",
+            keywords: &["clipboard", "insert"],
+            shortcut: Some("Ctrl+V"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::PasteFromClipboard),
+        },
+        CommandSpec {
             id: "editor.select_all",
             title: "Select All",
             keywords: &["selection", "everything"],

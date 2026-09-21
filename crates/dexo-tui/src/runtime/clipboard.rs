@@ -1,5 +1,14 @@
 use std::sync::{Mutex, OnceLock};
 
+/// Reads the system clipboard. Ctrl+V is not a paste gesture in most terminals --
+/// Ghostty and Alacritty both put it on Shift+Insert -- so the key reaches the app as
+/// a key, and an editor that wants it to paste has to fetch the text itself.
+pub fn read_text() -> Result<String, String> {
+    arboard::Clipboard::new()
+        .and_then(|mut clipboard| clipboard.get_text())
+        .map_err(|error| error.to_string())
+}
+
 pub fn copy_text(text: String) -> Result<(), String> {
     copy_with_adapter(text, os_adapter)
 }
