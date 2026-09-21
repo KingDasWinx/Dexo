@@ -199,3 +199,101 @@ fn connection_changed(name: &str, n: u128, token: u64) -> Action {
         driver: "postgres".into(),
     }
 }
+
+/// Documents stored before the binding column existed come back with nothing in it, so
+/// the whole strip would stay unlabelled until each one was touched. A console's path
+/// is `sql/<connection uuid>/console.sql`, which says what the column does not.
+#[test]
+fn a_stored_console_is_bound_from_its_path() {
+    let mut model = two_connections();
+    let beta = uuid_of(2);
+    let stored = dexo_storage::StoredDocument {
+        id: "doc-console".into(),
+        project_id: Some("p1".into()),
+        title: "console.sql".into(),
+        content: String::new(),
+        path: Some(format!("/home/u/.local/share/dexo/sql/{beta}/console.sql")),
+        fingerprint: None,
+        kind: None,
+        connection_id: None,
+    };
+    let restored = dexo_tui::update::document_from_stored_for_test(stored);
+    assert_eq!(
+        restored.connection_id.as_deref(),
+        Some(beta.as_str()),
+        "the console came back belonging to nobody"
+    );
+    model.documents.push(restored);
+    let labels = dexo_tui::widgets::document_tabs::labels(&model);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("beta\u{b7}console.sql")),
+        "the tab still does not say whose console it is: {labels:?}"
+    );
+}
+
+/// An unbound document runs on whatever is active, so using it is what settles the
+/// question -- and from then on the tab answers it without being asked.
+#[test]
+fn using_an_unbound_document_binds_it_to_the_live_connection() {
+    let mut model = two_connections();
+    model
+        .documents
+        .push(EditorDocument::new_unique("query-4.sql", None, None));
+    let index = model.documents.len() - 1;
+
+    update(&mut model, Action::SelectDocument { index });
+    assert_eq!(
+        model.documents[index].connection_id.as_deref(),
+        Some(uuid_of(1).as_str()),
+        "the document stayed unbound after being used on alpha"
+    );
+    let labels = dexo_tui::widgets::document_tabs::labels(&model);
+    assert!(
+        labels
+            .iter()
+            .any(|label| label.contains("alpha\u{b7}query-4.sql")),
+        "{labels:?}"
+    );
+}
+
+/// With nothing connected there is nothing to bind to, and inventing one would be a
+/// guess. It stays unbound and picks a connection the next time it is used.
+#[test]
+fn an_unbound_document_with_no_live_connection_stays_unbound() {
+    let mut model = Model::default();
+    model
+        .documents
+        .push(EditorDocument::new_unique("query-4.sql", None, None));
+    let index = model.documents.len() - 1;
+    update(&mut model, Action::SelectDocument { index });
+    assert!(model.documents[index].connection_id.is_none());
+}
+
+/// Naming a console after its connection only happened when the console was created,
+/// so a workspace restored from before that kept a row of `console.sql`. The rename
+/// runs on restore too, once the profiles are loaded and there is a name to use.
+#[test]
+fn restored_consoles_take_their_connection_name() {
+    let mut model = two_connections();
+    for (n, name) in [(1u128, "alpha"), (2, "beta")] {
+        let mut console = EditorDocument::new_unique("console.sql", None, Some(uuid_of(n)));
+        console.title = "console.sql".into();
+        model.documents.push(console);
+        let _ = name;
+    }
+    dexo_tui::update::rename_restored_consoles_for_test(&mut model);
+
+    let titles: Vec<_> = model
+        .documents
+        .iter()
+        .map(|document| document.title.as_str())
+        .collect();
+    assert!(titles.contains(&"alpha"), "{titles:?}");
+    assert!(titles.contains(&"beta"), "{titles:?}");
+    assert!(
+        !titles.contains(&"console.sql"),
+        "a console kept the file name every connection shares: {titles:?}"
+    );
+}

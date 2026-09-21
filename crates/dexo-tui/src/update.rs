@@ -4287,6 +4287,13 @@ fn switch_to_document_connection(model: &mut Model, index: usize) -> Switch {
         .documents
         .get(index)
         .and_then(|document| document.connection_id.clone())
+        .or_else(|| {
+            // Unbound means "wherever you are", which is what it would have run on
+            // anyway. Recording it is what lets the tab say so from then on.
+            let active = active_connection_uuid(model)?;
+            model.documents.get_mut(index)?.connection_id = Some(active.clone());
+            Some(active)
+        })
     else {
         return Switch::Ready;
     };
@@ -4441,10 +4448,38 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     };
     apply_layout(model, layout);
     model.connections.load_profiles(state.connections);
+    rename_restored_consoles(model);
     sync_explorer_connections(model);
     model.editor.snippets = state.snippets;
     model.recent_sql_files = state.recent_sql_files;
     apply_saved_settings(model);
+}
+
+/// A console stored before consoles were named after their connection comes back as
+/// `console.sql`, which is what made a row of them unreadable. Done once the profiles
+/// are loaded, since that is where the name comes from.
+fn rename_restored_consoles(model: &mut Model) {
+    let names: Vec<(String, String)> = model
+        .connections
+        .profiles
+        .iter()
+        .map(|row| (row.profile.id.0.to_string(), row.profile.name.clone()))
+        .collect();
+    for document in &mut model.documents {
+        if document.title != "console.sql" {
+            continue;
+        }
+        let Some(id) = document.connection_id.as_deref() else {
+            continue;
+        };
+        if let Some((_, name)) = names.iter().find(|(profile, _)| profile == id) {
+            document.title = name.clone();
+        }
+    }
+}
+
+pub fn rename_restored_consoles_for_test(model: &mut Model) {
+    rename_restored_consoles(model);
 }
 
 fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::RecoveryDocument>) {
@@ -4467,12 +4502,31 @@ fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::Re
         .active_document
         .min(model.documents.len().saturating_sub(1));
 }
+/// A connection's console lives at `sql/<connection uuid>/console.sql`, so a document
+/// stored before the binding column existed still says which connection it belongs to.
+/// Reading it back beats leaving every console from before the migration unlabelled.
+fn connection_id_from_console_path(path: Option<&std::path::Path>) -> Option<String> {
+    let parent = path?.parent()?.file_name()?.to_str()?;
+    uuid::Uuid::parse_str(parent).ok().map(|id| id.to_string())
+}
+
+/// Restores one stored row. Public for the tests that pin the binding recovered from a
+/// console's path, which is the only thing standing between a pre-migration workspace
+/// and a strip of unlabelled tabs.
+pub fn document_from_stored_for_test(
+    stored: dexo_storage::StoredDocument,
+) -> crate::model::EditorDocument {
+    document_from_stored(stored)
+}
+
 fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::EditorDocument {
     let mut document = crate::model::EditorDocument::with_text(&stored.content);
     document.id = stored.id;
     document.title = stored.title;
     document.path = stored.path.map(std::path::PathBuf::from);
-    document.connection_id = stored.connection_id;
+    document.connection_id = stored
+        .connection_id
+        .or_else(|| connection_id_from_console_path(document.path.as_deref()));
     if let Some(kind) = stored
         .kind
         .as_deref()
