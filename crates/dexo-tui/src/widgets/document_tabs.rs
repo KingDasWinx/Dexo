@@ -78,6 +78,18 @@ fn connection_prefix(model: &Model, document: &crate::model::EditorDocument) -> 
     format!("{}\u{b7}", truncate_cell(name, CONNECTION_PREFIX_WIDTH))
 }
 
+/// Swaps the label's outer spaces for brackets, keeping its width. Every label here is
+/// built as `" … "`, so there is always a pair of ASCII spaces to take.
+fn bracket(label: &str) -> String {
+    match label
+        .strip_prefix(' ')
+        .and_then(|rest| rest.strip_suffix(' '))
+    {
+        Some(inner) => format!("[{inner}]"),
+        None => label.to_string(),
+    }
+}
+
 fn close_width() -> u16 {
     UnicodeWidthStr::width(CLOSE_LABEL) as u16
 }
@@ -285,6 +297,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 
     let (_, viewport) = resolve_layout(model, area.width);
+    // The strip is a pane now, so it has to show when it is the one holding the keys.
+    // Brackets rather than a style alone: the cursor has to survive a monochrome
+    // terminal, and the label already carries a space at each end to spend on them.
+    let focused = model.effective_focus() == crate::model::Focus::DocumentTabs;
     let mut x = area.x;
     let end = area.x.saturating_add(area.width);
     let mut spans = Vec::new();
@@ -315,7 +331,14 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         } else {
             model.theme.pane_title(false, model.capabilities)
         };
-        spans.push(Span::styled(item.label.clone(), style));
+        let cursor =
+            matches!(model.document_tab_focus, DocumentTabFocus::Document(i) if i == item.index);
+        let label = if focused && cursor {
+            bracket(&item.label)
+        } else {
+            item.label.clone()
+        };
+        spans.push(Span::styled(label, style));
         spans.push(Span::styled(CLOSE_LABEL, style));
         hits.register(
             HitTarget::DocumentTab(item.index),
@@ -346,7 +369,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         } else {
             Style::default()
         };
-        spans.push(Span::styled(NEW_LABEL, new_style));
+        let new_label = if focused && model.document_tab_focus == DocumentTabFocus::New {
+            bracket(NEW_LABEL)
+        } else {
+            NEW_LABEL.to_string()
+        };
+        spans.push(Span::styled(new_label, new_style));
         hits.register(
             HitTarget::DocumentTabNew,
             Rect::new(x, area.y, new_width, 1),

@@ -146,6 +146,9 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
                 }
             })
             .or(Some("Enter connect/expand  a actions  n new")),
+        crate::model::Focus::DocumentTabs => {
+            Some("←/→ tabs  Enter open/new  Ctrl+W close  Esc editor")
+        }
         crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
         crate::model::Focus::Results => Some("Enter actions  v view  n/p page  Ctrl+W close"),
         _ => None,

@@ -37,7 +37,10 @@ fn two_documents() -> Model {
 }
 
 #[test]
-fn alt_arrows_cycle_document_tabs_and_the_new_button() {
+fn alt_arrows_cycle_documents_and_step_over_the_new_button() {
+    // `+` used to sit on this cycle while the focus stayed in the editor, so landing on
+    // it left a slot that looked selected and answered no key. It belongs to the strip,
+    // which is reached with Alt+0; creating a document is Ctrl+N from anywhere.
     let mut model = two_documents();
     model.focus = Focus::Editor;
 
@@ -48,18 +51,14 @@ fn alt_arrows_cycle_document_tabs_and_the_new_button() {
 
     update(&mut model, alt_right());
 
-    assert_eq!(model.active_document, 1);
-    assert_eq!(model.document_tab_focus, DocumentTabFocus::New);
-    assert_eq!(model.focus, Focus::Editor);
-
-    update(&mut model, alt_right());
-
-    assert_eq!(model.active_document, 0);
+    assert_eq!(model.active_document, 0, "the wrap stopped on `+`");
     assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(0));
+    assert_eq!(model.focus, Focus::Editor);
 
     update(&mut model, alt_left());
 
-    assert_eq!(model.document_tab_focus, DocumentTabFocus::New);
+    assert_eq!(model.document_tab_focus, DocumentTabFocus::Document(1));
+    assert_eq!(model.focus, Focus::Editor);
 }
 
 /// The document strip is always on screen, so switching files works from the output
@@ -165,12 +164,12 @@ fn alt_up_down_resize_the_console_the_same_pane_it_occupies() {
 #[test]
 fn document_tab_focus_actions_work_from_any_pane() {
     // Both are palette commands. They used to bail unless the focus was the editor,
-    // which made them silently inert from everywhere the palette can be opened.
-    // Two documents plus the new-document slot, so stepping back from the first wraps
-    // onto that slot rather than onto a document.
+    // which made them silently inert from everywhere the palette can be opened. Two
+    // documents and nothing else on the cycle, so either direction from the first lands
+    // on the second.
     for (action, expected) in [
         (Action::NextDocumentTabFocus, DocumentTabFocus::Document(1)),
-        (Action::PrevDocumentTabFocus, DocumentTabFocus::New),
+        (Action::PrevDocumentTabFocus, DocumentTabFocus::Document(1)),
     ] {
         let mut model = two_documents();
 
@@ -184,6 +183,8 @@ fn document_tab_focus_actions_work_from_any_pane() {
 #[test]
 fn enter_on_new_tab_focus_creates_a_document() {
     let mut model = Model::default();
+    // Enter is the strip's key now, not a special case guarded on the editor's focus.
+    model.focus = Focus::DocumentTabs;
     model.document_tab_focus = DocumentTabFocus::New;
 
     update(&mut model, enter());

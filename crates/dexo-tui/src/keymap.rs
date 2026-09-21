@@ -8,6 +8,9 @@ pub enum KeyContext {
     Editor,
     Explorer,
     Results,
+    /// The document tab strip. Its keys used to be special cases in `handle_key`, which
+    /// is how Enter on `+` came to work from the editor and nowhere else.
+    DocumentTabs,
     /// The pane the grid gives up to the console on a table document. It holds no
     /// navigation of its own -- only the keys that act on the pane itself.
     Console,
@@ -178,10 +181,11 @@ impl Keymap {
     }
 
     pub fn help_sections(&self) -> Vec<(&'static str, Vec<(String, String)>)> {
-        let mut buckets: [(KeyContext, Vec<(String, String)>); 5] = [
+        let mut buckets: [(KeyContext, Vec<(String, String)>); 6] = [
             (KeyContext::Editor, Vec::new()),
             (KeyContext::Results, Vec::new()),
             (KeyContext::Explorer, Vec::new()),
+            (KeyContext::DocumentTabs, Vec::new()),
             (KeyContext::Global, Vec::new()),
             (KeyContext::Palette, Vec::new()),
         ];
@@ -193,11 +197,19 @@ impl Keymap {
                 // the console is the results pane wearing a different hat
                 KeyContext::Results | KeyContext::Console => buckets[1].1.push(entry),
                 KeyContext::Explorer => buckets[2].1.push(entry),
-                KeyContext::Global => buckets[3].1.push(entry),
-                KeyContext::Palette | KeyContext::Modal => buckets[4].1.push(entry),
+                KeyContext::DocumentTabs => buckets[3].1.push(entry),
+                KeyContext::Global => buckets[4].1.push(entry),
+                KeyContext::Palette | KeyContext::Modal => buckets[5].1.push(entry),
             }
         }
-        let names = ["Editor", "Results", "Explorer", "Workbench", "Overlays"];
+        let names = [
+            "Editor",
+            "Results",
+            "Explorer",
+            "Tabs",
+            "Workbench",
+            "Overlays",
+        ];
         buckets
             .into_iter()
             .zip(names)
@@ -334,6 +346,7 @@ fn parse_context(name: &str) -> Result<KeyContext, KeymapError> {
         "explorer" => Ok(KeyContext::Explorer),
         "results" => Ok(KeyContext::Results),
         "console" => Ok(KeyContext::Console),
+        "tabs" => Ok(KeyContext::DocumentTabs),
         "palette" => Ok(KeyContext::Palette),
         "modal" => Ok(KeyContext::Modal),
         other => Err(KeymapError {
@@ -398,6 +411,8 @@ profile = "default"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
+"alt+0" = "focus.tabs"
+"ctrl+n" = "document.new"
 "alt+e" = "layout.hide_explorer"
 "alt+r" = "layout.hide_results"
 "alt+left" = "document.prev_focus"
@@ -427,7 +442,6 @@ profile = "default"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
-"ctrl+n" = "document.new"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
 "ctrl+z" = "editor.undo"
@@ -452,7 +466,7 @@ profile = "default"
 "ctrl+enter" = "results.toggle_pick"
 "r" = "results.select_row"
 "delete" = "data.toggle_delete"
-"ctrl+n" = "data.insert_row"
+"i" = "data.insert_row"
 "ctrl+s" = "data.review"
 "ctrl+shift+r" = "data.discard_all"
 "e" = "transfer.export"
@@ -470,6 +484,14 @@ profile = "default"
 [console]
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
+
+[tabs]
+"left" = "document.tab_prev"
+"right" = "document.tab_next"
+"enter" = "document.activate_tab"
+"ctrl+w" = "document.close"
+"esc" = "focus.editor"
+"?" = "help.open"
 "#;
 
 const VIM_TOML: &str = r#"
@@ -483,6 +505,8 @@ profile = "vim"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
+"alt+0" = "focus.tabs"
+"ctrl+n" = "document.new"
 "alt+e" = "layout.hide_explorer"
 "alt+r" = "layout.hide_results"
 "alt+left" = "document.prev_focus"
@@ -490,7 +514,6 @@ profile = "vim"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
-"ctrl+n" = "document.new"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
 "ctrl+z" = "editor.undo"
@@ -523,7 +546,7 @@ profile = "vim"
 "l" = "results.right"
 "g g" = "results.top"
 "delete" = "data.toggle_delete"
-"ctrl+n" = "data.insert_row"
+"i" = "data.insert_row"
 "ctrl+s" = "data.review"
 "ctrl+shift+r" = "data.discard_all"
 "e" = "transfer.export"
@@ -539,6 +562,14 @@ profile = "vim"
 [console]
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
+
+[tabs]
+"left" = "document.tab_prev"
+"right" = "document.tab_next"
+"enter" = "document.activate_tab"
+"ctrl+w" = "document.close"
+"esc" = "focus.editor"
+"?" = "help.open"
 "#;
 
 const EMACS_TOML: &str = r#"
@@ -546,6 +577,7 @@ profile = "emacs"
 [global]
 "alt+x" = "palette.open"
 "ctrl+x ctrl+c" = "workbench.quit"
+"ctrl+x ctrl+n" = "document.new"
 "f1" = "help.open"
 "f10" = "layout.cycle"
 "ctrl+f2" = "query.cancel"
@@ -553,6 +585,7 @@ profile = "emacs"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
+"alt+0" = "focus.tabs"
 "alt+e" = "layout.hide_explorer"
 "alt+r" = "layout.hide_results"
 "alt+left" = "document.prev_focus"
@@ -560,7 +593,6 @@ profile = "emacs"
 [editor]
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
-"ctrl+n" = "document.new"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
 "ctrl+z" = "editor.undo"
@@ -607,6 +639,14 @@ profile = "emacs"
 [console]
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
+
+[tabs]
+"left" = "document.tab_prev"
+"right" = "document.tab_next"
+"enter" = "document.activate_tab"
+"ctrl+w" = "document.close"
+"esc" = "focus.editor"
+"?" = "help.open"
 "#;
 
 #[cfg(test)]

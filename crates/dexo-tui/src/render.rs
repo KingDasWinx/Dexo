@@ -274,13 +274,17 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
                 explorer_body(model, area),
             );
         }
-        Focus::Editor | Focus::Palette if model.active_document().kind.is_table() => {
+        // The strip is its own row above the content; focusing it leaves the pane below
+        // showing whatever the active document shows.
+        Focus::DocumentTabs | Focus::Editor | Focus::Palette
+            if model.active_document().kind.is_table() =>
+        {
             if interactive {
                 hits.register(HitTarget::Grid, area);
             }
             crate::widgets::grid::render(frame, area, model, hits);
         }
-        Focus::Editor | Focus::Palette => {
+        Focus::DocumentTabs | Focus::Editor | Focus::Palette => {
             if interactive {
                 hits.register(HitTarget::Editor, area);
             }

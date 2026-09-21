@@ -59,6 +59,10 @@ pub enum Action {
     EditConnectionGroup,
     /// Context menu for the selected sidebar node.
     OpenNodeMenu,
+    /// Enter on the tab strip: the `+` creates a document, a tab hands focus to it.
+    ActivateDocumentTab,
+    /// Moves the cursor inside the focused tab strip, `+` included.
+    MoveDocumentTabCursor(i32),
     DuplicateConnection,
     TestConnection,
     DeleteConnection,
@@ -492,6 +496,7 @@ pub enum FocusTarget {
     Explorer,
     Editor,
     Results,
+    DocumentTabs,
 }
 
 #[derive(Clone, Debug)]

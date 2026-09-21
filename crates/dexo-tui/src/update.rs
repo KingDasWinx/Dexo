@@ -540,6 +540,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
         }
         Action::Focus(target) => focus_pane(model, target),
+        Action::ActivateDocumentTab => activate_document_tab(model),
+        Action::MoveDocumentTabCursor(delta) => {
+            model.move_tab_cursor(delta);
+            Vec::new()
+        }
         Action::ExplorerExpand => activate_connection_or_catalog(model),
         Action::RefreshCatalogNode => refresh_catalog(model, false),
         Action::RefreshCatalogAll => refresh_catalog(model, true),
@@ -1680,6 +1685,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
     }
 }
 
+/// Enter on the strip. On `+` it starts a new document; on a tab it hands focus to the
+/// document, which is where the user was heading. This was a special case in
+/// `handle_key` guarded on `focus == Editor`, so from the results pane the key did
+/// nothing at all.
+fn activate_document_tab(model: &mut Model) -> Vec<Effect> {
+    match model.document_tab_focus {
+        crate::model::DocumentTabFocus::New => update(model, Action::NewDocument),
+        crate::model::DocumentTabFocus::Document(index) => {
+            let mut effects = activate_document(model, index);
+            effects.extend(focus_pane(model, FocusTarget::Editor));
+            effects
+        }
+    }
+}
+
 fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
     crate::screens::editor::end_typing(model);
     let leaving_editor = model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
@@ -1693,6 +1713,10 @@ fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
             Focus::Explorer
         }
         FocusTarget::Editor => Focus::Editor,
+        FocusTarget::DocumentTabs => {
+            model.sync_document_tab_focus();
+            Focus::DocumentTabs
+        }
         FocusTarget::Results => {
             model.panes.results_visible = true;
             if table {
@@ -2738,6 +2762,8 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
                     update(model, Action::ResultsDown)
                 }
             }
+            // The wheel over the strip walks it, the way it walks every other pane.
+            Focus::DocumentTabs => update(model, Action::MoveDocumentTabCursor(delta)),
             Focus::Console => Vec::new(),
             Focus::Editor | Focus::Palette => {
                 let doc = model.active_document_mut();
@@ -3156,13 +3182,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
-    if model.document_tab_focus == crate::model::DocumentTabFocus::New
-        && key.code == KeyCode::Enter
-        && key.modifiers.is_empty()
-        && model.focus == Focus::Editor
-    {
-        return update(model, Action::NewDocument);
-    }
     let spec = crate::keymap::KeySpec {
         modifiers: key.modifiers,
         code: key.code,
@@ -3193,9 +3212,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
     }
     if !model.active_document().kind.is_table() && crate::screens::editor::handle_key(model, key) {
-        if model.document_tab_focus == crate::model::DocumentTabFocus::New {
-            model.focus_active_document_tab();
-        }
         crate::screens::editor::refresh_intelligence(model, false);
         return crate::screens::editor::take_completion_effects(model);
     }
@@ -3214,6 +3230,7 @@ fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
         // act on the pane itself. Global chords -- the way back out included -- still
         // resolve there.
         Focus::Console => KeyContext::Console,
+        Focus::DocumentTabs => KeyContext::DocumentTabs,
         Focus::Editor | Focus::Palette => KeyContext::Editor,
     }
 }

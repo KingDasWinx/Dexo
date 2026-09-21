@@ -127,6 +127,38 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::Editor)),
         },
         CommandSpec {
+            id: "focus.tabs",
+            title: "Focus Document Tabs",
+            keywords: &["strip", "files", "documents"],
+            shortcut: Some("Alt+0"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::DocumentTabs)),
+        },
+        CommandSpec {
+            id: "document.tab_prev",
+            title: "Previous Tab In Strip",
+            keywords: &["strip", "cursor"],
+            shortcut: Some("Left"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::MoveDocumentTabCursor(-1)),
+        },
+        CommandSpec {
+            id: "document.tab_next",
+            title: "Next Tab In Strip",
+            keywords: &["strip", "cursor"],
+            shortcut: Some("Right"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::MoveDocumentTabCursor(1)),
+        },
+        CommandSpec {
+            id: "document.activate_tab",
+            title: "Activate Document Tab",
+            keywords: &["open", "new", "strip"],
+            shortcut: Some("Enter"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ActivateDocumentTab),
+        },
+        CommandSpec {
             id: "focus.results",
             title: "Focus Results",
             keywords: &["grid", "rows"],
@@ -1119,6 +1151,10 @@ fn hidden(id: &str) -> bool {
             | "focus.explorer"
             | "focus.editor"
             | "focus.results"
+            | "focus.tabs"
+            | "document.activate_tab"
+            | "document.tab_prev"
+            | "document.tab_next"
             | "layout.hide_explorer"
             | "layout.hide_results"
             | "layout.results_grow"

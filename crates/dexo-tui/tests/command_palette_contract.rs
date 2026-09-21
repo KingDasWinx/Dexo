@@ -17,6 +17,10 @@ const COMMAND_IDS: &[&str] = &[
     "focus.explorer",
     "focus.editor",
     "focus.results",
+    "focus.tabs",
+    "document.activate_tab",
+    "document.tab_prev",
+    "document.tab_next",
     "layout.cycle",
     "layout.hide_explorer",
     "layout.hide_results",
@@ -209,8 +213,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 134);
-    assert_eq!(actual.len(), 134, "duplicate command id");
+    assert_eq!(specs.len(), 138);
+    assert_eq!(actual.len(), 138, "duplicate command id");
     assert_eq!(actual, expected);
 }
 

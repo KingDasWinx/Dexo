@@ -43,6 +43,10 @@ pub enum Focus {
     Explorer,
     Editor,
     Results,
+    /// The strip of document tabs. It owns keys of its own, so it is a pane like the
+    /// rest; `document_tab_focus` is the cursor inside it, the way `explorer.selected`
+    /// is the cursor inside the tree.
+    DocumentTabs,
     /// Only a table document has this pane: the grid takes the editor's slot and the
     /// console takes the grid's.
     Console,
@@ -54,6 +58,9 @@ impl Model {
     /// grid into the editor's slot, and closing one takes the console away -- either way
     /// the focus left behind would highlight a pane that is not on screen.
     pub fn effective_focus(&self) -> Focus {
+        if self.focus == Focus::DocumentTabs {
+            return Focus::DocumentTabs;
+        }
         if self.active_document().kind.is_table() {
             match self.focus {
                 Focus::Editor => Focus::Results,
@@ -1631,16 +1638,42 @@ impl Model {
             self.document_tab_focus = DocumentTabFocus::New;
             return;
         }
+        // Documents only. `+` used to be on this cycle while the focus stayed in the
+        // editor, so landing on it left a slot that looked selected and answered no
+        // key -- Enter went to the buffer instead. Creating is Ctrl+N from anywhere,
+        // and the strip itself still walks onto `+` once it has the focus.
+        let current = match self.document_tab_focus {
+            DocumentTabFocus::Document(index) => index,
+            DocumentTabFocus::New => 0,
+        };
+        let next = (current as i32)
+            .wrapping_add(delta)
+            .rem_euclid(self.documents.len() as i32) as usize;
+        self.document_tab_focus = DocumentTabFocus::Document(next);
+        self.active_document = next;
+        self.focus = Focus::Editor;
+        self.sync_document_tabs_scroll();
+    }
+
+    /// Moves the cursor inside the strip, `+` included, and keeps the focus there. This
+    /// is the strip navigating itself; `advance_document_tab_focus` is the shortcut for
+    /// changing document without leaving the buffer.
+    pub fn move_tab_cursor(&mut self, delta: i32) {
+        if self.documents.is_empty() {
+            self.document_tab_focus = DocumentTabFocus::New;
+            self.focus = Focus::DocumentTabs;
+            return;
+        }
         let slots = self.documents.len() + 1;
         let current = match self.document_tab_focus {
             DocumentTabFocus::Document(index) => index,
             DocumentTabFocus::New => self.documents.len(),
         };
         let next = (current as i32).wrapping_add(delta).rem_euclid(slots as i32) as usize;
+        self.focus = Focus::DocumentTabs;
         if next < self.documents.len() {
             self.document_tab_focus = DocumentTabFocus::Document(next);
             self.active_document = next;
-            self.focus = Focus::Editor;
         } else {
             self.document_tab_focus = DocumentTabFocus::New;
         }
