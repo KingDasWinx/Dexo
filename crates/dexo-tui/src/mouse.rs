@@ -85,6 +85,7 @@ pub enum OverlayKind {
     Palette,
     Help,
     ResultsMenu,
+    NodeMenu,
     Review,
     DdlPreview,
     SchemaDiff,
@@ -208,6 +209,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         ),
         (model.data.review.is_some(), OverlayKind::Review),
         (model.results_menu.open, OverlayKind::ResultsMenu),
+        (model.node_menu.open, OverlayKind::NodeMenu),
         (model.help.open, OverlayKind::Help),
         (model.palette.open, OverlayKind::Palette),
     ]

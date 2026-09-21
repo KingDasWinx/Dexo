@@ -135,17 +135,17 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
             .and_then(|node| {
                 if crate::screens::explorer::is_connection_node(node) {
                     if model.connections.session_for(&node.label).is_some() {
-                        Some("Enter expande/recolhe  n new  e edit  shift+d disconnect")
+                        Some("Enter expand  a actions  n new  e edit")
                     } else {
-                        Some("Enter connect  n new  e edit")
+                        Some("Enter connect  a actions  n new  e edit")
                     }
                 } else if crate::screens::explorer::opens_table_data(&node.kind) {
-                    Some("Enter abre a table")
+                    Some("Enter open table  a actions")
                 } else {
-                    Some("Enter expande/recolhe")
+                    Some("Enter expand  a actions")
                 }
             })
-            .or(Some("Enter connect/expand  n new  e edit")),
+            .or(Some("Enter connect/expand  a actions  n new")),
         crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
         crate::model::Focus::Results => Some("Enter actions  v view  n/p page  Ctrl+W close"),
         _ => None,
@@ -169,7 +169,10 @@ mod tests {
             .explorer
             .sync_connection_roots(&model.connections.profiles, "");
         model.explorer.select(connection_id("prod"));
-        assert_eq!(footer_hint(&model), Some("Enter connect  n new  e edit"));
+        assert_eq!(
+            footer_hint(&model),
+            Some("Enter connect  a actions  n new  e edit")
+        );
 
         model
             .connections
@@ -188,7 +191,7 @@ mod tests {
         model.explorer.select(connection_id("prod"));
         assert_eq!(
             footer_hint(&model),
-            Some("Enter expande/recolhe  n new  e edit  shift+d disconnect")
+            Some("Enter expand  a actions  n new  e edit")
         );
     }
 

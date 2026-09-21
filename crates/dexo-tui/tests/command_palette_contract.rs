@@ -106,6 +106,11 @@ const COMMAND_IDS: &[&str] = &[
     "connection.close_session",
     "connection.new",
     "connection.edit",
+    "connection.test",
+    "connection.duplicate",
+    "connection.move_group",
+    "connection.delete",
+    "explorer.actions",
     "project.browse",
     "project.switch",
     "project.create",
@@ -148,8 +153,6 @@ const FLOW_IDS: &[&str] = &[
     "backup.dump",
     "backup.restore",
     "connection.connect",
-    "connection.duplicate",
-    "connection.test",
     "connection.delete",
     "project.switch",
     "project.create",
@@ -198,6 +201,7 @@ const FLOW_INTENTS: &[(&str, FlowIntent)] = &[
     ("editor.parameters", FlowIntent::SubmitParameters),
     ("editor.history.clear", FlowIntent::ClearHistory),
     ("diagnostics.export", FlowIntent::DiagnosticsExport),
+    ("connection.delete", FlowIntent::ConnectionDelete),
 ];
 
 #[test]
@@ -205,8 +209,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 129);
-    assert_eq!(actual.len(), 129, "duplicate command id");
+    assert_eq!(specs.len(), 134);
+    assert_eq!(actual.len(), 134, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -215,7 +219,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 82);
+    assert_eq!(visible.len(), 86);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a
@@ -386,6 +390,17 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                 }
                 model.results.select_cell(1, 1);
             }
+            SelectedConnection => {
+                model.connections.load_profiles(vec![dexo_app::ConnectionProfile::new(
+                    dexo_app::ConnectionId(uuid::Uuid::nil()),
+                    None,
+                    "prod",
+                    "postgres",
+                    "local",
+                    serde_json::json!({"host":"localhost","port":5432,"username":"u","database":"d"}),
+                    dexo_app::SecretRef::new("ref-1".into()),
+                )]);
+            }
             ExplorerNode => {
                 let selected = ObjectId::new("table:items");
                 model.explorer.roots = ["users", "items", "orders"]
@@ -447,6 +462,7 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
             Requirement::Results => model.results.clear(),
             Requirement::RowSelection => model.results.select_column(0),
             Requirement::ExplorerNode => model.explorer.selected = None,
+            Requirement::SelectedConnection => model.connections.load_profiles(Vec::new()),
             Requirement::LoadedDdl => model.inspector.ddl = None,
             Requirement::PendingChanges => {
                 model.data.changes = ChangeSet::for_table(&model.data.table)

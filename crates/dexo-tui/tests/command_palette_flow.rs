@@ -171,6 +171,17 @@ fn model_satisfying(requirements: &[dexo_tui::palette::Requirement]) -> Model {
                 }
                 model.results.select_cell(1, 1);
             }
+            Requirement::SelectedConnection => {
+                model.connections.load_profiles(vec![dexo_app::ConnectionProfile::new(
+                    dexo_app::ConnectionId(uuid::Uuid::nil()),
+                    None,
+                    "prod",
+                    "postgres",
+                    "local",
+                    serde_json::json!({"host":"localhost","port":5432,"username":"u","database":"d"}),
+                    dexo_app::SecretRef::new("ref-1".into()),
+                )]);
+            }
             Requirement::ExplorerNode => {
                 let selected = ObjectId::new("table:items");
                 model.explorer.roots = ["users", "items", "orders"]

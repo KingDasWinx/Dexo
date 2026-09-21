@@ -83,6 +83,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.results_menu.open {
         render_results_menu(frame, model, hits);
     }
+    if model.node_menu.open {
+        render_node_menu(frame, model, hits);
+    }
     if let Some(review) = &model.data.review {
         render_review(frame, review, hits);
     }
@@ -536,6 +539,9 @@ fn for_popup_lines(popup: Rect, lines: &[String], mut map: impl FnMut(usize, &st
 /// Width of the palette's category gutter, sized to the longest label.
 const CATEGORY_WIDTH: usize = 12;
 
+/// Widest the sidebar context menu gets. Its longest title is "Duplicate Connection".
+const NODE_MENU_WIDTH: u16 = 38;
+
 fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
@@ -728,6 +734,132 @@ pub(crate) fn results_menu_layout(area: Rect) -> ResultsMenuLayout {
         detail: Block::bordered().title("Record").inner(detail_area),
         actions: Block::bordered().title("Actions").inner(actions_area),
     }
+}
+
+/// Screen row of the selected sidebar node, so the menu can sit against the object it
+/// acts on. `None` when the sidebar is not on screen or the node scrolled out of it.
+fn selected_node_row(model: &Model, area: Rect) -> Option<u16> {
+    let plan = LayoutPlan::for_area_with_document_tabs(area, Some(&model.effective_panes()), true);
+    let pane = plan.explorer;
+    if pane.width == 0 || pane.height == 0 {
+        return None;
+    }
+    let inner = popup_inner(pane);
+    let layout = crate::widgets::object_tree::sidebar_layout(
+        &model.explorer,
+        model.connections.profiles.len(),
+        &model.connection.name,
+        (inner.height as usize).max(1),
+    );
+    let index = model
+        .explorer
+        .selected_index()
+        .checked_sub(layout.offset)
+        .filter(|index| *index < layout.nodes.len())?;
+    let row = u16::try_from(layout.node_row(index)).ok()?;
+    (row < inner.height).then(|| inner.y.saturating_add(row))
+}
+
+fn render_node_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let area = frame.area();
+    let Some(kind) = crate::update::node_menu_kind(model) else {
+        return;
+    };
+    let entries = crate::palette::node_menu_entries(model, kind);
+    if area.width < 24 || area.height < 6 || entries.is_empty() {
+        return;
+    }
+    let width = area.width.clamp(24, NODE_MENU_WIDTH);
+    let height = crate::palette::menu_height(area.height, entries.len());
+    // Against the node when the sidebar shows it, centred when it does not -- the same
+    // fallback the palette takes when there is no room to be clever.
+    let anchor = selected_node_row(model, area);
+    let x = match anchor {
+        Some(_) => area.x + 2,
+        None => area.x + area.width.saturating_sub(width) / 2,
+    };
+    let x = x.min(area.x + area.width.saturating_sub(width));
+    let y = match anchor {
+        // Below the row, flipped above it when that would run off the bottom.
+        Some(row) if row.saturating_add(1 + height) <= area.y + area.height => row + 1,
+        Some(row) if row >= area.y + height => row - height,
+        _ => area.y + area.height.saturating_sub(height) / 3,
+    };
+    let popup = Rect::new(x, y, width, height);
+
+    let rows = crate::palette::menu_list_rows(area.height, entries.len());
+    let offset = scroll_to_selection(
+        model.node_menu.selected,
+        model.node_menu.offset,
+        entries.len(),
+        rows,
+    );
+    let inner_width = popup.width.saturating_sub(2) as usize;
+    let mut lines = Vec::new();
+    for (index, entry) in entries.iter().enumerate().skip(offset).take(rows) {
+        let marker = if index == model.node_menu.selected {
+            ">"
+        } else {
+            " "
+        };
+        let shortcut = entry.shortcut.unwrap_or_default();
+        let used = 2 + entry.title.chars().count();
+        let gap = inner_width
+            .saturating_sub(used + shortcut.chars().count())
+            .max(1);
+        lines.push(format!(
+            "{marker} {}{}{shortcut}",
+            entry.title,
+            " ".repeat(gap)
+        ));
+    }
+    let list_lines = lines.len();
+    let hidden = entries.len().saturating_sub(list_lines);
+    lines.push(
+        entries
+            .get(model.node_menu.selected)
+            .and_then(|entry| entry.disabled_reason.clone())
+            .unwrap_or_else(|| {
+                if hidden > 0 {
+                    format!("Enter run  Esc close  +{hidden} more")
+                } else {
+                    "Enter run  Esc close".into()
+                }
+            }),
+    );
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let body: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(i, text)| {
+            let dim = i == list_lines
+                || entries
+                    .get(offset + i)
+                    .is_some_and(|entry| entry.disabled_reason.is_some());
+            if dim {
+                Line::styled(text.clone(), muted)
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect();
+    let title = model
+        .explorer
+        .selected_node()
+        .map(|node| node.label.clone())
+        .unwrap_or_else(|| "Actions".into());
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, &title)),
+        popup,
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, _, rect| {
+        if i >= list_lines {
+            return;
+        }
+        hits.register(HitTarget::ListRow(offset.saturating_add(i)), rect);
+    });
 }
 
 fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

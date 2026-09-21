@@ -54,6 +54,11 @@ pub enum Action {
     OpenConnections,
     ConnectSelected,
     EditSelectedConnection,
+    /// Edit, with the cursor already on the group field. The form owns the only text
+    /// input for a group, so "move to group" is that form opened at that field.
+    EditConnectionGroup,
+    /// Context menu for the selected sidebar node.
+    OpenNodeMenu,
     DuplicateConnection,
     TestConnection,
     DeleteConnection,

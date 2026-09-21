@@ -32,6 +32,7 @@ pub enum FlowIntent {
     SubmitParameters,
     ClearHistory,
     DiagnosticsExport,
+    ConnectionDelete,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -69,6 +70,7 @@ pub enum Requirement {
     Results,
     RowSelection,
     ExplorerNode,
+    SelectedConnection,
     LoadedDdl,
     PendingChanges,
     ActiveQuery,
@@ -83,6 +85,7 @@ impl Requirement {
             Self::Results => "no results available",
             Self::RowSelection => "select a result row or cell first",
             Self::ExplorerNode => "select an explorer object first",
+            Self::SelectedConnection => "select a connection first",
             Self::LoadedDdl => "load DDL first",
             Self::PendingChanges => "no pending changes",
             Self::ActiveQuery => "no query is running",
@@ -96,6 +99,69 @@ impl Requirement {
 /// address commands by id and must keep reaching what the palette no longer lists.
 pub fn invocation_by_id(_model: &Model, id: &str) -> Option<PaletteInvocation> {
     command_spec(id).map(|spec| spec.invocation)
+}
+
+/// What a sidebar node offers. The tree has more kinds than this; what matters to a
+/// menu is which set of commands applies.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum NodeMenuKind {
+    Connection,
+    Relation,
+    Object,
+}
+
+/// Commands the context menu lists for a node, in display order. Ids only: the title,
+/// the shortcut and the reason a row is disabled all come from the same registry the
+/// palette reads, so the menu cannot drift from it the way `ExplorerAction` did.
+pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
+    match kind {
+        NodeMenuKind::Connection => &[
+            "explorer.expand",
+            "document.new",
+            "explorer.copy_name",
+            "connection.test",
+            "explorer.refresh",
+            "editor.history",
+            "schema.security",
+            "admin.sessions",
+            "backup.dump",
+            "backup.restore",
+            "explorer.favorites_only",
+            "explorer.system_objects",
+            "connection.edit",
+            "connection.duplicate",
+            "connection.move_group",
+            "connection.close_session",
+            "connection.delete",
+        ],
+        NodeMenuKind::Relation => &[
+            "explorer.data",
+            "explorer.inspect",
+            "explorer.ddl",
+            "explorer.copy_ddl",
+            "explorer.dependencies",
+            "explorer.copy_name",
+            "explorer.copy_simple",
+            "explorer.favorite",
+            "explorer.refresh",
+        ],
+        NodeMenuKind::Object => &[
+            "explorer.inspect",
+            "explorer.copy_name",
+            "explorer.copy_simple",
+            "explorer.favorite",
+            "explorer.refresh",
+        ],
+    }
+}
+
+/// The menu's rows for `kind`, carrying the same disabled reasons the palette shows.
+pub fn node_menu_entries(model: &Model, kind: NodeMenuKind) -> Vec<PaletteEntry> {
+    let entries = registry::all_entries(model);
+    node_menu_items(kind)
+        .iter()
+        .filter_map(|id| entries.iter().find(|entry| entry.id == *id).cloned())
+        .collect()
 }
 
 pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
@@ -130,6 +196,27 @@ pub fn popup_height(term_height: u16, count: usize) -> u16 {
 pub fn popup_list_rows(term_height: u16, count: usize) -> usize {
     popup_height(term_height, count)
         .saturating_sub(POPUP_CHROME)
+        .max(1) as usize
+}
+
+/// The context menu has no query line, so it spends one row less than the palette on
+/// itself, and it is allowed to be taller: its list is fixed, and a menu that hides
+/// Delete behind a scroll the user cannot see is worse than a tall menu.
+const MENU_CHROME: u16 = 3;
+const MENU_MAX_HEIGHT: u16 = 24;
+
+pub fn menu_height(term_height: u16, count: usize) -> u16 {
+    let wanted = u16::try_from(count)
+        .unwrap_or(u16::MAX)
+        .saturating_add(MENU_CHROME);
+    wanted
+        .clamp(MENU_CHROME + 1, MENU_MAX_HEIGHT)
+        .min(term_height.max(MENU_CHROME + 1))
+}
+
+pub fn menu_list_rows(term_height: u16, count: usize) -> usize {
+    menu_height(term_height, count)
+        .saturating_sub(MENU_CHROME)
         .max(1) as usize
 }
 
@@ -349,8 +436,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 82);
-        assert_eq!(ids.len(), 82);
+        assert_eq!(entries.len(), 86);
+        assert_eq!(ids.len(), 86);
     }
 
     #[test]

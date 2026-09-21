@@ -319,6 +319,24 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::EditConnectionGroup => {
+            let effects = update(model, Action::EditSelectedConnection);
+            // The form owns the only text input for a group, so "move to group" is that
+            // form opened with the cursor already there.
+            if let Some(index) = model
+                .connection_form
+                .fields
+                .iter()
+                .position(|field| field.label == "group")
+            {
+                model.connection_form.focus = index;
+            }
+            effects
+        }
+        Action::OpenNodeMenu => {
+            open_node_menu(model);
+            Vec::new()
+        }
         Action::DuplicateConnection => model
             .connections
             .selected()
@@ -1689,6 +1707,7 @@ fn handle_mouse(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
     }
     match mouse.kind {
         MouseEventKind::Down(MouseButton::Left) => handle_mouse_down(model, mouse),
+        MouseEventKind::Down(MouseButton::Right) => handle_mouse_right_down(model, mouse),
         MouseEventKind::Drag(MouseButton::Left) if model.drag.is_some() => {
             handle_mouse_drag(model, mouse);
             Vec::new()
@@ -1712,6 +1731,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Onboarding) => mouse_onboarding(model, hit),
         Some(OverlayKind::Palette) => mouse_palette(model, hit),
         Some(OverlayKind::Help) => mouse_help(model, hit),
+        Some(OverlayKind::NodeMenu) => mouse_node_menu(model, hit),
         Some(OverlayKind::ResultsMenu) => mouse_results_menu(model, hit),
         Some(OverlayKind::Review) => mouse_review(model, hit),
         Some(OverlayKind::DdlPreview) => mouse_ddl_preview(model, hit),
@@ -2436,6 +2456,35 @@ fn start_editor_selection_drag(model: &mut Model, anchor: usize, mouse: MouseEve
     });
 }
 
+/// Right-click opens the context menu of whatever it lands on. Nothing here is
+/// reachable only this way: the sidebar menu is also `a`, the grid menu also Enter.
+fn handle_mouse_right_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
+    if crate::mouse::overlay_blocks_workbench(model) {
+        return Vec::new();
+    }
+    match model.hits.at(mouse.column, mouse.row) {
+        Some(HitTarget::ExplorerNode(index)) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Explorer;
+            model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
+            if index < model.explorer.visible_ids().len() {
+                model.explorer.select_visible(index);
+                if let Some(profile_index) = selected_connection_profile_index(model) {
+                    model.connections.selected_profile = profile_index;
+                }
+            }
+            update(model, Action::OpenNodeMenu)
+        }
+        Some(HitTarget::GridRow(row)) | Some(HitTarget::GridCell { row, .. }) => {
+            model.focus = Focus::Results;
+            click_results_row(model, row, false);
+            update(model, Action::OpenResultsMenu)
+        }
+        _ => Vec::new(),
+    }
+}
+
 fn handle_mouse_drag(model: &mut Model, mouse: MouseEvent) {
     match model.drag.map(|drag| drag.kind) {
         Some(DragKind::PaneDivider(_)) => resize_pane_drag(model, mouse),
@@ -2713,6 +2762,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.help.open {
         return handle_help_key(model, key);
+    }
+    if model.node_menu.open {
+        return handle_node_menu_key(model, key);
     }
     if model.results_menu.open {
         return handle_results_menu_key(model, key);
@@ -3862,6 +3914,85 @@ fn open_results_menu(model: &mut Model) {
     model.results_menu.open = true;
     model.results_menu.selected = 0;
     model.results_menu.offset = 0;
+}
+
+/// Which set of commands the selected node offers, or `None` when nothing is selected.
+pub fn node_menu_kind(model: &Model) -> Option<crate::palette::NodeMenuKind> {
+    use crate::palette::NodeMenuKind;
+    let node = model.explorer.selected_node()?;
+    Some(if crate::screens::explorer::is_connection_node(node) {
+        NodeMenuKind::Connection
+    } else if crate::screens::explorer::opens_table_data(&node.kind) {
+        NodeMenuKind::Relation
+    } else {
+        NodeMenuKind::Object
+    })
+}
+
+fn open_node_menu(model: &mut Model) {
+    if node_menu_kind(model).is_none() {
+        model
+            .messages
+            .warn("Select an object in the sidebar first.".into());
+        return;
+    }
+    model.node_menu.open = true;
+    model.node_menu.selected = 0;
+    model.node_menu.offset = 0;
+}
+
+fn node_menu_entries(model: &Model) -> Vec<crate::palette::PaletteEntry> {
+    node_menu_kind(model)
+        .map(|kind| crate::palette::node_menu_entries(model, kind))
+        .unwrap_or_default()
+}
+
+fn handle_node_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let count = node_menu_entries(model).len();
+    match key.code {
+        KeyCode::Esc => {
+            model.node_menu.open = false;
+            Vec::new()
+        }
+        KeyCode::Up => {
+            model.node_menu.selected = model.node_menu.selected.saturating_sub(1);
+            Vec::new()
+        }
+        KeyCode::Down => {
+            model.node_menu.selected = (model.node_menu.selected + 1).min(count.saturating_sub(1));
+            Vec::new()
+        }
+        KeyCode::Enter => pick_node_menu(model),
+        _ => Vec::new(),
+    }
+}
+
+fn pick_node_menu(model: &mut Model) -> Vec<Effect> {
+    let entries = node_menu_entries(model);
+    model.node_menu.open = false;
+    let Some(entry) = entries.get(model.node_menu.selected) else {
+        return Vec::new();
+    };
+    // A row the palette would refuse is refused here too, with the same sentence.
+    if let Some(reason) = &entry.disabled_reason {
+        model.messages.warn(format!("{}: {reason}", entry.title));
+        return Vec::new();
+    }
+    invoke_palette(model, entry.invocation.clone())
+}
+
+fn mouse_node_menu(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::ListRow(index)) => {
+            model.node_menu.selected = index;
+            pick_node_menu(model)
+        }
+        Some(HitTarget::Overlay) => Vec::new(),
+        _ => {
+            model.node_menu.open = false;
+            Vec::new()
+        }
+    }
 }
 
 fn handle_results_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
@@ -6532,6 +6663,15 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
     use crate::palette::{FlowIntent, PaletteInvocation};
     match invocation {
         PaletteInvocation::Dispatch(action) => update(model, action),
+        PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete) => {
+            // Deleting takes a confirmation, and the connections screen is the only
+            // place that draws one -- the flow is that screen, opened on the target.
+            let effects = update(model, Action::DeleteConnection);
+            if model.connections.delete_target.is_some() {
+                model.connections.open = true;
+            }
+            effects
+        }
         PaletteInvocation::OpenFlow(FlowIntent::ProjectCreate) => {
             model.projects.open = true;
             model.projects.mode = crate::screens::projects::ProjectsMode::Create;

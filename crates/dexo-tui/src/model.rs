@@ -130,6 +130,15 @@ impl Default for OnboardingState {
     }
 }
 
+/// Context menu over a sidebar node. The renderer derives where it sits from the
+/// sidebar layout, so nothing here can fall out of step with the row it points at.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NodeMenuState {
+    pub open: bool,
+    pub selected: usize,
+    pub offset: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultsMenuState {
     pub open: bool,
@@ -1408,6 +1417,7 @@ pub struct Model {
     pub help: HelpState,
     pub onboarding: OnboardingState,
     pub results_menu: ResultsMenuState,
+    pub node_menu: NodeMenuState,
     pub layout_preset: LayoutPreset,
     pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
@@ -1499,6 +1509,7 @@ impl Default for Model {
             help: HelpState::default(),
             onboarding: OnboardingState::default(),
             results_menu: ResultsMenuState::default(),
+            node_menu: NodeMenuState::default(),
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,

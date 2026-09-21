@@ -458,7 +458,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "explorer.expand",
-            title: "Activate Sidebar Selection",
+            title: "Connect or Expand",
             keywords: &["tree", "connection", "connect", "open", "enter", "table"],
             shortcut: Some("Enter"),
             requirements: &[],
@@ -849,6 +849,46 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenConnections),
         },
         CommandSpec {
+            id: "explorer.actions",
+            title: "Object Actions",
+            keywords: &["menu", "context", "sidebar"],
+            shortcut: Some("a"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenNodeMenu),
+        },
+        CommandSpec {
+            id: "connection.test",
+            title: "Test Connection",
+            keywords: &["ping", "check", "reach"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::TestConnection),
+        },
+        CommandSpec {
+            id: "connection.duplicate",
+            title: "Duplicate Connection",
+            keywords: &["copy", "clone", "profile"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::DuplicateConnection),
+        },
+        CommandSpec {
+            id: "connection.move_group",
+            title: "Move to Group",
+            keywords: &["folder", "organise", "organize"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditConnectionGroup),
+        },
+        CommandSpec {
+            id: "connection.delete",
+            title: "Delete Connection",
+            keywords: &["remove", "drop", "profile"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete),
+        },
+        CommandSpec {
             id: "connection.close_session",
             title: "Disconnect Connection",
             keywords: &["close", "session"],
@@ -1074,6 +1114,7 @@ fn hidden(id: &str) -> bool {
             | "explorer.up"
             | "explorer.down"
             | "explorer.expand"
+            | "explorer.actions"
             // pane focus and sizing
             | "focus.explorer"
             | "focus.editor"
@@ -1130,9 +1171,18 @@ pub fn command_spec(id: &str) -> Option<CommandSpec> {
 }
 
 pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
+    all_entries(model)
+        .into_iter()
+        .filter(|entry| !hidden(entry.id))
+        .collect()
+}
+
+/// Every command as a row, hidden ones included. The context menu addresses commands
+/// by id and lists some the palette deliberately leaves out, `explorer.expand` first
+/// among them.
+pub fn all_entries(model: &Model) -> Vec<PaletteEntry> {
     command_specs()
         .into_iter()
-        .filter(|spec| !hidden(spec.id))
         .map(|spec| PaletteEntry {
             id: spec.id,
             title: spec.title,
@@ -1152,6 +1202,7 @@ fn unmet_requirement(model: &Model, requirement: Requirement) -> Option<String> 
         Requirement::Results => model.results.rows().is_empty(),
         Requirement::RowSelection => matches!(model.results.kind, GridSelection::Column { .. }),
         Requirement::ExplorerNode => model.explorer.selected.is_none(),
+        Requirement::SelectedConnection => model.connections.selected().is_none(),
         Requirement::LoadedDdl => model.inspector.ddl.is_none(),
         Requirement::PendingChanges => model.data.changes.pending().is_empty(),
         Requirement::ActiveQuery => model.active_operation.is_none(),
@@ -1254,7 +1305,8 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "results.actions"
         | "results.toggle_pick"
         | "data.toggle_delete" => &[Results, RowSelection],
-        "explorer.expand"
+        "explorer.actions"
+        | "explorer.expand"
         | "explorer.copy_name"
         | "explorer.copy_simple"
         | "explorer.favorite"
@@ -1266,6 +1318,10 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explorer.refresh_all"
         | "explain.analyze" => &[ActiveSession],
         "explorer.refresh" => &[ActiveSession, ExplorerNode],
+        "connection.test"
+        | "connection.duplicate"
+        | "connection.move_group"
+        | "connection.delete" => &[SelectedConnection],
         "explorer.copy_ddl" => &[LoadedDdl],
         "data.revert" | "data.review" | "data.discard_all" => &[PendingChanges],
         "query.cancel" => &[ActiveQuery],
