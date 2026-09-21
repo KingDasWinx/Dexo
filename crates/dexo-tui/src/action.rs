@@ -63,6 +63,8 @@ pub enum Action {
     ActivateDocumentTab,
     /// Moves the cursor inside the focused tab strip, `+` included.
     MoveDocumentTabCursor(i32),
+    /// A bracketed paste, arriving whole rather than as the keys it resembles.
+    Paste(String),
     DuplicateConnection,
     TestConnection,
     DeleteConnection,

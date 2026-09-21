@@ -19,6 +19,7 @@ pub fn action_from_event(event: Event) -> Option<Action> {
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(Action::Key(key)),
         Event::Mouse(mouse) => Some(Action::Mouse(mouse)),
         Event::Resize(width, height) => Some(Action::Resize { width, height }),
+        Event::Paste(text) => Some(Action::Paste(text)),
         _ => None,
     }
 }

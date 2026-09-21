@@ -541,6 +541,22 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::Focus(target) => focus_pane(model, target),
         Action::ActivateDocumentTab => activate_document_tab(model),
+        Action::Paste(text) => {
+            if crate::screens::editor::paste(model, &text) {
+                crate::screens::editor::refresh_intelligence(model, false);
+                return crate::screens::editor::take_completion_effects(model);
+            }
+            // Anywhere else -- a form field, a prompt -- the text is short and the
+            // widget only knows keys, so it is fed as the keys it stands for.
+            let mut effects = Vec::new();
+            for ch in text.chars().filter(|ch| !ch.is_control()) {
+                effects.extend(update(
+                    model,
+                    Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+                ));
+            }
+            effects
+        }
         Action::MoveDocumentTabCursor(delta) => {
             model.move_tab_cursor(delta);
             Vec::new()

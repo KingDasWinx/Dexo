@@ -197,8 +197,10 @@ fn mouse_capture_trait_records_on_and_off() {
             "enter",
             "raw_on",
             "keyboard_on",
+            "paste_on",
             "mouse_on",
             "mouse_off",
+            "paste_off",
             "keyboard_off",
             "raw_off",
             "leave",
@@ -235,15 +237,24 @@ fn connection_advanced_options_expand_with_the_mouse() {
     let mut model = Model::default();
     update(&mut model, Action::OpenConnectionForm);
     assert!(!model.connection_form.advanced);
-    assert!(!model.connection_form.lines().join("\n").contains("tls_mode:"));
+    assert!(
+        !model
+            .connection_form
+            .lines()
+            .join("\n")
+            .contains("tls_mode:")
+    );
 
     paint(&mut model);
-    click_target(
-        &mut model,
-        HitTarget::Button(HitButton::ToggleAdvanced),
-    );
+    click_target(&mut model, HitTarget::Button(HitButton::ToggleAdvanced));
     assert!(model.connection_form.advanced);
-    assert!(model.connection_form.lines().join("\n").contains("tls_mode:"));
+    assert!(
+        model
+            .connection_form
+            .lines()
+            .join("\n")
+            .contains("tls_mode:")
+    );
 
     paint(&mut model);
     let environment = model

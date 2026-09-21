@@ -5,8 +5,8 @@ use std::sync::{Arc, Mutex};
 
 use crossterm::cursor::Show;
 use crossterm::event::{
-    DisableMouseCapture, EnableMouseCapture, KeyboardEnhancementFlags, PopKeyboardEnhancementFlags,
-    PushKeyboardEnhancementFlags,
+    DisableBracketedPaste, DisableMouseCapture, EnableBracketedPaste, EnableMouseCapture,
+    KeyboardEnhancementFlags, PopKeyboardEnhancementFlags, PushKeyboardEnhancementFlags,
 };
 use crossterm::execute;
 use crossterm::terminal::{
@@ -26,6 +26,12 @@ pub trait TerminalControl {
     fn leave(&self) -> Result<(), TuiError>;
     fn show_cursor(&self) -> Result<(), TuiError>;
     fn mouse_capture(&self, on: bool) -> Result<(), TuiError>;
+    /// Without this a paste arrives as the keys it happens to look like: every
+    /// character dispatched and redrawn on its own, and every tab in the text firing
+    /// whatever tab is bound to instead of landing as whitespace.
+    fn bracketed_paste(&self, _on: bool) -> Result<(), TuiError> {
+        Ok(())
+    }
     /// Tells the terminal what colour to draw the caret, or restores its own. Dexo
     /// repaints the surface, so the colour the terminal was configured with is about a
     /// background that is no longer there.
@@ -44,12 +50,14 @@ pub struct TerminalGuard<B: TerminalControl> {
     mouse: bool,
     keyboard_enhanced: bool,
     caret: Option<(u8, u8, u8)>,
+    paste: bool,
 }
 
 impl<B: TerminalControl> TerminalGuard<B> {
     pub fn start(backend: B) -> Result<Self, TuiError> {
         let mut guard = Self::enter(backend)?;
         guard.enable_raw()?;
+        guard.enable_paste()?;
         Ok(guard)
     }
 
@@ -62,7 +70,17 @@ impl<B: TerminalControl> TerminalGuard<B> {
             mouse: false,
             keyboard_enhanced: false,
             caret: None,
+            paste: false,
         })
+    }
+
+    pub fn enable_paste(&mut self) -> Result<(), TuiError> {
+        if self.paste {
+            return Ok(());
+        }
+        self.backend.bracketed_paste(true)?;
+        self.paste = true;
+        Ok(())
     }
 
     pub fn enable_raw(&mut self) -> Result<(), TuiError> {
@@ -108,6 +126,10 @@ impl<B: TerminalControl> TerminalGuard<B> {
         if self.restored {
             return;
         }
+        if self.paste {
+            let _ = self.backend.bracketed_paste(false);
+            self.paste = false;
+        }
         if self.caret.is_some() {
             let _ = self.backend.cursor_color(None);
             self.caret = None;
@@ -142,6 +164,7 @@ pub fn install_panic_hook() {
         let _ = write!(io::stdout(), "\x1b]112\x1b\\");
         let _ = execute!(
             io::stdout(),
+            DisableBracketedPaste,
             DisableMouseCapture,
             LeaveAlternateScreen,
             Show
@@ -169,6 +192,15 @@ impl TerminalControl for CrosstermTerminal {
             enable_raw_mode()?;
         } else {
             disable_raw_mode()?;
+        }
+        Ok(())
+    }
+
+    fn bracketed_paste(&self, on: bool) -> Result<(), TuiError> {
+        if on {
+            execute!(io::stdout(), EnableBracketedPaste)?;
+        } else {
+            execute!(io::stdout(), DisableBracketedPaste)?;
         }
         Ok(())
     }
@@ -253,6 +285,11 @@ impl RecordingTerminal {
 impl TerminalControl for RecordingTerminal {
     fn enter(&self) -> Result<(), TuiError> {
         self.push("enter");
+        Ok(())
+    }
+
+    fn bracketed_paste(&self, on: bool) -> Result<(), TuiError> {
+        self.push(if on { "paste_on" } else { "paste_off" });
         Ok(())
     }
 

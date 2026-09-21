@@ -648,6 +648,29 @@ fn shift_snippet_stops(model: &mut Model, mark: (usize, usize)) {
     }
 }
 
+/// Drops pasted text in whole. Character by character it was one dispatch, one
+/// intelligence pass and one frame each -- and the completion popup it opened on the
+/// way turned the next tab in the text into an accepted suggestion instead of
+/// indentation.
+pub fn paste(model: &mut Model, text: &str) -> bool {
+    if model.focus != crate::model::Focus::Editor || model.active_document().kind.is_table() {
+        return false;
+    }
+    // The completion popup is the editor's own, not a modal with a claim on the paste:
+    // pasting dismisses it. Anything else on top does own the keys, and the paste with
+    // them, or the text lands in the buffer underneath where nobody sees it go.
+    model.editor.completion_open = false;
+    if crate::mouse::overlay_blocks_workbench(model) {
+        return false;
+    }
+    // A paste is not typing: none of it should be completed or expanded, and the whole
+    // of it belongs in one undo step.
+    end_typing(model);
+    insert_text(model, &text.replace("\r\n", "\n").replace('\r', "\n"));
+    end_typing(model);
+    true
+}
+
 fn insert_text(model: &mut Model, text: &str) {
     let mark = edit_mark(model);
     let doc = model.active_document_mut();
