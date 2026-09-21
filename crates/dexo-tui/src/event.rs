@@ -135,6 +135,9 @@ async fn run_loop(
             }
         }
         guard.set_mouse(model.mouse)?;
+        // The theme can change under the user (mode, accent), so this is offered every
+        // frame and the guard only forwards a change.
+        guard.set_cursor_color(model.theme.caret_rgb(model.capabilities))?;
     }
     Ok(())
 }

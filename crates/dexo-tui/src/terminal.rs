@@ -1,4 +1,5 @@
 use std::io;
+use std::io::Write as _;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -25,6 +26,12 @@ pub trait TerminalControl {
     fn leave(&self) -> Result<(), TuiError>;
     fn show_cursor(&self) -> Result<(), TuiError>;
     fn mouse_capture(&self, on: bool) -> Result<(), TuiError>;
+    /// Tells the terminal what colour to draw the caret, or restores its own. Dexo
+    /// repaints the surface, so the colour the terminal was configured with is about a
+    /// background that is no longer there.
+    fn cursor_color(&self, _rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        Ok(())
+    }
     fn keyboard_enhancement(&self, _on: bool) -> Result<bool, TuiError> {
         Ok(false)
     }
@@ -36,6 +43,7 @@ pub struct TerminalGuard<B: TerminalControl> {
     raw: bool,
     mouse: bool,
     keyboard_enhanced: bool,
+    caret: Option<(u8, u8, u8)>,
 }
 
 impl<B: TerminalControl> TerminalGuard<B> {
@@ -53,6 +61,7 @@ impl<B: TerminalControl> TerminalGuard<B> {
             raw: false,
             mouse: false,
             keyboard_enhanced: false,
+            caret: None,
         })
     }
 
@@ -84,9 +93,24 @@ impl<B: TerminalControl> TerminalGuard<B> {
         Ok(())
     }
 
+    /// Idempotent like `set_mouse`: the loop offers the theme's caret colour every
+    /// frame and only a change reaches the terminal.
+    pub fn set_cursor_color(&mut self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        if self.caret == rgb {
+            return Ok(());
+        }
+        self.backend.cursor_color(rgb)?;
+        self.caret = rgb;
+        Ok(())
+    }
+
     pub fn restore(&mut self) {
         if self.restored {
             return;
+        }
+        if self.caret.is_some() {
+            let _ = self.backend.cursor_color(None);
+            self.caret = None;
         }
         if self.mouse {
             let _ = self.backend.mouse_capture(false);
@@ -115,6 +139,7 @@ pub fn install_panic_hook() {
             KEYBOARD_ENHANCEMENT_ACTIVE.store(false, Ordering::Relaxed);
         }
         let _ = disable_raw_mode();
+        let _ = write!(io::stdout(), "\x1b]112\x1b\\");
         let _ = execute!(
             io::stdout(),
             DisableMouseCapture,
@@ -145,6 +170,18 @@ impl TerminalControl for CrosstermTerminal {
         } else {
             disable_raw_mode()?;
         }
+        Ok(())
+    }
+
+    fn cursor_color(&self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        // OSC 12 sets it, OSC 112 hands it back. Terminals that do not know either
+        // ignore the sequence, which is the whole point of asking this way.
+        let mut out = io::stdout();
+        match rgb {
+            Some((r, g, b)) => write!(out, "\x1b]12;#{r:02x}{g:02x}{b:02x}\x1b\\")?,
+            None => write!(out, "\x1b]112\x1b\\")?,
+        }
+        out.flush()?;
         Ok(())
     }
 
@@ -216,6 +253,15 @@ impl RecordingTerminal {
 impl TerminalControl for RecordingTerminal {
     fn enter(&self) -> Result<(), TuiError> {
         self.push("enter");
+        Ok(())
+    }
+
+    fn cursor_color(&self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        self.push(if rgb.is_some() {
+            "cursor_color_set"
+        } else {
+            "cursor_color_reset"
+        });
         Ok(())
     }
 

@@ -241,6 +241,21 @@ impl Theme {
         }
     }
 
+    /// The caret colour to hand the terminal. Dexo repaints the whole surface, so the
+    /// cursor colour the terminal was configured with no longer has anything to do with
+    /// what is behind it -- a light terminal theme fixes a near-black cursor, which on
+    /// Dexo's dark background is a caret nobody can see. `None` when the terminal is
+    /// running without colour, where it is better left alone.
+    pub fn caret_rgb(&self, caps: TerminalCapabilities) -> Option<(u8, u8, u8)> {
+        if caps.color_depth == ColorDepth::None {
+            return None;
+        }
+        match self.slots.get(&Role::Foreground)?.truecolor {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            _ => None,
+        }
+    }
+
     /// Foreground + background for the whole surface, so a light theme does not
     /// leave dark text sitting on the terminal's own dark background.
     pub fn base(&self, caps: TerminalCapabilities) -> Style {
