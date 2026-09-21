@@ -625,6 +625,7 @@ fn flush_documents(
             path.as_deref(),
             None,
             document.kind.as_deref(),
+            document.connection_id.as_deref(),
         )?;
     }
     tx.commit()?;

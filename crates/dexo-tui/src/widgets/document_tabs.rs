@@ -14,6 +14,9 @@ const SCROLL_PREV: &str = "‹";
 const SCROLL_NEXT: &str = "›";
 const MAX_TITLE_WIDTH: usize = 20;
 const MIN_TITLE_WIDTH: usize = 3;
+/// Cells the connection prefix may take. Whose tab it is beats reading the end of a
+/// file name, so the title truncates around it and it never truncates itself away.
+const CONNECTION_PREFIX_WIDTH: usize = 8;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 struct TabItem {
@@ -43,9 +46,36 @@ pub fn labels(model: &Model) -> Vec<String> {
         .iter()
         .map(|document| {
             let dirty = if document.is_dirty() { "*" } else { "" };
-            format!(" {}{dirty} ", document.title)
+            format!(
+                " {}{}{dirty} ",
+                connection_prefix(model, document),
+                document.title
+            )
         })
         .collect()
+}
+
+/// `connection·` for a document that belongs to one and does not already carry its
+/// name, empty otherwise. A console is titled after its connection, so prefixing it
+/// would print the name twice; an unbound document prints nothing, and that absence is
+/// itself the answer -- it has not picked a connection yet.
+fn connection_prefix(model: &Model, document: &crate::model::EditorDocument) -> String {
+    let Some(id) = document.connection_id.as_deref() else {
+        return String::new();
+    };
+    let Some(name) = model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.id.0.to_string() == id)
+        .map(|row| row.profile.name.as_str())
+    else {
+        return String::new();
+    };
+    if name == document.title {
+        return String::new();
+    }
+    format!("{}\u{b7}", truncate_cell(name, CONNECTION_PREFIX_WIDTH))
 }
 
 fn close_width() -> u16 {
@@ -67,8 +97,14 @@ fn tab_items(model: &Model, max_title_width: usize) -> Vec<TabItem> {
         .enumerate()
         .map(|(index, document)| {
             let dirty = if document.is_dirty() { "*" } else { "" };
-            let title = truncate_cell(document.title.as_str(), max_title_width);
-            let padded = format!(" {title}{dirty} ");
+            let prefix = connection_prefix(model, document);
+            // The prefix is spent first; the title lives on what is left, down to
+            // `MIN_TITLE_WIDTH`.
+            let room = max_title_width
+                .saturating_sub(prefix.chars().count())
+                .max(MIN_TITLE_WIDTH);
+            let title = truncate_cell(document.title.as_str(), room);
+            let padded = format!(" {prefix}{title}{dirty} ");
             let title_width = UnicodeWidthStr::width(padded.as_str()) as u16;
             TabItem {
                 index,

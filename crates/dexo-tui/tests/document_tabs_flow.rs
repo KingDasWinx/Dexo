@@ -139,11 +139,10 @@ fn alt_up_down_resize_results_height_from_editor_or_results() {
 #[test]
 fn alt_up_down_resize_the_console_the_same_pane_it_occupies() {
     let mut model = two_documents();
-    model
-        .documents
-        .push(EditorDocument::new_table(dexo_app::parse_qualified(
-            "public.orders",
-        )));
+    model.documents.push(EditorDocument::new_table(
+        dexo_app::parse_qualified("public.orders"),
+        None,
+    ));
     model.active_document = model.documents.len() - 1;
     model.apply_size(160, 50);
     let start = model.panes.console_height;

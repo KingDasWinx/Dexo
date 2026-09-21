@@ -227,6 +227,7 @@ fn project_crud_preview_detaches_and_keeps_external_paths() {
             Some("C:/tmp/keep.sql"),
             None,
             None,
+            None,
         )
         .unwrap();
     let preview = repo.preview_delete(project.id).unwrap();

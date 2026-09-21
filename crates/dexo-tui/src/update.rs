@@ -65,6 +65,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 // dial that never finished.
                 model.messages.info(format!("Connected to {name}"));
             }
+            // An execution that was waiting on this connection. Dropped rather than
+            // deferred again if the token moved on or the user changed tabs, because
+            // firing a query at a document the user has left is worse than not firing.
+            let replay = model
+                .pending_execute
+                .take()
+                .filter(|pending| ready && pending.token == token)
+                .filter(|pending| model.active_document().id == pending.document)
+                .map(|pending| pending.action);
             model.connection.name = name.clone();
             model.connection.ready = ready;
             model.connection.environment = environment;
@@ -111,6 +120,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 if let Some(connection_id) = active_connection_uuid(model) {
                     effects.push(Effect::EnsureConnectionSql { connection_id });
                 }
+                if let Some(action) = replay {
+                    effects.extend(update(model, action));
+                }
                 effects
             } else {
                 model.explorer.offline = true;
@@ -139,12 +151,27 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 if model.documents[index].connection_id.is_none() {
                     model.documents[index].connection_id = Some(connection_id);
                 }
+                // Consoles stored before they were named after their connection come
+                // back as `console.sql`, which is what made a row of them unreadable.
+                if !model.connection.name.is_empty()
+                    && model.documents[index].title == "console.sql"
+                {
+                    model.documents[index].title = model.connection.name.clone();
+                }
             } else {
-                let title = console
-                    .file_name()
-                    .and_then(|name| name.to_str())
-                    .unwrap_or("console.sql")
-                    .to_owned();
+                // The file on disk is `<connection uuid>/console.sql`, so its name is
+                // the same for every connection and a row of consoles was a row of
+                // identical tabs. The console *is* the connection's, so it is named
+                // after it.
+                let title = if model.connection.name.is_empty() {
+                    console
+                        .file_name()
+                        .and_then(|file| file.to_str())
+                        .unwrap_or("console.sql")
+                        .to_owned()
+                } else {
+                    model.connection.name.clone()
+                };
                 let mut document = crate::model::EditorDocument::new_unique(
                     title,
                     Some(console),
@@ -454,21 +481,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::PaletteSelect => palette_select(model),
-        Action::ExecuteStatement => {
-            if model.active_document().selection().is_some() {
-                crate::screens::workbench::execute_selection(model);
-            } else {
-                crate::screens::workbench::execute_current_statement(model);
-            }
-            start_query(model)
-        }
-        Action::ExecuteSelection => {
-            crate::screens::workbench::execute_selection(model);
-            start_query(model)
-        }
-        Action::ExecuteDocument => {
-            crate::screens::workbench::execute_document(model);
-            start_query(model)
+        Action::ExecuteStatement | Action::ExecuteSelection | Action::ExecuteDocument => {
+            execute_on_document_connection(model, action)
         }
         Action::CancelQuery => cancel_query(model),
         Action::BeginTransaction => {
@@ -3546,6 +3560,10 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     if let Some(session) = model.connections.session_for(&profile.name).cloned() {
         return activate_existing_session(model, &profile, session);
     }
+    connect_to(model, profile)
+}
+
+fn connect_to(model: &mut Model, profile: dexo_app::ConnectionProfile) -> Vec<Effect> {
     model.connect_token = model.connect_token.saturating_add(1);
     model.connections.pending_connect = Some(model.connect_token);
     // The dial is spawned, so this toast paints on the very next frame and is the only
@@ -4162,6 +4180,7 @@ fn flush_documents_effect(model: &Model) -> Effect {
             .iter()
             .map(|document| crate::action::FlushedDocument {
                 kind: document.kind.storage_tag(),
+                connection_id: document.connection_id.clone(),
                 id: document.id.clone(),
                 title: document.title.clone(),
                 content: document.text(),
@@ -4234,6 +4253,87 @@ fn persist_history_effect(model: &Model) -> Vec<Effect> {
             sql: entry.sql,
         },
     )]
+}
+
+fn profile_by_uuid(model: &Model, id: &str) -> Option<dexo_app::ConnectionProfile> {
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.id.0.to_string() == id)
+        .map(|row| row.profile.clone())
+}
+
+/// What `switch_to_document_connection` did. The three cases read differently to a
+/// caller that wants to execute: only `Dialling` means the query has to wait, and
+/// collapsing them into an `Option` hid that -- dialling another connection leaves the
+/// old session live, so "no session yet" is not the test for whether to wait.
+enum Switch {
+    /// The live session already belongs to the document.
+    Ready,
+    /// Moved onto a session that was already open. Whatever is next can proceed.
+    Activated(Vec<Effect>),
+    /// The connection is being dialled. Nothing may run against it yet.
+    Dialling(Vec<Effect>),
+}
+
+/// Brings the live session to the document's connection.
+///
+/// `Ready` is what keeps the cycle in check: connecting moves the active document to
+/// that connection's console, and activating a document moves the active connection to
+/// the document's. Both sides have to be no-ops once satisfied.
+fn switch_to_document_connection(model: &mut Model, index: usize) -> Switch {
+    let Some(id) = model
+        .documents
+        .get(index)
+        .and_then(|document| document.connection_id.clone())
+    else {
+        return Switch::Ready;
+    };
+    let Some(profile) = profile_by_uuid(model, &id) else {
+        return Switch::Ready;
+    };
+    if model.connection.name == profile.name && model.active_session.is_some() {
+        return Switch::Ready;
+    }
+    match model.connections.session_for(&profile.name).cloned() {
+        Some(session) => Switch::Activated(activate_existing_session(model, &profile, session)),
+        None => Switch::Dialling(connect_to(model, profile)),
+    }
+}
+
+/// Runs an execution on the document's own connection. A document restored from a
+/// launch, or one whose connection dropped, would otherwise send its query to whatever
+/// session happens to be live -- the wrong database, silently.
+fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effect> {
+    let mut effects = match switch_to_document_connection(model, model.active_document) {
+        Switch::Ready => Vec::new(),
+        Switch::Activated(effects) => effects,
+        Switch::Dialling(effects) => {
+            // Replay when `ConnectionChanged` says the dial landed. Running now would
+            // send the query to the session that happens to still be live.
+            model.pending_execute = Some(crate::model::PendingExecute {
+                document: model.active_document().id.clone(),
+                action,
+                token: model.connect_token,
+            });
+            return effects;
+        }
+    };
+    match action {
+        Action::ExecuteStatement => {
+            if model.active_document().selection().is_some() {
+                crate::screens::workbench::execute_selection(model);
+            } else {
+                crate::screens::workbench::execute_current_statement(model);
+            }
+        }
+        Action::ExecuteSelection => crate::screens::workbench::execute_selection(model),
+        Action::ExecuteDocument => crate::screens::workbench::execute_document(model),
+        _ => return effects,
+    }
+    effects.extend(start_query(model));
+    effects
 }
 
 fn start_query(model: &mut Model) -> Vec<Effect> {
@@ -4372,6 +4472,7 @@ fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::E
     document.id = stored.id;
     document.title = stored.title;
     document.path = stored.path.map(std::path::PathBuf::from);
+    document.connection_id = stored.connection_id;
     if let Some(kind) = stored
         .kind
         .as_deref()
@@ -4779,10 +4880,14 @@ fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
         return Vec::new();
     }
     model.active_document = index;
+    let mut effects = match switch_to_document_connection(model, index) {
+        Switch::Ready => Vec::new(),
+        Switch::Activated(effects) | Switch::Dialling(effects) => effects,
+    };
     if model.documents[index].kind.is_table() {
-        return load_table_document(model, index);
+        effects.extend(load_table_document(model, index));
     }
-    Vec::new()
+    effects
 }
 
 fn document_index_for_table(model: &Model, target: &dexo_driver_api::QualifiedName) -> Option<usize> {
@@ -4805,9 +4910,13 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
     let index = match document_index_for_table(model, &target) {
         Some(index) => index,
         None => {
+            let connection_id = active_connection_uuid(model);
             model
                 .documents
-                .push(crate::model::EditorDocument::new_table(target));
+                .push(crate::model::EditorDocument::new_table(
+                    target,
+                    connection_id,
+                ));
             model.documents.len() - 1
         }
     };
@@ -5260,11 +5369,13 @@ fn open_related(model: &mut Model) -> Vec<Effect> {
     // This used to push a title onto the workbench strip that `data_nav_back` never
     // popped, so walking foreign keys leaked a tab per hop. The referenced table gets
     // a document, reusing one if it is already open.
+    let connection_id = active_connection_uuid(model);
     let index = document_index_for_table(model, &fk.referenced_table).unwrap_or_else(|| {
         model
             .documents
             .push(crate::model::EditorDocument::new_table(
                 fk.referenced_table.clone(),
+                connection_id,
             ));
         model.documents.len() - 1
     });
@@ -6634,10 +6745,11 @@ fn open_document_path(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "untitled.sql".into());
     let document_id = uuid::Uuid::new_v4().to_string();
+    let connection_id = active_connection_uuid(model);
     model.documents.push(crate::model::EditorDocument::new_unique(
         title,
         Some(normalized.clone()),
-        None,
+        connection_id,
     ));
     model.active_document = model.documents.len().saturating_sub(1);
     model.sync_document_tabs_scroll();
@@ -7104,6 +7216,7 @@ mod tests {
             .documents
             .push(crate::model::EditorDocument::new_table(
                 dexo_app::parse_qualified("public.orders"),
+                None,
             ));
         model.active_document = 1;
         model.focus_active_document_tab();
@@ -7127,6 +7240,7 @@ mod tests {
             .documents
             .push(crate::model::EditorDocument::new_table(
                 dexo_app::parse_qualified("public.orders"),
+                None,
             ));
         model.active_document = model.documents.len() - 1;
 
@@ -7289,6 +7403,7 @@ mod tests {
                 path: None,
                 fingerprint: None,
                 kind: crate::model::DocumentKind::Table(target.clone()).storage_tag(),
+                connection_id: None,
             }));
         assert!(model.documents[1].kind.is_table(), "the kind did not survive the row");
 

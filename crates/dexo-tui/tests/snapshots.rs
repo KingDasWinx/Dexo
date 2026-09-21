@@ -217,6 +217,7 @@ fn snapshot_table_document_shows_the_grid() {
         .documents
         .push(dexo_tui::model::EditorDocument::new_table(
             dexo_app::parse_qualified("public.orders"),
+            None,
         ));
     model.active_document = model.documents.len() - 1;
     insta::assert_snapshot!(render_to_string(&model, 160, 50));

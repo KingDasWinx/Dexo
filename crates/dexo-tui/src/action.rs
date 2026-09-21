@@ -588,6 +588,8 @@ impl TransferRequest {
 pub struct FlushedDocument {
     /// `DocumentKind::storage_tag` -- `None` for an ordinary editor tab.
     pub kind: Option<String>,
+    /// Profile the document executes against. `None` until it picks one.
+    pub connection_id: Option<String>,
     pub id: String,
     pub title: String,
     pub content: String,

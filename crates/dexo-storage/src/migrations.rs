@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 12;
+pub const LATEST_SCHEMA_VERSION: u32 = 13;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -258,6 +258,16 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(12, datetime('now'));
 COMMIT;
 "#;
 
+/// A document belongs to a connection: it executes there and the tab strip says so.
+/// Without the column the binding is lost on every launch and the strip goes back to
+/// a row of identical names.
+pub const MIGRATION_13: &str = r#"
+BEGIN;
+ALTER TABLE documents ADD COLUMN connection_id TEXT;
+INSERT INTO schema_migrations(version, applied_at) VALUES(13, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -300,6 +310,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             10 => MIGRATION_10,
             11 => MIGRATION_11,
             12 => MIGRATION_12,
+            13 => MIGRATION_13,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;
@@ -319,7 +330,7 @@ mod tests {
         conn.execute_batch(MIGRATION_1).unwrap();
         assert_eq!(read_schema_version(&conn), 1);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_history'",
@@ -338,7 +349,7 @@ mod tests {
         conn.execute_batch(MIGRATION_2).unwrap();
         assert_eq!(read_schema_version(&conn), 2);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_snapshots'",
@@ -358,7 +369,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_3).unwrap();
         assert_eq!(read_schema_version(&conn), 3);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_diff_snapshots'",
@@ -379,7 +390,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_4).unwrap();
         assert_eq!(read_schema_version(&conn), 4);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_profiles'",
@@ -401,7 +412,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_5).unwrap();
         assert_eq!(read_schema_version(&conn), 5);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_grants'",
@@ -424,7 +435,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_6).unwrap();
         assert_eq!(read_schema_version(&conn), 6);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",
@@ -448,7 +459,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_7).unwrap();
         assert_eq!(read_schema_version(&conn), 7);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='connection_secret_refs'",
@@ -474,7 +485,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_9).unwrap();
         assert_eq!(read_schema_version(&conn), 9);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 12);
+        assert_eq!(read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='object_usage'",
@@ -521,9 +532,12 @@ mod tests {
             if version >= 11 {
                 conn.execute_batch(super::MIGRATION_11).unwrap();
             }
+            if version >= 12 {
+                conn.execute_batch(super::MIGRATION_12).unwrap();
+            }
             assert_eq!(read_schema_version(&conn), version);
             apply_pending(&conn).unwrap();
-            assert_eq!(read_schema_version(&conn), 12);
+            assert_eq!(read_schema_version(&conn), 13);
         }
     }
 

@@ -28,10 +28,11 @@ impl<'a> DocumentRepository<'a> {
         path: Option<&str>,
         fingerprint: Option<&FileFingerprint>,
         kind: Option<&str>,
+        connection_id: Option<&str>,
     ) -> anyhow::Result<()> {
         self.conn.execute(
-            "INSERT INTO documents (id, project_id, title, content, path, mtime, content_hash, kind, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, datetime('now'))
+            "INSERT INTO documents (id, project_id, title, content, path, mtime, content_hash, kind, connection_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
                project_id = excluded.project_id,
                title = excluded.title,
@@ -40,6 +41,7 @@ impl<'a> DocumentRepository<'a> {
                mtime = excluded.mtime,
                content_hash = excluded.content_hash,
                kind = excluded.kind,
+               connection_id = excluded.connection_id,
                updated_at = excluded.updated_at",
             params![
                 id,
@@ -49,7 +51,8 @@ impl<'a> DocumentRepository<'a> {
                 path,
                 fingerprint.map(|fp| fp.mtime.as_str()),
                 fingerprint.map(|fp| fp.hash.as_str()),
-                kind
+                kind,
+                connection_id
             ],
         )?;
         Ok(())
@@ -58,7 +61,7 @@ impl<'a> DocumentRepository<'a> {
     pub fn get(&self, id: &str) -> anyhow::Result<Option<StoredDocument>> {
         self.conn
             .query_row(
-                "SELECT id, project_id, title, content, path, mtime, content_hash, kind
+                "SELECT id, project_id, title, content, path, mtime, content_hash, kind, connection_id
                  FROM documents WHERE id = ?1",
                 params![id],
                 row_to_document,
@@ -69,7 +72,7 @@ impl<'a> DocumentRepository<'a> {
 
     pub fn list_for_project(&self, project_id: &str) -> anyhow::Result<Vec<StoredDocument>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, title, content, path, mtime, content_hash, kind
+            "SELECT id, project_id, title, content, path, mtime, content_hash, kind, connection_id
              FROM documents WHERE project_id = ?1 ORDER BY title",
         )?;
         let rows = stmt.query_map(params![project_id], row_to_document)?;
@@ -118,6 +121,9 @@ pub struct StoredDocument {
     /// tab. A table browser that loses this comes back as an editor tab, and the next
     /// open of that table makes a second document instead of finding this one.
     pub kind: Option<String>,
+    /// Profile the document executes against, as a connection id. `None` means it has
+    /// not picked one yet and takes whatever is active at its first execution.
+    pub connection_id: Option<String>,
 }
 
 fn row_to_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDocument> {
@@ -134,6 +140,7 @@ fn row_to_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDocument> 
             _ => None,
         },
         kind: row.get(7)?,
+        connection_id: row.get(8)?,
     })
 }
 
@@ -163,7 +170,16 @@ mod tests {
             mtime: "1".into(),
             hash: "abc".into(),
         };
-        repo.save("d1", Some("p1"), "scratch", "select 1", None, Some(&fp), None)
+        repo.save(
+            "d1",
+            Some("p1"),
+            "scratch",
+            "select 1",
+            None,
+            Some(&fp),
+            None,
+            Some("conn-1"),
+        )
             .unwrap();
         assert_eq!(repo.get("d1").unwrap().unwrap().content, "select 1");
         assert_eq!(repo.list_for_project("p1").unwrap().len(), 1);

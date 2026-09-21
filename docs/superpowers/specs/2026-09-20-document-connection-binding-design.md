@@ -1,6 +1,6 @@
 # Vínculo entre documento e conexão — Design
 
-**Status:** aguardando revisão
+**Status:** implementado
 
 **Data:** 2026-09-20
 
@@ -22,9 +22,10 @@ Três achados na leitura do código, nesta ordem de importância:
 no instante do Enter. Não existe vínculo a ser exibido.
 
 **O campo do vínculo existe pela metade.** `EditorDocument.connection_id`
-(`model.rs:1248`) é escrito em exatamente um lugar — `Action::ConnectionSqlReady`
-(`update.rs:138`+`140`), para o documento de console — e guarda o UUID do profile, não o
-nome.
+(`model.rs:1248`) guarda o UUID do profile, não o nome, e é preenchido em dois lugares
+apenas: `Action::ConnectionSqlReady` para o console, e `document.new` quando o nome vem
+do prompt. Documento de tabela, arquivo aberto do disco e restaurado do banco nascem
+todos sem vínculo.
 
 **O campo da sessão está morto.** `EditorDocument.session: Option<SessionId>`
 (`model.rs:1251`) nunca é escrito. É intenção não terminada, do mesmo tipo do
@@ -226,6 +227,11 @@ o nome de conexão longo o bastante para truncar.
 | Migration 13 e binário antigo | Mesma exposição da 12: abrir com binário anterior arquiva o banco (`database.rs:144`). Já é o comportamento conhecido do projeto |
 
 ## 13. Ordem de implementação
+
+Os seis passos foram entregues. `Switch` (§8) ficou um enum de três casos em vez do
+booleano previsto: discar outra conexão deixa a sessão anterior viva, então "ainda não
+há sessão" não é o teste de quando esperar — colapsar os casos num `Option` mandou a
+query para a conexão errada até o teste pegar.
 
 Cada passo compila e passa a suíte sozinho:
 

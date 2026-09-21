@@ -139,8 +139,17 @@ fn project_resources_can_be_listed_moved_cleared_and_deleted() {
     let db = dexo_storage::Database::open_in_memory().unwrap();
     let (a, b) = seed_two_projects(&db);
     let docs = dexo_storage::DocumentRepository::new(db.connection());
-    docs.save("d1", Some(&a), "scratch", "select 1", None, None, None)
-        .unwrap();
+    docs.save(
+        "d1",
+        Some(&a),
+        "scratch",
+        "select 1",
+        None,
+        None,
+        None,
+        None,
+    )
+    .unwrap();
     docs.move_to_project("d1", &b).unwrap();
     assert_eq!(docs.list_for_project(&b).unwrap().len(), 1);
     dexo_storage::ProjectRepository::new(db.connection())

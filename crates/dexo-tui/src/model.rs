@@ -139,6 +139,18 @@ pub struct NodeMenuState {
     pub offset: usize,
 }
 
+/// An execution waiting for the document's connection to open. Replayed rather than
+/// resumed: the action re-reads the buffer, so nothing about it can go stale while the
+/// connect is in flight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingExecute {
+    /// Who asked. Checked on drain -- the user may have moved to another tab.
+    pub document: String,
+    pub action: crate::action::Action,
+    /// The `connect_token` in flight, so a connect from somewhere else cannot fire it.
+    pub token: u64,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultsMenuState {
     pub open: bool,
@@ -1248,7 +1260,6 @@ pub struct EditorDocument {
     pub connection_id: Option<String>,
     pub sql: SqlDocument,
     pub saved_revision: u64,
-    pub session: Option<SessionId>,
     pub viewport_line: usize,
     pub viewport_column: usize,
     pub typing: bool,
@@ -1269,7 +1280,6 @@ impl PartialEq for EditorDocument {
             && self.sql.text() == other.sql.text()
             && self.sql.cursor() == other.sql.cursor()
             && self.saved_revision == other.saved_revision
-            && self.session == other.session
             && self.viewport_line == other.viewport_line
             && self.viewport_column == other.viewport_column
             && self.typing == other.typing
@@ -1288,7 +1298,6 @@ impl EditorDocument {
             connection_id: None,
             sql: SqlDocument::new(""),
             saved_revision: 0,
-            session: None,
             viewport_line: 0,
             viewport_column: 0,
             typing: false,
@@ -1311,7 +1320,6 @@ impl EditorDocument {
             connection_id,
             sql: SqlDocument::new(""),
             saved_revision: 0,
-            session: None,
             viewport_line: 0,
             viewport_column: 0,
             typing: false,
@@ -1332,17 +1340,19 @@ impl EditorDocument {
         }
     }
 
-    pub fn new_table(target: dexo_driver_api::QualifiedName) -> Self {
+    pub fn new_table(
+        target: dexo_driver_api::QualifiedName,
+        connection_id: Option<String>,
+    ) -> Self {
         let title = target.object().to_string();
         let sql_text = format!("SELECT * FROM {} LIMIT 501", target.display_unquoted());
         Self {
             id: uuid::Uuid::new_v4().to_string(),
             title,
             path: None,
-            connection_id: None,
+            connection_id,
             sql: SqlDocument::new(&sql_text),
             saved_revision: 0,
-            session: None,
             viewport_line: 0,
             viewport_column: 0,
             typing: false,
@@ -1418,6 +1428,7 @@ pub struct Model {
     pub onboarding: OnboardingState,
     pub results_menu: ResultsMenuState,
     pub node_menu: NodeMenuState,
+    pub pending_execute: Option<PendingExecute>,
     pub layout_preset: LayoutPreset,
     pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
@@ -1510,6 +1521,7 @@ impl Default for Model {
             onboarding: OnboardingState::default(),
             results_menu: ResultsMenuState::default(),
             node_menu: NodeMenuState::default(),
+            pending_execute: None,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,

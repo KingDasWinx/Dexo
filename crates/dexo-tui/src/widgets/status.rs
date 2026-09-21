@@ -234,6 +234,7 @@ mod tests {
             .documents
             .push(crate::model::EditorDocument::new_table(
                 dexo_app::parse_qualified("public.orders"),
+                None,
             ));
         model.set_active_document(1);
         assert_eq!(

@@ -500,11 +500,10 @@ mod tests {
                 for table in [false, true] {
                     let mut model = Model::default();
                     if table {
-                        model
-                            .documents
-                            .push(EditorDocument::new_table(dexo_app::parse_qualified(
-                                "public.orders",
-                            )));
+                        model.documents.push(EditorDocument::new_table(
+                            dexo_app::parse_qualified("public.orders"),
+                            None,
+                        ));
                         model.set_active_document(1);
                     }
                     *model.results = GridModel::sample_rows(500);
@@ -544,11 +543,10 @@ mod tests {
 
         for (w, h) in [(160u16, 50u16), (267, 59), (120, 35), (100, 30)] {
             let mut model = Model::default();
-            model
-                .documents
-                .push(EditorDocument::new_table(dexo_app::parse_qualified(
-                    "public.orders",
-                )));
+            model.documents.push(EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+                None,
+            ));
             // Rows in the table tab's own pane, which no resize has sized yet: results
             // are per document, so only the switch can derive its viewport.
             *model.documents[1].results = GridModel::sample_rows(500);
@@ -681,11 +679,10 @@ mod tests {
             for table in [false, true] {
                 let mut model = Model::default();
                 if table {
-                    model
-                        .documents
-                        .push(EditorDocument::new_table(dexo_app::parse_qualified(
-                            "public.orders",
-                        )));
+                    model.documents.push(EditorDocument::new_table(
+                        dexo_app::parse_qualified("public.orders"),
+                        None,
+                    ));
                     model.set_active_document(1);
                 }
                 *model.results = GridModel::sample_rows(500);
@@ -726,11 +723,10 @@ mod tests {
 
         // a table document, whose grid height actually tracks the terminal
         let mut model = Model::default();
-        model
-            .documents
-            .push(EditorDocument::new_table(dexo_app::parse_qualified(
-                "public.orders",
-            )));
+        model.documents.push(EditorDocument::new_table(
+            dexo_app::parse_qualified("public.orders"),
+            None,
+        ));
         model.set_active_document(1);
         *model.results = GridModel::sample_rows(500);
         model.apply_size(100, 24);
@@ -771,11 +767,10 @@ mod tests {
         use crate::model::EditorDocument;
 
         let mut model = Model::default();
-        model
-            .documents
-            .push(EditorDocument::new_table(dexo_app::parse_qualified(
-                "public.orders",
-            )));
+        model.documents.push(EditorDocument::new_table(
+            dexo_app::parse_qualified("public.orders"),
+            None,
+        ));
         *model.results = crate::model::GridModel::sample_rows(200);
 
         model.set_active_document(0);
@@ -807,11 +802,10 @@ mod tests {
         use crate::model::EditorDocument;
 
         let mut model = Model::default();
-        model
-            .documents
-            .push(EditorDocument::new_table(dexo_app::parse_qualified(
-                "public.orders",
-            )));
+        model.documents.push(EditorDocument::new_table(
+            dexo_app::parse_qualified("public.orders"),
+            None,
+        ));
         model.set_active_document(1);
         *model.results = crate::model::GridModel::sample_rows(200);
         model.apply_size(120, 40);
