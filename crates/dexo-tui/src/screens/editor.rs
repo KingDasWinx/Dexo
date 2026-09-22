@@ -170,7 +170,7 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let parsed = model.editor.parser.parse_edited(&old, &sql);
     model.editor.last_sql = sql.clone();
     model.editor.highlights = parsed.highlights;
-    model.editor.parameters = named_parameters(&sql)
+    model.editor.parameters = named_parameters(&sql, editor_dialect(model))
         .into_iter()
         .map(|parameter| ParameterValue {
             sensitive: is_sensitive_name(&parameter.name),

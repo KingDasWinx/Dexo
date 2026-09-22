@@ -47,27 +47,30 @@ pub struct Parameter {
     pub value: Option<String>,
 }
 
-pub fn named_parameters(sql: &str) -> Vec<Parameter> {
-    let mut names = Vec::new();
-    let bytes = sql.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b':' && i + 1 < bytes.len() && bytes[i + 1].is_ascii_alphabetic() {
-            i += 1;
-            let start = i;
-            while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                i += 1;
-            }
-            let name = sql[start..i].to_string();
-            if !names.iter().any(|item: &Parameter| item.name == name) {
-                names.push(Parameter {
-                    name,
-                    type_name: "text".into(),
-                    value: None,
-                });
-            }
-        } else {
-            i += 1;
+/// The `:name` placeholders the statement will ask a value for, in first-seen order.
+///
+/// Read off the lexer's tokens rather than the raw bytes. A byte scan took every colon
+/// followed by a letter: `N:N` in a comment or a string, `"weird:col"`, a `$$` function
+/// body, and every Postgres cast -- `id::text` asked for a parameter called `text`. The
+/// lexer already knows where strings, comments and quoted names end.
+pub fn named_parameters(sql: &str, dialect: crate::Dialect) -> Vec<Parameter> {
+    let mut names: Vec<Parameter> = Vec::new();
+    for token in crate::lex::tokenize(sql, dialect) {
+        if token.kind != crate::lex::TokenKind::Param {
+            continue;
+        }
+        let Some(name) = sql[token.span.clone()].strip_prefix(':') else {
+            continue;
+        };
+        if name.is_empty() || !name.starts_with(|c: char| c.is_ascii_alphabetic()) {
+            continue;
+        }
+        if !names.iter().any(|item| item.name == name) {
+            names.push(Parameter {
+                name: name.to_string(),
+                type_name: "text".into(),
+                value: None,
+            });
         }
     }
     names

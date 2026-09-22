@@ -120,6 +120,9 @@ pub fn tokenize(sql: &str, dialect: Dialect) -> Vec<Token> {
                     (TokenKind::Param, end, true)
                 }
             },
+            // `::` is a cast. Read as two placeholders it made `id::text` a parameter
+            // called `text`, so every cast in a statement asked for a value.
+            b':' if bytes.get(i + 1) == Some(&b':') => (TokenKind::Operator, i + 2, true),
             b':' | b'@' | b'?' | b'#' => {
                 let end = take_while(bytes, i + 1, is_ident_byte);
                 (TokenKind::Param, end.max(i + 1), true)
