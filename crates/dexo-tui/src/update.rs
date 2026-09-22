@@ -2179,7 +2179,7 @@ fn mouse_parameters(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::FormField(_)) => Vec::new(),
         Some(HitTarget::FooterSubmit) => update(model, Action::SubmitParameters),
         Some(HitTarget::FooterCancel) => {
-            model.editor.parameter_prompt = false;
+            crate::screens::editor::cancel_parameters(model);
             Vec::new()
         }
         _ => Vec::new(),
@@ -2899,8 +2899,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return Vec::new();
     }
     if model.editor.parameter_prompt {
-        crate::screens::editor::handle_parameter_key(model, key);
-        if !model.editor.parameter_prompt {
+        let outcome = crate::screens::editor::handle_parameter_key(model, key);
+        // Only a submit that answered the last parameter runs the statement. A cancel
+        // closed the prompt the same way and this could not tell them apart, so Esc ran
+        // the query -- which found the parameter still null and asked for it again, and
+        // looked like a key that did nothing.
+        if outcome == crate::widgets::form::FooterKey::Submit && !model.editor.parameter_prompt {
             return start_query(model);
         }
         return Vec::new();
@@ -3010,26 +3014,17 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.transfer.open {
+        use crate::widgets::form::{FooterKey, footer_key};
+        match footer_key(&mut model.transfer.footer, &key) {
+            FooterKey::Cancel => {
+                model.transfer.open = false;
+                return Vec::new();
+            }
+            FooterKey::Submit => return run_transfer(model),
+            FooterKey::Moved => return Vec::new(),
+            FooterKey::Pass => {}
+        }
         return match key.code {
-            KeyCode::Esc => {
-                model.transfer.open = false;
-                Vec::new()
-            }
-            KeyCode::Tab => {
-                model.transfer.footer = model.transfer.footer.next();
-                Vec::new()
-            }
-            KeyCode::BackTab => {
-                model.transfer.footer = model.transfer.footer.prev();
-                Vec::new()
-            }
-            KeyCode::Enter
-                if model.transfer.footer == crate::widgets::form::FooterFocus::Cancel =>
-            {
-                model.transfer.open = false;
-                Vec::new()
-            }
-            KeyCode::Enter => run_transfer(model),
             KeyCode::Backspace
                 if model.transfer.footer == crate::widgets::form::FooterFocus::Input =>
             {
@@ -3712,28 +3707,18 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
 }
 
 fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    match footer_key(&mut model.transaction_prompt.footer, &key) {
+        FooterKey::Cancel => {
+            model.transaction_prompt.open = false;
+            model.transaction_prompt.error = None;
+            return Vec::new();
+        }
+        FooterKey::Submit => return submit_savepoint_prompt(model),
+        FooterKey::Moved => return Vec::new(),
+        FooterKey::Pass => {}
+    }
     match key.code {
-        KeyCode::Esc => {
-            model.transaction_prompt.open = false;
-            model.transaction_prompt.error = None;
-            Vec::new()
-        }
-        KeyCode::Tab => {
-            model.transaction_prompt.footer = model.transaction_prompt.footer.next();
-            Vec::new()
-        }
-        KeyCode::BackTab => {
-            model.transaction_prompt.footer = model.transaction_prompt.footer.prev();
-            Vec::new()
-        }
-        KeyCode::Enter
-            if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Cancel =>
-        {
-            model.transaction_prompt.open = false;
-            model.transaction_prompt.error = None;
-            Vec::new()
-        }
-        KeyCode::Enter => submit_savepoint_prompt(model),
         KeyCode::Backspace
             if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Input =>
         {
@@ -3752,28 +3737,18 @@ fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect
 }
 
 fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    match footer_key(&mut model.document_name_prompt.footer, &key) {
+        FooterKey::Cancel => {
+            model.document_name_prompt.open = false;
+            model.document_name_prompt.error = None;
+            return Vec::new();
+        }
+        FooterKey::Submit => return submit_document_name_prompt(model),
+        FooterKey::Moved => return Vec::new(),
+        FooterKey::Pass => {}
+    }
     match key.code {
-        KeyCode::Esc => {
-            model.document_name_prompt.open = false;
-            model.document_name_prompt.error = None;
-            Vec::new()
-        }
-        KeyCode::Tab => {
-            model.document_name_prompt.footer = model.document_name_prompt.footer.next();
-            Vec::new()
-        }
-        KeyCode::BackTab => {
-            model.document_name_prompt.footer = model.document_name_prompt.footer.prev();
-            Vec::new()
-        }
-        KeyCode::Enter
-            if model.document_name_prompt.footer == crate::widgets::form::FooterFocus::Cancel =>
-        {
-            model.document_name_prompt.open = false;
-            model.document_name_prompt.error = None;
-            Vec::new()
-        }
-        KeyCode::Enter => submit_document_name_prompt(model),
         KeyCode::Char(_)
         | KeyCode::Left
         | KeyCode::Right
@@ -3794,28 +3769,22 @@ fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effe
 }
 
 fn handle_data_query_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    // Tab already belongs to this prompt -- it flips the sort direction, or moves
+    // between the filter's column and value -- so it is answered before the footer is.
+    if key.code != KeyCode::Tab {
+        match footer_key(&mut model.data.query_prompt.footer, &key) {
+            FooterKey::Cancel => {
+                model.data.query_prompt.open = false;
+                model.data.query_prompt.error = None;
+                return Vec::new();
+            }
+            FooterKey::Submit => return submit_data_query_prompt(model),
+            FooterKey::Moved => return Vec::new(),
+            FooterKey::Pass => {}
+        }
+    }
     match key.code {
-        KeyCode::Esc => {
-            model.data.query_prompt.open = false;
-            model.data.query_prompt.error = None;
-            Vec::new()
-        }
-        KeyCode::Enter
-            if model.data.query_prompt.footer == crate::widgets::form::FooterFocus::Cancel =>
-        {
-            model.data.query_prompt.open = false;
-            model.data.query_prompt.error = None;
-            Vec::new()
-        }
-        KeyCode::Enter => submit_data_query_prompt(model),
-        KeyCode::Down => {
-            model.data.query_prompt.footer = model.data.query_prompt.footer.next();
-            Vec::new()
-        }
-        KeyCode::Up => {
-            model.data.query_prompt.footer = model.data.query_prompt.footer.prev();
-            Vec::new()
-        }
         KeyCode::Tab => {
             match model.data.query_prompt.intent {
                 Some(crate::screens::data::DataQueryIntent::Sort) => {
@@ -6503,46 +6472,36 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     match model.projects.mode {
         crate::screens::projects::ProjectsMode::Create
-        | crate::screens::projects::ProjectsMode::Rename => match key.code {
-            KeyCode::Esc => {
-                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
-                model.projects.name_input.clear();
-                model.projects.error = None;
-                model.projects.footer = crate::widgets::form::FooterFocus::Input;
-                Vec::new()
+        | crate::screens::projects::ProjectsMode::Rename => {
+            use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+            match footer_key(&mut model.projects.footer, &key) {
+                FooterKey::Cancel => {
+                    model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                    model.projects.name_input.clear();
+                    model.projects.error = None;
+                    model.projects.footer = FooterFocus::Input;
+                    return Vec::new();
+                }
+                FooterKey::Submit => return submit_project_name(model),
+                FooterKey::Moved => return Vec::new(),
+                FooterKey::Pass => {}
             }
-            KeyCode::Tab => {
-                model.projects.footer = model.projects.footer.next();
-                Vec::new()
+            match key.code {
+                KeyCode::Backspace
+                    if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
+                {
+                    model.projects.name_input.pop();
+                    Vec::new()
+                }
+                KeyCode::Char(ch)
+                    if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
+                {
+                    model.projects.name_input.push(ch);
+                    Vec::new()
+                }
+                _ => Vec::new(),
             }
-            KeyCode::BackTab => {
-                model.projects.footer = model.projects.footer.prev();
-                Vec::new()
-            }
-            KeyCode::Enter
-                if model.projects.footer == crate::widgets::form::FooterFocus::Cancel =>
-            {
-                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
-                model.projects.name_input.clear();
-                model.projects.error = None;
-                model.projects.footer = crate::widgets::form::FooterFocus::Input;
-                Vec::new()
-            }
-            KeyCode::Enter => submit_project_name(model),
-            KeyCode::Backspace
-                if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
-            {
-                model.projects.name_input.pop();
-                Vec::new()
-            }
-            KeyCode::Char(ch)
-                if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
-            {
-                model.projects.name_input.push(ch);
-                Vec::new()
-            }
-            _ => Vec::new(),
-        },
+        }
         crate::screens::projects::ProjectsMode::Browse
         | crate::screens::projects::ProjectsMode::DeleteConfirm => match key.code {
             KeyCode::Esc => {

@@ -27,6 +27,7 @@ pub struct EditorState {
     pub parameter_prompt: bool,
     pub parameter_index: usize,
     pub parameter_draft: String,
+    pub parameter_footer: crate::widgets::form::FooterFocus,
     pub snippets: Vec<Snippet>,
     pub snippet_open: bool,
     pub snippet_selected: usize,
@@ -80,6 +81,7 @@ impl Clone for EditorState {
             parameter_prompt: self.parameter_prompt,
             parameter_index: self.parameter_index,
             parameter_draft: self.parameter_draft.clone(),
+            parameter_footer: self.parameter_footer,
             snippets: self.snippets.clone(),
             snippet_open: self.snippet_open,
             snippet_selected: self.snippet_selected,
@@ -132,6 +134,7 @@ impl Default for EditorState {
             parameter_prompt: false,
             parameter_index: 0,
             parameter_draft: String::new(),
+            parameter_footer: crate::widgets::form::FooterFocus::Input,
             snippets: Vec::new(),
             snippet_open: false,
             snippet_selected: 0,
@@ -961,26 +964,41 @@ pub fn handle_snippet_key(model: &mut Model, key: KeyEvent) -> bool {
     }
 }
 
-pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Esc => {
-            model.editor.parameter_prompt = false;
-            true
-        }
-        KeyCode::Backspace => {
-            model.editor.parameter_draft.pop();
-            true
-        }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-            model.editor.parameter_draft.push(ch);
-            true
-        }
-        KeyCode::Enter => {
+/// Leaves the prompt without running anything. One place, so the key and the mouse
+/// cannot come to mean different things by it.
+pub fn cancel_parameters(model: &mut Model) {
+    model.editor.parameter_prompt = false;
+    model.editor.parameter_index = 0;
+    model.editor.parameter_draft.clear();
+    model.editor.parameter_footer = crate::widgets::form::FooterFocus::Input;
+}
+
+/// Returns what the key did, because the caller has to tell a submit from a cancel:
+/// both close the prompt, and only one of them should run the statement.
+pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> crate::widgets::form::FooterKey {
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let outcome = footer_key(&mut model.editor.parameter_footer, &key);
+    match outcome {
+        FooterKey::Cancel => cancel_parameters(model),
+        FooterKey::Submit => {
             submit_parameters(model);
-            true
+            model.editor.parameter_footer = FooterFocus::Input;
         }
-        _ => false,
+        FooterKey::Moved => {}
+        FooterKey::Pass if model.editor.parameter_footer == FooterFocus::Input => match key.code {
+            KeyCode::Backspace => {
+                model.editor.parameter_draft.pop();
+            }
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                model.editor.parameter_draft.push(ch);
+            }
+            _ => {}
+        },
+        FooterKey::Pass => {}
     }
+    outcome
 }
 
 pub fn reveal_cursor(doc: &mut EditorDocument) {

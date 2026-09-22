@@ -1855,8 +1855,7 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .unwrap_or("param");
     let popup = centered(frame.area(), 48, 6);
     let body = format!("{name} = {}", model.editor.parameter_draft);
-    let footer =
-        crate::widgets::form::footer_line("Submit", crate::widgets::form::FooterFocus::Input);
+    let footer = crate::widgets::form::footer_line("Submit", model.editor.parameter_footer);
     let lines = vec![body, footer];
     paint_popup(
         frame,
