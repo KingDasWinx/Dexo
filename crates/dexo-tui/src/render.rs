@@ -393,17 +393,49 @@ fn properties_tab_body(model: &Model) -> String {
     lines.join("\n")
 }
 
-fn explorer_body(model: &Model, area: Rect) -> String {
-    let rows = area.height.saturating_sub(2) as usize;
-    crate::widgets::object_tree::render_sidebar(
+fn explorer_body(model: &Model, area: Rect) -> Vec<Line<'static>> {
+    let rows = area.height.saturating_sub(2).max(1) as usize;
+    let lines = crate::widgets::object_tree::render_sidebar(
         &model.explorer,
         &model.connections.profiles,
         &model.connection.name,
         model.capabilities.unicode,
-        rows.max(1),
+        rows,
         area.width.saturating_sub(2) as usize,
-    )
-    .join("\n")
+    );
+    // The cursor sits in the first column and the name can be a long way to its right,
+    // so the row it points at carries the colour too. Found through the same layout the
+    // hit map reads, not by looking for the marker, so the two cannot disagree.
+    let current = crate::widgets::object_tree::sidebar_layout(
+        &model.explorer,
+        model.connections.profiles.len(),
+        &model.connection.name,
+        rows,
+    );
+    let current = model
+        .explorer
+        .selected_index()
+        .checked_sub(current.offset)
+        .filter(|index| *index < current.nodes.len())
+        .map(|index| current.node_row(index));
+    // The accent means "the pane you are in". Out of focus the row is still where the
+    // cursor is, so it stays bold, but it gives the colour back to the focused pane.
+    let style = if model.effective_focus() == Focus::Explorer {
+        model.theme.header(model.capabilities)
+    } else {
+        Style::default().add_modifier(Modifier::BOLD)
+    };
+    lines
+        .into_iter()
+        .enumerate()
+        .map(|(index, text)| {
+            if Some(index) == current {
+                Line::styled(text, style)
+            } else {
+                Line::raw(text)
+            }
+        })
+        .collect()
 }
 
 fn render_bar(frame: &mut Frame, area: Rect, text: String) {
@@ -419,7 +451,7 @@ fn render_panel(
     model: &Model,
     title: &str,
     focused: bool,
-    body: String,
+    body: impl Into<ratatui::text::Text<'static>>,
 ) {
     render_panel_scrolled(frame, area, model, title, focused, body, 0);
 }
@@ -430,9 +462,10 @@ fn render_panel_scrolled(
     model: &Model,
     title: &str,
     focused: bool,
-    body: String,
+    body: impl Into<ratatui::text::Text<'static>>,
     scroll: u16,
 ) {
+    let body = body.into();
     if area.width == 0 || area.height == 0 {
         return;
     }

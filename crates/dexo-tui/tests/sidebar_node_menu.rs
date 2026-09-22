@@ -233,3 +233,75 @@ fn the_sidebar_header_sheds_to_fit() {
     assert!(sidebar_header(20).contains("[a]ctions"));
     assert!(sidebar_header(26).contains("[a]ctions"));
 }
+
+/// The cursor sits in the first column and the name can be a long way to its right, so
+/// the row it points at carries the colour too -- the accent while the sidebar has the
+/// focus, bold alone when it does not, so it never competes with the pane that does.
+#[test]
+fn the_current_row_is_coloured_where_the_cursor_is() {
+    use dexo_tui::model::Focus;
+    use ratatui::style::Modifier;
+
+    let mut model = Model::default();
+    model.apply_size(160, 30);
+    model.connections.load_profiles(vec![
+        profile(),
+        ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(9)),
+            None,
+            "other",
+            "postgres",
+            "local",
+            serde_json::json!({"host":"h","port":5432,"username":"u","database":"d"}),
+            SecretRef::new("ref-9".into()),
+        ),
+    ]);
+    let profiles = model.connections.profiles.clone();
+    model.explorer.sync_connection_roots(&profiles, "");
+    model
+        .explorer
+        .select(dexo_tui::screens::explorer::connection_id("other"));
+
+    let cell = |model: &Model, needle: &str| {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 30)).unwrap();
+        let mut hits = dexo_tui::mouse::HitMap::default();
+        terminal
+            .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer().clone();
+        let area = buffer.area;
+        for y in 0..area.height {
+            let row: String = (0..area.width).map(|x| buffer[(x, y)].symbol()).collect();
+            if let Some(x) = row.find(needle) {
+                let x = row[..x].chars().count() as u16;
+                return buffer[(x, y)].clone();
+            }
+        }
+        panic!("{needle} is not on screen");
+    };
+
+    model.focus = Focus::Explorer;
+    let accent = model.theme.header(model.capabilities).fg;
+    let current = cell(&model, "other");
+    let neighbour = cell(&model, "prod");
+    assert_eq!(
+        current.fg,
+        accent.unwrap(),
+        "the current row is not in the accent"
+    );
+    assert!(current.modifier.contains(Modifier::BOLD));
+    assert_ne!(neighbour.fg, current.fg, "every row got the colour");
+
+    model.focus = Focus::Editor;
+    let current = cell(&model, "other");
+    assert_ne!(
+        current.fg,
+        accent.unwrap(),
+        "an unfocused sidebar kept the accent from the focused pane"
+    );
+    assert!(
+        current.modifier.contains(Modifier::BOLD),
+        "the current row lost its mark when the sidebar lost focus"
+    );
+}
