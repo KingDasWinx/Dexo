@@ -53,17 +53,43 @@ Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a term
 
 ## Installation
 
-Dexo requires Rust 1.93 or later to build.
+**Homebrew** (macOS, Linux)
+
+```sh
+brew install kingdaswinx/tap/dexo
+```
+
+**Scoop** (Windows)
+
+```powershell
+scoop bucket add dexo https://github.com/KingDasWinx/scoop-bucket
+scoop install dexo
+```
+
+**Installer scripts**
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/kingdaswinx/Dexo/releases/latest/download/dexo-installer.sh | sh
+```
+
+```powershell
+irm https://github.com/kingdaswinx/Dexo/releases/latest/download/dexo-installer.ps1 | iex
+```
+
+**Debian, Ubuntu, Fedora** — download the `.deb` or `.rpm` from the [latest release](https://github.com/kingdaswinx/Dexo/releases/latest) (requires glibc 2.35 or later):
+
+```sh
+sudo apt install ./dexo_*_amd64.deb
+sudo dnf install ./dexo-*.x86_64.rpm
+```
+
+**From source** (Rust 1.93 or later)
 
 ```sh
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
 ```
 
-From a local checkout:
-
-```sh
-cargo install --locked --path crates/dexo
-```
+Every release also ships archives for each platform, SHA-256 checksums, and a CycloneDX SBOM. See the [install guide](docs/src/install.md) for details.
 
 ## Getting started
 
