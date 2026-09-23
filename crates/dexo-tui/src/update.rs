@@ -1405,8 +1405,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     .file_name()
                     .map(|name| name.to_string_lossy().into_owned())
                     .unwrap_or_else(|| doc.title.clone());
-                *doc = crate::model::EditorDocument::with_text(&content);
-                doc.id = document;
+                // Only the text arrives. Rebuilding the tab dropped the connection it
+                // belongs to.
+                doc.sql = dexo_sql::SqlDocument::new(&content);
                 doc.title = title;
                 doc.path = Some(path.clone());
                 doc.saved_revision = doc.sql.revision();
@@ -6976,15 +6977,13 @@ fn open_document_path(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
         .unwrap_or_else(|| "untitled.sql".into());
-    let document_id = uuid::Uuid::new_v4().to_string();
     let connection_id = active_connection_uuid(model);
-    model
-        .documents
-        .push(crate::model::EditorDocument::new_unique(
-            title,
-            Some(normalized.clone()),
-            connection_id,
-        ));
+    let document =
+        crate::model::EditorDocument::new_unique(title, Some(normalized.clone()), connection_id);
+    // The load answers by this id; a fresh one here matched no tab, so the file's text
+    // never arrived.
+    let document_id = document.id.clone();
+    model.documents.push(document);
     model.active_document = model.documents.len().saturating_sub(1);
     model.sync_document_tabs_scroll();
     let mut effects = touch_recent_sql_file(model, &normalized);
@@ -7434,6 +7433,41 @@ mod tests {
         );
         assert_eq!(model.documents.len(), 2);
         assert_eq!(model.active_document, 1);
+    }
+
+    /// The picker's load carried an id no tab had, so the file's text never arrived and
+    /// Ctrl+O opened an empty tab. The load also rebuilt the tab from scratch, dropping
+    /// the connection it belongs to.
+    #[test]
+    fn a_file_opened_from_the_picker_shows_its_text_and_keeps_its_connection() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = std::fs::canonicalize(dir.path()).unwrap().join("query.sql");
+        std::fs::write(&path, "select 42").unwrap();
+        let mut model = Model::default();
+
+        let effects = super::open_document_path(&mut model, path.clone());
+        let request = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::LoadDocument(request) => Some(request.clone()),
+                _ => None,
+            })
+            .expect("opening did not load the file");
+        model.active_document_mut().connection_id = Some("conn-1".into());
+        update(
+            &mut model,
+            Action::DocumentLoaded {
+                document: request.document,
+                path: request.path,
+                content: "select 42".into(),
+            },
+        );
+
+        let document = model.active_document();
+        assert_eq!(document.text(), "select 42", "the tab opened empty");
+        assert!(!document.is_dirty());
+        assert_eq!(document.path.as_ref(), Some(&path));
+        assert_eq!(document.connection_id.as_deref(), Some("conn-1"));
     }
 
     fn catalog_object(
