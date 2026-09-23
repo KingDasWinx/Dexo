@@ -1,0 +1,46 @@
+name: Linux packages
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  packages:
+    runs-on: ubuntu-22.04
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ github.token }}
+      NFPM_VERSION: "2.47.0"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Install nfpm
+        run: |
+          base="https://github.com/goreleaser/nfpm/releases/download/v${NFPM_VERSION}"
+          curl -fsSLO "$base/nfpm_${NFPM_VERSION}_amd64.deb"
+          curl -fsSLO "$base/checksums.txt"
+          grep " nfpm_${NFPM_VERSION}_amd64.deb\$" checksums.txt | sha256sum -c -
+          sudo dpkg -i "nfpm_${NFPM_VERSION}_amd64.deb"
+      - name: Build .deb and .rpm
+        run: |
+          tag=$(jq -r '.announcement_tag' <<<"$PLAN")
+          VERSION=$(jq -r '.releases[0].app_version' <<<"$PLAN")
+          export VERSION
+          mkdir -p out
+          for pair in x86_64-unknown-linux-gnu:amd64 aarch64-unknown-linux-gnu:arm64; do
+            triple=${pair%%:*}
+            export ARCH=${pair##*:}
+            gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+              --pattern "dexo-$triple.tar.gz" --output - | tar -xz
+            install -Dm755 "dexo-$triple/dexo" target/nfpm/dexo
+            nfpm package --config packaging/nfpm.yaml --packager deb --target out/
+            nfpm package --config packaging/nfpm.yaml --packager rpm --target out/
+          done
+          cd out
+          for file in *; do sha256sum "$file" > "$file.sha256"; done
+          ls -l
+          echo "TAG=$tag" >> "$GITHUB_ENV"
+      - name: Attach to the release
+        run: gh release upload "$TAG" out/* --repo "$GITHUB_REPOSITORY" --clobber

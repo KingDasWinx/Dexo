@@ -1,0 +1,39 @@
+name: dexo
+arch: ${ARCH}
+platform: linux
+version: ${VERSION}
+version_schema: semver
+release: "1"
+section: database
+priority: optional
+maintainer: KingDasWinx <KingDasWinx@users.noreply.github.com>
+vendor: Dexo
+homepage: https://github.com/KingDasWinx/Dexo
+license: MIT OR Apache-2.0
+description: A local-first database workbench for PostgreSQL and MySQL in the terminal.
+
+overrides:
+  deb:
+    depends:
+      - libc6 (>= 2.35)
+  rpm:
+    depends:
+      - glibc >= 2.35
+
+contents:
+  - src: ./target/nfpm/dexo
+    dst: /usr/bin/dexo
+    file_info:
+      mode: 0755
+  - src: ./LICENSE-MIT
+    dst: /usr/share/doc/dexo/LICENSE-MIT
+    packager: deb
+  - src: ./LICENSE-APACHE
+    dst: /usr/share/doc/dexo/LICENSE-APACHE
+    packager: deb
+  - src: ./LICENSE-MIT
+    dst: /usr/share/licenses/dexo/LICENSE-MIT
+    packager: rpm
+  - src: ./LICENSE-APACHE
+    dst: /usr/share/licenses/dexo/LICENSE-APACHE
+    packager: rpm
