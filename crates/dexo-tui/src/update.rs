@@ -5009,7 +5009,7 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
             model.documents.len() - 1
         }
     };
-    model.active_document = index;
+    model.set_active_document(index);
     model.data.last_error = None;
     load_table_document(model, index)
 }
@@ -5018,6 +5018,9 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
+    if reload_would_orphan_edits(model) {
+        return Vec::new();
+    }
     let crate::model::DocumentKind::Table(target) = model.documents[index].kind.clone() else {
         return Vec::new();
     };
@@ -5105,8 +5108,11 @@ fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
         model.data.last_error = Some("connect a session first".into());
         return Vec::new();
     }
-    if model.data.target.object().is_empty() {
+    if !model.active_document().kind.is_table() {
         model.data.last_error = Some("open a table first".into());
+        return Vec::new();
+    }
+    if reload_would_orphan_edits(model) {
         return Vec::new();
     }
     model.data.page_offset = offset;
@@ -5118,11 +5124,9 @@ fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
     effects
 }
 
-/// Reruns the active table's page with the filter, sort and offset it has. Pending edits
-/// are keyed by row index and a page load leaves them in place, so reloading under them
-/// would pin each edit to whatever row lands at its index.
+/// Reruns the active table's page with the filter, sort and offset it has.
 fn refresh_table_data(model: &mut Model) -> Vec<Effect> {
-    let crate::model::DocumentKind::Table(target) = model.active_document().kind.clone() else {
+    if !model.active_document().kind.is_table() {
         model
             .messages
             .warn("Refresh reloads a table's data; open a table from the sidebar.".into());
@@ -5134,20 +5138,19 @@ fn refresh_table_data(model: &mut Model) -> Vec<Effect> {
             .warn("connect a session to browse table data".into());
         return Vec::new();
     }
-    if !model.data.changes.pending().is_empty() || !model.data.row_changes.is_empty() {
+    change_data_page(model, model.data.page_offset)
+}
+
+/// Row edits are keyed by row index and a page load leaves them in place, so loading
+/// rows under them would pin each edit to whatever row lands at its index.
+fn reload_would_orphan_edits(model: &mut Model) -> bool {
+    let pending = model.data.has_pending_edits();
+    if pending {
         model
             .messages
-            .warn("Apply or discard the pending changes before refreshing.".into());
-        return Vec::new();
+            .warn("Apply or discard the pending changes before reloading the table.".into());
     }
-    if model.data.target != target {
-        // The data state still describes the last table loaded, and its filter and sort
-        // name that table's columns.
-        model.data.filter = None;
-        model.data.sort.clear();
-        return load_table_document(model, model.active_document);
-    }
-    change_data_page(model, model.data.page_offset)
+    pending
 }
 
 fn apply_remote_query(model: &mut Model) -> Vec<Effect> {
@@ -5481,12 +5484,7 @@ fn open_related(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     let title = fk.referenced_table.display_unquoted();
-    model.data.crumbs.push((
-        model.data.target.clone(),
-        model.data.filter.clone(),
-        model.data.page_offset,
-    ));
-    model.data.crumb_forward.clear();
+    let origin = model.active_document().id.clone();
     // This used to push a title onto the workbench strip that `data_nav_back` never
     // popped, so walking foreign keys leaked a tab per hop. The referenced table gets
     // a document, reusing one if it is already open.
@@ -5500,30 +5498,36 @@ fn open_related(model: &mut Model) -> Vec<Effect> {
             ));
         model.documents.len() - 1
     });
-    model.active_document = index;
-    model.data.target = fk.referenced_table.clone();
+    // The referenced table keeps its own state, so the switch comes before any of it
+    // is written, and the way back is recorded on that table.
+    model.set_active_document(index);
+    if reload_would_orphan_edits(model) {
+        return Vec::new();
+    }
+    model.data.crumbs.push(origin);
     model.data.filter = Some(filter);
     model.data.related_open.push(title);
-    model.data.page_offset = 0;
-    model.data.loading = true;
-    reload_object_data(model)
+    load_table_document(model, index)
 }
 
 fn data_nav_back(model: &mut Model) -> Vec<Effect> {
-    let Some((target, filter, offset)) = model.data.crumbs.pop() else {
+    let Some(origin) = model.data.crumbs.pop() else {
         return Vec::new();
     };
-    model.data.crumb_forward.push((
-        model.data.target.clone(),
-        model.data.filter.clone(),
-        model.data.page_offset,
-    ));
     model.data.related_open.pop();
-    model.data.target = target;
-    model.data.filter = filter;
-    model.data.page_offset = offset;
-    model.data.loading = true;
-    reload_object_data(model)
+    // The document walked away from kept its rows and paging; back is a switch to it.
+    // This used to load the origin table into the current document, under its table.
+    match model
+        .documents
+        .iter()
+        .position(|document| document.id == origin)
+    {
+        Some(index) => model.set_active_document(index),
+        None => model
+            .messages
+            .warn("the document this came from is closed".into()),
+    }
+    Vec::new()
 }
 
 fn copy_grid(model: &mut Model, format: dexo_app::data::CopyFormat) -> Vec<Effect> {
@@ -5814,6 +5818,10 @@ fn submit_data_query_prompt(model: &mut Model) -> Vec<Effect> {
             .any(|col| col.name == column)
     {
         model.data.query_prompt.error = Some("unknown column".into());
+        return Vec::new();
+    }
+    if model.data.has_pending_edits() {
+        model.data.query_prompt.error = Some("apply or discard the pending changes first".into());
         return Vec::new();
     }
     match model.data.query_prompt.intent {
@@ -7497,7 +7505,7 @@ mod tests {
         assert!(table_requests(&effects).is_empty(), "{effects:?}");
         assert_eq!(
             model.messages.last().map(|entry| entry.message.as_str()),
-            Some("Apply or discard the pending changes before refreshing.")
+            Some("Apply or discard the pending changes before reloading the table.")
         );
     }
 

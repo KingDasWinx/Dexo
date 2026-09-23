@@ -9,10 +9,10 @@ demo  local  public
 │>   ▸ public              ││                                                                      │
 │      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │
 │             │target: demo.public.users                                             │             │
-│             │ops: 1                                                                │             │
+│             │ops: 0                                                                │             │
 │             │status: Pending                                                       │             │
 │             │ready                                                                 │             │
-│             │INSERT INTO demo.public.users (id) VALUES ($1)                        │             │
+│             │                                                                      │             │
 │             │                                                                      │             │
 │             │                                                                      │             │
 │             │                                                                      │             │

@@ -1322,6 +1322,9 @@ pub struct EditorDocument {
     /// The output pane as this document last left it. Parked here while another
     /// document is active, so a query run in one file cannot redraw another's grid.
     pub results: ResultsState,
+    /// A table's paging, filter, sort and pending edits, parked the same way. Only the
+    /// fields `DataScreen::swap_browse` moves mean anything here.
+    pub browse: crate::screens::data::DataScreen,
 }
 
 impl PartialEq for EditorDocument {
@@ -1357,6 +1360,7 @@ impl EditorDocument {
             anchor: None,
             kind: DocumentKind::Console,
             results: ResultsState::default(),
+            browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
         }
     }
@@ -1391,6 +1395,7 @@ impl EditorDocument {
             anchor: None,
             kind: DocumentKind::Console,
             results: ResultsState::default(),
+            browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
         }
     }
@@ -1424,6 +1429,7 @@ impl EditorDocument {
             anchor: None,
             kind: DocumentKind::Table(target),
             results: ResultsState::default(),
+            browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
         }
     }
@@ -1856,6 +1862,12 @@ impl Model {
     /// document's. Results are per document: a query run in one file must not redraw
     /// another file's grid.
     pub fn swap_results_to_active_document(&mut self) -> bool {
+        let swapped = self.park_output_under_owner();
+        self.adopt_table_target();
+        swapped
+    }
+
+    fn park_output_under_owner(&mut self) -> bool {
         let Some(active) = self
             .documents
             .get(self.active_document)
@@ -1876,9 +1888,32 @@ impl Model {
             .find(|document| document.id == owner)
         {
             previous.results = parked;
+            self.data.swap_browse(&mut previous.browse);
         }
         self.results = std::mem::take(&mut self.documents[self.active_document].results);
+        let active = &mut self.documents[self.active_document];
+        self.data.swap_browse(&mut active.browse);
         true
+    }
+
+    /// A table document that never loaded -- new, or restored at boot -- parks the
+    /// default state, which names no table; paging it would ask for a table that is not
+    /// there.
+    fn adopt_table_target(&mut self) {
+        let Some(DocumentKind::Table(target)) = self
+            .documents
+            .get(self.active_document)
+            .map(|document| &document.kind)
+        else {
+            return;
+        };
+        if self.data.target != *target {
+            let mut fresh = crate::screens::data::DataScreen {
+                target: target.clone(),
+                ..Default::default()
+            };
+            self.data.swap_browse(&mut fresh);
+        }
     }
 
     pub fn sync_grid_viewport(&mut self) {

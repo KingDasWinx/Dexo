@@ -119,8 +119,9 @@ pub struct DataScreen {
     pub related_open: Vec<String>,
     pub related_fk: Option<ForeignKey>,
     pub related_row: Vec<(String, Option<DbValue>)>,
-    pub crumbs: Vec<(QualifiedName, Option<dexo_driver_api::Filter>, u64)>,
-    pub crumb_forward: Vec<(QualifiedName, Option<dexo_driver_api::Filter>, u64)>,
+    /// The documents a foreign-key walk came from, most recent last. Each kept its own
+    /// table state, so the way back is the document, not a copy of where it was.
+    pub crumbs: Vec<String>,
     pub page_offset: u64,
     pub page_limit: u32,
     pub has_more: bool,
@@ -153,7 +154,6 @@ impl Default for DataScreen {
             related_fk: None,
             related_row: Vec::new(),
             crumbs: Vec::new(),
-            crumb_forward: Vec::new(),
             page_offset: 0,
             page_limit: 100,
             has_more: false,
@@ -171,6 +171,33 @@ impl Default for DataScreen {
 }
 
 impl DataScreen {
+    /// Trades the state that belongs to one table -- what it is, where it is paged to,
+    /// how it is filtered and sorted, the edits waiting on it -- with `parked`. The rest
+    /// (modals, clipboard, the session's dialect) stays put: it is not the table's.
+    pub fn swap_browse(&mut self, parked: &mut DataScreen) {
+        use std::mem::swap;
+        swap(&mut self.table, &mut parked.table);
+        swap(&mut self.target, &mut parked.target);
+        swap(&mut self.changes, &mut parked.changes);
+        swap(&mut self.related_open, &mut parked.related_open);
+        swap(&mut self.related_fk, &mut parked.related_fk);
+        swap(&mut self.related_row, &mut parked.related_row);
+        swap(&mut self.crumbs, &mut parked.crumbs);
+        swap(&mut self.page_offset, &mut parked.page_offset);
+        swap(&mut self.has_more, &mut parked.has_more);
+        swap(&mut self.loading, &mut parked.loading);
+        swap(&mut self.filter, &mut parked.filter);
+        swap(&mut self.sort, &mut parked.sort);
+        swap(&mut self.last_error, &mut parked.last_error);
+        swap(&mut self.target_document, &mut parked.target_document);
+        swap(&mut self.request_started, &mut parked.request_started);
+        swap(&mut self.row_changes, &mut parked.row_changes);
+    }
+
+    pub fn has_pending_edits(&self) -> bool {
+        !self.changes.pending().is_empty() || !self.row_changes.is_empty()
+    }
+
     pub fn open_review(&mut self) {
         self.review = Some(ReviewModal {
             target: self.target.display_unquoted(),

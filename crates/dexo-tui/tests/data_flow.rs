@@ -416,6 +416,14 @@ fn copy_json_and_next_page_are_wired() {
         session_generation: 1,
         ..Model::default()
     };
+    // Paging belongs to a table; the scratch document has none to page.
+    model
+        .documents
+        .push(dexo_tui::model::EditorDocument::new_table(
+            dexo_app::parse_qualified("public.orders"),
+            None,
+        ));
+    model.active_document = 1;
     model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
         name: "id".into(),
         type_name: "int".into(),
