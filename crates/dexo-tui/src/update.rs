@@ -968,7 +968,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             discard_all_pending(model);
             Vec::new()
         }
-        Action::RefreshTableData => refresh_table_data(model),
+        // Offline, it dials the table's own connection and runs once the session lands.
+        Action::RefreshTableData => execute_on_document_connection(model, action),
         Action::ToggleRowDelete => toggle_row_delete(model),
         Action::OpenInsertRow => {
             model.data.insert_form.open_for(&model.data.table);
@@ -4367,6 +4368,10 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
         }
         Action::ExecuteSelection => crate::screens::workbench::execute_selection(model),
         Action::ExecuteDocument => crate::screens::workbench::execute_document(model),
+        Action::RefreshTableData => {
+            effects.extend(refresh_table_data(model));
+            return effects;
+        }
         _ => return effects,
     }
     effects.extend(start_query(model));

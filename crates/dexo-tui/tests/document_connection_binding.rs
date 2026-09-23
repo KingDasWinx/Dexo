@@ -297,3 +297,41 @@ fn restored_consoles_take_their_connection_name() {
         "a console kept the file name every connection shares: {titles:?}"
     );
 }
+
+/// Refreshing a table whose connection is offline used to stop at "connect a session".
+/// It dials the table's own connection and reloads once the session lands.
+#[test]
+fn refreshing_an_offline_table_connects_then_reloads() {
+    let mut model = two_connections();
+    model.active_session = None;
+    model.connection.ready = false;
+    model.documents.push(EditorDocument::new_table(
+        dexo_app::parse_qualified("public.orders"),
+        Some(uuid_of(2)),
+    ));
+    model.active_document = 3;
+
+    let effects = update(&mut model, Action::RefreshTableData);
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::ConnectProfile { profile, .. } if profile.name == "beta"
+        )),
+        "did not dial the table's connection: {effects:?}"
+    );
+    let token = model
+        .pending_execute
+        .as_ref()
+        .expect("nothing queued")
+        .token;
+
+    let effects = update(&mut model, connection_changed("beta", 2, token));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadTableData { request, .. }
+                if request.object == dexo_app::parse_qualified("public.orders")
+        )),
+        "the table never reloaded: {effects:?}"
+    );
+}
