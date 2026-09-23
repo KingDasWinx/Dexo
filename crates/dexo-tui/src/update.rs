@@ -336,10 +336,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConnectSelected => connect_selected(model),
         Action::EditSelectedConnection => {
-            if !model.connections.open && model.focus == Focus::Explorer {
-                if let Some(index) = selected_connection_profile_index(model) {
-                    model.connections.selected_profile = index;
-                }
+            if !model.connections.open
+                && model.focus == Focus::Explorer
+                && let Some(index) = selected_connection_profile_index(model)
+            {
+                model.connections.selected_profile = index;
             }
             match model.connections.selected().cloned() {
                 Some(profile) => {

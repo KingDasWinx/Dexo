@@ -19,6 +19,7 @@ impl<'a> DocumentRepository<'a> {
         Self { conn }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn save(
         &self,
         id: &str,

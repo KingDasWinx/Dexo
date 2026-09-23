@@ -165,8 +165,7 @@ fn layout_with_pinned_active(
                 break;
             }
         }
-        for index in active + 1..items.len() {
-            let item = &items[index];
+        for (index, item) in items.iter().enumerate().skip(active + 1) {
             if item.total_width() <= budget {
                 packed.push(item.clone());
                 budget = budget.saturating_sub(item.total_width());
@@ -191,9 +190,7 @@ fn layout_with_pinned_active(
             while packed.len() > 1 {
                 if packed[0].index != active {
                     packed.remove(0);
-                } else if packed.last().map(|item| item.index) == Some(active) && packed.len() > 1 {
-                    packed.pop();
-                } else if packed.last().map(|item| item.index) != Some(active) {
+                } else if packed.last().map(|item| item.index) != Some(active) || packed.len() > 1 {
                     packed.pop();
                 } else {
                     break;
@@ -326,10 +323,6 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             model.theme.active_row(model.capabilities)
         } else if item.index == model.active_document {
             model.theme.pane_title(true, model.capabilities)
-        } else if matches!(model.document_tab_focus, DocumentTabFocus::New)
-            && item.index == model.active_document
-        {
-            model.theme.pane_title(true, model.capabilities)
         } else {
             model.theme.pane_title(false, model.capabilities)
         };
@@ -358,15 +351,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         x = x.saturating_add(tab_width);
     }
 
-    if viewport.show_next {
-        if x < end {
-            spans.push(Span::raw(SCROLL_NEXT));
-            hits.register(
-                HitTarget::DocumentTabScrollNext,
-                Rect::new(x, area.y, scroll_indicator_width(), 1),
-            );
-            x = x.saturating_add(scroll_indicator_width());
-        }
+    if viewport.show_next && x < end {
+        spans.push(Span::raw(SCROLL_NEXT));
+        hits.register(
+            HitTarget::DocumentTabScrollNext,
+            Rect::new(x, area.y, scroll_indicator_width(), 1),
+        );
+        x = x.saturating_add(scroll_indicator_width());
     }
 
     let new_width = new_button_width();

@@ -132,17 +132,17 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
         crate::model::Focus::Explorer => model
             .explorer
             .selected_node()
-            .and_then(|node| {
+            .map(|node| {
                 if crate::screens::explorer::is_connection_node(node) {
                     if model.connections.session_for(&node.label).is_some() {
-                        Some("Enter expand  a actions  n new  e edit")
+                        "Enter expand  a actions  n new  e edit"
                     } else {
-                        Some("Enter connect  a actions  n new  e edit")
+                        "Enter connect  a actions  n new  e edit"
                     }
                 } else if crate::screens::explorer::opens_table_data(&node.kind) {
-                    Some("Enter open table  a actions")
+                    "Enter open table  a actions"
                 } else {
-                    Some("Enter expand  a actions")
+                    "Enter expand  a actions"
                 }
             })
             .or(Some("Enter connect/expand  a actions  n new")),

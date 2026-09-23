@@ -182,10 +182,12 @@ fn document_tab_focus_actions_work_from_any_pane() {
 
 #[test]
 fn enter_on_new_tab_focus_creates_a_document() {
-    let mut model = Model::default();
     // Enter is the strip's key now, not a special case guarded on the editor's focus.
-    model.focus = Focus::DocumentTabs;
-    model.document_tab_focus = DocumentTabFocus::New;
+    let mut model = Model {
+        focus: Focus::DocumentTabs,
+        document_tab_focus: DocumentTabFocus::New,
+        ..Model::default()
+    };
 
     update(&mut model, enter());
     confirm_document_name(&mut model);

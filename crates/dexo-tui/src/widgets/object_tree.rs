@@ -183,6 +183,7 @@ fn connection_sessions(profiles: &[ConnectionRow], name: &str) -> usize {
         .unwrap_or(0)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn collect(
     nodes: &[ExplorerNode],
     state: &ExplorerState,

@@ -127,10 +127,10 @@ fn classify_db_value(value: &DbValue, type_name: &str) -> RowDetailValue {
 }
 
 fn classify_text_value(text: &str, type_name: &str) -> RowDetailValue {
-    if type_name.to_ascii_lowercase().contains("json") || looks_like_json(text) {
-        if serde_json::from_str::<serde_json::Value>(text).is_ok() {
-            return RowDetailValue::Json(text.to_string());
-        }
+    if (type_name.to_ascii_lowercase().contains("json") || looks_like_json(text))
+        && serde_json::from_str::<serde_json::Value>(text).is_ok()
+    {
+        return RowDetailValue::Json(text.to_string());
     }
     RowDetailValue::Text(text.to_string())
 }
