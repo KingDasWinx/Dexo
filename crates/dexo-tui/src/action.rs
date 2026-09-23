@@ -67,6 +67,8 @@ pub enum Action {
     Paste(String),
     /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
     PasteFromClipboard,
+    /// The answer to the unsaved-changes prompt.
+    ResolveClose(crate::model::CloseChoice),
     DuplicateConnection,
     TestConnection,
     DeleteConnection,
@@ -825,6 +827,12 @@ pub enum Effect {
         generation: u64,
     },
     ReadClipboard,
+    /// Forgets a document's crash-recovery copy. Without it a document closed with
+    /// "Don't save" came back on the next launch after a crash, since every recovery
+    /// row is restored at boot.
+    DiscardRecovery {
+        document: String,
+    },
     CopyToClipboard {
         text: String,
     },

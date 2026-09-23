@@ -260,8 +260,11 @@ fn selecting_and_cycling_documents_focuses_the_editor() {
     assert_eq!(model.focus, Focus::Editor);
 }
 
+/// An untitled buffer holds the only copy of its text, so closing it asks rather than
+/// deciding. It used to refuse outright, which kept the text but left no way to let it
+/// go; backing out of the question keeps it exactly as it was.
 #[test]
-fn closing_dirty_untitled_document_keeps_it_open() {
+fn closing_dirty_untitled_document_asks_and_cancel_keeps_it() {
     let mut model = Model::default();
     model
         .active_document_mut()
@@ -270,13 +273,17 @@ fn closing_dirty_untitled_document_keeps_it_open() {
         .unwrap();
 
     update(&mut model, Action::CloseDocument);
+    assert!(model.close_prompt.is_some(), "closing did not ask");
+    assert_eq!(model.documents.len(), 1);
 
+    update(
+        &mut model,
+        Action::ResolveClose(dexo_tui::model::CloseChoice::Cancel),
+    );
+    assert!(model.close_prompt.is_none());
     assert_eq!(model.documents.len(), 1);
     assert!(model.active_document().is_dirty());
-    assert_eq!(
-        model.messages.last().map(|entry| entry.message.as_str()),
-        Some("Save the untitled document before closing it.")
-    );
+    assert_eq!(model.active_document().text(), "select 1");
 }
 
 fn dirty_file_document() -> Model {
@@ -299,7 +306,11 @@ fn closing_dirty_file_document_waits_for_the_save_to_land() {
     let mut model = dirty_file_document();
     let id = model.active_document().id.clone();
 
-    let effects = update(&mut model, Action::CloseDocument);
+    update(&mut model, Action::CloseDocument);
+    let effects = update(
+        &mut model,
+        Action::ResolveClose(dexo_tui::model::CloseChoice::Save),
+    );
     let revision = effects
         .iter()
         .find_map(|effect| match effect {
@@ -344,7 +355,11 @@ fn stale_save_acknowledgement_does_not_close_newer_dirty_document() {
     let mut model = dirty_file_document();
     let id = model.active_document().id.clone();
 
-    let effects = update(&mut model, Action::CloseDocument);
+    update(&mut model, Action::CloseDocument);
+    let effects = update(
+        &mut model,
+        Action::ResolveClose(dexo_tui::model::CloseChoice::Save),
+    );
     let old_revision = effects
         .iter()
         .find_map(|effect| match effect {
@@ -377,7 +392,11 @@ fn stale_save_acknowledgement_does_not_close_newer_dirty_document() {
     assert!(model.active_document().is_dirty());
     assert!(model.pending_document_close.is_none());
 
-    let effects = update(&mut model, Action::CloseDocument);
+    update(&mut model, Action::CloseDocument);
+    let effects = update(
+        &mut model,
+        Action::ResolveClose(dexo_tui::model::CloseChoice::Save),
+    );
     let current_save_revision = effects
         .iter()
         .find_map(|effect| match effect {
@@ -404,6 +423,10 @@ fn a_failed_save_keeps_the_dirty_tab_open() {
     let mut model = dirty_file_document();
 
     update(&mut model, Action::CloseDocument);
+    update(
+        &mut model,
+        Action::ResolveClose(dexo_tui::model::CloseChoice::Save),
+    );
     update(
         &mut model,
         Action::DocumentConflict {

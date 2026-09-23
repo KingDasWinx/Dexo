@@ -695,6 +695,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::CloseDocument => close_active_document(model),
+        Action::ResolveClose(choice) => resolve_close(model, choice),
         Action::NewDocument => {
             open_new_document_prompt(model);
             Vec::new()
@@ -1792,6 +1793,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Onboarding) => mouse_onboarding(model, hit),
         Some(OverlayKind::Palette) => mouse_palette(model, hit),
         Some(OverlayKind::Help) => mouse_help(model, hit),
+        Some(OverlayKind::ClosePrompt) => mouse_close_prompt(model, hit),
         Some(OverlayKind::NodeMenu) => mouse_node_menu(model, hit),
         Some(OverlayKind::ResultsMenu) => mouse_results_menu(model, hit),
         Some(OverlayKind::Review) => mouse_review(model, hit),
@@ -2144,10 +2146,7 @@ fn mouse_file_picker(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
             Vec::new()
         }
         Some(HitTarget::FooterSubmit) => file_picker_submit(model),
-        Some(HitTarget::FooterCancel) => {
-            model.file_picker.open = false;
-            Vec::new()
-        }
+        Some(HitTarget::FooterCancel) => cancel_file_picker(model),
         _ => Vec::new(),
     }
 }
@@ -2826,6 +2825,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.help.open {
         return handle_help_key(model, key);
+    }
+    if model.close_prompt.is_some() {
+        return handle_close_prompt_key(model, key);
     }
     if model.node_menu.open {
         return handle_node_menu_key(model, key);
@@ -5831,30 +5833,96 @@ fn save_active_document(model: &mut Model) -> Vec<Effect> {
 }
 
 fn close_active_document(model: &mut Model) -> Vec<Effect> {
-    let is_dirty = model.active_document().is_dirty();
-    let has_path = model.active_document().path.is_some();
-    if is_dirty && !has_path {
-        model
-            .messages
-            .warn("Save the untitled document before closing it.".into());
-        return Vec::new();
-    }
-    if is_dirty {
-        // The buffer holds the only copy of these edits, so the tab survives
-        // until `DocumentSaved` confirms the write. A failed save leaves the
-        // tab open with the error in the message log.
+    // Unsaved changes are the user's to keep or let go. Closing used to save on its own
+    // or, with no file to save to, refuse -- there was no way to discard them.
+    if model.active_document().is_dirty() {
         let document = model.active_document();
-        model.pending_document_close = Some(crate::model::PendingDocumentClose {
+        model.close_prompt = Some(crate::model::ClosePrompt {
             document: document.id.clone(),
-            revision: document.sql.revision(),
+            title: document.title.clone(),
+            choice: crate::model::CloseChoice::Save,
         });
-        model
-            .messages
-            .info("Saving dirty file before closing it.".into());
-        return save_active_document(model);
+        return Vec::new();
     }
     remove_document(model, model.active_document);
     Vec::new()
+}
+
+fn resolve_close(model: &mut Model, choice: crate::model::CloseChoice) -> Vec<Effect> {
+    use crate::model::CloseChoice;
+    let Some(prompt) = model.close_prompt.take() else {
+        return Vec::new();
+    };
+    let Some(index) = model
+        .documents
+        .iter()
+        .position(|document| document.id == prompt.document)
+    else {
+        return Vec::new();
+    };
+    match choice {
+        CloseChoice::Cancel => Vec::new(),
+        CloseChoice::Discard => {
+            remove_document(model, index);
+            vec![Effect::DiscardRecovery {
+                document: prompt.document,
+            }]
+        }
+        CloseChoice::Save => {
+            model.active_document = index;
+            // The buffer holds the only copy of these edits, so the tab survives until
+            // `DocumentSaved` confirms the write. A failed save leaves the tab open with
+            // the error in the message log; an untitled one goes through the picker, and
+            // backing out of the picker keeps the tab.
+            let document = model.active_document();
+            let file_backed = document.path.is_some();
+            model.pending_document_close = Some(crate::model::PendingDocumentClose {
+                document: document.id.clone(),
+                revision: document.sql.revision(),
+            });
+            if file_backed {
+                model
+                    .messages
+                    .info("Saving dirty file before closing it.".into());
+            }
+            save_active_document(model)
+        }
+    }
+}
+
+fn handle_close_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::model::CloseChoice;
+    let Some(prompt) = model.close_prompt.as_mut() else {
+        return Vec::new();
+    };
+    match key.code {
+        KeyCode::Esc => resolve_close(model, CloseChoice::Cancel),
+        KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
+            prompt.choice = prompt.choice.next();
+            Vec::new()
+        }
+        KeyCode::Left | KeyCode::Up | KeyCode::BackTab => {
+            prompt.choice = prompt.choice.prev();
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let choice = prompt.choice;
+            resolve_close(model, choice)
+        }
+        KeyCode::Char('s') => resolve_close(model, CloseChoice::Save),
+        KeyCode::Char('d') => resolve_close(model, CloseChoice::Discard),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_close_prompt(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::model::CloseChoice;
+    match hit {
+        Some(HitTarget::Button(HitButton::Confirm)) => resolve_close(model, CloseChoice::Save),
+        Some(HitTarget::Button(HitButton::Discard)) => resolve_close(model, CloseChoice::Discard),
+        Some(HitTarget::Button(HitButton::Cancel)) => resolve_close(model, CloseChoice::Cancel),
+        _ => Vec::new(),
+    }
 }
 
 fn remove_document(model: &mut Model, index: usize) {
@@ -6256,10 +6324,7 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     use crate::screens::file_picker::FilePickerFocus;
     let rows = file_picker_rows(model);
     match key.code {
-        KeyCode::Esc => {
-            model.file_picker.open = false;
-            Vec::new()
-        }
+        KeyCode::Esc => cancel_file_picker(model),
         KeyCode::Tab => {
             model.file_picker.focus_next();
             Vec::new()
@@ -6340,8 +6405,7 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Enter if model.file_picker.focus == FilePickerFocus::Cancel => {
-            model.file_picker.open = false;
-            Vec::new()
+            cancel_file_picker(model)
         }
         KeyCode::Enter if model.file_picker.focus == FilePickerFocus::List => {
             if model.file_picker.activate_selected().is_some() {
@@ -6353,6 +6417,17 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Enter => file_picker_submit(model),
         _ => Vec::new(),
     }
+}
+
+/// Every way out of the picker without choosing. A close armed by "Save" in the
+/// unsaved-changes prompt was waiting on this save; with no save coming, it is
+/// disarmed, or a later Ctrl+S on the same document would close it by surprise.
+fn cancel_file_picker(model: &mut Model) -> Vec<Effect> {
+    model.file_picker.open = false;
+    if model.file_picker_mode == crate::screens::file_picker::FilePickerMode::Save {
+        model.pending_document_close = None;
+    }
+    Vec::new()
 }
 
 fn file_picker_submit(model: &mut Model) -> Vec<Effect> {

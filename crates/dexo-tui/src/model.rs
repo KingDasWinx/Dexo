@@ -158,6 +158,44 @@ pub struct PendingExecute {
     pub token: u64,
 }
 
+/// What to do with a dirty document on its way out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+impl CloseChoice {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Save => Self::Discard,
+            Self::Discard => Self::Cancel,
+            Self::Cancel => Self::Save,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Save => Self::Cancel,
+            Self::Discard => Self::Save,
+            Self::Cancel => Self::Discard,
+        }
+    }
+}
+
+/// Asked when a document with unsaved changes is closed. Closing used to either save
+/// on its own or, for an untitled document, refuse -- there was no way to let the
+/// changes go.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClosePrompt {
+    /// Which document, by id: the answer applies to it even if the active one moves.
+    pub document: String,
+    pub title: String,
+    /// Starts on Save, so Enter never throws work away by reflex.
+    pub choice: CloseChoice,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ResultsMenuState {
     pub open: bool,
@@ -1456,6 +1494,7 @@ pub struct Model {
     pub results_menu: ResultsMenuState,
     pub node_menu: NodeMenuState,
     pub pending_execute: Option<PendingExecute>,
+    pub close_prompt: Option<ClosePrompt>,
     pub layout_preset: LayoutPreset,
     pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
@@ -1549,6 +1588,7 @@ impl Default for Model {
             results_menu: ResultsMenuState::default(),
             node_menu: NodeMenuState::default(),
             pending_execute: None,
+            close_prompt: None,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,

@@ -171,6 +171,78 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.editor.snippet_open {
         render_snippets(frame, model, hits);
     }
+    if let Some(prompt) = &model.close_prompt {
+        render_close_prompt(frame, model, prompt, hits);
+    }
+}
+
+/// "Save, don't save, or cancel" for a document closed with unsaved changes. The
+/// focused button is bracketed with a marker, not only styled, so the choice still
+/// reads on a terminal without colour.
+fn render_close_prompt(
+    frame: &mut Frame,
+    model: &Model,
+    prompt: &crate::model::ClosePrompt,
+    hits: &mut HitMap,
+) {
+    use crate::model::CloseChoice;
+    let area = frame.area();
+    if area.width < 20 || area.height < 7 {
+        return;
+    }
+    let name = if prompt.title.is_empty() {
+        "This document".to_string()
+    } else {
+        prompt.title.clone()
+    };
+    let buttons = [
+        (CloseChoice::Save, "[Save]", HitButton::Confirm),
+        (CloseChoice::Discard, "[Don't save]", HitButton::Discard),
+        (CloseChoice::Cancel, "[Cancel]", HitButton::Cancel),
+    ];
+    let footer: String = buttons
+        .iter()
+        .map(|(choice, label, _)| {
+            let marker = if *choice == prompt.choice { ">" } else { " " };
+            format!("{marker}{label}")
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+    let lines = [
+        format!("{name} has changes that are not saved."),
+        "Closing it without saving loses them.".to_string(),
+        String::new(),
+        footer.clone(),
+    ];
+    let content_width = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let width = (content_width as u16 + 4).min(area.width);
+    let popup = centered(area, width, lines.len() as u16 + 2);
+    let danger = model.theme.style(Role::Warning, model.capabilities);
+    let body: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            if index == 1 {
+                Line::styled(text.clone(), danger)
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, "Unsaved changes")),
+        popup,
+    );
+    register_overlay(hits, popup);
+    let footer_row = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
+    for (_, label, button) in buttons {
+        register_label(hits, footer_row, &footer, label, HitTarget::Button(button));
+    }
 }
 
 fn register_pane_dividers(hits: &mut HitMap, plan: LayoutPlan) {

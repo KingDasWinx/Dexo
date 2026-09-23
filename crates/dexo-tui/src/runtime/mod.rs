@@ -379,6 +379,11 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::CheckpointRecovery(request) => self.checkpoint_recovery(request).await,
+            crate::Effect::DiscardRecovery { document } => {
+                if let Some(storage) = &self.storage {
+                    let _ = storage.discard_recovery(document);
+                }
+            }
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
             crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
             crate::Effect::ClearHistory { connection_id } => {

@@ -66,6 +66,9 @@ pub enum StorageCommand {
         id: String,
     },
     CheckpointRecovery(RecoveryCheckpointRequest),
+    DiscardRecovery {
+        document: String,
+    },
     PersistLayout {
         project_id: String,
         layout: WorkbenchLayout,
@@ -205,6 +208,9 @@ impl StorageWorker {
                                             .collect()
                                     });
                             let _ = reply.send(result);
+                        }
+                        StorageCommand::DiscardRecovery { document } => {
+                            let _ = RecoveryRepository::new(db.connection()).clear(&document);
                         }
                         StorageCommand::CheckpointRecovery(request) => {
                             let repo = RecoveryRepository::new(db.connection());
@@ -386,6 +392,11 @@ impl StorageWorker {
 
     pub fn delete_snippet(&self, id: String) -> anyhow::Result<()> {
         self.tx.send(StorageCommand::DeleteSnippet { id })?;
+        Ok(())
+    }
+
+    pub fn discard_recovery(&self, document: String) -> anyhow::Result<()> {
+        self.tx.send(StorageCommand::DiscardRecovery { document })?;
         Ok(())
     }
 
