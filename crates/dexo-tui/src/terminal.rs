@@ -38,6 +38,12 @@ pub trait TerminalControl {
     fn cursor_color(&self, _rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
         Ok(())
     }
+    /// Sets the terminal's default background, or hands its own back. The entrance
+    /// resets to that default after every cell, so painting a background over it does
+    /// not survive; only changing the default does.
+    fn background_color(&self, _rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        Ok(())
+    }
     fn keyboard_enhancement(&self, _on: bool) -> Result<bool, TuiError> {
         Ok(false)
     }
@@ -50,6 +56,7 @@ pub struct TerminalGuard<B: TerminalControl> {
     mouse: bool,
     keyboard_enhanced: bool,
     caret: Option<(u8, u8, u8)>,
+    background: Option<(u8, u8, u8)>,
     paste: bool,
 }
 
@@ -69,6 +76,7 @@ impl<B: TerminalControl> TerminalGuard<B> {
             mouse: false,
             keyboard_enhanced: false,
             caret: None,
+            background: None,
             paste: false,
         })
     }
@@ -125,9 +133,23 @@ impl<B: TerminalControl> TerminalGuard<B> {
         Ok(())
     }
 
+    /// Idempotent like the caret: offered every frame, forwarded only when it changes.
+    pub fn set_background_color(&mut self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        if self.background == rgb {
+            return Ok(());
+        }
+        self.backend.background_color(rgb)?;
+        self.background = rgb;
+        Ok(())
+    }
+
     pub fn restore(&mut self) {
         if self.restored {
             return;
+        }
+        if self.background.is_some() {
+            let _ = self.backend.background_color(None);
+            self.background = None;
         }
         if self.paste {
             let _ = self.backend.bracketed_paste(false);
@@ -164,7 +186,7 @@ pub fn install_panic_hook() {
             KEYBOARD_ENHANCEMENT_ACTIVE.store(false, Ordering::Relaxed);
         }
         let _ = disable_raw_mode();
-        let _ = write!(io::stdout(), "\x1b]112\x1b\\");
+        let _ = write!(io::stdout(), "\x1b]112\x1b\\\x1b]111\x1b\\");
         let _ = execute!(
             io::stdout(),
             DisableBracketedPaste,
@@ -205,6 +227,16 @@ impl TerminalControl for CrosstermTerminal {
         } else {
             execute!(io::stdout(), DisableBracketedPaste)?;
         }
+        Ok(())
+    }
+
+    fn background_color(&self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        let mut out = io::stdout();
+        match rgb {
+            Some((r, g, b)) => write!(out, "\x1b]11;#{r:02x}{g:02x}{b:02x}\x1b\\")?,
+            None => write!(out, "\x1b]111\x1b\\")?,
+        }
+        out.flush()?;
         Ok(())
     }
 
@@ -293,6 +325,15 @@ impl TerminalControl for RecordingTerminal {
 
     fn bracketed_paste(&self, on: bool) -> Result<(), TuiError> {
         self.push(if on { "paste_on" } else { "paste_off" });
+        Ok(())
+    }
+
+    fn background_color(&self, rgb: Option<(u8, u8, u8)>) -> Result<(), TuiError> {
+        self.push(if rgb.is_some() {
+            "background_set"
+        } else {
+            "background_reset"
+        });
         Ok(())
     }
 

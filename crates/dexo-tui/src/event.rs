@@ -42,12 +42,19 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     let (action_tx, action_rx) = tokio::sync::mpsc::channel(32);
     let mut runtime = WorkbenchRuntime::new(action_tx, worker, registry);
     let mut guard = TerminalGuard::enter(CrosstermTerminal)?;
+    // The workbench does not exist yet, so the theme is read from what was saved -- the
+    // same mapping the workbench will apply, so the entrance cannot come up in another.
+    // The background goes to the terminal first: the entrance resets to the terminal's
+    // default after every cell, and only the default carries the theme's ground.
+    let theme = crate::theme::saved_theme(&paths.data_dir);
+    let capabilities = crate::capabilities::TerminalCapabilities::detect();
+    guard.set_background_color(theme.background_rgb(capabilities))?;
     if animate_entrance {
-        let _ = crate::entrance::play_animation();
+        let _ = crate::entrance::play_animation(&theme);
         crate::entrance::clear_animation()?;
     }
     let animate_logo = first_run && animate_entrance && std::env::var_os("NO_COLOR").is_none();
-    let logo_frames = Arc::new(crate::entrance::logo_frames(animate_logo));
+    let logo_frames = Arc::new(crate::entrance::logo_frames(animate_logo, &theme));
     guard.enable_raw()?;
     let result = run_loop(
         bootstrap,
@@ -139,6 +146,7 @@ async fn run_loop(
         // The theme can change under the user (mode, accent), so this is offered every
         // frame and the guard only forwards a change.
         guard.set_cursor_color(model.theme.caret_rgb(model.capabilities))?;
+        guard.set_background_color(model.theme.background_rgb(model.capabilities))?;
     }
     Ok(())
 }

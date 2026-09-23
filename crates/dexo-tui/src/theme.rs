@@ -173,6 +173,22 @@ pub fn with_accent(mut theme: Theme, accent: &str) -> Theme {
     theme
 }
 
+/// How a saved mode reads as a theme mode. One mapping, so the entrance, which runs
+/// before the workbench exists, cannot come up in a different theme from it.
+pub fn mode_from_settings(mode: dexo_app::settings::ModeId) -> Mode {
+    match mode {
+        dexo_app::settings::ModeId::HighContrast => Mode::LowColor,
+        dexo_app::settings::ModeId::Light => Mode::Light,
+        dexo_app::settings::ModeId::Dark => Mode::Dark,
+    }
+}
+
+/// The theme the user saved, read straight from the settings file.
+pub fn saved_theme(data_dir: &std::path::Path) -> Theme {
+    let settings = dexo_app::settings::load_settings(data_dir);
+    theme_for(mode_from_settings(settings.mode), &settings.accent)
+}
+
 pub fn theme_for(mode: Mode, accent: &str) -> Theme {
     with_accent(mode.theme(), accent)
 }
@@ -250,7 +266,23 @@ impl Theme {
         if caps.color_depth == ColorDepth::None {
             return None;
         }
-        match self.slots.get(&Role::Foreground)?.truecolor {
+        self.rgb(Role::Foreground)
+    }
+
+    /// The background to hand the terminal as its default. Dexo paints its own ground,
+    /// but anything drawn around it -- the entrance, which resets to the terminal's
+    /// default after every cell -- lands on whatever the terminal was configured with.
+    pub fn background_rgb(&self, caps: TerminalCapabilities) -> Option<(u8, u8, u8)> {
+        if caps.color_depth == ColorDepth::None {
+            return None;
+        }
+        self.rgb(Role::Background)
+    }
+
+    /// A role's true colour, whatever the terminal can show. For handing to things that
+    /// speak hex -- the terminal's own OSC colours, the entrance's gradient.
+    pub fn rgb(&self, role: Role) -> Option<(u8, u8, u8)> {
+        match self.slots.get(&role)?.truecolor {
             Color::Rgb(r, g, b) => Some((r, g, b)),
             _ => None,
         }

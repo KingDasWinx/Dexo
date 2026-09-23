@@ -69,3 +69,47 @@ fn the_caret_colour_is_set_once_and_handed_back_on_exit() {
         "the terminal kept Dexo's caret colour after exit: {calls:?}"
     );
 }
+
+/// The entrance resets to the terminal's default background after every cell, so a
+/// painted ground does not survive it; only the default does. It is handed over once,
+/// like the caret, and given back when Dexo leaves.
+#[test]
+fn the_background_is_set_once_and_handed_back_on_exit() {
+    let backend = RecordingTerminal::default();
+    let calls = backend.clone();
+    {
+        let mut guard = TerminalGuard::enter(backend).unwrap();
+        guard.set_background_color(Some((18, 18, 18))).unwrap();
+        guard.set_background_color(Some((18, 18, 18))).unwrap();
+        guard.restore();
+    }
+    let calls = calls.calls();
+    assert_eq!(
+        calls.iter().filter(|c| **c == "background_set").count(),
+        1,
+        "the unchanged background was sent again: {calls:?}"
+    );
+    assert!(
+        calls.contains(&"background_reset"),
+        "the terminal kept Dexo's background after exit: {calls:?}"
+    );
+}
+
+/// The entrance runs before the workbench exists, so it reads the theme from the saved
+/// settings -- through the same mapping the workbench applies.
+#[test]
+fn the_saved_theme_is_what_the_settings_file_says() {
+    use dexo_tui::theme::{Mode, Role, saved_theme, theme_for};
+
+    let dir = tempfile::tempdir().unwrap();
+    let mut settings = dexo_app::settings::load_settings(dir.path());
+    settings.mode = dexo_app::settings::ModeId::Light;
+    settings.accent = "green".into();
+    dexo_app::settings::save_settings(dir.path(), &settings).unwrap();
+
+    let saved = saved_theme(dir.path());
+    let expected = theme_for(Mode::Light, "green");
+    assert_eq!(saved.mode, Mode::Light);
+    assert_eq!(saved.rgb(Role::Background), expected.rgb(Role::Background));
+    assert_eq!(saved.rgb(Role::Focus), expected.rgb(Role::Focus));
+}

@@ -5947,11 +5947,7 @@ fn apply_saved_settings(model: &mut Model) {
         dexo_app::settings::UnicodeMode::Unicode
     );
     model.keymap = crate::keymap::Keymap::named(&manager.active.keymap.profile);
-    let mode = match manager.active.mode {
-        dexo_app::settings::ModeId::HighContrast => crate::theme::Mode::LowColor,
-        dexo_app::settings::ModeId::Light => crate::theme::Mode::Light,
-        dexo_app::settings::ModeId::Dark => crate::theme::Mode::Dark,
-    };
+    let mode = crate::theme::mode_from_settings(manager.active.mode);
     model.settings.mode = mode.as_key().into();
     model.settings.accent = manager.active.accent.clone();
     model.settings.completion_trigger = manager.active.completion_trigger;

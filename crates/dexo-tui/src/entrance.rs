@@ -31,9 +31,9 @@ pub struct LogoFrame {
     pub rows: Vec<Vec<LogoCell>>,
 }
 
-pub fn logo_frames(animated: bool) -> Vec<LogoFrame> {
+pub fn logo_frames(animated: bool, theme: &crate::theme::Theme) -> Vec<LogoFrame> {
     if animated
-        && let Ok(frames) = animated_logo_frames_platform()
+        && let Ok(frames) = animated_logo_frames_platform(&gradient(theme, true))
         && !frames.is_empty()
     {
         return frames;
@@ -85,8 +85,30 @@ pub fn should_animate(data_dir: &Path) -> bool {
         && dexo_app::settings::load_settings(data_dir).animation
 }
 
-pub fn play_animation() -> Result<(), String> {
-    play_animation_platform()
+/// The entrance, in the colours of the theme the user saved. It used to be a fixed
+/// blue-to-white, whose white end vanished against a light theme's ground.
+pub fn play_animation(theme: &crate::theme::Theme) -> Result<(), String> {
+    play_animation_platform(&gradient(theme, false))
+}
+
+/// Accent to text colour, as hex: the accent leads because it is the theme's own
+/// colour, and the text colour closes because it is the one guaranteed to read on the
+/// theme's ground. `looped` returns to the accent so a cycling gradient has no seam.
+fn gradient(theme: &crate::theme::Theme, looped: bool) -> Vec<String> {
+    use crate::theme::Role;
+    let hex = |role| {
+        theme
+            .rgb(role)
+            .map(|(r, g, b)| format!("{r:02x}{g:02x}{b:02x}"))
+    };
+    let (Some(accent), Some(text)) = (hex(Role::Focus), hex(Role::Foreground)) else {
+        return vec!["03a9f4".into(), "ffffff".into()];
+    };
+    if looped {
+        vec![accent.clone(), text, accent]
+    } else {
+        vec![accent, text]
+    }
 }
 
 pub fn clear_animation() -> std::io::Result<()> {
@@ -105,7 +127,7 @@ fn marker_path(data_dir: &Path) -> PathBuf {
 }
 
 #[cfg(unix)]
-fn play_animation_platform() -> Result<(), String> {
+fn play_animation_platform(stops: &[String]) -> Result<(), String> {
     use std::io::IsTerminal;
 
     use ttfx::effects::wipe::{Wipe, WipeConfig};
@@ -121,9 +143,9 @@ fn play_animation_platform() -> Result<(), String> {
         return Ok(());
     }
 
-    let colors = ["03a9f4", "00d1ff", "ffffff"]
-        .into_iter()
-        .map(Color::from_hex)
+    let colors = stops
+        .iter()
+        .map(|stop| Color::from_hex(stop))
         .collect::<Result<Vec<_>, _>>()?;
     let effect = WipeConfig {
         wipe_direction: CharacterGroup::DiagonalTopLeftToBottomRight,
@@ -153,14 +175,14 @@ fn play_animation_platform() -> Result<(), String> {
 }
 
 #[cfg(not(unix))]
-fn play_animation_platform() -> Result<(), String> {
+fn play_animation_platform(_stops: &[String]) -> Result<(), String> {
     // ttfx currently targets Linux and macOS. The onboarding screen remains
     // available on other platforms; only its animated prelude is skipped.
     Ok(())
 }
 
 #[cfg(unix)]
-fn animated_logo_frames_platform() -> Result<Vec<LogoFrame>, String> {
+fn animated_logo_frames_platform(stops: &[String]) -> Result<Vec<LogoFrame>, String> {
     use ttfx::effects::colorshift::{ColorShift, ColorShiftConfig};
     use ttfx::engine::ctx::{Clock, EngineCtx};
     use ttfx::engine::effect::Effect;
@@ -168,9 +190,9 @@ fn animated_logo_frames_platform() -> Result<Vec<LogoFrame>, String> {
     use ttfx::utils::graphics::{Color, GradientDirection};
     use ttfx::utils::rng::Rng;
 
-    let colors = ["03a9f4", "00d1ff", "ffffff", "03a9f4"]
-        .into_iter()
-        .map(Color::from_hex)
+    let colors = stops
+        .iter()
+        .map(|stop| Color::from_hex(stop))
         .collect::<Result<Vec<_>, _>>()?;
     let config = ColorShiftConfig {
         gradient_stops: colors.clone(),
@@ -248,7 +270,7 @@ fn capture_logo_frame(context: &ttfx::engine::ctx::EngineCtx) -> LogoFrame {
 }
 
 #[cfg(not(unix))]
-fn animated_logo_frames_platform() -> Result<Vec<LogoFrame>, String> {
+fn animated_logo_frames_platform(_stops: &[String]) -> Result<Vec<LogoFrame>, String> {
     Ok(vec![static_logo_frame()])
 }
 
@@ -269,10 +291,60 @@ mod tests {
         assert!(frame.rows[0].iter().any(|cell| cell.symbol == "█"));
     }
 
+    fn luminance(hex: &str) -> f32 {
+        let byte = |at: usize| u8::from_str_radix(&hex[at..at + 2], 16).unwrap() as f32;
+        0.2126 * byte(0) + 0.7152 * byte(2) + 0.0722 * byte(4)
+    }
+
+    /// The entrance was a fixed blue-to-white. Against the light theme's ground its
+    /// white end had a luminance contrast of 5 out of 255 -- the logo finished by
+    /// vanishing. Every theme's gradient now closes on its own text colour.
+    #[test]
+    fn the_entrance_gradient_ends_legible_on_its_own_theme() {
+        use crate::theme::{MODES, Role, theme_for};
+        for mode in MODES {
+            let theme = theme_for(*mode, "blue");
+            let stops = super::gradient(&theme, false);
+            let (r, g, b) = theme.rgb(Role::Background).unwrap();
+            let ground = luminance(&format!("{r:02x}{g:02x}{b:02x}"));
+            let end = luminance(stops.last().unwrap());
+            assert!(
+                (end - ground).abs() > 128.0,
+                "{mode:?} ends on {} against its ground",
+                stops.last().unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn the_entrance_takes_the_saved_accent() {
+        use crate::theme::{Mode, Role, theme_for};
+        for accent in ["blue", "green", "orange"] {
+            let theme = theme_for(Mode::Dark, accent);
+            let (r, g, b) = theme.rgb(Role::Focus).unwrap();
+            assert_eq!(
+                super::gradient(&theme, false)[0],
+                format!("{r:02x}{g:02x}{b:02x}"),
+                "the gradient does not open on the {accent} accent"
+            );
+        }
+    }
+
+    /// A cycling gradient returns to where it started, or the loop shows a seam.
+    #[test]
+    fn the_logo_loop_closes_on_its_first_colour() {
+        let theme = crate::theme::theme_for(crate::theme::Mode::Light, "blue");
+        let stops = super::gradient(&theme, true);
+        assert_eq!(stops.first(), stops.last());
+    }
+
     #[cfg(unix)]
     #[test]
     fn ttfx_builds_a_loop_of_colored_logo_frames() {
-        let frames = logo_frames(true);
+        let frames = logo_frames(
+            true,
+            &crate::theme::theme_for(crate::theme::Mode::Dark, "blue"),
+        );
         assert!(frames.len() > 8);
         assert!(frames.iter().any(|frame| {
             frame
