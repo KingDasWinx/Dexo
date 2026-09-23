@@ -1754,6 +1754,23 @@ impl Model {
         self.sync_document_tabs_scroll();
     }
 
+    /// The strip's cursor is the active document, except while the strip holds the keys
+    /// with the cursor on `+`. The strip lights the cursor's tab, and every change of
+    /// document outside it -- a table opened from the tree, the tabs a connect restores,
+    /// a close -- moved the active document and left the cursor behind.
+    pub fn follow_active_document_tab(&mut self) {
+        let wanted = if self.nothing_open() {
+            DocumentTabFocus::New
+        } else {
+            DocumentTabFocus::Document(self.active_document)
+        };
+        let on_new_in_strip =
+            self.focus == Focus::DocumentTabs && self.document_tab_focus == DocumentTabFocus::New;
+        if self.document_tab_focus != wanted && !on_new_in_strip {
+            self.focus_active_document_tab();
+        }
+    }
+
     pub fn focus_active_document_tab(&mut self) {
         if self.nothing_open() {
             self.document_tab_focus = DocumentTabFocus::New;

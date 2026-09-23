@@ -32,6 +32,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     promote_placeholder(model);
     model.drop_redundant_placeholder();
     swapped |= model.swap_results_to_active_document();
+    model.follow_active_document_tab();
     if swapped || model.active_document().kind.is_table() != was_table {
         model.sync_grid_viewport();
     }
@@ -7784,6 +7785,44 @@ mod tests {
 
         assert_eq!(model.documents.len(), 2, "opening the table made a second tab");
         assert_eq!(model.active_document().id, "doc-brands");
+    }
+
+    /// The strip lights the tab under its cursor, and opening a table from the tree
+    /// moved the active document without moving the cursor: the strip said one file
+    /// was open while another was.
+    #[test]
+    fn opening_a_table_from_the_tree_moves_the_tab_cursor_with_it() {
+        use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
+
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_unique(
+                "q2.sql", None, None,
+            ));
+        update(&mut model, Action::SelectDocument { index: 1 });
+        assert_eq!(
+            model.document_tab_focus,
+            crate::model::DocumentTabFocus::Document(1)
+        );
+        model.explorer.replace_roots(CatalogList {
+            objects: vec![catalog_object("table:orders", ObjectKind::Table, "orders")],
+            restrictions: vec![],
+        });
+        model.explorer.select(ObjectId::new("table:orders"));
+
+        update(&mut model, Action::ExplorerExpand);
+
+        assert!(model.active_document().kind.is_table());
+        assert_eq!(
+            model.document_tab_focus,
+            crate::model::DocumentTabFocus::Document(model.active_document),
+            "the strip lights a tab that is not the open one"
+        );
     }
 
     /// Opening a table loads its metadata so `explorer.ddl` and Properties have something
