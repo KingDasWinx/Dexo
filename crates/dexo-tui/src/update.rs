@@ -3223,8 +3223,14 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             return Vec::new();
         }
     }
+    let revision = model.active_document().sql.revision();
     if !model.active_document().kind.is_table() && crate::screens::editor::handle_key(model, key) {
-        crate::screens::editor::refresh_intelligence(model, false);
+        // Highlighting and parameters are functions of the text. An arrow key moves the
+        // cursor and changes neither, and re-deriving them from the whole buffer on every
+        // repeat was half of what made a long script lag behind the key.
+        if model.active_document().sql.revision() != revision {
+            crate::screens::editor::refresh_intelligence(model, false);
+        }
         return crate::screens::editor::take_completion_effects(model);
     }
     Vec::new()

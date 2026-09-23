@@ -31,6 +31,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         return;
     }
 
+    // ponytail: the whole buffer is still copied, split and scanned once per frame --
+    // under a millisecond at 3 300 lines (benches/editor_navigation). Read the rope's
+    // visible lines directly if a far larger script ever pushes it past the budget.
     let text = doc.text();
     let lines: Vec<&str> = if text.is_empty() {
         vec![""]
@@ -53,6 +56,23 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     let start = doc.viewport_line.min(lines.len().saturating_sub(1));
     let end = (start + inner.height as usize).min(lines.len());
     let mut char_at = char_index_at_line(&text, start);
+    // Byte offsets for the window, found once per frame. The highlighter works in
+    // bytes and the lines in chars; converting per character, from the start of the
+    // document each time, is what made a frame cost as much as the document was long.
+    let mut byte_at: usize = lines[..start].iter().map(|line| line.len() + 1).sum();
+    let window_end = byte_at
+        + lines[start..end]
+            .iter()
+            .map(|line| line.len() + 1)
+            .sum::<usize>();
+    // Only the spans that touch the window, still in the parser's order: the first one
+    // containing a byte wins, and nested captures depend on that order.
+    let window_highlights: Vec<&dexo_sql::HighlightSpan> = model
+        .editor
+        .highlights
+        .iter()
+        .filter(|span| span.byte_range.start < window_end && span.byte_range.end > byte_at)
+        .collect();
     for (row, line) in lines[start..end].iter().enumerate() {
         let line_no = start + row + 1;
         let marker = if stmt.contains(&(start + row)) {
@@ -67,6 +87,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         let visible = visible_slice(line, doc.viewport_column, text_width as usize);
         let line_start = char_at;
         let line_end = line_start + line.chars().count();
+        let visible_byte = byte_at
+            + line
+                .chars()
+                .take(visible.skip_chars)
+                .map(char::len_utf8)
+                .sum::<usize>();
         if let Some(range) = &sel {
             spans.extend(selection_spans(
                 &visible.text,
@@ -77,13 +103,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         } else {
             spans.extend(highlight_spans(
                 &visible.text,
-                line_start + visible.skip_chars,
-                &text,
-                &model.editor.highlights,
+                visible_byte,
+                &window_highlights,
             ));
         }
         rendered.push(Line::from(spans));
         char_at = line_end + 1;
+        byte_at += line.len() + 1;
     }
     frame.render_widget(Paragraph::new(rendered), inner);
 
@@ -200,11 +226,12 @@ fn span_owned(text: String, selected: bool, sel_style: Style) -> Span<'static> {
     }
 }
 
+/// Styles one visible slice. `start_byte` is where the slice begins in the document,
+/// and `highlights` is only what touches the frame -- the caller filters it once.
 fn highlight_spans(
     visible: &str,
-    line_char_start: usize,
-    full: &str,
-    highlights: &[dexo_sql::HighlightSpan],
+    start_byte: usize,
+    highlights: &[&dexo_sql::HighlightSpan],
 ) -> Vec<Span<'static>> {
     if highlights.is_empty() {
         return vec![Span::raw(visible.to_string())];
@@ -212,15 +239,14 @@ fn highlight_spans(
     let mut spans = Vec::new();
     let mut buf = String::new();
     let mut current = Style::default();
-    let char_to_byte =
-        |chars: usize| -> usize { full.chars().take(chars).map(char::len_utf8).sum() };
-    for (offset, ch) in visible.chars().enumerate() {
-        let byte = char_to_byte(line_char_start + offset);
+    let mut byte = start_byte;
+    for ch in visible.chars() {
         let style = highlights
             .iter()
             .find(|span| byte >= span.byte_range.start && byte < span.byte_range.end)
             .map(|span| highlight_style(span.kind))
             .unwrap_or_default();
+        byte += ch.len_utf8();
         if style != current && !buf.is_empty() {
             spans.push(Span::styled(std::mem::take(&mut buf), current));
         }
@@ -291,4 +317,119 @@ fn display_width_range(line: &str, from_col: usize, to_char: usize) -> usize {
         cols += UnicodeWidthChar::width(ch).unwrap_or(0);
     }
     cols.saturating_sub(from_col)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::highlight_spans;
+    use ratatui::text::Span;
+
+    /// The highlighter as it was: for every character, walk the document from the start
+    /// to find its byte, then scan every span for the first that holds it. Correct and
+    /// quadratic -- kept here only as the oracle the windowed version must agree with.
+    fn reference(
+        visible: &str,
+        line_char_start: usize,
+        full: &str,
+        highlights: &[dexo_sql::HighlightSpan],
+    ) -> Vec<(String, ratatui::style::Style)> {
+        let char_to_byte =
+            |chars: usize| -> usize { full.chars().take(chars).map(char::len_utf8).sum() };
+        let mut out: Vec<(String, ratatui::style::Style)> = Vec::new();
+        for (offset, ch) in visible.chars().enumerate() {
+            let byte = char_to_byte(line_char_start + offset);
+            let style = highlights
+                .iter()
+                .find(|span| byte >= span.byte_range.start && byte < span.byte_range.end)
+                .map(|span| super::highlight_style(span.kind))
+                .unwrap_or_default();
+            match out.last_mut() {
+                Some((text, last)) if *last == style => text.push(ch),
+                _ => out.push((ch.to_string(), style)),
+            }
+        }
+        out
+    }
+
+    fn flatten(spans: Vec<Span<'static>>) -> Vec<(String, ratatui::style::Style)> {
+        let mut out: Vec<(String, ratatui::style::Style)> = Vec::new();
+        for span in spans {
+            for ch in span.content.chars() {
+                match out.last_mut() {
+                    Some((text, last)) if *last == span.style => text.push(ch),
+                    _ => out.push((ch.to_string(), span.style)),
+                }
+            }
+        }
+        out
+    }
+
+    /// Every line of every document, at several horizontal scroll offsets, must style
+    /// exactly as the per-character original did.
+    #[test]
+    fn the_windowed_highlighter_matches_the_original() {
+        let documents = [
+            "select id, 'texto com acentuação' from t -- comentário é\nwhere a = 1;",
+            "create table t (\n  preço numeric(10,2) default 0, -- ção\n  nome text\n);",
+            "/* bloco\n   de várias linhas */ select 1;\nselect 'fim';",
+            include_str!("../../../dexo-sql/tests/fixtures_schema_vendas.sql"),
+        ];
+        let mut parser = dexo_sql::ParserService::new(dexo_sql::Dialect::Postgres);
+        for sql in documents {
+            let highlights = parser.parse_edited("", sql).highlights;
+            let lines: Vec<&str> = sql.split('\n').collect();
+            let mut char_at = 0;
+            let mut byte_at = 0;
+            for line in &lines {
+                for skip in [0usize, 3, 11] {
+                    let visible: String = line.chars().skip(skip).collect();
+                    let visible_byte =
+                        byte_at + line.chars().take(skip).map(char::len_utf8).sum::<usize>();
+                    let window: Vec<&dexo_sql::HighlightSpan> = highlights.iter().collect();
+                    assert_eq!(
+                        flatten(highlight_spans(&visible, visible_byte, &window)),
+                        reference(
+                            &visible,
+                            char_at + skip.min(line.chars().count()),
+                            sql,
+                            &highlights
+                        ),
+                        "line {line:?} scrolled by {skip}"
+                    );
+                }
+                char_at += line.chars().count() + 1;
+                byte_at += line.len() + 1;
+            }
+
+            // The window the renderer actually filters to: a band of lines out of the
+            // middle, which keeps spans that start above it and run into it.
+            let (first, last) = (lines.len() / 3, (lines.len() / 3 + 8).min(lines.len()));
+            let window_start: usize = lines[..first].iter().map(|line| line.len() + 1).sum();
+            let window_end = window_start
+                + lines[first..last]
+                    .iter()
+                    .map(|line| line.len() + 1)
+                    .sum::<usize>();
+            let window: Vec<&dexo_sql::HighlightSpan> = highlights
+                .iter()
+                .filter(|span| {
+                    span.byte_range.start < window_end && span.byte_range.end > window_start
+                })
+                .collect();
+            let mut char_at: usize = lines[..first]
+                .iter()
+                .map(|line| line.chars().count() + 1)
+                .sum();
+            let mut byte_at = window_start;
+            for line in &lines[first..last] {
+                assert_eq!(
+                    flatten(highlight_spans(line, byte_at, &window)),
+                    reference(line, char_at, sql, &highlights),
+                    "windowed line {line:?}"
+                );
+                char_at += line.chars().count() + 1;
+                byte_at += line.len() + 1;
+            }
+        }
+    }
 }
