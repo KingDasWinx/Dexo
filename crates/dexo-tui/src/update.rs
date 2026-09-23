@@ -7404,7 +7404,9 @@ mod tests {
     #[test]
     fn open_document_path_creates_tab_and_deduplicates_by_path() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("query.sql");
+        // Paths are stored resolved, and macOS's temp dir sits behind the /var ->
+        // /private/var symlink.
+        let path = std::fs::canonicalize(dir.path()).unwrap().join("query.sql");
         std::fs::write(&path, "select 1").unwrap();
         let mut model = Model {
             project_id: "project-1".into(),
