@@ -87,13 +87,13 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         render_node_menu(frame, model, hits);
     }
     if let Some(review) = &model.data.review {
-        render_review(frame, review, hits);
+        render_review(frame, model, review, hits);
     }
     if model.data.insert_form.open {
         render_insert_row_form(frame, model, hits);
     }
     if let Some(preview) = &model.schema_editor.preview {
-        render_ddl_preview(frame, preview, hits);
+        render_ddl_preview(frame, model, preview, hits);
     }
     if model.schema_diff.open {
         render_schema_diff(frame, model, hits);
@@ -321,7 +321,13 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             (lines.len() as u16).saturating_add(2).min(area.height)
         },
     );
-    paint_popup(frame, popup, overlay_block(model, "DEXO"), lines.join("\n"));
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, "DEXO"),
+        lines.join("\n"),
+    );
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.contains("Get started") {
             hits.register(HitTarget::Button(HitButton::GetStarted), rect);
@@ -633,9 +639,15 @@ fn register_form_fields(hits: &mut HitMap, area: Rect, lines: &[String]) {
     }
 }
 
-fn paint_popup(frame: &mut Frame, popup: Rect, block: Block<'static>, body: String) {
+/// `Clear` leaves the cells in the terminal's own colours, and the terminal's background
+/// is the theme's, so an unstyled popup draws the terminal's foreground on the theme's
+/// background: invisible when a dark theme meets a terminal with dark text.
+fn paint_popup(frame: &mut Frame, model: &Model, popup: Rect, block: Block<'static>, body: String) {
     frame.render_widget(Clear, popup);
-    frame.render_widget(Paragraph::new(body).block(block), popup);
+    frame.render_widget(
+        Paragraph::new(body).block(block.style(model.theme.base(model.capabilities))),
+        popup,
+    );
 }
 
 fn for_popup_lines(popup: Rect, lines: &[String], mut map: impl FnMut(usize, &str, Rect)) {
@@ -1063,6 +1075,7 @@ fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     lines.push("Enter submit  Esc cancel".into());
     paint_popup(
         frame,
+        model,
         popup,
         overlay_block(model, "New row"),
         lines.join("\n"),
@@ -1070,7 +1083,12 @@ fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     register_overlay(hits, popup);
 }
 
-fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal, hits: &mut HitMap) {
+fn render_review(
+    frame: &mut Frame,
+    model: &Model,
+    review: &crate::screens::data::ReviewModal,
+    hits: &mut HitMap,
+) {
     let area = frame.area();
     if area.width < 10 || area.height < 5 {
         return;
@@ -1079,6 +1097,7 @@ fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal, 
     let lines = crate::screens::data::review_lines(review);
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Review changes"),
         lines.join("\n"),
@@ -1095,6 +1114,7 @@ fn render_review(frame: &mut Frame, review: &crate::screens::data::ReviewModal, 
 
 fn render_ddl_preview(
     frame: &mut Frame,
+    model: &Model,
     preview: &crate::screens::schema_editor::DdlPreviewState,
     hits: &mut HitMap,
 ) {
@@ -1106,6 +1126,7 @@ fn render_ddl_preview(
     let lines = crate::modals::preview_lines(preview);
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("DDL preview"),
         lines.join("\n"),
@@ -1161,6 +1182,7 @@ fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .collect::<Vec<_>>();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Schema diff"),
         visible.join("\n"),
@@ -1234,6 +1256,7 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     visible.extend(footer.iter().cloned());
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Transfer"),
         visible.join("\n"),
@@ -1288,6 +1311,7 @@ fn render_admin(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.admin.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Sessions"),
         lines.join("\n"),
@@ -1317,6 +1341,7 @@ fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.mcp_profiles.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("MCP profiles"),
         lines.join("\n"),
@@ -1337,6 +1362,7 @@ fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.connections.lines(model.active_session);
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Connections"),
         lines.join("\n"),
@@ -1415,6 +1441,7 @@ fn render_projects(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.projects.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Projects"),
         lines.join("\n"),
@@ -1447,6 +1474,7 @@ fn render_config_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.config_transfer.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Config transfer"),
         lines.join("\n"),
@@ -1475,6 +1503,7 @@ fn render_secret(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.secret_prompt.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Secret"),
         lines.join("\n"),
@@ -1510,6 +1539,7 @@ fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap
     let lines = model.transaction_prompt.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Savepoint"),
         lines.join("\n"),
@@ -1530,6 +1560,7 @@ fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitM
     let lines = model.document_name_prompt.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title(model.document_name_prompt.title()),
         lines.join("\n"),
@@ -1555,6 +1586,7 @@ fn render_data_query(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.data.query_prompt.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Query"),
         lines.join("\n"),
@@ -1583,6 +1615,7 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.connection_form.visible_lines(rows);
     paint_popup(
         frame,
+        model,
         popup,
         overlay_block(model, model.connection_form.title()),
         lines.join("\n"),
@@ -1797,6 +1830,7 @@ fn render_value_viewer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     lines.push("  esc close".into());
     paint_popup(
         frame,
+        model,
         popup,
         overlay_block(model, "Value"),
         lines.join("\n"),
@@ -1809,6 +1843,7 @@ fn render_recovery(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.recovery.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Session recovery"),
         lines.join("\n"),
@@ -1832,6 +1867,7 @@ fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Diagnostics"),
         lines.join("\n"),
@@ -1853,6 +1889,7 @@ fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = model.mcp_audit.lines();
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("MCP audit"),
         lines.join("\n"),
@@ -1964,6 +2001,7 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let lines = vec![body, footer];
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title("Parameters"),
         lines.join("\n"),
@@ -1980,6 +2018,7 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 fn render_list_overlay(
     frame: &mut Frame,
+    model: &Model,
     title: &str,
     items: &[String],
     selected: usize,
@@ -2003,6 +2042,7 @@ fn render_list_overlay(
     }
     paint_popup(
         frame,
+        model,
         popup,
         Block::bordered().title(title.to_string()),
         lines.join("\n"),
@@ -2026,6 +2066,7 @@ fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         };
         render_list_overlay(
             frame,
+            model,
             &format!("clear history for {target}?"),
             &[],
             0,
@@ -2035,6 +2076,7 @@ fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     } else {
         render_list_overlay(
             frame,
+            model,
             "History",
             &model.editor.history,
             model.editor.history_selected,
@@ -2053,6 +2095,7 @@ fn render_snippets(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .collect();
     render_list_overlay(
         frame,
+        model,
         "Snippets",
         &names,
         model.editor.snippet_selected,
@@ -2070,6 +2113,7 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .layout(model.file_picker_mode, list_rows);
     paint_popup(
         frame,
+        model,
         popup,
         overlay_block(model, model.file_picker_mode.title()),
         layout.lines.join("\n"),
