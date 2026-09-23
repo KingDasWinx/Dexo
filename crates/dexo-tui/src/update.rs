@@ -2500,6 +2500,8 @@ fn mouse_workbench(
             };
             update(model, Action::Focus(target))
         }
+        // Only a table document gives the console a pane of its own, in pane 3's place.
+        Some(HitTarget::Console) => update(model, Action::Focus(FocusTarget::Results)),
         _ => Vec::new(),
     }
 }
@@ -7400,7 +7402,7 @@ mod tests {
     /// Rows, cells and headers focus the grid themselves; the rest of its pane went
     /// through the positional pane-3 focus, which in a table document is the console.
     #[test]
-    fn clicking_a_table_documents_grid_focuses_the_grid() {
+    fn clicking_a_table_documents_panes_focuses_each() {
         let mut model = Model::default();
         model
             .documents
@@ -7433,6 +7435,19 @@ mod tests {
         );
 
         assert_eq!(model.effective_focus(), Focus::Results);
+
+        let (column, row) = model.hits.center(crate::mouse::HitTarget::Console);
+        update(
+            &mut model,
+            Action::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+
+        assert_eq!(model.effective_focus(), Focus::Console);
     }
 
     /// A table document puts the grid in pane 2 and the console in pane 3. Alt+2 and

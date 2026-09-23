@@ -47,6 +47,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                     hits.register(HitTarget::Grid, grid_pane);
                 }
                 crate::widgets::grid::render(frame, grid_pane, model, hits);
+                if !overlay_blocks_workbench(model) {
+                    hits.register(HitTarget::Console, plan.results);
+                }
                 render_console_log(
                     frame,
                     plan.results,

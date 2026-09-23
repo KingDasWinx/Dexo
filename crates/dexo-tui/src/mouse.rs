@@ -25,6 +25,7 @@ pub enum HitTarget {
     Editor,
     PaneDivider(PaneEdge),
     Grid,
+    Console,
     GridRow(usize),
     GridCell { row: usize, col: usize },
     GridHeader(usize),
