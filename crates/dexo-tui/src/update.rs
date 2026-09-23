@@ -2490,7 +2490,16 @@ fn mouse_workbench(
                 Vec::new()
             }
         }
-        Some(HitTarget::Grid) => update(model, Action::Focus(FocusTarget::Results)),
+        Some(HitTarget::Grid) => {
+            // `FocusTarget` names a position, and a table document puts the grid in the
+            // editor's.
+            let target = if model.active_document().kind.is_table() {
+                FocusTarget::Editor
+            } else {
+                FocusTarget::Results
+            };
+            update(model, Action::Focus(target))
+        }
         _ => Vec::new(),
     }
 }
@@ -7386,6 +7395,44 @@ mod tests {
         assert_eq!(model.active_document, 0, "alt+left switched nothing");
         update(&mut model, alt(KeyCode::Right));
         assert_eq!(model.active_document, 1, "alt+right switched nothing");
+    }
+
+    /// Rows, cells and headers focus the grid themselves; the rest of its pane went
+    /// through the positional pane-3 focus, which in a table document is the console.
+    #[test]
+    fn clicking_a_table_documents_grid_focuses_the_grid() {
+        let mut model = Model::default();
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+                None,
+            ));
+        model.active_document = model.documents.len() - 1;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(160, 50)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| crate::render::render(frame, &model, &mut hits))
+            .unwrap();
+        let (column, row) = hits.center(crate::mouse::HitTarget::Grid);
+        model.hits = hits;
+        assert_eq!(
+            model.hits.at(column, row),
+            Some(crate::mouse::HitTarget::Grid)
+        );
+
+        update(
+            &mut model,
+            Action::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+
+        assert_eq!(model.effective_focus(), Focus::Results);
     }
 
     /// A table document puts the grid in pane 2 and the console in pane 3. Alt+2 and
