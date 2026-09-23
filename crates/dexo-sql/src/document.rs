@@ -49,6 +49,12 @@ impl SqlDocument {
         self.rope.to_string()
     }
 
+    /// Constant time: the rope keeps its length, where `text().is_empty()` would build
+    /// the whole buffer to answer.
+    pub fn is_empty(&self) -> bool {
+        self.rope.len_chars() == 0
+    }
+
     pub fn revision(&self) -> u64 {
         self.revision
     }

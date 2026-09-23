@@ -13,6 +13,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
     }
+    if model.active_document().kind.is_placeholder() {
+        render_nothing_open(frame, area, model);
+        return;
+    }
     let doc = model.active_document();
     let title = if doc.is_dirty() {
         format!("SQL · {}*", doc.title)
@@ -125,6 +129,38 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
             }
         }
     }
+}
+
+/// What the editor shows when no document is open: the ways to get one. Typing works
+/// too -- the first keystroke becomes a document of the active connection.
+fn render_nothing_open(frame: &mut Frame, area: Rect, model: &Model) {
+    let focused = model.effective_focus() == Focus::Editor;
+    let block = crate::render::pane_block(model, "SQL", focused);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    if inner.width == 0 || inner.height == 0 {
+        return;
+    }
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let lines = [
+        "No document open",
+        "",
+        "Ctrl+N  new query",
+        "Ctrl+O  open a file",
+        "or just start typing",
+    ];
+    let top = inner.height.saturating_sub(lines.len() as u16) / 2;
+    // The hints are padded to one width so they centre as a block and their keys line
+    // up, rather than each line centring on its own and leaving a ragged edge.
+    let width = lines[2..].iter().map(|text| text.len()).max().unwrap_or(0);
+    let body: Vec<Line> = std::iter::repeat_n(Line::raw(""), top as usize)
+        .chain(lines.iter().enumerate().map(|(index, text)| match index {
+            0 => Line::raw(*text).centered(),
+            1 => Line::raw(""),
+            _ => Line::styled(format!("{text:<width$}"), muted).centered(),
+        }))
+        .collect();
+    frame.render_widget(Paragraph::new(body), inner);
 }
 
 pub fn char_index_at(model: &Model, area: Rect, x: u16, y: u16) -> Option<usize> {

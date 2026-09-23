@@ -23,8 +23,14 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     // Before, so the action writes into the active document's pane; after, because the
     // action may have switched documents and the next frame draws before the next
     // action arrives.
+    // Before the action as well as after it: text can land in the stand-in outside an
+    // action -- restored recovery, a test harness -- and an action like a project switch
+    // flushes before anything after it could run.
+    promote_placeholder(model);
     let mut swapped = model.swap_results_to_active_document();
     let effects = dispatch(model, action);
+    promote_placeholder(model);
+    model.drop_redundant_placeholder();
     swapped |= model.swap_results_to_active_document();
     if swapped || model.active_document().kind.is_table() != was_table {
         model.sync_grid_viewport();
@@ -4187,6 +4193,7 @@ fn flush_documents_effect(model: &Model) -> Effect {
         documents: model
             .documents
             .iter()
+            .filter(|document| !document.kind.is_placeholder())
             .map(|document| crate::action::FlushedDocument {
                 kind: document.kind.storage_tag(),
                 connection_id: document.connection_id.clone(),
@@ -4438,6 +4445,11 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
             .into_iter()
             .map(document_from_stored)
             .collect();
+        model.active_document = 0;
+    } else {
+        // A first launch, or a project whose tabs were all closed: nothing is open, and
+        // the workbench says so rather than inventing a `scratch.sql` for no connection.
+        model.documents = vec![crate::model::EditorDocument::placeholder()];
         model.active_document = 0;
     }
     let recovery = state.recovery;
@@ -5652,6 +5664,25 @@ fn submit_savepoint_prompt(model: &mut Model) -> Vec<Effect> {
     effects
 }
 
+/// Text in "nothing open" means there is a document. It becomes one in place, named
+/// the way Ctrl+N would name it and bound to the connection it is being written for --
+/// never the unowned `scratch.sql` it used to be.
+///
+/// Keyed on the text, not on how it got there: typing, a paste, a snippet, a history
+/// entry, SQL generated from a result all write the buffer, and a stand-in left holding
+/// any of it would be dropped on the next flush.
+fn promote_placeholder(model: &mut Model) {
+    if !model.active_document().kind.is_placeholder() || model.active_document().sql.is_empty() {
+        return;
+    }
+    let title = suggested_document_name(model);
+    let connection_id = active_connection_uuid(model);
+    let document = model.active_document_mut();
+    document.kind = crate::model::DocumentKind::Console;
+    document.title = title;
+    document.connection_id = connection_id;
+}
+
 fn suggested_document_name(model: &Model) -> String {
     format!("query-{}.sql", model.documents.len())
 }
@@ -5780,6 +5811,9 @@ fn explain_effect(model: &Model, analyze: bool) -> Vec<Effect> {
 }
 
 fn save_active_document(model: &mut Model) -> Vec<Effect> {
+    if model.active_document().kind.is_placeholder() {
+        return Vec::new();
+    }
     let doc = model.active_document();
     match &doc.path {
         Some(path) => vec![Effect::SaveDocument(crate::action::DocumentIoRequest {
@@ -5831,7 +5865,7 @@ fn remove_document(model: &mut Model, index: usize) {
     if model.documents.is_empty() {
         model
             .documents
-            .push(crate::model::EditorDocument::scratch());
+            .push(crate::model::EditorDocument::placeholder());
         model.active_document = 0;
     } else {
         if model.active_document > index {
@@ -6431,7 +6465,7 @@ fn apply_loaded_project(
     model.projects.pending = None;
     model.recent_sql_files = recent_sql_files;
     if documents.is_empty() {
-        model.documents = vec![crate::model::EditorDocument::scratch()];
+        model.documents = vec![crate::model::EditorDocument::placeholder()];
         model.active_document = 0;
     } else {
         model.documents = documents

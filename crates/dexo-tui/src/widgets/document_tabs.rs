@@ -103,10 +103,12 @@ fn scroll_indicator_width() -> u16 {
 }
 
 fn tab_items(model: &Model, max_title_width: usize) -> Vec<TabItem> {
+    // "Nothing open" has no tab; the strip is only its `+`.
     model
         .documents
         .iter()
         .enumerate()
+        .filter(|(_, document)| !document.kind.is_placeholder())
         .map(|(index, document)| {
             let dirty = if document.is_dirty() { "*" } else { "" };
             let prefix = connection_prefix(model, document);

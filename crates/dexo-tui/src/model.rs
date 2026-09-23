@@ -1236,6 +1236,10 @@ fn spool_or_prefix(bytes: Vec<u8>, inline: usize) -> (DbValue, Option<GridCell>)
 pub enum DocumentKind {
     Console,
     Table(dexo_driver_api::QualifiedName),
+    /// Nothing is open. The workbench still needs an active document -- eighty call
+    /// sites index into the list -- so this stands in for none: no tab, no title, never
+    /// persisted, and it becomes a real document the moment it is typed into.
+    Placeholder,
 }
 
 impl DocumentKind {
@@ -1243,12 +1247,16 @@ impl DocumentKind {
         matches!(self, DocumentKind::Table(_))
     }
 
+    pub fn is_placeholder(&self) -> bool {
+        matches!(self, DocumentKind::Placeholder)
+    }
+
     /// How the kind is written on a stored document. An editor tab stores nothing;
     /// a table browser stores the table it browses, or it comes back as an editor tab
     /// and the next open of that table makes a second document instead of finding it.
     pub fn storage_tag(&self) -> Option<String> {
         match self {
-            Self::Console => None,
+            Self::Console | Self::Placeholder => None,
             Self::Table(target) => Some(format!("table:{}", target.display_unquoted())),
         }
     }
@@ -1312,6 +1320,18 @@ impl EditorDocument {
             kind: DocumentKind::Console,
             results: ResultsState::default(),
             console_log: Vec::new(),
+        }
+    }
+
+    /// The stand-in for "nothing open". It used to be a real `scratch.sql`, which
+    /// belonged to no connection -- with three connected, there was no saying which
+    /// database it was for.
+    pub fn placeholder() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: String::new(),
+            kind: DocumentKind::Placeholder,
+            ..Self::scratch()
         }
     }
 
@@ -1619,8 +1639,16 @@ impl Model {
         seed.into()
     }
 
+    /// No real document is open -- the list is empty or holds only the stand-in. The
+    /// strip has nothing to put a cursor on but its `+` then.
+    pub fn nothing_open(&self) -> bool {
+        self.documents
+            .iter()
+            .all(|document| document.kind.is_placeholder())
+    }
+
     pub fn sync_document_tab_focus(&mut self) {
-        if self.documents.is_empty() {
+        if self.nothing_open() {
             self.document_tab_focus = DocumentTabFocus::New;
             return;
         }
@@ -1634,7 +1662,7 @@ impl Model {
     }
 
     pub fn advance_document_tab_focus(&mut self, delta: i32) {
-        if self.documents.is_empty() {
+        if self.nothing_open() {
             self.document_tab_focus = DocumentTabFocus::New;
             return;
         }
@@ -1659,7 +1687,7 @@ impl Model {
     /// is the strip navigating itself; `advance_document_tab_focus` is the shortcut for
     /// changing document without leaving the buffer.
     pub fn move_tab_cursor(&mut self, delta: i32) {
-        if self.documents.is_empty() {
+        if self.nothing_open() {
             self.document_tab_focus = DocumentTabFocus::New;
             self.focus = Focus::DocumentTabs;
             return;
@@ -1681,7 +1709,7 @@ impl Model {
     }
 
     pub fn focus_active_document_tab(&mut self) {
-        if self.documents.is_empty() {
+        if self.nothing_open() {
             self.document_tab_focus = DocumentTabFocus::New;
         } else {
             self.document_tab_focus = DocumentTabFocus::Document(self.active_document);
@@ -1754,6 +1782,28 @@ impl Model {
     /// Switches the active document and brings its output pane with it. Assigning
     /// `active_document` on its own leaves `results_owner` behind, and the next
     /// `update` then parks the pane under the document that no longer owns it.
+    /// Drops the placeholder once a real document is open beside it. Every way of
+    /// opening one -- Ctrl+N, a file, a table, a connection's console -- pushes onto the
+    /// list, and this is the one place that has to know the stand-in should go.
+    pub fn drop_redundant_placeholder(&mut self) {
+        if self.documents.len() < 2 {
+            return;
+        }
+        let Some(index) = self
+            .documents
+            .iter()
+            .position(|document| document.kind.is_placeholder())
+        else {
+            return;
+        };
+        self.documents.remove(index);
+        if self.active_document > index {
+            self.active_document -= 1;
+        }
+        self.active_document = self.active_document.min(self.documents.len() - 1);
+        self.sync_document_tab_focus();
+    }
+
     pub fn set_active_document(&mut self, index: usize) {
         if index >= self.documents.len() {
             return;
