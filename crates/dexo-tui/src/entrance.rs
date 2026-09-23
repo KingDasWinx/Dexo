@@ -276,7 +276,7 @@ fn animated_logo_frames_platform(_stops: &[String]) -> Result<Vec<LogoFrame>, St
 
 #[cfg(test)]
 mod tests {
-    use super::{LOGO_ART, is_complete, logo_frames, mark_complete, static_logo_frame};
+    use super::{LOGO_ART, is_complete, mark_complete, static_logo_frame};
 
     #[test]
     fn static_logo_keeps_its_shape() {
@@ -341,7 +341,7 @@ mod tests {
     #[cfg(unix)]
     #[test]
     fn ttfx_builds_a_loop_of_colored_logo_frames() {
-        let frames = logo_frames(
+        let frames = super::logo_frames(
             true,
             &crate::theme::theme_for(crate::theme::Mode::Dark, "blue"),
         );
