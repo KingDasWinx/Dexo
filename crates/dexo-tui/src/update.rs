@@ -968,6 +968,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             discard_all_pending(model);
             Vec::new()
         }
+        Action::RefreshTableData => refresh_table_data(model),
         Action::ToggleRowDelete => toggle_row_delete(model),
         Action::OpenInsertRow => {
             model.data.insert_form.open_for(&model.data.table);
@@ -5117,6 +5118,38 @@ fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
     effects
 }
 
+/// Reruns the active table's page with the filter, sort and offset it has. Pending edits
+/// are keyed by row index and a page load leaves them in place, so reloading under them
+/// would pin each edit to whatever row lands at its index.
+fn refresh_table_data(model: &mut Model) -> Vec<Effect> {
+    let crate::model::DocumentKind::Table(target) = model.active_document().kind.clone() else {
+        model
+            .messages
+            .warn("Refresh reloads a table's data; open a table from the sidebar.".into());
+        return Vec::new();
+    };
+    if model.active_session.is_none() {
+        model
+            .messages
+            .warn("connect a session to browse table data".into());
+        return Vec::new();
+    }
+    if !model.data.changes.pending().is_empty() || !model.data.row_changes.is_empty() {
+        model
+            .messages
+            .warn("Apply or discard the pending changes before refreshing.".into());
+        return Vec::new();
+    }
+    if model.data.target != target {
+        // The data state still describes the last table loaded, and its filter and sort
+        // name that table's columns.
+        model.data.filter = None;
+        model.data.sort.clear();
+        return load_table_document(model, model.active_document);
+    }
+    change_data_page(model, model.data.page_offset)
+}
+
 fn apply_remote_query(model: &mut Model) -> Vec<Effect> {
     let source = model
         .results
@@ -7397,6 +7430,103 @@ mod tests {
         assert_eq!(model.active_document, 0, "alt+left switched nothing");
         update(&mut model, alt(KeyCode::Right));
         assert_eq!(model.active_document, 1, "alt+right switched nothing");
+    }
+
+    fn table_document_on_page_two() -> Model {
+        let orders = dexo_app::parse_qualified("public.orders");
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                orders.clone(),
+                None,
+            ));
+        model.active_document = model.documents.len() - 1;
+        model.data.target = orders;
+        model.data.target_document = Some(model.active_document().id.clone());
+        model.data.page_offset = u64::from(model.data.page_limit);
+        model.focus = Focus::Results;
+        model
+    }
+
+    fn ctrl_r() -> Action {
+        Action::Key(KeyEvent::new(KeyCode::Char('r'), KeyModifiers::CONTROL))
+    }
+
+    fn table_requests(effects: &[Effect]) -> Vec<&dexo_driver_api::DataRequest> {
+        effects
+            .iter()
+            .filter_map(|effect| match effect {
+                Effect::LoadTableData { request, .. } => Some(request),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn ctrl_r_reloads_the_table_on_the_page_it_is_on() {
+        let mut model = table_document_on_page_two();
+        let offset = model.data.page_offset;
+
+        let effects = update(&mut model, ctrl_r());
+
+        let requests = table_requests(&effects);
+        assert_eq!(requests.len(), 1, "{effects:?}");
+        assert_eq!(
+            requests[0].object,
+            dexo_app::parse_qualified("public.orders")
+        );
+        assert_eq!(requests[0].page.offset, offset);
+        assert!(model.data.loading);
+    }
+
+    #[test]
+    fn refresh_waits_for_pending_edits_to_be_applied_or_discarded() {
+        let mut model = table_document_on_page_two();
+        model
+            .data
+            .row_changes
+            .insert(0, dexo_app::data::RowEditState::Inserted);
+
+        let effects = update(&mut model, ctrl_r());
+
+        assert!(table_requests(&effects).is_empty(), "{effects:?}");
+        assert_eq!(
+            model.messages.last().map(|entry| entry.message.as_str()),
+            Some("Apply or discard the pending changes before refreshing.")
+        );
+    }
+
+    /// The data state is shared, so after another table loaded it still names that
+    /// table; refreshing must load the table on screen, not the one loaded last.
+    #[test]
+    fn refresh_loads_the_table_on_screen_not_the_last_one_loaded() {
+        let mut model = table_document_on_page_two();
+        model.data.target = dexo_app::parse_qualified("public.customers");
+
+        let effects = update(&mut model, ctrl_r());
+
+        let requests = table_requests(&effects);
+        assert_eq!(requests.len(), 1, "{effects:?}");
+        assert_eq!(
+            requests[0].object,
+            dexo_app::parse_qualified("public.orders")
+        );
+        assert_eq!(requests[0].page.offset, 0);
+    }
+
+    #[test]
+    fn refresh_outside_a_table_document_loads_nothing() {
+        let mut model = table_document_on_page_two();
+        model.active_document = 0;
+
+        let effects = update(&mut model, Action::RefreshTableData);
+
+        assert!(table_requests(&effects).is_empty(), "{effects:?}");
     }
 
     /// Rows, cells and headers focus the grid themselves; the rest of its pane went

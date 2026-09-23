@@ -305,6 +305,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::DiscardAllChanges),
         },
         CommandSpec {
+            id: "data.refresh",
+            title: "Refresh Table Data",
+            keywords: &["reload", "requery", "rows"],
+            shortcut: Some("Ctrl+R"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::RefreshTableData),
+        },
+        CommandSpec {
             id: "data.toggle_delete",
             title: "Toggle Row Delete",
             keywords: &["remove", "restore", "row"],
@@ -1317,6 +1325,7 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "admin.sessions"
         | "data.page_next"
         | "data.page_prev"
+        | "data.refresh"
         | "data.insert_row" => &[ActiveSession],
         "explorer.inspect"
         | "explorer.ddl"
