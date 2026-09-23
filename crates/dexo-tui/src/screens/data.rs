@@ -1,8 +1,50 @@
 use dexo_app::Environment;
 use dexo_app::data::{
-    ChangeSet, EditMode, ForeignKey, SqlDialect, TableMeta, ValueView, preview_sql,
+    ChangeSet, EditMode, ForeignKey, RowEditState, SqlDialect, TableMeta, ValueView, preview_sql,
 };
 use dexo_driver_api::{DbValue, QualifiedName};
+
+use crate::widgets::form::{FooterFocus, footer_line};
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InsertRowForm {
+    pub open: bool,
+    pub fields: Vec<crate::screens::schema_editor::FormField>,
+    pub focus: usize,
+}
+
+impl InsertRowForm {
+    pub fn open_for(&mut self, table: &TableMeta) {
+        self.open = true;
+        self.focus = 0;
+        self.fields = table
+            .columns
+            .iter()
+            .map(|column| crate::screens::schema_editor::FormField {
+                label: column.name.clone(),
+                value: String::new(),
+                secret: false,
+            })
+            .collect();
+    }
+
+    pub fn close(&mut self) {
+        self.open = false;
+        self.fields.clear();
+        self.focus = 0;
+    }
+
+    /// Empty fields are omitted entirely rather than sent as `Null`, so a
+    /// left-blank auto-increment/serial or defaulted column falls through to
+    /// the database's own default instead of an explicit NULL overriding it.
+    pub fn values(&self) -> Vec<(String, DbValue)> {
+        self.fields
+            .iter()
+            .filter(|field| !field.value.is_empty())
+            .map(|field| (field.label.clone(), DbValue::Text(field.value.clone())))
+            .collect()
+    }
+}
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum DataQueryIntent {
@@ -19,6 +61,7 @@ pub struct DataQueryPrompt {
     pub descending: bool,
     pub error: Option<String>,
     pub focus_value: bool,
+    pub footer: FooterFocus,
 }
 
 impl DataQueryPrompt {
@@ -34,11 +77,12 @@ impl DataQueryPrompt {
                 format!("column: {}", self.column),
                 format!("value: {}", self.value),
             ],
-            None => vec!["query".into()],
+            None => Vec::new(),
         };
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }
+        lines.push(footer_line("Submit", self.footer));
         lines
     }
 }
@@ -59,6 +103,7 @@ pub struct ReviewModal {
     pub production: bool,
     pub confirmed: bool,
     pub status: ReviewStatus,
+    pub error: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -74,8 +119,9 @@ pub struct DataScreen {
     pub related_open: Vec<String>,
     pub related_fk: Option<ForeignKey>,
     pub related_row: Vec<(String, Option<DbValue>)>,
-    pub crumbs: Vec<(QualifiedName, Option<dexo_driver_api::Filter>, u64)>,
-    pub crumb_forward: Vec<(QualifiedName, Option<dexo_driver_api::Filter>, u64)>,
+    /// The documents a foreign-key walk came from, most recent last. Each kept its own
+    /// table state, so the way back is the document, not a copy of where it was.
+    pub crumbs: Vec<String>,
     pub page_offset: u64,
     pub page_limit: u32,
     pub has_more: bool,
@@ -84,6 +130,10 @@ pub struct DataScreen {
     pub sort: Vec<dexo_driver_api::Sort>,
     pub last_error: Option<String>,
     pub query_prompt: DataQueryPrompt,
+    pub target_document: Option<String>,
+    pub request_started: Option<std::time::Instant>,
+    pub row_changes: std::collections::BTreeMap<usize, RowEditState>,
+    pub insert_form: InsertRowForm,
 }
 
 impl Default for DataScreen {
@@ -104,7 +154,6 @@ impl Default for DataScreen {
             related_fk: None,
             related_row: Vec::new(),
             crumbs: Vec::new(),
-            crumb_forward: Vec::new(),
             page_offset: 0,
             page_limit: 100,
             has_more: false,
@@ -113,11 +162,42 @@ impl Default for DataScreen {
             sort: Vec::new(),
             last_error: None,
             query_prompt: DataQueryPrompt::default(),
+            target_document: None,
+            request_started: None,
+            row_changes: std::collections::BTreeMap::new(),
+            insert_form: InsertRowForm::default(),
         }
     }
 }
 
 impl DataScreen {
+    /// Trades the state that belongs to one table -- what it is, where it is paged to,
+    /// how it is filtered and sorted, the edits waiting on it -- with `parked`. The rest
+    /// (modals, clipboard, the session's dialect) stays put: it is not the table's.
+    pub fn swap_browse(&mut self, parked: &mut DataScreen) {
+        use std::mem::swap;
+        swap(&mut self.table, &mut parked.table);
+        swap(&mut self.target, &mut parked.target);
+        swap(&mut self.changes, &mut parked.changes);
+        swap(&mut self.related_open, &mut parked.related_open);
+        swap(&mut self.related_fk, &mut parked.related_fk);
+        swap(&mut self.related_row, &mut parked.related_row);
+        swap(&mut self.crumbs, &mut parked.crumbs);
+        swap(&mut self.page_offset, &mut parked.page_offset);
+        swap(&mut self.has_more, &mut parked.has_more);
+        swap(&mut self.loading, &mut parked.loading);
+        swap(&mut self.filter, &mut parked.filter);
+        swap(&mut self.sort, &mut parked.sort);
+        swap(&mut self.last_error, &mut parked.last_error);
+        swap(&mut self.target_document, &mut parked.target_document);
+        swap(&mut self.request_started, &mut parked.request_started);
+        swap(&mut self.row_changes, &mut parked.row_changes);
+    }
+
+    pub fn has_pending_edits(&self) -> bool {
+        !self.changes.pending().is_empty() || !self.row_changes.is_empty()
+    }
+
     pub fn open_review(&mut self) {
         self.review = Some(ReviewModal {
             target: self.target.display_unquoted(),
@@ -126,6 +206,7 @@ impl DataScreen {
             production: self.environment == Environment::Production,
             confirmed: false,
             status: ReviewStatus::Pending,
+            error: None,
         });
     }
 
@@ -146,9 +227,10 @@ impl DataScreen {
         self.changes.discard();
     }
 
-    pub fn fail_apply(&mut self) {
+    pub fn fail_apply(&mut self, message: String) {
         if let Some(review) = &mut self.review {
             review.status = ReviewStatus::Failed;
+            review.error = Some(message);
         }
     }
 
@@ -170,17 +252,21 @@ impl DataScreen {
 }
 
 pub fn review_lines(modal: &ReviewModal) -> Vec<String> {
-    vec![
+    let mut lines = vec![
         format!("target: {}", modal.target),
         format!("ops: {}", modal.operations),
         format!("status: {:?}", modal.status),
-        if modal.production && !modal.confirmed {
-            "confirm production to apply".into()
-        } else {
-            "ready".into()
-        },
-        modal.preview_sql.clone(),
-    ]
+    ];
+    if let Some(error) = &modal.error {
+        lines.push(format!("error: {error}"));
+    }
+    lines.push(if modal.production && !modal.confirmed {
+        "confirm production to apply".into()
+    } else {
+        "ready".into()
+    });
+    lines.push(modal.preview_sql.clone());
+    lines
 }
 
 #[cfg(test)]
@@ -277,10 +363,36 @@ mod tests {
         assert!(model.data.changes.pending().is_empty());
     }
 
+    /// `data_nav_back` popped the crumb but never the pushed tab title, so walking
+    /// foreign keys leaked a strip entry per hop. Documents are reused by target, so
+    /// going back and forth has to stay flat.
     #[test]
-    fn open_related_adds_tab() {
+    fn related_navigation_does_not_leak_per_hop() {
         let mut model = Model::default();
-        let before = model.tabs.titles.len();
+        model.data.related_fk = Some(ForeignKey {
+            local: vec!["user_id".into()],
+            referenced_table: QualifiedName::new(Some("db"), Some("public"), "users"),
+            referenced: vec!["id".into()],
+        });
+        model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
+
+        update(&mut model, Action::OpenRelated);
+        let after_first = model.documents.len();
+        update(&mut model, Action::DataNavBack);
+        update(&mut model, Action::OpenRelated);
+        update(&mut model, Action::DataNavBack);
+
+        assert_eq!(
+            model.documents.len(),
+            after_first,
+            "each hop left something behind"
+        );
+    }
+
+    #[test]
+    fn open_related_opens_a_document() {
+        let mut model = Model::default();
+        let before = model.documents.len();
         model.data.related_fk = Some(ForeignKey {
             local: vec!["user_id".into()],
             referenced_table: QualifiedName::new(Some("db"), Some("public"), "users"),
@@ -288,7 +400,8 @@ mod tests {
         });
         model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
         update(&mut model, Action::OpenRelated);
-        assert_eq!(model.tabs.titles.len(), before + 1);
+        assert_eq!(model.documents.len(), before + 1);
+        assert!(model.active_document().kind.is_table());
         assert_eq!(model.data.related_open, vec!["db.public.users"]);
     }
 }

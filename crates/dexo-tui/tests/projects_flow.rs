@@ -164,7 +164,7 @@ fn switching_with_open_transaction_keeps_old_project() {
         model
             .messages
             .iter()
-            .any(|message| message.contains("transaction"))
+            .any(|message| message.message.contains("transaction"))
     );
 }
 
@@ -225,6 +225,8 @@ fn project_crud_preview_detaches_and_keeps_external_paths() {
             "scratch",
             "select 1",
             Some("C:/tmp/keep.sql"),
+            None,
+            None,
             None,
         )
         .unwrap();

@@ -23,14 +23,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenPalette),
         },
         CommandSpec {
-            id: "query.execute",
-            title: "Execute Query",
-            keywords: &["run", "sql"],
-            shortcut: Some("F5"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::ExecuteQuery),
-        },
-        CommandSpec {
             id: "query.execute_statement",
             title: "Execute Statement",
             keywords: &["run", "sql", "cursor"],
@@ -50,7 +42,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "query.execute_document",
             title: "Execute Document",
             keywords: &["run", "sql", "all"],
-            shortcut: Some("F5"),
+            shortcut: Some("Ctrl+Shift+F10"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ExecuteDocument),
         },
@@ -58,7 +50,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "query.cancel",
             title: "Cancel Query",
             keywords: &["stop", "abort"],
-            shortcut: Some("Ctrl+C"),
+            shortcut: Some("Ctrl+F2"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::CancelQuery),
         },
@@ -135,20 +127,44 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::Editor)),
         },
         CommandSpec {
+            id: "focus.tabs",
+            title: "Focus Document Tabs",
+            keywords: &["strip", "files", "documents"],
+            shortcut: Some("Alt+0"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::DocumentTabs)),
+        },
+        CommandSpec {
+            id: "document.tab_prev",
+            title: "Previous Tab In Strip",
+            keywords: &["strip", "cursor"],
+            shortcut: Some("Left"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::MoveDocumentTabCursor(-1)),
+        },
+        CommandSpec {
+            id: "document.tab_next",
+            title: "Next Tab In Strip",
+            keywords: &["strip", "cursor"],
+            shortcut: Some("Right"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::MoveDocumentTabCursor(1)),
+        },
+        CommandSpec {
+            id: "document.activate_tab",
+            title: "Activate Document Tab",
+            keywords: &["open", "new", "strip"],
+            shortcut: Some("Enter"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ActivateDocumentTab),
+        },
+        CommandSpec {
             id: "focus.results",
             title: "Focus Results",
             keywords: &["grid", "rows"],
             shortcut: Some("Alt+3"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::Results)),
-        },
-        CommandSpec {
-            id: "focus.inspector",
-            title: "Focus Inspector",
-            keywords: &["details", "side"],
-            shortcut: Some("Alt+4"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::Focus(FocusTarget::Inspector)),
         },
         CommandSpec {
             id: "layout.cycle",
@@ -159,20 +175,20 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::CycleLayout),
         },
         CommandSpec {
-            id: "layout.results_focus",
-            title: "Layout: Results focus",
-            keywords: &["preset", "wide", "grid"],
-            shortcut: None,
+            id: "layout.hide_explorer",
+            title: "Hide Explorer",
+            keywords: &["layout", "pane", "toggle", "sidebar"],
+            shortcut: Some("Alt+E"),
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::LayoutResultsFocus),
+            invocation: PaletteInvocation::Dispatch(Action::HideExplorer),
         },
         CommandSpec {
-            id: "layout.hide_inspector",
-            title: "Hide Inspector",
-            keywords: &["layout", "pane", "toggle"],
-            shortcut: None,
+            id: "layout.hide_results",
+            title: "Hide Results",
+            keywords: &["layout", "pane", "toggle", "grid"],
+            shortcut: Some("Alt+R"),
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::HideInspector),
+            invocation: PaletteInvocation::Dispatch(Action::HideResults),
         },
         CommandSpec {
             id: "layout.reset",
@@ -213,22 +229,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: Some("Alt+["),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ShrinkExplorer),
-        },
-        CommandSpec {
-            id: "layout.inspector_grow",
-            title: "Grow Inspector Pane",
-            keywords: &["split", "width"],
-            shortcut: Some("Alt+="),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::GrowInspector),
-        },
-        CommandSpec {
-            id: "layout.inspector_shrink",
-            title: "Shrink Inspector Pane",
-            keywords: &["split", "width"],
-            shortcut: Some("Alt+-"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::ShrinkInspector),
         },
         CommandSpec {
             id: "data.copy.csv",
@@ -297,6 +297,38 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RevertChanges),
         },
         CommandSpec {
+            id: "data.discard_all",
+            title: "Discard All Pending Changes",
+            keywords: &["revert", "cancel", "rows"],
+            shortcut: Some("Ctrl+Shift+R"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::DiscardAllChanges),
+        },
+        CommandSpec {
+            id: "data.refresh",
+            title: "Refresh Table Data",
+            keywords: &["reload", "requery", "rows"],
+            shortcut: Some("Ctrl+R"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::RefreshTableData),
+        },
+        CommandSpec {
+            id: "data.toggle_delete",
+            title: "Toggle Row Delete",
+            keywords: &["remove", "restore", "row"],
+            shortcut: Some("Delete"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleRowDelete),
+        },
+        CommandSpec {
+            id: "data.insert_row",
+            title: "Insert Row",
+            keywords: &["new", "create", "row"],
+            shortcut: Some("Ctrl+N"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenInsertRow),
+        },
+        CommandSpec {
             id: "data.nav_back",
             title: "Data Navigate Back",
             keywords: &["crumb", "related"],
@@ -340,7 +372,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "data.review",
             title: "Review Changes",
             keywords: &["apply", "edit"],
-            shortcut: None,
+            shortcut: Some("Ctrl+S"),
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::DataReview),
         },
@@ -388,7 +420,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "transfer.export",
             title: "Export Data",
             keywords: &["csv", "json", "file"],
-            shortcut: None,
+            shortcut: Some("e"),
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::TransferExport),
         },
@@ -433,6 +465,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenExplain),
         },
         CommandSpec {
+            id: "results.cycle_view",
+            title: "Cycle Output View",
+            keywords: &["grid", "explain", "messages", "output", "results"],
+            shortcut: Some("v"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CycleResultsView),
+        },
+        CommandSpec {
+            id: "explain.analyze",
+            title: "Explain Analyze",
+            keywords: &["analyze", "execute", "timing", "actual"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ConfirmExplainAnalyze),
+        },
+        CommandSpec {
             id: "admin.sessions",
             title: "Inspect Sessions",
             keywords: &["locks", "cancel", "terminate"],
@@ -450,11 +498,27 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "explorer.expand",
-            title: "Expand or Open Table",
-            keywords: &["tree", "open", "enter", "table"],
+            title: "Connect or Expand",
+            keywords: &["tree", "connection", "connect", "open", "enter", "table"],
             shortcut: Some("Enter"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ExplorerExpand),
+        },
+        CommandSpec {
+            id: "connection.new",
+            title: "New Connection",
+            keywords: &["database", "profile", "connect"],
+            shortcut: Some("n"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenConnectionForm),
+        },
+        CommandSpec {
+            id: "connection.edit",
+            title: "Edit Selected Connection",
+            keywords: &["database", "profile", "connect"],
+            shortcut: Some("e"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditSelectedConnection),
         },
         CommandSpec {
             id: "explorer.refresh",
@@ -476,7 +540,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "explorer.inspect",
             title: "Inspect Object",
             keywords: &["properties", "ddl"],
-            shortcut: None,
+            shortcut: Some("i"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectInspector),
         },
@@ -487,14 +551,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: Some("d"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectDdl),
-        },
-        CommandSpec {
-            id: "explorer.refresh_subtree",
-            title: "Refresh Catalog Subtree",
-            keywords: &["reload", "tree"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::RefreshCatalogSubtree),
         },
         CommandSpec {
             id: "explorer.up",
@@ -521,76 +577,60 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenDependencies),
         },
         CommandSpec {
-            id: "explorer.dependents",
-            title: "Show Dependents",
-            keywords: &["used", "inspector"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenDependents),
-        },
-        CommandSpec {
-            id: "tab.sql",
-            title: "Tab SQL",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+1"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 0 }),
-        },
-        CommandSpec {
-            id: "tab.data",
-            title: "Tab Data",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+2"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 1 }),
-        },
-        CommandSpec {
-            id: "tab.ddl",
-            title: "Tab DDL",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+3"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 2 }),
-        },
-        CommandSpec {
-            id: "tab.properties",
-            title: "Tab Properties",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+4"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 3 }),
-        },
-        CommandSpec {
-            id: "tab.explain",
-            title: "Tab Explain",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+5"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::SwitchTab { index: 4 }),
-        },
-        CommandSpec {
-            id: "tab.next",
-            title: "Next Tab",
-            keywords: &["workbench"],
-            shortcut: Some("Ctrl+Tab"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::NextTab),
-        },
-        CommandSpec {
             id: "document.next",
             title: "Next Document",
             keywords: &["editor", "tab"],
-            shortcut: None,
+            shortcut: Some("Ctrl+Tab"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::NextDocument),
+        },
+        CommandSpec {
+            id: "document.prev",
+            title: "Previous Document",
+            keywords: &["editor", "tab"],
+            shortcut: Some("Ctrl+Shift+Tab"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::PrevDocument),
+        },
+        CommandSpec {
+            id: "document.prev_focus",
+            title: "Previous Document Tab Focus",
+            keywords: &["editor", "tab"],
+            shortcut: Some("Alt+Left"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::PrevDocumentTabFocus),
+        },
+        CommandSpec {
+            id: "document.next_focus",
+            title: "Next Document Tab Focus",
+            keywords: &["editor", "tab"],
+            shortcut: Some("Alt+Right"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::NextDocumentTabFocus),
+        },
+        CommandSpec {
+            id: "document.close",
+            title: "Close Document",
+            keywords: &["editor", "tab"],
+            shortcut: Some("Ctrl+W"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CloseDocument),
         },
         CommandSpec {
             id: "document.new",
             title: "New Document",
             keywords: &["editor", "scratch"],
-            shortcut: None,
+            shortcut: Some("Ctrl+N"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::NewDocument),
+        },
+        CommandSpec {
+            id: "document.rename",
+            title: "Rename Document",
+            keywords: &["editor", "tab", "title"],
+            shortcut: Some("F2"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::RenameDocument),
         },
         CommandSpec {
             id: "document.save",
@@ -641,20 +681,20 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::PrevResultTab),
         },
         CommandSpec {
-            id: "inspector.next_tab",
-            title: "Next Inspector Tab",
-            keywords: &["ddl", "privileges"],
-            shortcut: Some("Tab"),
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::InspectorNextTab),
-        },
-        CommandSpec {
-            id: "settings.theme",
-            title: "Cycle Theme",
-            keywords: &["dark", "light"],
+            id: "settings.mode",
+            title: "Toggle Light/Dark Mode",
+            keywords: &["dark", "light", "contrast"],
             shortcut: None,
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::CycleTheme),
+            invocation: PaletteInvocation::Dispatch(Action::CycleMode),
+        },
+        CommandSpec {
+            id: "settings.accent",
+            title: "Cycle Accent Color",
+            keywords: &["accent", "primary", "color"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CycleAccent),
         },
         CommandSpec {
             id: "settings.keymap",
@@ -671,6 +711,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ToggleMouse),
+        },
+        CommandSpec {
+            id: "settings.animation",
+            title: "Toggle Animation",
+            keywords: &["intro", "splash"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleAnimation),
+        },
+        CommandSpec {
+            id: "settings.unicode",
+            title: "Toggle Unicode Glyphs",
+            keywords: &["ascii", "glyph"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleUnicode),
         },
         CommandSpec {
             id: "explorer.data",
@@ -825,14 +881,6 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ToggleResultsPick),
         },
         CommandSpec {
-            id: "connection.add",
-            title: "Add Connection",
-            keywords: &["database", "postgres", "mysql", "connect"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenConnectionForm),
-        },
-        CommandSpec {
             id: "connection.browse",
             title: "Browse Connections",
             keywords: &["database", "sessions", "profiles"],
@@ -841,44 +889,52 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenConnections),
         },
         CommandSpec {
-            id: "connection.connect",
-            title: "Connect Selected",
-            keywords: &["session"],
-            shortcut: None,
+            id: "explorer.actions",
+            title: "Object Actions",
+            keywords: &["menu", "context", "sidebar"],
+            shortcut: Some("a"),
             requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionConnect),
-        },
-        CommandSpec {
-            id: "connection.duplicate",
-            title: "Duplicate Connection",
-            keywords: &["copy", "profile"],
-            shortcut: None,
-            requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionDuplicate),
+            invocation: PaletteInvocation::Dispatch(Action::OpenNodeMenu),
         },
         CommandSpec {
             id: "connection.test",
             title: "Test Connection",
-            keywords: &["ping"],
+            keywords: &["ping", "check", "reach"],
             shortcut: None,
             requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionTest),
+            invocation: PaletteInvocation::Dispatch(Action::TestConnection),
+        },
+        CommandSpec {
+            id: "connection.duplicate",
+            title: "Duplicate Connection",
+            keywords: &["copy", "clone", "profile"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::DuplicateConnection),
+        },
+        CommandSpec {
+            id: "connection.move_group",
+            title: "Move to Group",
+            keywords: &["folder", "organise", "organize"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditConnectionGroup),
         },
         CommandSpec {
             id: "connection.delete",
             title: "Delete Connection",
-            keywords: &["remove"],
+            keywords: &["remove", "drop", "profile"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete),
         },
         CommandSpec {
             id: "connection.close_session",
-            title: "Close Session",
-            keywords: &["disconnect"],
-            shortcut: None,
+            title: "Disconnect Connection",
+            keywords: &["close", "session"],
+            shortcut: Some("Shift+D"),
             requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::ConnectionCloseSession),
+            invocation: PaletteInvocation::Dispatch(Action::CloseSelectedSession),
         },
         CommandSpec {
             id: "project.browse",
@@ -931,7 +987,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         CommandSpec {
             id: "settings.open",
             title: "Open Settings",
-            keywords: &["theme", "keymap", "mouse"],
+            keywords: &["theme", "mode", "accent", "keymap", "mouse"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenSettings),
@@ -993,6 +1049,38 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RefreshSqlIntelligence),
         },
         CommandSpec {
+            id: "editor.undo",
+            title: "Undo",
+            keywords: &["revert", "back"],
+            shortcut: Some("Ctrl+Z"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorUndo),
+        },
+        CommandSpec {
+            id: "editor.redo",
+            title: "Redo",
+            keywords: &["forward", "again"],
+            shortcut: Some("Ctrl+Y"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorRedo),
+        },
+        CommandSpec {
+            id: "editor.paste",
+            title: "Paste",
+            keywords: &["clipboard", "insert"],
+            shortcut: Some("Ctrl+V"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::PasteFromClipboard),
+        },
+        CommandSpec {
+            id: "editor.select_all",
+            title: "Select All",
+            keywords: &["selection", "everything"],
+            shortcut: Some("Ctrl+A"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorSelectAll),
+        },
+        CommandSpec {
             id: "editor.format",
             title: "Format SQL",
             keywords: &["pretty", "indent"],
@@ -1004,7 +1092,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "editor.accept_completion",
             title: "Accept Completion",
             keywords: &["complete"],
-            shortcut: Some("Tab"),
+            shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::AcceptCompletion),
         },
@@ -1051,6 +1139,75 @@ fn command_spec_list() -> Vec<CommandSpec> {
     ]
 }
 
+/// Commands that stay invokable by key or by id, but are not worth a row in the
+/// palette: cursor motion, pane gestures, tab switching, and steps that are already
+/// a labelled row inside the screen they belong to.
+fn hidden(id: &str) -> bool {
+    matches!(
+        id,
+        // cursor and selection gestures
+        "results.up"
+            | "results.down"
+            | "results.left"
+            | "results.right"
+            | "results.pageup"
+            | "results.pagedown"
+            | "results.top"
+            | "results.extend_up"
+            | "results.extend_down"
+            | "results.toggle_pick"
+            | "results.actions"
+            | "results.select_row"
+            | "results.select_column"
+            | "explorer.up"
+            | "explorer.down"
+            | "explorer.expand"
+            | "explorer.actions"
+            // pane focus and sizing
+            | "focus.explorer"
+            | "focus.editor"
+            | "focus.results"
+            | "focus.tabs"
+            | "document.activate_tab"
+            | "document.tab_prev"
+            | "document.tab_next"
+            | "layout.hide_explorer"
+            | "layout.hide_results"
+            | "layout.results_grow"
+            | "layout.results_shrink"
+            | "layout.explorer_grow"
+            | "layout.explorer_shrink"
+            // tab switching
+            | "document.next"
+            | "document.prev"
+            | "document.prev_focus"
+            | "document.next_focus"
+            | "results.next_tab"
+            | "results.cycle_view"
+            | "results.prev_tab"
+            // already a labelled row inside the Settings screen
+            | "settings.mode"
+            | "settings.accent"
+            | "settings.keymap"
+            | "settings.mouse"
+            | "settings.animation"
+            | "settings.unicode"
+            | "settings.reset"
+            // second step of a flow the palette already opened
+            | "recovery.restore"
+            | "recovery.discard"
+            // grid chrome
+            | "data.page_next"
+            | "data.page_prev"
+            | "data.toggle_delete"
+            | "data.nav_back"
+            // listing the palette inside the palette
+            | "palette.open"
+            // opening the palette destroys completion state, so it is always disabled
+            | "editor.accept_completion"
+    )
+}
+
 pub fn command_specs() -> Vec<CommandSpec> {
     command_spec_list()
         .into_iter()
@@ -1066,6 +1223,16 @@ pub fn command_spec(id: &str) -> Option<CommandSpec> {
 }
 
 pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
+    all_entries(model)
+        .into_iter()
+        .filter(|entry| !hidden(entry.id))
+        .collect()
+}
+
+/// Every command as a row, hidden ones included. The context menu addresses commands
+/// by id and lists some the palette deliberately leaves out, `explorer.expand` first
+/// among them.
+pub fn all_entries(model: &Model) -> Vec<PaletteEntry> {
     command_specs()
         .into_iter()
         .map(|spec| PaletteEntry {
@@ -1087,14 +1254,12 @@ fn unmet_requirement(model: &Model, requirement: Requirement) -> Option<String> 
         Requirement::Results => model.results.rows().is_empty(),
         Requirement::RowSelection => matches!(model.results.kind, GridSelection::Column { .. }),
         Requirement::ExplorerNode => model.explorer.selected.is_none(),
+        Requirement::SelectedConnection => model.connections.selected().is_none(),
         Requirement::LoadedDdl => model.inspector.ddl.is_none(),
         Requirement::PendingChanges => model.data.changes.pending().is_empty(),
-        Requirement::Breadcrumb => model.data.crumbs.is_empty(),
         Requirement::ActiveQuery => model.active_operation.is_none(),
-        Requirement::Completion => model.editor.completions.is_empty(),
         Requirement::Parameters => model.editor.parameters.is_empty(),
         Requirement::History => model.editor.history.is_empty(),
-        Requirement::Recovery => model.recovery.checkpoints.is_empty(),
     };
     unmet.then(|| requirement.reason().to_string())
 }
@@ -1143,8 +1308,7 @@ fn contextual_reason(model: &Model, id: &str) -> Option<String> {
 fn requirements_for(id: &str) -> &'static [Requirement] {
     use Requirement::*;
     match id {
-        "query.execute"
-        | "query.execute_statement"
+        "query.execute_statement"
         | "query.execute_selection"
         | "query.execute_document"
         | "transaction.begin"
@@ -1160,7 +1324,9 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explain.open"
         | "admin.sessions"
         | "data.page_next"
-        | "data.page_prev" => &[ActiveSession],
+        | "data.page_prev"
+        | "data.refresh"
+        | "data.insert_row" => &[ActiveSession],
         "explorer.inspect"
         | "explorer.ddl"
         | "explorer.dependencies"
@@ -1187,24 +1353,33 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "results.top"
         | "results.extend_up"
         | "results.extend_down" => &[Results],
-        "data.inspect" | "data.related" | "results.actions" | "results.toggle_pick" => {
-            &[Results, RowSelection]
-        }
-        "explorer.expand"
-        | "explorer.refresh_subtree"
+        "data.inspect"
+        | "data.related"
+        | "results.actions"
+        | "results.toggle_pick"
+        | "data.toggle_delete" => &[Results, RowSelection],
+        "explorer.actions"
+        | "explorer.expand"
         | "explorer.copy_name"
         | "explorer.copy_simple"
         | "explorer.favorite"
         | "explorer.up"
         | "explorer.down" => &[ExplorerNode],
+        "transfer.import"
+        | "backup.dump"
+        | "backup.restore"
+        | "explorer.refresh_all"
+        | "explain.analyze" => &[ActiveSession],
+        "explorer.refresh" => &[ActiveSession, ExplorerNode],
+        "connection.test"
+        | "connection.duplicate"
+        | "connection.move_group"
+        | "connection.delete" => &[SelectedConnection],
         "explorer.copy_ddl" => &[LoadedDdl],
-        "data.revert" | "data.review" => &[PendingChanges],
-        "data.nav_back" => &[Breadcrumb],
+        "data.revert" | "data.review" | "data.discard_all" => &[PendingChanges],
         "query.cancel" => &[ActiveQuery],
-        "editor.accept_completion" => &[Completion],
         "editor.parameters" => &[Parameters],
         "editor.history.clear" => &[History],
-        "recovery.restore" | "recovery.discard" => &[Recovery],
         _ => &[],
     }
 }

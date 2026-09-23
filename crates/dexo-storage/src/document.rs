@@ -19,6 +19,7 @@ impl<'a> DocumentRepository<'a> {
         Self { conn }
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn save(
         &self,
         id: &str,
@@ -27,10 +28,12 @@ impl<'a> DocumentRepository<'a> {
         content: &str,
         path: Option<&str>,
         fingerprint: Option<&FileFingerprint>,
+        kind: Option<&str>,
+        connection_id: Option<&str>,
     ) -> anyhow::Result<()> {
         self.conn.execute(
-            "INSERT INTO documents (id, project_id, title, content, path, mtime, content_hash, updated_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, datetime('now'))
+            "INSERT INTO documents (id, project_id, title, content, path, mtime, content_hash, kind, connection_id, updated_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, datetime('now'))
              ON CONFLICT(id) DO UPDATE SET
                project_id = excluded.project_id,
                title = excluded.title,
@@ -38,6 +41,8 @@ impl<'a> DocumentRepository<'a> {
                path = excluded.path,
                mtime = excluded.mtime,
                content_hash = excluded.content_hash,
+               kind = excluded.kind,
+               connection_id = excluded.connection_id,
                updated_at = excluded.updated_at",
             params![
                 id,
@@ -46,7 +51,9 @@ impl<'a> DocumentRepository<'a> {
                 content,
                 path,
                 fingerprint.map(|fp| fp.mtime.as_str()),
-                fingerprint.map(|fp| fp.hash.as_str())
+                fingerprint.map(|fp| fp.hash.as_str()),
+                kind,
+                connection_id
             ],
         )?;
         Ok(())
@@ -55,7 +62,7 @@ impl<'a> DocumentRepository<'a> {
     pub fn get(&self, id: &str) -> anyhow::Result<Option<StoredDocument>> {
         self.conn
             .query_row(
-                "SELECT id, project_id, title, content, path, mtime, content_hash
+                "SELECT id, project_id, title, content, path, mtime, content_hash, kind, connection_id
                  FROM documents WHERE id = ?1",
                 params![id],
                 row_to_document,
@@ -66,7 +73,7 @@ impl<'a> DocumentRepository<'a> {
 
     pub fn list_for_project(&self, project_id: &str) -> anyhow::Result<Vec<StoredDocument>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, title, content, path, mtime, content_hash
+            "SELECT id, project_id, title, content, path, mtime, content_hash, kind, connection_id
              FROM documents WHERE project_id = ?1 ORDER BY title",
         )?;
         let rows = stmt.query_map(params![project_id], row_to_document)?;
@@ -76,6 +83,18 @@ impl<'a> DocumentRepository<'a> {
     pub fn delete(&self, id: &str) -> anyhow::Result<()> {
         self.conn
             .execute("DELETE FROM documents WHERE id = ?1", params![id])?;
+        Ok(())
+    }
+
+    /// Empties a project's document rows, and the project-less ones an older save path
+    /// left behind -- nothing reads those. The table is the snapshot of what is open,
+    /// not a library of everything ever typed: a flush clears it and writes back the
+    /// tabs that survived, so a closed tab cannot return on the next launch.
+    pub fn clear_project(&self, project_id: &str) -> anyhow::Result<()> {
+        self.conn.execute(
+            "DELETE FROM documents WHERE project_id = ?1 OR project_id IS NULL",
+            params![project_id],
+        )?;
         Ok(())
     }
 
@@ -99,6 +118,13 @@ pub struct StoredDocument {
     pub content: String,
     pub path: Option<String>,
     pub fingerprint: Option<FileFingerprint>,
+    /// What the tab is, as the workbench spells it -- `None` for an ordinary editor
+    /// tab. A table browser that loses this comes back as an editor tab, and the next
+    /// open of that table makes a second document instead of finding this one.
+    pub kind: Option<String>,
+    /// Profile the document executes against, as a connection id. `None` means it has
+    /// not picked one yet and takes whatever is active at its first execution.
+    pub connection_id: Option<String>,
 }
 
 fn row_to_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDocument> {
@@ -114,6 +140,8 @@ fn row_to_document(row: &rusqlite::Row<'_>) -> rusqlite::Result<StoredDocument> 
             (Some(mtime), Some(hash)) => Some(FileFingerprint { mtime, hash }),
             _ => None,
         },
+        kind: row.get(7)?,
+        connection_id: row.get(8)?,
     })
 }
 
@@ -143,8 +171,17 @@ mod tests {
             mtime: "1".into(),
             hash: "abc".into(),
         };
-        repo.save("d1", Some("p1"), "scratch", "select 1", None, Some(&fp))
-            .unwrap();
+        repo.save(
+            "d1",
+            Some("p1"),
+            "scratch",
+            "select 1",
+            None,
+            Some(&fp),
+            None,
+            Some("conn-1"),
+        )
+        .unwrap();
         assert_eq!(repo.get("d1").unwrap().unwrap().content, "select 1");
         assert_eq!(repo.list_for_project("p1").unwrap().len(), 1);
         repo.delete("d1").unwrap();

@@ -2,7 +2,7 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
     CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete, current_token, expand_placeholders, format_sql, named_parameters,
+    complete_with, format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -27,6 +27,7 @@ pub struct EditorState {
     pub parameter_prompt: bool,
     pub parameter_index: usize,
     pub parameter_draft: String,
+    pub parameter_footer: crate::widgets::form::FooterFocus,
     pub snippets: Vec<Snippet>,
     pub snippet_open: bool,
     pub snippet_selected: usize,
@@ -37,6 +38,22 @@ pub struct EditorState {
     pub history_confirm_clear: bool,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
+    /// The completion catalog, and the catalog and explorer revisions it was built from.
+    /// Building it walks and clones every object the connection has loaded, so doing it
+    /// for every character typed is a cost the editor cannot afford.
+    catalog_key: Option<(u64, u64)>,
+    catalog_snapshot: Option<dexo_app::SnapshotCatalog>,
+    /// The bytes the open popup's items would replace, and whether accepting a table
+    /// there should bring an alias with it. Both come from the analysis that built the
+    /// list, so accepting cannot disagree with it about what is being replaced.
+    completion_replace: std::ops::Range<usize>,
+    /// The holes an inserted snippet left behind, in characters, and which one the
+    /// cursor is on. Tab walks forward through them and Shift+Tab back.
+    snippet_stops: Vec<std::ops::Range<usize>>,
+    snippet_stop: usize,
+    /// A search the popup would like answered from the catalog snapshot. Drained by
+    /// `update`, which is the only place that can turn it into an effect.
+    completion_request: Option<(String, u64, String)>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -64,6 +81,7 @@ impl Clone for EditorState {
             parameter_prompt: self.parameter_prompt,
             parameter_index: self.parameter_index,
             parameter_draft: self.parameter_draft.clone(),
+            parameter_footer: self.parameter_footer,
             snippets: self.snippets.clone(),
             snippet_open: self.snippet_open,
             snippet_selected: self.snippet_selected,
@@ -74,6 +92,12 @@ impl Clone for EditorState {
             history_confirm_clear: self.history_confirm_clear,
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
+            catalog_key: None,
+            catalog_snapshot: None,
+            completion_replace: 0..0,
+            snippet_stops: Vec::new(),
+            snippet_stop: 0,
+            completion_request: None,
         }
     }
 }
@@ -110,6 +134,7 @@ impl Default for EditorState {
             parameter_prompt: false,
             parameter_index: 0,
             parameter_draft: String::new(),
+            parameter_footer: crate::widgets::form::FooterFocus::Input,
             snippets: Vec::new(),
             snippet_open: false,
             snippet_selected: 0,
@@ -120,6 +145,12 @@ impl Default for EditorState {
             history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::table("public.users", ["id", "email"]),
+            catalog_key: None,
+            catalog_snapshot: None,
+            completion_replace: 0..0,
+            snippet_stops: Vec::new(),
+            snippet_stop: 0,
+            completion_request: None,
         }
     }
 }
@@ -134,13 +165,12 @@ fn editor_dialect(model: &Model) -> Dialect {
 
 pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
-    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    let byte_cursor = model.active_document().byte_cursor();
     let old = std::mem::take(&mut model.editor.last_sql);
     let parsed = model.editor.parser.parse_edited(&old, &sql);
     model.editor.last_sql = sql.clone();
     model.editor.highlights = parsed.highlights;
-    model.editor.parameters = named_parameters(&sql)
+    model.editor.parameters = named_parameters(&sql, editor_dialect(model))
         .into_iter()
         .map(|parameter| ParameterValue {
             sensitive: is_sensitive_name(&parameter.name),
@@ -153,36 +183,173 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
+fn close_completion(model: &mut Model) {
+    model.editor.completions.clear();
+    model.editor.completion_open = false;
+    model.editor.completion_selected = 0;
+    model.editor.completion_offset = 0;
+}
+
+/// Rebuilds the completion catalog only when something it is built from actually
+/// changed: a page of catalog objects arriving, or the user starring something.
+fn sync_catalog(model: &mut Model) {
+    let key = (model.catalog_revision, model.explorer.revision());
+    if model.editor.catalog_key == Some(key) {
+        return;
+    }
+    model.editor.catalog_key = Some(key);
+    if model.catalog_objects.is_empty() {
+        model.editor.catalog_snapshot = None;
+        return;
+    }
+    let favorites = model.explorer.favorite_ids();
+    let mut objects = model.catalog_objects.clone();
+    for object in &mut objects {
+        if favorites.contains(&object.id) {
+            object
+                .attributes
+                .insert("favorite".into(), serde_json::json!(true));
+        }
+    }
+    model.editor.catalog_snapshot = Some(dexo_app::SnapshotCatalog::new(objects));
+}
+
 fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: bool) {
     let at = byte_cursor.min(sql.len());
     let dialect = editor_dialect(model);
-    let objects = model.explorer.flatten();
-    let items = if objects.is_empty() {
-        complete(sql, at, &model.editor.catalog, dialect)
-    } else {
-        let snapshot = dexo_app::SnapshotCatalog::new(objects);
-        complete(sql, at, &snapshot, dialect)
-    };
-    let prefix = &sql[..at];
-    let token = current_token(prefix);
-    let after_dot = prefix.trim_end().ends_with('.');
-    if items.is_empty() || (live && token.is_empty() && !after_dot) {
-        model.editor.completions.clear();
-        model.editor.completion_open = false;
-        model.editor.completion_selected = 0;
-        model.editor.completion_offset = 0;
+    // One analysis, shared: deciding whether to open the popup and deciding what goes in
+    // it have to agree about what is being typed.
+    let context = dexo_sql::analyze(sql, at, dialect);
+    // Inside a string literal or a comment nothing the catalog knows is an answer, and
+    // a popup there reads as the editor not understanding what you are writing.
+    if context.intent == dexo_sql::Intent::Suppressed {
+        close_completion(model);
         return;
     }
+    let origin = if live {
+        dexo_sql::TriggerOrigin::Typing
+    } else {
+        dexo_sql::TriggerOrigin::Explicit
+    };
+    if !dexo_sql::should_open(model.settings.completion_trigger, &context, origin) {
+        close_completion(model);
+        return;
+    }
+    sync_catalog(model);
+    let items = match &model.editor.catalog_snapshot {
+        Some(snapshot) => complete_with(&context, snapshot),
+        None => complete_with(&context, &model.editor.catalog),
+    };
+    if items.is_empty() {
+        close_completion(model);
+        return;
+    }
+    model.editor.completion_replace = context.replace.clone();
+    request_more_objects(model, &context, items.len());
     model.editor.completions = items;
     model.editor.completion_open = true;
     model.editor.completion_selected = 0;
     model.editor.completion_offset = 0;
 }
 
+/// Asks the snapshot for more names when the objects in memory did not fill the list.
+/// The in-memory catalog only holds what has been expanded in the sidebar, so on a large
+/// database the table you want is usually not in it yet. Never for columns: those are
+/// answered from memory or not at all.
+fn request_more_objects(model: &mut Model, context: &dexo_sql::CursorContext, found: usize) {
+    model.editor.completion_request = None;
+    let names = matches!(
+        context.intent,
+        dexo_sql::Intent::Table | dexo_sql::Intent::Schema | dexo_sql::Intent::Routine
+    );
+    // A prefix of one character matches most of a catalog; a full list already answers
+    // the question. Either way the disk read would buy nothing.
+    if !names || context.prefix.chars().count() < 2 || found >= dexo_sql::rank::CAP {
+        return;
+    }
+    if model.connection.name.is_empty() {
+        return;
+    }
+    let document = model.active_document();
+    model.editor.completion_request = Some((
+        document.id.clone(),
+        document.sql.revision(),
+        context.prefix.clone(),
+    ));
+}
+
+/// Turns a pending search into an effect. Separate from the analysis because only
+/// `update` can emit effects.
+pub fn take_completion_effects(model: &mut Model) -> Vec<crate::Effect> {
+    let Some((document, revision, query)) = model.editor.completion_request.take() else {
+        return Vec::new();
+    };
+    vec![crate::Effect::SearchCompletionObjects {
+        connection_id: model.connection.name.clone(),
+        database_name: crate::update::catalog_database(model),
+        document,
+        revision,
+        query,
+        limit: dexo_sql::rank::CAP,
+    }]
+}
+
+/// Folds names that arrived from the snapshot into the open popup. They are late by
+/// definition, so anything that moved on since the request was made discards them.
+pub fn merge_completion_objects(
+    model: &mut Model,
+    document: &str,
+    revision: u64,
+    objects: Vec<dexo_driver_api::CatalogObject>,
+) {
+    if !model.editor.completion_open {
+        return;
+    }
+    let current = model.active_document();
+    if current.id != document || current.sql.revision() != revision {
+        return;
+    }
+    let sql = current.text();
+    let at = current.byte_cursor();
+    let dialect = editor_dialect(model);
+    let context = dexo_sql::analyze(&sql, at, dialect);
+    let snapshot = dexo_app::SnapshotCatalog::new(objects);
+    // The same engine, over a different catalog: whatever the position wanted, it wants
+    // from these too.
+    let arriving = complete_with(&context, &snapshot);
+    if arriving.is_empty() {
+        return;
+    }
+    // The user may already be on an item; keep them on it by name. Restoring the index
+    // instead would move the selection out from under them as the list reorders.
+    let selected = model
+        .editor
+        .completions
+        .get(model.editor.completion_selected)
+        .map(|item| item.label.clone());
+    let mut merged = std::mem::take(&mut model.editor.completions);
+    merged.extend(arriving);
+    model.editor.completions = dexo_sql::rank::finish(merged);
+    model.editor.completion_selected = selected
+        .and_then(|label| {
+            model
+                .editor
+                .completions
+                .iter()
+                .position(|item| item.label == label)
+        })
+        .unwrap_or(0);
+    model.editor.completion_offset = crate::palette::scroll_to_selection(
+        model.editor.completion_selected,
+        model.editor.completion_offset,
+        model.editor.completions.len(),
+        8,
+    );
+}
+
 fn suggest_live(model: &mut Model) {
     let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
-    let byte_cursor = sql.chars().take(cursor).map(char::len_utf8).sum();
+    let byte_cursor = model.active_document().byte_cursor();
     apply_completions(model, &sql, byte_cursor, true);
 }
 
@@ -199,7 +366,7 @@ pub fn apply_format(model: &mut Model) {
             model.set_sql(&formatted);
             refresh_intelligence(model, false);
         }
-        Err(error) => model.messages.push(error.to_string()),
+        Err(error) => model.messages.error(error.to_string()),
     }
 }
 
@@ -220,8 +387,61 @@ pub fn insert_snippet_at(model: &mut Model, index: usize) {
         return;
     };
     model.editor.snippet_open = false;
-    insert_text(model, &expand_placeholders(&snippet.body));
+    let expansion = dexo_sql::expand(&snippet.body);
+    let at = model.active_document().cursor();
+    insert_text(model, &expansion.text);
+    // The holes are relative to the snippet; the document knows where it was put.
+    model.editor.snippet_stops = expansion
+        .stops
+        .into_iter()
+        .map(|stop| at + stop.start..at + stop.end)
+        .collect();
+    model.editor.snippet_stop = 0;
+    select_snippet_stop(model);
     refresh_intelligence(model, false);
+}
+
+/// Puts the cursor on the current hole, selecting whatever default text is in it so
+/// typing replaces it.
+fn select_snippet_stop(model: &mut Model) {
+    let Some(stop) = model
+        .editor
+        .snippet_stops
+        .get(model.editor.snippet_stop)
+        .cloned()
+    else {
+        return;
+    };
+    end_typing(model);
+    let doc = model.active_document_mut();
+    doc.anchor = if stop.start == stop.end {
+        None
+    } else {
+        Some(stop.start)
+    };
+    let _ = doc.sql.set_cursor(stop.end);
+    reveal_cursor(doc);
+}
+
+/// Moves to the next hole, or leaves the snippet when there are none left. Returns
+/// whether it did anything, so Tab can fall through to indenting.
+fn move_snippet_stop(model: &mut Model, delta: i32) -> bool {
+    if model.editor.snippet_stops.is_empty() {
+        return false;
+    }
+    let next = model.editor.snippet_stop as i32 + delta;
+    if next < 0 || next as usize >= model.editor.snippet_stops.len() {
+        // Walking past the last hole leaves the snippet. The selection goes with it --
+        // otherwise the next thing typed replaces the text in the hole just left.
+        model.editor.snippet_stops.clear();
+        model.editor.snippet_stop = 0;
+        let doc = model.active_document_mut();
+        doc.anchor = None;
+        return true;
+    }
+    model.editor.snippet_stop = next as usize;
+    select_snippet_stop(model);
+    true
 }
 
 pub fn accept_completion(model: &mut Model) {
@@ -229,7 +449,14 @@ pub fn accept_completion(model: &mut Model) {
     let Some(item) = model.editor.completions.get(index).cloned() else {
         return;
     };
-    replace_current_token(model, &item.label);
+    let dialect = editor_dialect(model);
+    let text = match item.kind {
+        // A join condition is already written out; quoting it would break it.
+        dexo_sql::CompletionKind::Keyword | dexo_sql::CompletionKind::Snippet => item.label.clone(),
+        _ => dialect.quote_if_needed(&item.label),
+    };
+    let range = model.editor.completion_replace.clone();
+    replace_range(model, range, &text);
     model.editor.completion_open = false;
     model.editor.completions.clear();
     refresh_intelligence(model, false);
@@ -250,12 +477,10 @@ pub fn move_completion(model: &mut Model, delta: i32) {
     );
 }
 
-fn replace_current_token(model: &mut Model, text: &str) {
-    let sql = model.active_document().text();
-    let cursor = model.active_document().cursor();
-    let prefix: String = sql.chars().take(cursor).collect();
-    let token_chars = current_token(&prefix).chars().count();
-    let start = cursor.saturating_sub(token_chars);
+/// Replaces a byte range, which is what the analysis reports. Accepting used to
+/// recompute the token being replaced from the raw text, with its own idea of where one
+/// starts -- so a qualified or quoted name was replaced from the wrong place.
+fn replace_range(model: &mut Model, range: std::ops::Range<usize>, text: &str) {
     let doc = model.active_document_mut();
     if !doc.typing {
         doc.sql.end_group();
@@ -263,7 +488,7 @@ fn replace_current_token(model: &mut Model, text: &str) {
         doc.typing = true;
     }
     doc.anchor = None;
-    let _ = doc.sql.replace_chars(start..cursor, text);
+    let _ = doc.sql.replace_bytes(range, text);
     reveal_cursor(doc);
 }
 
@@ -297,18 +522,6 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     match key.code {
-        KeyCode::Char(ch) if ctrl && (ch == 'z' || ch == 'Z') => {
-            undo(model);
-            true
-        }
-        KeyCode::Char(ch) if ctrl && (ch == 'y' || ch == 'Y') => {
-            redo(model);
-            true
-        }
-        KeyCode::Char('a') if ctrl => {
-            select_all(model);
-            true
-        }
         KeyCode::Char(ch) if !ctrl => {
             insert_text(model, &ch.to_string());
             suggest_live(model);
@@ -339,7 +552,15 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             true
         }
         KeyCode::Tab => {
-            insert_text(model, "    ");
+            // Tab has three owners here, in this order: the open popup takes it, then an
+            // active snippet, and only then does it indent.
+            if !move_snippet_stop(model, 1) {
+                insert_text(model, "    ");
+            }
+            true
+        }
+        KeyCode::BackTab => {
+            move_snippet_stop(model, -1);
             true
         }
         KeyCode::Backspace => {
@@ -379,7 +600,63 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     }
 }
 
+/// Where an edit starts and how long the buffer was, so the snippet's remaining holes
+/// can be moved with the text. Without this, typing into one hole leaves every later one
+/// pointing at the wrong characters.
+fn edit_mark(model: &Model) -> (usize, usize) {
+    let doc = model.active_document();
+    let at = match doc.selection() {
+        Some(range) => range.start.min(doc.cursor()),
+        None => doc.cursor(),
+    };
+    (at, doc.text().chars().count())
+}
+
+fn shift_snippet_stops(model: &mut Model, mark: (usize, usize)) {
+    if model.editor.snippet_stops.is_empty() {
+        return;
+    }
+    let (at, before) = mark;
+    let after = model.active_document().text().chars().count();
+    if after == before {
+        return;
+    }
+    let shift = |value: &mut usize| {
+        if *value >= at {
+            *value = (*value as i64 + after as i64 - before as i64).max(at as i64) as usize;
+        }
+    };
+    for stop in &mut model.editor.snippet_stops {
+        shift(&mut stop.start);
+        shift(&mut stop.end);
+    }
+}
+
+/// Drops pasted text in whole. Character by character it was one dispatch, one
+/// intelligence pass and one frame each -- and the completion popup it opened on the
+/// way turned the next tab in the text into an accepted suggestion instead of
+/// indentation.
+pub fn paste(model: &mut Model, text: &str) -> bool {
+    if model.focus != crate::model::Focus::Editor || model.active_document().kind.is_table() {
+        return false;
+    }
+    // The completion popup is the editor's own, not a modal with a claim on the paste:
+    // pasting dismisses it. Anything else on top does own the keys, and the paste with
+    // them, or the text lands in the buffer underneath where nobody sees it go.
+    model.editor.completion_open = false;
+    if crate::mouse::overlay_blocks_workbench(model) {
+        return false;
+    }
+    // A paste is not typing: none of it should be completed or expanded, and the whole
+    // of it belongs in one undo step.
+    end_typing(model);
+    insert_text(model, &text.replace("\r\n", "\n").replace('\r', "\n"));
+    end_typing(model);
+    true
+}
+
 fn insert_text(model: &mut Model, text: &str) {
+    let mark = edit_mark(model);
     let doc = model.active_document_mut();
     let range = doc.selection();
     if range.is_some() && doc.typing {
@@ -398,6 +675,7 @@ fn insert_text(model: &mut Model, text: &str) {
         doc.sql.insert(doc.sql.cursor(), text)
     };
     reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
 }
 
 fn insert_newline(model: &mut Model) {
@@ -409,6 +687,7 @@ fn insert_newline(model: &mut Model) {
 }
 
 fn backspace(model: &mut Model) {
+    let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
     if let Some(range) = doc.selection() {
@@ -421,9 +700,11 @@ fn backspace(model: &mut Model) {
         }
     }
     reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
 }
 
 fn delete(model: &mut Model) {
+    let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
     if let Some(range) = doc.selection() {
@@ -437,23 +718,24 @@ fn delete(model: &mut Model) {
         }
     }
     reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
 }
 
-fn undo(model: &mut Model) {
+pub fn undo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.undo();
     reveal_cursor(doc);
 }
 
-fn redo(model: &mut Model) {
+pub fn redo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.redo();
     reveal_cursor(doc);
 }
 
-fn select_all(model: &mut Model) {
+pub fn select_all(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let len = doc.sql.text().chars().count();
@@ -512,6 +794,13 @@ fn apply_move(doc: &mut EditorDocument, cursor: usize, shift: bool) {
         doc.anchor = None;
         let _ = doc.sql.set_cursor(cursor);
     }
+}
+
+pub(crate) fn extend_selection_to(model: &mut Model, cursor: usize) {
+    end_typing(model);
+    let doc = model.active_document_mut();
+    apply_move(doc, cursor, true);
+    reveal_cursor(doc);
 }
 
 pub(crate) fn end_typing(model: &mut Model) {
@@ -675,26 +964,41 @@ pub fn handle_snippet_key(model: &mut Model, key: KeyEvent) -> bool {
     }
 }
 
-pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Esc => {
-            model.editor.parameter_prompt = false;
-            true
-        }
-        KeyCode::Backspace => {
-            model.editor.parameter_draft.pop();
-            true
-        }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-            model.editor.parameter_draft.push(ch);
-            true
-        }
-        KeyCode::Enter => {
+/// Leaves the prompt without running anything. One place, so the key and the mouse
+/// cannot come to mean different things by it.
+pub fn cancel_parameters(model: &mut Model) {
+    model.editor.parameter_prompt = false;
+    model.editor.parameter_index = 0;
+    model.editor.parameter_draft.clear();
+    model.editor.parameter_footer = crate::widgets::form::FooterFocus::Input;
+}
+
+/// Returns what the key did, because the caller has to tell a submit from a cancel:
+/// both close the prompt, and only one of them should run the statement.
+pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> crate::widgets::form::FooterKey {
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let outcome = footer_key(&mut model.editor.parameter_footer, &key);
+    match outcome {
+        FooterKey::Cancel => cancel_parameters(model),
+        FooterKey::Submit => {
             submit_parameters(model);
-            true
+            model.editor.parameter_footer = FooterFocus::Input;
         }
-        _ => false,
+        FooterKey::Moved => {}
+        FooterKey::Pass if model.editor.parameter_footer == FooterFocus::Input => match key.code {
+            KeyCode::Backspace => {
+                model.editor.parameter_draft.pop();
+            }
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
+                model.editor.parameter_draft.push(ch);
+            }
+            _ => {}
+        },
+        FooterKey::Pass => {}
     }
+    outcome
 }
 
 pub fn reveal_cursor(doc: &mut EditorDocument) {

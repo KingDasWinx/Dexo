@@ -10,6 +10,16 @@ pub enum ExplainView {
     Summary,
 }
 
+impl ExplainView {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Tree => Self::Table,
+            Self::Table => Self::Summary,
+            Self::Summary => Self::Tree,
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplainScreen {
     pub plan: Option<ExplainPlan>,

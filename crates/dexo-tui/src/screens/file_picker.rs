@@ -1,5 +1,8 @@
 use std::path::{Path, PathBuf};
 
+use crate::widgets::form::{FooterFocus, footer_line};
+use crate::widgets::text_input::TextInput;
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum FilePickerMode {
     #[default]
@@ -7,18 +10,91 @@ pub enum FilePickerMode {
     Save,
     Transfer,
     Diagnostics,
+    ConfigExport,
+    ConfigImport,
+}
+
+impl FilePickerMode {
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Open => "Open file",
+            Self::Save => "Save file",
+            Self::Transfer => "Choose path",
+            Self::Diagnostics => "Save diagnostics",
+            Self::ConfigExport => "Export config to",
+            Self::ConfigImport => "Import config from",
+        }
+    }
+
+    pub fn submit_label(self) -> &'static str {
+        match self {
+            Self::Open => "Open",
+            Self::Save | Self::Diagnostics | Self::ConfigExport => "Save",
+            Self::Transfer => "Choose",
+            Self::ConfigImport => "Open",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FilePickerSection {
+    #[default]
+    Browser,
+    Recent,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum FilePickerLineKind {
+    Cwd,
+    RecentHeader,
+    RecentItem(usize),
+    BrowseHeader,
+    BrowserEntry(usize),
+    Name,
+    Error,
+    Footer,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FilePickerLayout {
+    pub lines: Vec<String>,
+    pub kinds: Vec<FilePickerLineKind>,
+    pub browser_offset: usize,
+    pub browser_rows: usize,
+}
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum FilePickerFocus {
+    #[default]
+    List,
+    Name,
+    Submit,
+    Cancel,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct FileEntry {
+    pub path: PathBuf,
+    pub name: String,
+    pub is_dir: bool,
+    pub is_parent: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilePicker {
     pub open: bool,
     pub cwd: PathBuf,
-    pub entries: Vec<PathBuf>,
+    pub entries: Vec<FileEntry>,
     pub selected: usize,
     pub offset: usize,
     pub show_hidden: bool,
     pub error: Option<String>,
     pub overwrite: bool,
+    pub name: TextInput,
+    pub focus: FilePickerFocus,
+    pub section: FilePickerSection,
+    pub recent_selected: usize,
+    pub recent_paths: Vec<PathBuf>,
 }
 
 impl Default for FilePicker {
@@ -32,11 +108,36 @@ impl Default for FilePicker {
             show_hidden: false,
             error: None,
             overwrite: false,
+            name: TextInput::default(),
+            focus: FilePickerFocus::List,
+            section: FilePickerSection::Browser,
+            recent_selected: 0,
+            recent_paths: Vec::new(),
         }
     }
 }
 
 impl FilePicker {
+    pub fn open_browser(&mut self) {
+        self.open_browser_with_recents(&[]);
+    }
+
+    pub fn open_browser_with_recents(&mut self, recent: &[PathBuf]) {
+        self.open = true;
+        self.name.clear();
+        self.focus = FilePickerFocus::List;
+        self.error = None;
+        self.recent_paths = recent.to_vec();
+        if self.recent_paths.is_empty() {
+            self.section = FilePickerSection::Browser;
+            self.recent_selected = 0;
+        } else {
+            self.section = FilePickerSection::Recent;
+            self.recent_selected = 0;
+        }
+        self.refresh();
+    }
+
     pub fn refresh(&mut self) {
         match read_entries(&self.cwd, self.show_hidden) {
             Ok(entries) => {
@@ -53,8 +154,12 @@ impl FilePicker {
     }
 
     pub fn parent(&mut self) {
+        self.section = FilePickerSection::Browser;
         if let Some(parent) = self.cwd.parent() {
             self.cwd = parent.to_path_buf();
+            self.refresh();
+        } else if !drive_roots().is_empty() {
+            self.cwd = PathBuf::new();
             self.refresh();
         }
     }
@@ -78,11 +183,75 @@ impl FilePicker {
         Ok(path)
     }
 
+    pub fn activate_selected(&mut self) -> Option<PathBuf> {
+        if self.section == FilePickerSection::Recent {
+            return self.recent_paths.get(self.recent_selected).cloned();
+        }
+        let entry = self.entries.get(self.selected)?.clone();
+        if entry.is_dir {
+            self.cwd = entry.path;
+            self.refresh();
+            None
+        } else {
+            self.name.set_text(entry.name.clone());
+            Some(entry.path)
+        }
+    }
+
     pub fn selected_path(&self) -> Option<PathBuf> {
-        self.entries.get(self.selected).cloned()
+        self.entries
+            .get(self.selected)
+            .map(|entry| entry.path.clone())
+    }
+
+    pub fn chosen_path(&self) -> Option<PathBuf> {
+        let name = self.name.trim();
+        if !name.is_empty() {
+            let path = Path::new(name);
+            return Some(if path.is_absolute() {
+                path.to_path_buf()
+            } else {
+                self.cwd.join(name)
+            });
+        }
+        if self.section == FilePickerSection::Recent {
+            return self.recent_paths.get(self.recent_selected).cloned();
+        }
+        let entry = self.entries.get(self.selected)?;
+        if entry.is_dir || entry.is_parent {
+            None
+        } else {
+            Some(entry.path.clone())
+        }
+    }
+
+    pub fn jump_to(&mut self, prefix: char, rows: usize) {
+        if self.section != FilePickerSection::Browser || self.entries.is_empty() {
+            return;
+        }
+        let needle = prefix.to_ascii_lowercase();
+        let start = self.selected + 1;
+        let found = (0..self.entries.len()).find_map(|step| {
+            let index = (start + step) % self.entries.len();
+            let name = self.entries[index].name.to_ascii_lowercase();
+            name.starts_with(needle).then_some(index)
+        });
+        if let Some(index) = found {
+            self.selected = index;
+            self.offset = crate::palette::scroll_to_selection(
+                self.selected,
+                self.offset,
+                self.entries.len(),
+                rows.max(1),
+            );
+        }
     }
 
     pub fn move_selection(&mut self, delta: i32, rows: usize) {
+        if self.section == FilePickerSection::Recent {
+            self.move_recent(delta);
+            return;
+        }
         if self.entries.is_empty() {
             return;
         }
@@ -95,23 +264,292 @@ impl FilePicker {
             rows.max(1),
         );
     }
+
+    fn move_recent(&mut self, delta: i32) {
+        if self.recent_paths.is_empty() {
+            return;
+        }
+        if delta > 0 && self.recent_selected + 1 >= self.recent_paths.len() {
+            self.section = FilePickerSection::Browser;
+            self.selected = 0;
+            self.offset = 0;
+            return;
+        }
+        if delta < 0 && self.recent_selected == 0 {
+            return;
+        }
+        let next = (self.recent_selected as i32 + delta)
+            .clamp(0, self.recent_paths.len() as i32 - 1) as usize;
+        self.recent_selected = next;
+    }
+
+    fn move_browser_up(&mut self, rows: usize) {
+        if self.selected == 0 && !self.recent_paths.is_empty() {
+            self.section = FilePickerSection::Recent;
+            self.recent_selected = self.recent_paths.len().saturating_sub(1);
+            return;
+        }
+        self.move_selection(-1, rows);
+    }
+
+    pub fn focus_next(&mut self) {
+        self.focus = match self.focus {
+            FilePickerFocus::List => FilePickerFocus::Name,
+            FilePickerFocus::Name => FilePickerFocus::Submit,
+            FilePickerFocus::Submit => FilePickerFocus::Cancel,
+            FilePickerFocus::Cancel => FilePickerFocus::List,
+        };
+    }
+
+    pub fn focus_prev(&mut self) {
+        self.focus = match self.focus {
+            FilePickerFocus::List => FilePickerFocus::Cancel,
+            FilePickerFocus::Name => FilePickerFocus::List,
+            FilePickerFocus::Submit => FilePickerFocus::Name,
+            FilePickerFocus::Cancel => FilePickerFocus::Submit,
+        };
+    }
+
+    pub fn move_down(&mut self, rows: usize) {
+        match self.focus {
+            FilePickerFocus::List if self.section == FilePickerSection::Recent => {
+                self.move_recent(1);
+            }
+            FilePickerFocus::List
+                if self.section == FilePickerSection::Browser
+                    && self.selected + 1 >= self.entries.len() =>
+            {
+                self.focus = FilePickerFocus::Name;
+            }
+            FilePickerFocus::List => self.move_selection(1, rows),
+            FilePickerFocus::Name => self.focus = FilePickerFocus::Submit,
+            FilePickerFocus::Submit => self.focus = FilePickerFocus::Cancel,
+            FilePickerFocus::Cancel => {}
+        }
+    }
+
+    pub fn move_up(&mut self, rows: usize) {
+        match self.focus {
+            FilePickerFocus::List if self.section == FilePickerSection::Recent => {
+                self.move_recent(-1);
+            }
+            FilePickerFocus::List
+                if self.section == FilePickerSection::Browser && self.selected == 0 =>
+            {
+                self.move_browser_up(rows);
+            }
+            FilePickerFocus::List => self.move_selection(-1, rows),
+            FilePickerFocus::Name => {
+                if self.recent_paths.is_empty() {
+                    self.focus = FilePickerFocus::List;
+                } else {
+                    self.section = FilePickerSection::Recent;
+                    self.recent_selected = self.recent_paths.len().saturating_sub(1);
+                    self.focus = FilePickerFocus::List;
+                }
+            }
+            FilePickerFocus::Submit => self.focus = FilePickerFocus::Name,
+            FilePickerFocus::Cancel => self.focus = FilePickerFocus::Submit,
+        }
+    }
+
+    pub fn footer_left(&mut self) {
+        if self.focus == FilePickerFocus::Cancel {
+            self.focus = FilePickerFocus::Submit;
+        }
+    }
+
+    pub fn footer_right(&mut self) {
+        if self.focus == FilePickerFocus::Submit {
+            self.focus = FilePickerFocus::Cancel;
+        }
+    }
+
+    pub fn footer_focus(&self) -> FooterFocus {
+        match self.focus {
+            FilePickerFocus::Submit => FooterFocus::Submit,
+            FilePickerFocus::Cancel => FooterFocus::Cancel,
+            _ => FooterFocus::Input,
+        }
+    }
+
+    pub fn layout(&self, mode: FilePickerMode, rows: usize) -> FilePickerLayout {
+        let rows = rows.max(1);
+        let show_recent = mode == FilePickerMode::Open && !self.recent_paths.is_empty();
+        let mut lines = Vec::new();
+        let mut kinds = Vec::new();
+
+        if show_recent {
+            lines.push("Recent files".into());
+            kinds.push(FilePickerLineKind::RecentHeader);
+            for (index, path) in self.recent_paths.iter().enumerate() {
+                let marker = if self.section == FilePickerSection::Recent
+                    && index == self.recent_selected
+                    && self.focus == FilePickerFocus::List
+                {
+                    ">"
+                } else {
+                    " "
+                };
+                let label = recent_label(path);
+                lines.push(format!("{marker} {label}"));
+                kinds.push(FilePickerLineKind::RecentItem(index));
+            }
+            lines.push("Browse".into());
+            kinds.push(FilePickerLineKind::BrowseHeader);
+        }
+
+        let cwd = if self.cwd.as_os_str().is_empty() {
+            "Drives".into()
+        } else {
+            self.cwd.display().to_string()
+        };
+        lines.push(cwd.clone());
+        kinds.push(FilePickerLineKind::Cwd);
+
+        let browser_offset = crate::palette::scroll_to_selection(
+            self.selected,
+            self.offset,
+            self.entries.len(),
+            rows.max(1),
+        );
+        let browser_rows = rows.max(1);
+        for (index, entry) in self
+            .entries
+            .iter()
+            .enumerate()
+            .skip(browser_offset)
+            .take(browser_rows)
+        {
+            let marker = if self.section == FilePickerSection::Browser
+                && index == self.selected
+                && self.focus == FilePickerFocus::List
+            {
+                ">"
+            } else {
+                " "
+            };
+            let kind = if entry.is_dir { "/" } else { " " };
+            lines.push(format!("{marker}{kind} {}", entry.name));
+            kinds.push(FilePickerLineKind::BrowserEntry(index));
+        }
+
+        lines.push(
+            self.name
+                .labeled_line("name:", self.focus == FilePickerFocus::Name),
+        );
+        kinds.push(FilePickerLineKind::Name);
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
+            kinds.push(FilePickerLineKind::Error);
+        }
+        lines.push(footer_line(mode.submit_label(), self.footer_focus()));
+        kinds.push(FilePickerLineKind::Footer);
+
+        FilePickerLayout {
+            lines,
+            kinds,
+            browser_offset,
+            browser_rows,
+        }
+    }
+
+    pub fn lines(&self, mode: FilePickerMode, rows: usize) -> Vec<String> {
+        self.layout(mode, rows).lines
+    }
+
+    pub fn select_recent(&mut self, index: usize) {
+        if index < self.recent_paths.len() {
+            self.section = FilePickerSection::Recent;
+            self.recent_selected = index;
+            self.focus = FilePickerFocus::List;
+        }
+    }
+
+    pub fn select_browser(&mut self, index: usize, rows: usize) {
+        if index < self.entries.len() {
+            self.section = FilePickerSection::Browser;
+            self.selected = index;
+            self.offset = crate::palette::scroll_to_selection(
+                self.selected,
+                self.offset,
+                self.entries.len(),
+                rows.max(1),
+            );
+            self.focus = FilePickerFocus::List;
+        }
+    }
 }
 
-pub fn read_entries(dir: &Path, show_hidden: bool) -> Result<Vec<PathBuf>, String> {
+fn recent_label(path: &Path) -> String {
+    path.file_name()
+        .map(|name| name.to_string_lossy().into_owned())
+        .unwrap_or_else(|| path.display().to_string())
+}
+
+pub fn read_entries(dir: &Path, show_hidden: bool) -> Result<Vec<FileEntry>, String> {
+    if dir.as_os_str().is_empty() {
+        return Ok(drive_roots()
+            .into_iter()
+            .map(|path| FileEntry {
+                name: path.display().to_string(),
+                is_dir: true,
+                is_parent: false,
+                path,
+            })
+            .collect());
+    }
     let mut entries = Vec::new();
+    if let Some(parent) = dir.parent() {
+        entries.push(FileEntry {
+            path: parent.to_path_buf(),
+            name: "..".into(),
+            is_dir: true,
+            is_parent: true,
+        });
+    } else {
+        for path in drive_roots() {
+            if path != dir {
+                entries.push(FileEntry {
+                    name: path.display().to_string(),
+                    is_dir: true,
+                    is_parent: false,
+                    path,
+                });
+            }
+        }
+    }
     for entry in std::fs::read_dir(dir).map_err(|error| error.to_string())? {
         let entry = entry.map_err(|error| error.to_string())?;
         let path = entry.path();
         let name = path
             .file_name()
             .and_then(|name| name.to_str())
-            .unwrap_or_default();
+            .unwrap_or_default()
+            .to_string();
         if !show_hidden && name.starts_with('.') {
             continue;
         }
-        entries.push(path);
+        let is_dir = path.is_dir();
+        entries.push(FileEntry {
+            path,
+            name,
+            is_dir,
+            is_parent: false,
+        });
     }
-    entries.sort();
+    entries.sort_by(|left, right| match (left.is_parent, right.is_parent) {
+        (true, false) => std::cmp::Ordering::Less,
+        (false, true) => std::cmp::Ordering::Greater,
+        _ => match (left.is_dir, right.is_dir) {
+            (true, false) => std::cmp::Ordering::Less,
+            (false, true) => std::cmp::Ordering::Greater,
+            _ => left
+                .name
+                .to_ascii_lowercase()
+                .cmp(&right.name.to_ascii_lowercase()),
+        },
+    });
     Ok(entries)
 }
 
@@ -132,7 +570,9 @@ pub fn drive_roots() -> Vec<PathBuf> {
 
 #[cfg(test)]
 mod tests {
-    use super::{FilePicker, drive_roots, read_entries};
+    use super::{FilePicker, FilePickerFocus, FilePickerMode, drive_roots, read_entries};
+    use crate::widgets::text_input::TextInput;
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 
     #[test]
     fn parent_hidden_absolute_and_inaccessible() {
@@ -152,11 +592,21 @@ mod tests {
             picker
                 .entries
                 .iter()
-                .any(|path| path.ends_with("visible.txt"))
+                .any(|entry| entry.path.ends_with("visible.txt"))
         );
-        assert!(!picker.entries.iter().any(|path| path.ends_with(".secret")));
+        assert!(
+            !picker
+                .entries
+                .iter()
+                .any(|entry| entry.path.ends_with(".secret"))
+        );
         picker.toggle_hidden();
-        assert!(picker.entries.iter().any(|path| path.ends_with(".secret")));
+        assert!(
+            picker
+                .entries
+                .iter()
+                .any(|entry| entry.path.ends_with(".secret"))
+        );
         let abs = picker.enter_path(dir.path().join("visible.txt")).unwrap();
         assert!(abs.is_absolute());
         assert!(!drive_roots().is_empty());
@@ -183,5 +633,132 @@ mod tests {
         assert!(picker.offset > 0);
         assert!(picker.selected >= picker.offset);
         assert!(picker.selected < picker.offset + 8);
+    }
+
+    #[test]
+    fn browser_lists_parent_dirs_first_short_names_and_actions() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("z-file.txt"), b"x").unwrap();
+        std::fs::create_dir(dir.path().join("a-dir")).unwrap();
+        let mut picker = FilePicker {
+            cwd: dir.path().to_path_buf(),
+            ..FilePicker::default()
+        };
+        picker.refresh();
+        assert_eq!(picker.entries[0].name, "..");
+        assert!(picker.entries[0].is_parent);
+        let names: Vec<&str> = picker
+            .entries
+            .iter()
+            .map(|entry| entry.name.as_str())
+            .collect();
+        let dir_at = names.iter().position(|name| *name == "a-dir").unwrap();
+        let file_at = names.iter().position(|name| *name == "z-file.txt").unwrap();
+        assert!(dir_at < file_at);
+        assert!(picker.entries.iter().all(|entry| {
+            entry.is_parent || (!entry.name.contains('/') && !entry.name.contains('\\'))
+        }));
+        picker.name.set_text("out.sql");
+        assert_eq!(picker.chosen_path(), Some(dir.path().join("out.sql")));
+        let lines = picker.lines(FilePickerMode::Save, 12);
+        assert!(lines.iter().any(|line| line.contains("/ a-dir")));
+        assert!(lines.iter().any(|line| line.contains(" z-file.txt")));
+        assert!(lines.iter().any(|line| line.contains("[Save]")));
+        assert!(lines.iter().any(|line| line.contains("[Cancel]")));
+        picker.focus = FilePickerFocus::Cancel;
+        assert!(
+            picker
+                .lines(FilePickerMode::Save, 12)
+                .iter()
+                .any(|line| line.contains(">[Cancel]"))
+        );
+    }
+
+    #[test]
+    fn arrow_and_tab_navigation_reaches_save_and_cancel() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("file.sql"), b"x").unwrap();
+        let mut picker = FilePicker {
+            cwd: dir.path().to_path_buf(),
+            ..FilePicker::default()
+        };
+        picker.refresh();
+        assert_eq!(picker.focus, FilePickerFocus::List);
+        picker.selected = picker.entries.len().saturating_sub(1);
+
+        picker.move_down(8);
+        assert_eq!(picker.focus, FilePickerFocus::Name);
+
+        picker.move_down(8);
+        assert_eq!(picker.focus, FilePickerFocus::Submit);
+        assert!(
+            picker
+                .lines(FilePickerMode::Save, 8)
+                .iter()
+                .any(|line| line.contains(">[Save]"))
+        );
+
+        picker.move_down(8);
+        assert_eq!(picker.focus, FilePickerFocus::Cancel);
+
+        picker.footer_left();
+        assert_eq!(picker.focus, FilePickerFocus::Submit);
+
+        picker.focus_prev();
+        assert_eq!(picker.focus, FilePickerFocus::Name);
+
+        picker.focus_next();
+        assert_eq!(picker.focus, FilePickerFocus::Submit);
+    }
+
+    #[test]
+    fn open_mode_lists_recent_files_before_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        let recent = vec![
+            dir.path().join("recent-a.sql"),
+            dir.path().join("recent-b.sql"),
+        ];
+        let mut picker = FilePicker {
+            cwd: dir.path().to_path_buf(),
+            ..FilePicker::default()
+        };
+        picker.open_browser_with_recents(&recent);
+        let lines = picker.lines(FilePickerMode::Open, 8);
+        assert!(lines.iter().any(|line| line.contains("Recent files")));
+        assert!(lines.iter().any(|line| line.contains("recent-a.sql")));
+        assert!(lines.iter().any(|line| line.contains("Browse")));
+        assert_eq!(picker.section, super::FilePickerSection::Recent);
+        assert_eq!(picker.chosen_path(), Some(recent[0].clone()));
+    }
+
+    #[test]
+    fn recent_navigation_moves_into_browser() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("one.sql"), b"x").unwrap();
+        let recent = vec![dir.path().join("recent.sql")];
+        let mut picker = FilePicker {
+            cwd: dir.path().to_path_buf(),
+            ..FilePicker::default()
+        };
+        picker.open_browser_with_recents(&recent);
+        picker.move_down(8);
+        assert_eq!(picker.section, super::FilePickerSection::Browser);
+        assert_eq!(picker.selected, 0);
+    }
+
+    #[test]
+    fn name_field_supports_word_navigation() {
+        let mut picker = FilePicker {
+            focus: FilePickerFocus::Name,
+            name: TextInput::new("query-1.sql"),
+            ..FilePicker::default()
+        };
+        picker
+            .name
+            .handle_key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE));
+        picker
+            .name
+            .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
+        assert_eq!(picker.name.cursor(), "query-1.".chars().count());
     }
 }

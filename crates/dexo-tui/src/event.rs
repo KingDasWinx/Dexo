@@ -5,6 +5,7 @@ use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::collections::VecDeque;
+use std::sync::Arc;
 use std::time::Duration;
 
 use crate::action::{Action, Effect};
@@ -18,6 +19,7 @@ pub fn action_from_event(event: Event) -> Option<Action> {
         Event::Key(key) if key.kind == KeyEventKind::Press => Some(Action::Key(key)),
         Event::Mouse(mouse) => Some(Action::Mouse(mouse)),
         Event::Resize(width, height) => Some(Action::Resize { width, height }),
+        Event::Paste(text) => Some(Action::Paste(text)),
         _ => None,
     }
 }
@@ -33,12 +35,36 @@ fn map_tui(error: impl std::fmt::Display) -> TuiError {
 
 async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     let paths = AppPaths::discover().map_err(map_tui)?;
+    let first_run = !crate::entrance::is_complete(&paths.data_dir);
+    let animate_entrance = crate::entrance::should_animate(&paths.data_dir);
     let worker = StorageWorker::start(paths.database).map_err(map_tui)?;
     let bootstrap = worker.bootstrap().await.map_err(map_tui)?;
     let (action_tx, action_rx) = tokio::sync::mpsc::channel(32);
     let mut runtime = WorkbenchRuntime::new(action_tx, worker, registry);
-    let mut guard = TerminalGuard::start(CrosstermTerminal)?;
-    let result = run_loop(bootstrap, &mut runtime, action_rx).await;
+    let mut guard = TerminalGuard::enter(CrosstermTerminal)?;
+    // The workbench does not exist yet, so the theme is read from what was saved -- the
+    // same mapping the workbench will apply, so the entrance cannot come up in another.
+    // The background goes to the terminal first: the entrance resets to the terminal's
+    // default after every cell, and only the default carries the theme's ground.
+    let theme = crate::theme::saved_theme(&paths.data_dir);
+    let capabilities = crate::capabilities::TerminalCapabilities::detect();
+    guard.set_background_color(theme.background_rgb(capabilities))?;
+    if animate_entrance {
+        let _ = crate::entrance::play_animation(&theme);
+        crate::entrance::clear_animation()?;
+    }
+    let animate_logo = first_run && animate_entrance && std::env::var_os("NO_COLOR").is_none();
+    let logo_frames = Arc::new(crate::entrance::logo_frames(animate_logo, &theme));
+    guard.enable_raw()?;
+    let result = run_loop(
+        bootstrap,
+        first_run,
+        logo_frames,
+        &mut runtime,
+        action_rx,
+        &mut guard,
+    )
+    .await;
     runtime.dispatch(Effect::Shutdown).await;
     guard.restore();
     result
@@ -46,19 +72,47 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
 
 async fn run_loop(
     bootstrap: crate::runtime::storage_worker::BootstrapState,
+    show_onboarding: bool,
+    logo_frames: Arc<Vec<crate::entrance::LogoFrame>>,
     runtime: &mut WorkbenchRuntime,
     mut action_rx: tokio::sync::mpsc::Receiver<Action>,
+    guard: &mut TerminalGuard<CrosstermTerminal>,
 ) -> Result<(), TuiError> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
     let _ = crate::update::update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
+    model.onboarding.open = show_onboarding;
+    model.onboarding.logo_frames = logo_frames;
+    guard.set_mouse(model.mouse)?;
     let mut events = EventStream::new();
+    let mut onboarding_tick = tokio::time::interval(Duration::from_millis(66));
+    onboarding_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Only runs while a toast that can age out is up, the same shape as onboarding_tick.
+    // A sticky error toast never starts the clock.
+    let mut toast_tick = tokio::time::interval(Duration::from_secs(1));
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let mut hits = crate::mouse::HitMap::default();
-        terminal.draw(|frame| crate::render::render(frame, &model, &mut hits))?;
+        let mut drawn = ratatui::layout::Rect::default();
+        terminal.draw(|frame| {
+            drawn = frame.area();
+            crate::render::render(frame, &model, &mut hits);
+        })?;
         model.hits = hits;
+        // crossterm only reports a resize when the size *changes*, so a terminal the user
+        // never resizes left the model on `Model::default()`'s 160x50 for the whole
+        // session -- every layout number computed for a screen that was not there.
+        if (model.width, model.height) != (drawn.width, drawn.height) {
+            let _ = crate::update::update(
+                &mut model,
+                Action::Resize {
+                    width: drawn.width,
+                    height: drawn.height,
+                },
+            );
+            continue;
+        }
         tokio::select! {
             terminal_event = events.next() => {
                 let Some(event) = terminal_event else { break };
@@ -75,6 +129,12 @@ async fn run_loop(
                     return Ok(());
                 }
             }
+            _ = onboarding_tick.tick(), if model.onboarding.open && model.onboarding.logo_frames.len() > 1 => {
+                let _ = crate::update::update(&mut model, Action::OnboardingTick);
+            }
+            _ = toast_tick.tick(), if model.messages.expires() => {
+                let _ = crate::update::update(&mut model, Action::ToastTick);
+            }
             _ = checkpoint.tick() => {
                 let effects = crate::update::update(&mut model, Action::CheckpointTick);
                 if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
@@ -82,6 +142,11 @@ async fn run_loop(
                 }
             }
         }
+        guard.set_mouse(model.mouse)?;
+        // The theme can change under the user (mode, accent), so this is offered every
+        // frame and the guard only forwards a change.
+        guard.set_cursor_color(model.theme.caret_rgb(model.capabilities))?;
+        guard.set_background_color(model.theme.background_rgb(model.capabilities))?;
     }
     Ok(())
 }

@@ -3,10 +3,10 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 demo  local  public                                         
-┌▸ Explain─────────────────────────────────────────────────┐
-│explain captured_at=1710000000 paused=false analyze=true c│
-│nodes=1 scans=1 planning_ms=0.04 execution_ms=0.21 raw_byt│
-│raw_bytes=59                                              │
+ scratch.sql ×  +                                           
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
+│   1▸select 1                                             │
+│                                                          │
 │                                                          │
 │                                                          │
 │                                                          │
@@ -21,4 +21,4 @@ demo  local  public
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows
+local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1

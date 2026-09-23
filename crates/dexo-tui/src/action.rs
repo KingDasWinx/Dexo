@@ -26,9 +26,19 @@ pub enum Action {
         read_only: bool,
         driver: String,
     },
+    ConnectionSqlReady {
+        connection_id: String,
+        files: Vec<PathBuf>,
+        console: PathBuf,
+        content: String,
+    },
     OpenConnectionForm,
     ConnectionFormError {
         message: String,
+    },
+    /// A spawned connect parked its session and is waiting to be adopted.
+    SessionOpened {
+        token: u64,
     },
     SecretRequired {
         purpose: crate::screens::secret_prompt::SecretPurpose,
@@ -43,6 +53,22 @@ pub enum Action {
     },
     OpenConnections,
     ConnectSelected,
+    EditSelectedConnection,
+    /// Edit, with the cursor already on the group field. The form owns the only text
+    /// input for a group, so "move to group" is that form opened at that field.
+    EditConnectionGroup,
+    /// Context menu for the selected sidebar node.
+    OpenNodeMenu,
+    /// Enter on the tab strip: the `+` creates a document, a tab hands focus to it.
+    ActivateDocumentTab,
+    /// Moves the cursor inside the focused tab strip, `+` included.
+    MoveDocumentTabCursor(i32),
+    /// A bracketed paste, arriving whole rather than as the keys it resembles.
+    Paste(String),
+    /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
+    PasteFromClipboard,
+    /// The answer to the unsaved-changes prompt.
+    ResolveClose(crate::model::CloseChoice),
     DuplicateConnection,
     TestConnection,
     DeleteConnection,
@@ -92,6 +118,7 @@ pub enum Action {
         key: crate::runtime::OperationKey,
     },
     CheckpointTick,
+    OnboardingTick,
     TransactionChanged {
         session: crate::runtime::SessionId,
         generation: u64,
@@ -108,7 +135,6 @@ pub enum Action {
     ClosePalette,
     PaletteQuery(String),
     PaletteSelect,
-    ExecuteQuery,
     ExecuteStatement,
     ExecuteSelection,
     ExecuteDocument,
@@ -123,8 +149,15 @@ pub enum Action {
     ExplorerExpand,
     ExplorerCopyName,
     RefreshCatalogNode,
-    RefreshCatalogSubtree,
     RefreshCatalogAll,
+    /// Names the snapshot search turned up. Late by definition, so it carries the
+    /// document and its revision: by the time it lands the buffer may have moved on, and
+    /// a stale list replacing a fresher one is worse than no list at all.
+    CompletionObjectsLoaded {
+        document: String,
+        revision: u64,
+        objects: Vec<dexo_driver_api::CatalogObject>,
+    },
     CatalogLoaded {
         operation: crate::runtime::OperationId,
         session: String,
@@ -145,15 +178,20 @@ pub enum Action {
     OpenObjectDdl,
     OpenObjectData,
     OpenDependencies,
-    OpenDependents,
     ExplorerUp,
     ExplorerDown,
-    SwitchTab {
+    SelectDocument {
         index: usize,
     },
-    NextTab,
     NextDocument,
+    PrevDocument,
+    NextDocumentTabFocus,
+    PrevDocumentTabFocus,
+    ScrollDocumentTabsPrev,
+    ScrollDocumentTabsNext,
+    CloseDocument,
     NewDocument,
+    RenameDocument,
     SelectGridRow,
     SelectGridColumn,
     NextResultTab,
@@ -161,14 +199,16 @@ pub enum Action {
     SelectResultTab {
         index: usize,
     },
-    InspectorNextTab,
     NextDataPage,
     PrevDataPage,
     SaveActiveDocument,
     OpenDocument,
-    CycleTheme,
+    CycleMode,
+    CycleAccent,
     CycleKeymap,
     ToggleMouse,
+    ToggleAnimation,
+    ToggleUnicode,
     ChangeDataPage {
         offset: u64,
     },
@@ -180,6 +220,14 @@ pub enum Action {
         page: dexo_driver_api::DataPage,
     },
     DataPageFailed {
+        generation: u64,
+        message: String,
+    },
+    TableColumnsLoaded {
+        generation: u64,
+        columns: Vec<dexo_driver_api::ColumnKeyInfo>,
+    },
+    TableColumnsFailed {
         generation: u64,
         message: String,
     },
@@ -237,6 +285,12 @@ pub enum Action {
     ApplyChanges,
     FailApply,
     RevertChanges,
+    DiscardAllChanges,
+    RefreshTableData,
+    ToggleRowDelete,
+    OpenInsertRow,
+    SubmitInsertRow,
+    CancelInsertRow,
     InspectValue,
     OpenRelated,
     DataNavBack,
@@ -284,17 +338,18 @@ pub enum Action {
         message: String,
     },
     OpenExplain,
-    ExplainViewTree,
-    ExplainViewTable,
-    ExplainViewSummary,
+    CycleResultsView,
+    DismissToast,
+    ToastTick,
     ConfirmExplainAnalyze,
     OpenAdmin,
     AdminPause,
     AdminResume,
     ConfirmAdmin,
     OpenMcpProfiles,
-    ConfirmMcpEnable,
+    ToggleMcpProfile,
     RevokeAllMcpGrants,
+    RevokeProfileGrants,
     McpGrantsRevoked {
         count: usize,
     },
@@ -328,16 +383,17 @@ pub enum Action {
     ToggleHelp,
     CycleLayout,
     ResetLayout,
-    HideInspector,
-    LayoutResultsFocus,
+    HideExplorer,
+    HideResults,
     GrowResults,
     ShrinkResults,
     GrowExplorer,
     ShrinkExplorer,
-    GrowInspector,
-    ShrinkInspector,
     RefreshSqlIntelligence,
     FormatSql,
+    EditorUndo,
+    EditorRedo,
+    EditorSelectAll,
     AcceptCompletion,
     InsertSnippet,
     SubmitParameters,
@@ -374,7 +430,17 @@ pub enum Action {
     },
     DocumentLoaded {
         document: String,
+        path: std::path::PathBuf,
         content: String,
+    },
+    DocumentAutosaved {
+        id: String,
+        revision: u64,
+    },
+    /// A `SaveDocument` write landed on disk, so a tab waiting on it can close.
+    DocumentSaved {
+        document: String,
+        revision: u64,
     },
     DocumentConflict {
         path: String,
@@ -399,6 +465,7 @@ pub enum Action {
         project: dexo_app::Project,
         documents: Vec<(String, String)>,
         layout: Option<dexo_storage::WorkbenchLayout>,
+        recent_sql_files: Vec<std::path::PathBuf>,
     },
     ProjectDeleted {
         name: String,
@@ -436,7 +503,7 @@ pub enum FocusTarget {
     Explorer,
     Editor,
     Results,
-    Inspector,
+    DocumentTabs,
 }
 
 #[derive(Clone, Debug)]
@@ -453,6 +520,7 @@ pub struct DocumentIoRequest {
     pub document: String,
     pub path: std::path::PathBuf,
     pub content: String,
+    pub revision: u64,
     pub expected_fingerprint: Option<String>,
 }
 
@@ -530,6 +598,10 @@ impl TransferRequest {
 
 #[derive(Clone, Debug)]
 pub struct FlushedDocument {
+    /// `DocumentKind::storage_tag` -- `None` for an ordinary editor tab.
+    pub kind: Option<String>,
+    /// Profile the document executes against. `None` until it picks one.
+    pub connection_id: Option<String>,
     pub id: String,
     pub title: String,
     pub content: String,
@@ -550,6 +622,11 @@ pub enum Effect {
     },
     ConnectProfile {
         profile: ConnectionProfile,
+        token: u64,
+    },
+    /// Move the session a spawned connect parked into the registry. The registry needs
+    /// `&mut WorkbenchRuntime`, which the task doing the dialling cannot hold.
+    AdoptSession {
         token: u64,
     },
     SubmitSecret {
@@ -603,8 +680,21 @@ pub enum Effect {
         session: SessionId,
         name: String,
     },
+    EnsureConnectionSql {
+        connection_id: String,
+    },
     LoadDocument(DocumentIoRequest),
     SaveDocument(DocumentIoRequest),
+    TouchRecentSqlFile {
+        project_id: String,
+        path: String,
+    },
+    AutosaveDocument {
+        id: String,
+        path: PathBuf,
+        content: String,
+        revision: u64,
+    },
     PreviewDdl {
         change: dexo_driver_api::SchemaChange,
         session: SessionId,
@@ -644,8 +734,9 @@ pub enum Effect {
     LoadMcpProfiles,
     LoadConnectionProfiles,
     LoadMcpAudit,
-    EnableMcpProfile {
+    SetMcpProfileEnabled {
         name: String,
+        enabled: bool,
     },
     RevokeMcpGrants {
         profile: String,
@@ -719,6 +810,11 @@ pub enum Effect {
         session: SessionId,
         generation: u64,
     },
+    LoadTableColumns {
+        target: dexo_driver_api::QualifiedName,
+        session: SessionId,
+        generation: u64,
+    },
     FetchValue {
         value: dexo_driver_api::RemoteValueRef,
         offset: u64,
@@ -730,6 +826,13 @@ pub enum Effect {
         mutations: Vec<dexo_driver_api::Mutation>,
         session: SessionId,
         generation: u64,
+    },
+    ReadClipboard,
+    /// Forgets a document's crash-recovery copy. Without it a document closed with
+    /// "Don't save" came back on the next launch after a crash, since every recovery
+    /// row is restored at boot.
+    DiscardRecovery {
+        document: String,
     },
     CopyToClipboard {
         text: String,
@@ -745,6 +848,17 @@ pub enum Effect {
         database_name: String,
         generation: u64,
     },
+    /// Object names for the completion popup, from the captured snapshot rather than the
+    /// handful of objects the sidebar has loaded. Never columns: those come from what is
+    /// already in memory, and waiting on disk for them would stutter the typing.
+    SearchCompletionObjects {
+        connection_id: String,
+        database_name: String,
+        document: String,
+        revision: u64,
+        query: String,
+        limit: usize,
+    },
     LoadObjectUsage {
         project_id: String,
         connection_id: String,
@@ -755,6 +869,7 @@ pub enum Effect {
         object_id: String,
         favorite: bool,
     },
+    CompleteOnboarding,
     Shutdown,
     Quit,
 }

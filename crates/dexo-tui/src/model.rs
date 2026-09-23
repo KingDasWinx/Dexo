@@ -12,13 +12,14 @@ use crate::runtime::{OperationId, OperationKey, SessionId};
 use crate::capabilities::TerminalCapabilities;
 use crate::keymap::{Chord, Keymap};
 use crate::layout::{LayoutMode, LayoutPlan, LayoutPreset, PaneLayout};
-use crate::mouse::HitMap;
+use crate::mouse::{HitMap, LastClick, PaneEdge};
 use crate::screens::admin::AdminScreen;
 use crate::screens::config_transfer::ConfigTransferScreen;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::connections::ConnectionsScreen;
 use crate::screens::data::DataScreen;
 use crate::screens::diagnostics::DiagnosticsScreen;
+use crate::screens::document_name_prompt::DocumentNamePrompt;
 use crate::screens::editor::EditorState;
 use crate::screens::explain::ExplainScreen;
 use crate::screens::explorer::ExplorerState;
@@ -42,8 +43,56 @@ pub enum Focus {
     Explorer,
     Editor,
     Results,
-    Inspector,
+    /// The strip of document tabs. It owns keys of its own, so it is a pane like the
+    /// rest; `document_tab_focus` is the cursor inside it, the way `explorer.selected`
+    /// is the cursor inside the tree.
+    DocumentTabs,
+    /// Only a table document has this pane: the grid takes the editor's slot and the
+    /// console takes the grid's.
+    Console,
     Palette,
+}
+
+impl Model {
+    /// The pane the stored focus actually points at. Opening a table document moves the
+    /// grid into the editor's slot, and closing one takes the console away -- either way
+    /// the focus left behind would highlight a pane that is not on screen.
+    pub fn effective_focus(&self) -> Focus {
+        if self.focus == Focus::DocumentTabs {
+            return Focus::DocumentTabs;
+        }
+        if self.active_document().kind.is_table() {
+            match self.focus {
+                Focus::Editor => Focus::Results,
+                other => other,
+            }
+        } else {
+            match self.focus {
+                Focus::Console => Focus::Results,
+                other => other,
+            }
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DocumentTabFocus {
+    Document(usize),
+    New,
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum DragKind {
+    PaneDivider(PaneEdge),
+    EditorSelect { anchor: usize },
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct DragState {
+    pub kind: DragKind,
+    pub origin_x: u16,
+    pub origin_y: u16,
+    pub start_value: u16,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -68,6 +117,83 @@ pub struct PaletteState {
 pub struct HelpState {
     pub open: bool,
     pub scroll: u16,
+    pub query: String,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnboardingState {
+    pub open: bool,
+    pub logo_frames: Arc<Vec<crate::entrance::LogoFrame>>,
+    pub logo_frame: usize,
+}
+
+impl Default for OnboardingState {
+    fn default() -> Self {
+        Self {
+            open: false,
+            logo_frames: Arc::new(vec![crate::entrance::static_logo_frame()]),
+            logo_frame: 0,
+        }
+    }
+}
+
+/// Context menu over a sidebar node. The renderer derives where it sits from the
+/// sidebar layout, so nothing here can fall out of step with the row it points at.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct NodeMenuState {
+    pub open: bool,
+    pub selected: usize,
+    pub offset: usize,
+}
+
+/// An execution waiting for the document's connection to open. Replayed rather than
+/// resumed: the action re-reads the buffer, so nothing about it can go stale while the
+/// connect is in flight.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PendingExecute {
+    /// Who asked. Checked on drain -- the user may have moved to another tab.
+    pub document: String,
+    pub action: crate::action::Action,
+    /// The `connect_token` in flight, so a connect from somewhere else cannot fire it.
+    pub token: u64,
+}
+
+/// What to do with a dirty document on its way out.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CloseChoice {
+    Save,
+    Discard,
+    Cancel,
+}
+
+impl CloseChoice {
+    pub fn next(self) -> Self {
+        match self {
+            Self::Save => Self::Discard,
+            Self::Discard => Self::Cancel,
+            Self::Cancel => Self::Save,
+        }
+    }
+
+    pub fn prev(self) -> Self {
+        match self {
+            Self::Save => Self::Cancel,
+            Self::Discard => Self::Save,
+            Self::Cancel => Self::Discard,
+        }
+    }
+}
+
+/// Asked when a document with unsaved changes is closed. Closing used to either save
+/// on its own or, for an untitled document, refuse -- there was no way to let the
+/// changes go.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClosePrompt {
+    /// Which document, by id: the answer applies to it even if the active one moves.
+    pub document: String,
+    pub title: String,
+    /// Starts on Save, so Enter never throws work away by reflex.
+    pub choice: CloseChoice,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -75,29 +201,6 @@ pub struct ResultsMenuState {
     pub open: bool,
     pub selected: usize,
     pub offset: usize,
-}
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct TabsState {
-    pub active: usize,
-    pub titles: Vec<String>,
-    pub scroll: u16,
-}
-
-impl Default for TabsState {
-    fn default() -> Self {
-        Self {
-            active: 0,
-            titles: vec![
-                "SQL".into(),
-                "Data".into(),
-                "DDL".into(),
-                "Properties".into(),
-                "Explain".into(),
-            ],
-            scroll: 0,
-        }
-    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -177,6 +280,17 @@ impl ResultBuffer {
         self.rows = Arc::default();
         self.estimated_bytes = 0;
         self.truncated = false;
+    }
+
+    pub fn remove_row(&mut self, index: usize) {
+        let storage = Arc::make_mut(&mut self.rows);
+        if index >= storage.len() {
+            return;
+        }
+        let removed = storage.remove(index);
+        self.estimated_bytes = self
+            .estimated_bytes
+            .saturating_sub(estimated_row_bytes(&removed));
     }
 }
 
@@ -271,13 +385,200 @@ impl ResultTab {
     }
 }
 
+/// How a message reads at a glance. Nothing else in the app records these -- the log is
+/// never rendered -- so the toast is the only chance the user gets to see one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Severity {
+    /// It happened.
+    Info,
+    /// You asked, and a precondition stopped it. Nothing is broken.
+    Warn,
+    /// It failed.
+    Error,
+}
+
+impl Severity {
+    /// Ticks the toast survives. Zero means it stays until dismissed: an error is the one
+    /// thing here you cannot afford to blink and miss.
+    pub fn ticks(self) -> u8 {
+        match self {
+            Self::Info => 4,
+            Self::Warn => 6,
+            Self::Error => 0,
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Info => "info",
+            Self::Warn => "warn",
+            Self::Error => "error",
+        }
+    }
+}
+
+/// One entry in the log. The toast shows the newest; the Messages view shows them all.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Notification {
+    pub message: String,
+    pub severity: Severity,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct Toast {
+    pub message: String,
+    pub severity: Severity,
+    pub ticks_left: u8,
+}
+
+/// The message log, plus the transient toast that surfaces the newest entry. The log
+/// used to be appended to the status bar, which is the one place a user never looks.
 #[derive(Clone, Debug, Default, PartialEq)]
+pub struct Notifications {
+    entries: Vec<Notification>,
+    pub toast: Option<Toast>,
+}
+
+impl Notifications {
+    /// It happened.
+    pub fn info(&mut self, message: String) {
+        self.emit(Severity::Info, message);
+    }
+
+    /// You asked, and a precondition stopped it.
+    pub fn warn(&mut self, message: String) {
+        self.emit(Severity::Warn, message);
+    }
+
+    /// It failed.
+    pub fn error(&mut self, message: String) {
+        self.emit(Severity::Error, message);
+    }
+
+    fn emit(&mut self, severity: Severity, message: String) {
+        self.toast = Some(Toast {
+            message: message.clone(),
+            severity,
+            ticks_left: severity.ticks(),
+        });
+        self.entries.push(Notification { message, severity });
+    }
+
+    pub fn last(&self) -> Option<&Notification> {
+        self.entries.last()
+    }
+
+    pub fn iter(&self) -> std::slice::Iter<'_, Notification> {
+        self.entries.iter()
+    }
+
+    pub fn len(&self) -> usize {
+        self.entries.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.entries.is_empty()
+    }
+
+    pub fn dismiss(&mut self) {
+        self.toast = None;
+    }
+
+    /// True while a toast is up that will age out on its own -- the clock runs for those
+    /// only, so a sticky error costs nothing.
+    pub fn expires(&self) -> bool {
+        self.toast
+            .as_ref()
+            .is_some_and(|toast| toast.ticks_left > 0)
+    }
+
+    /// Ages the visible toast. A sticky one (`ticks_left == 0`) is left alone.
+    pub fn tick(&mut self) {
+        match &mut self.toast {
+            Some(toast) if toast.ticks_left > 1 => toast.ticks_left -= 1,
+            Some(toast) if toast.ticks_left == 1 => self.toast = None,
+            _ => {}
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
 pub struct ResultsState {
     pub tabs: Vec<ResultTab>,
     pub active: usize,
+    /// Which projection of the output pane is on screen. Explain used to be a
+    /// workbench tab, which put query output in two unrelated places.
+    pub view: ResultsView,
+    /// Explain scrolls on its own; it used to share `tabs.scroll` with four tabs
+    /// that had nothing to do with it.
+    pub explain_scroll: u16,
+    pub messages_scroll: u16,
+    /// Last size the output pane handed down. Kept so a tab created between two syncs
+    /// is born the right size instead of with `GridViewport`'s defaults.
+    viewport_size: (u16, u16),
+}
+
+/// Views of the output pane, in selector order.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ResultsView {
+    #[default]
+    Grid,
+    Explain,
+    /// The log, which until now had no surface at all: a message got one toast and was
+    /// then unreachable.
+    Messages,
+}
+
+impl ResultsView {
+    pub const ALL: [Self; 3] = [Self::Grid, Self::Explain, Self::Messages];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Grid => "Grid",
+            Self::Explain => "Explain",
+            Self::Messages => "Messages",
+        }
+    }
+}
+
+impl Default for ResultsState {
+    fn default() -> Self {
+        let empty = GridViewport::default();
+        Self {
+            tabs: Vec::new(),
+            active: 0,
+            view: ResultsView::default(),
+            explain_scroll: 0,
+            messages_scroll: 0,
+            viewport_size: (empty.width as u16, empty.height as u16),
+        }
+    }
 }
 
 impl ResultsState {
+    /// Every tab is drawn in the same pane, so the pane sizes all of them. Sizing only
+    /// the active one left the others believing in `GridViewport::default()`, and
+    /// switching to one walked the cursor past the rows the pane paints.
+    pub fn set_viewport_size(&mut self, width: u16, height: u16) {
+        self.viewport_size = (width, height);
+        for tab in &mut self.tabs {
+            tab.grid.set_viewport_size(width, height);
+        }
+    }
+
+    pub fn push_tab(&mut self, mut tab: ResultTab) {
+        let (width, height) = self.viewport_size;
+        tab.grid.set_viewport_size(width, height);
+        self.tabs.push(tab);
+    }
+
+    /// Replaces every result set with one, as reloading a table's data does.
+    pub fn replace_tabs(&mut self, tab: ResultTab) {
+        self.tabs.clear();
+        self.active = 0;
+        self.push_tab(tab);
+    }
+
     fn grid(&self) -> &GridModel {
         self.tabs
             .get(self.active)
@@ -287,7 +588,7 @@ impl ResultsState {
 
     fn grid_mut(&mut self) -> &mut GridModel {
         if self.tabs.is_empty() {
-            self.tabs.push(ResultTab::new(
+            self.push_tab(ResultTab::new(
                 ResultKey {
                     operation: OperationKey::new(OperationId::new(), "", "", 0),
                     index: 0,
@@ -378,6 +679,7 @@ impl GridModel {
 
     pub fn set_columns(&mut self, columns: Vec<ColumnMeta>) {
         self.buffer.columns = columns;
+        self.column_widths.clear();
         self.recompute_column_widths();
         self.ensure_cursor();
     }
@@ -414,6 +716,32 @@ impl GridModel {
         self.column_widths.clear();
     }
 
+    pub fn remove_row(&mut self, index: usize) {
+        let mut shifted = std::collections::BTreeMap::new();
+        for (&(row, col), cell) in self.cells.iter() {
+            if row == index {
+                if let GridCell::Spool { path, .. } = cell {
+                    let _ = std::fs::remove_file(path);
+                }
+                continue;
+            }
+            let new_row = if row > index { row - 1 } else { row };
+            shifted.insert((new_row, col), cell.clone());
+        }
+        self.cells = shifted;
+        self.buffer.remove_row(index);
+        self.picked_rows = self
+            .picked_rows
+            .iter()
+            .filter_map(|&row| match row.cmp(&index) {
+                std::cmp::Ordering::Equal => None,
+                std::cmp::Ordering::Greater => Some(row - 1),
+                std::cmp::Ordering::Less => Some(row),
+            })
+            .collect();
+        self.ensure_cursor();
+    }
+
     pub fn cell_at(&self, row: usize, col: usize) -> Option<&GridCell> {
         self.cells.get(&(row, col))
     }
@@ -426,12 +754,17 @@ impl GridModel {
         self.viewport.width = width as usize;
         self.viewport.height = height as usize;
         self.clamp_scroll();
+        if let Some(row) = self.cursor_row() {
+            self.ensure_row_visible(row);
+        }
+        self.recompute_column_widths();
     }
 
     pub fn scroll_rows(&mut self, delta: i32) {
         let next = self.viewport.row_offset as i32 + delta;
         self.viewport.row_offset = next.max(0) as usize;
         self.clamp_scroll();
+        self.recompute_column_widths();
     }
 
     pub fn scroll_columns(&mut self, delta: i32) {
@@ -554,6 +887,7 @@ impl GridModel {
             self.viewport.row_offset = row.saturating_add(1).saturating_sub(height);
         }
         self.clamp_scroll();
+        self.recompute_column_widths();
     }
 
     pub fn freeze_columns(&mut self, count: usize) {
@@ -692,6 +1026,11 @@ impl GridModel {
                 .map(|rows| rows.iter().map(Vec::len).max().unwrap_or(0))
                 .unwrap_or(0),
         );
+        // Widths only grow while a result set is on screen: a column widened
+        // for a longer value further down must not clip it again once that
+        // row scrolls back into view, and columns must not jitter sideways
+        // on every scroll step.
+        let previous = std::mem::take(&mut self.column_widths);
         self.column_widths = (0..cols)
             .map(|index| {
                 let header = self
@@ -714,7 +1053,11 @@ impl GridModel {
                     })
                     .max()
                     .unwrap_or(0);
-                header.max(body).clamp(1, 40)
+                header
+                    .max(body)
+                    .clamp(1, 40)
+                    .saturating_add(COLUMN_PADDING)
+                    .max(previous.get(index).copied().unwrap_or(0))
             })
             .collect();
         self.clamp_scroll();
@@ -730,6 +1073,58 @@ pub fn format_value(value: &DbValue) -> String {
         DbValue::Decimal(v) | DbValue::Text(v) | DbValue::Json(v) => v.clone(),
         DbValue::Bytes(_) => "<bytes>".into(),
         DbValue::Native { text, .. } => text.clone(),
+    }
+}
+
+pub fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
+    if width == 0 {
+        return vec![String::new()];
+    }
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    let mut used = 0usize;
+    for ch in text.chars() {
+        let char_width = unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        if used + char_width > width && !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+            used = 0;
+        }
+        current.push(ch);
+        used += char_width;
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
+pub fn append_field_detail(lines: &mut Vec<String>, name: &str, value: &str, width: usize) {
+    if width == 0 {
+        lines.push(format!("{name}: {value}"));
+        return;
+    }
+    let label = format!("{name}: ");
+    let label_width = unicode_width::UnicodeWidthStr::width(label.as_str());
+    if label_width >= width {
+        lines.extend(wrap_display_text(&format!("{label}{value}"), width));
+        return;
+    }
+    let value_width = width.saturating_sub(label_width);
+    let indent = " ".repeat(label_width);
+    let mut first = true;
+    for segment in value.split('\n') {
+        let wrapped = wrap_display_text(segment, if first { value_width } else { width });
+        for (index, line) in wrapped.into_iter().enumerate() {
+            if first && index == 0 {
+                lines.push(format!("{label}{line}"));
+                first = false;
+            } else {
+                lines.push(format!("{indent}{line}"));
+            }
+        }
+    }
+    if first {
+        lines.push(label);
     }
 }
 
@@ -753,6 +1148,64 @@ pub fn truncate_cell(text: &str, width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// Breathing room past the widest value in a column. Sized to the content alone, the
+/// columns sat one space apart with the rest of the pane empty next to them. It is part
+/// of the natural width, so `allocate_column_widths` gives it up like any other
+/// character when the row stops fitting.
+pub const COLUMN_PADDING: u16 = 2;
+
+/// Fits `natural` column widths into `available` terminal columns.
+///
+/// Narrow columns keep their natural width for as long as possible: when the
+/// row doesn't fit, the widest column is shrunk one character at a time
+/// until it does, instead of greedily truncating whichever column happens to
+/// exhaust the remaining space first. If even one character per column
+/// (plus separators) doesn't fit, trailing columns are dropped and the
+/// second return value is `true`, signaling callers to render an overflow
+/// marker.
+pub fn allocate_column_widths(natural: &[u16], available: usize) -> (Vec<u16>, bool) {
+    let mut widths = natural.to_vec();
+    let mut overflowed = false;
+    while !widths.is_empty() {
+        let n = widths.len();
+        let min_required = n + n.saturating_sub(1);
+        if min_required <= available {
+            break;
+        }
+        widths.pop();
+        overflowed = true;
+    }
+    let Some(&widest) = widths.iter().max() else {
+        return (widths, overflowed);
+    };
+    let separators = widths.len().saturating_sub(1);
+    let budget = available.saturating_sub(separators);
+    let total: usize = widths.iter().map(|&w| w as usize).sum();
+    if total <= budget || widest <= 1 {
+        return (widths, overflowed);
+    }
+    let mut heap: std::collections::BinaryHeap<(u16, std::cmp::Reverse<usize>)> = widths
+        .iter()
+        .enumerate()
+        .map(|(index, &width)| (width, std::cmp::Reverse(index)))
+        .collect();
+    let mut remaining_total = total;
+    while remaining_total > budget {
+        let Some((width, std::cmp::Reverse(index))) = heap.pop() else {
+            break;
+        };
+        if width <= 1 {
+            heap.push((width, std::cmp::Reverse(index)));
+            break;
+        }
+        let shrunk = width - 1;
+        widths[index] = shrunk;
+        remaining_total -= 1;
+        heap.push((shrunk, std::cmp::Reverse(index)));
+    }
+    (widths, overflowed)
 }
 
 fn estimated_row_bytes(row: &[DbValue]) -> usize {
@@ -817,18 +1270,61 @@ fn spool_or_prefix(bytes: Vec<u8>, inline: usize) -> (DbValue, Option<GridCell>)
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub enum DocumentKind {
+    Console,
+    Table(dexo_driver_api::QualifiedName),
+    /// Nothing is open. The workbench still needs an active document -- eighty call
+    /// sites index into the list -- so this stands in for none: no tab, no title, never
+    /// persisted, and it becomes a real document the moment it is typed into.
+    Placeholder,
+}
+
+impl DocumentKind {
+    pub fn is_table(&self) -> bool {
+        matches!(self, DocumentKind::Table(_))
+    }
+
+    pub fn is_placeholder(&self) -> bool {
+        matches!(self, DocumentKind::Placeholder)
+    }
+
+    /// How the kind is written on a stored document. An editor tab stores nothing;
+    /// a table browser stores the table it browses, or it comes back as an editor tab
+    /// and the next open of that table makes a second document instead of finding it.
+    pub fn storage_tag(&self) -> Option<String> {
+        match self {
+            Self::Console | Self::Placeholder => None,
+            Self::Table(target) => Some(format!("table:{}", target.display_unquoted())),
+        }
+    }
+
+    pub fn from_storage_tag(tag: &str) -> Option<Self> {
+        tag.strip_prefix("table:")
+            .map(|target| Self::Table(dexo_app::parse_qualified(target)))
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct EditorDocument {
     pub id: String,
     pub title: String,
     pub path: Option<std::path::PathBuf>,
+    pub connection_id: Option<String>,
     pub sql: SqlDocument,
     pub saved_revision: u64,
-    pub session: Option<SessionId>,
     pub viewport_line: usize,
     pub viewport_column: usize,
     pub typing: bool,
     pub anchor: Option<usize>,
+    pub kind: DocumentKind,
+    pub console_log: Vec<String>,
+    /// The output pane as this document last left it. Parked here while another
+    /// document is active, so a query run in one file cannot redraw another's grid.
+    pub results: ResultsState,
+    /// A table's paging, filter, sort and pending edits, parked the same way. Only the
+    /// fields `DataScreen::swap_browse` moves mean anything here.
+    pub browse: crate::screens::data::DataScreen,
 }
 
 impl PartialEq for EditorDocument {
@@ -836,14 +1332,16 @@ impl PartialEq for EditorDocument {
         self.id == other.id
             && self.title == other.title
             && self.path == other.path
+            && self.connection_id == other.connection_id
             && self.sql.text() == other.sql.text()
             && self.sql.cursor() == other.sql.cursor()
             && self.saved_revision == other.saved_revision
-            && self.session == other.session
             && self.viewport_line == other.viewport_line
             && self.viewport_column == other.viewport_column
             && self.typing == other.typing
             && self.anchor == other.anchor
+            && self.kind == other.kind
+            && self.console_log == other.console_log
     }
 }
 
@@ -853,13 +1351,52 @@ impl EditorDocument {
             id: "scratch".into(),
             title: "scratch.sql".into(),
             path: None,
+            connection_id: None,
             sql: SqlDocument::new(""),
             saved_revision: 0,
-            session: None,
             viewport_line: 0,
             viewport_column: 0,
             typing: false,
             anchor: None,
+            kind: DocumentKind::Console,
+            results: ResultsState::default(),
+            browse: crate::screens::data::DataScreen::default(),
+            console_log: Vec::new(),
+        }
+    }
+
+    /// The stand-in for "nothing open". It used to be a real `scratch.sql`, which
+    /// belonged to no connection -- with three connected, there was no saying which
+    /// database it was for.
+    pub fn placeholder() -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: String::new(),
+            kind: DocumentKind::Placeholder,
+            ..Self::scratch()
+        }
+    }
+
+    pub fn new_unique(
+        title: impl Into<String>,
+        path: Option<std::path::PathBuf>,
+        connection_id: Option<String>,
+    ) -> Self {
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            title: title.into(),
+            path,
+            connection_id,
+            sql: SqlDocument::new(""),
+            saved_revision: 0,
+            viewport_line: 0,
+            viewport_column: 0,
+            typing: false,
+            anchor: None,
+            kind: DocumentKind::Console,
+            results: ResultsState::default(),
+            browse: crate::screens::data::DataScreen::default(),
+            console_log: Vec::new(),
         }
     }
 
@@ -873,7 +1410,34 @@ impl EditorDocument {
         }
     }
 
+    pub fn new_table(
+        target: dexo_driver_api::QualifiedName,
+        connection_id: Option<String>,
+    ) -> Self {
+        let title = target.object().to_string();
+        let sql_text = format!("SELECT * FROM {} LIMIT 501", target.display_unquoted());
+        Self {
+            id: uuid::Uuid::new_v4().to_string(),
+            title,
+            path: None,
+            connection_id,
+            sql: SqlDocument::new(&sql_text),
+            saved_revision: 0,
+            viewport_line: 0,
+            viewport_column: 0,
+            typing: false,
+            anchor: None,
+            kind: DocumentKind::Table(target),
+            results: ResultsState::default(),
+            browse: crate::screens::data::DataScreen::default(),
+            console_log: Vec::new(),
+        }
+    }
+
     pub fn is_dirty(&self) -> bool {
+        if self.kind.is_table() {
+            return false;
+        }
         self.sql.revision() != self.saved_revision
     }
 
@@ -883,6 +1447,18 @@ impl EditorDocument {
 
     pub fn cursor(&self) -> usize {
         self.sql.cursor()
+    }
+
+    /// The cursor as a byte offset. `SqlDocument` counts the cursor in chars, while
+    /// everything in `dexo-sql` that scans the text indexes bytes; handing one the
+    /// other's number silently reads the wrong span as soon as the buffer holds a
+    /// non-ASCII character.
+    pub fn byte_cursor(&self) -> usize {
+        let text = self.text();
+        text.char_indices()
+            .nth(self.cursor())
+            .map(|(at, _)| at)
+            .unwrap_or(text.len())
     }
 
     pub fn selection(&self) -> Option<Range<usize>> {
@@ -896,6 +1472,12 @@ impl EditorDocument {
     }
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct PendingDocumentClose {
+    pub document: String,
+    pub revision: u64,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
     pub focus: Focus,
@@ -904,15 +1486,31 @@ pub struct Model {
     pub layout_mode: LayoutMode,
     pub connection: ConnectionStatus,
     pub transaction: TransactionState,
+    /// The output pane on screen. It belongs to `results_owner`; every other document
+    /// keeps its own in `EditorDocument::results` until it is activated again.
     pub results: ResultsState,
-    pub tabs: TabsState,
+    /// Document id whose results `self.results` currently holds. `None` before the
+    /// first swap: the pane cannot have been written for anyone but the active
+    /// document, so it is adopted rather than dropped. A `Some` id that no longer
+    /// matches a document means that document was closed, and its pane goes with it.
+    pub results_owner: Option<String>,
     pub palette: PaletteState,
     pub help: HelpState,
+    pub onboarding: OnboardingState,
     pub results_menu: ResultsMenuState,
+    pub node_menu: NodeMenuState,
+    pub pending_execute: Option<PendingExecute>,
+    pub close_prompt: Option<ClosePrompt>,
     pub layout_preset: LayoutPreset,
-    pub messages: Vec<String>,
+    pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
     pub active_document: usize,
+    pub document_tab_focus: DocumentTabFocus,
+    pub document_tabs_scroll: usize,
+    /// Document revision whose tab closes once its matching save is
+    /// acknowledged. The buffer is the only copy of the edits until the write
+    /// lands.
+    pub pending_document_close: Option<PendingDocumentClose>,
     pub execution_target: ExecutionTarget,
     pub script_policy: ScriptPolicy,
     pub active_task: Option<TaskId>,
@@ -925,6 +1523,12 @@ pub struct Model {
     pub project_id: String,
     pub schema: String,
     pub explorer: ExplorerState,
+    /// Catalog objects exactly as the driver produced them. The explorer tree is a view:
+    /// it wraps objects in synthetic folders and keeps only what it draws, so a column's
+    /// type and a constraint's foreign key do not survive the trip into it. Completion
+    /// needs both, so they are kept here as well.
+    pub catalog_objects: Vec<dexo_driver_api::CatalogObject>,
+    pub catalog_revision: u64,
     pub inspector: ObjectInspector,
     pub data: DataScreen,
     pub schema_editor: SchemaEditor,
@@ -940,6 +1544,7 @@ pub struct Model {
     pub config_transfer: ConfigTransferScreen,
     pub secret_prompt: SecretPrompt,
     pub transaction_prompt: TransactionPrompt,
+    pub document_name_prompt: DocumentNamePrompt,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
@@ -950,11 +1555,14 @@ pub struct Model {
     pub pending_chord: Chord,
     pub panes: PaneLayout,
     pub mouse: bool,
+    pub last_click: Option<LastClick>,
+    pub drag: Option<DragState>,
     pub animation: bool,
     pub layout_dirty: bool,
     pub hits: HitMap,
     pub file_picker: FilePicker,
     pub file_picker_mode: FilePickerMode,
+    pub recent_sql_files: Vec<std::path::PathBuf>,
     pub diagnostic_preview: Option<String>,
     pub diagnostics: DiagnosticsScreen,
 }
@@ -982,31 +1590,40 @@ impl Default for Model {
             keymap: Keymap::default_profile(),
             pending_chord: Chord { keys: Vec::new() },
             help: HelpState::default(),
+            onboarding: OnboardingState::default(),
             results_menu: ResultsMenuState::default(),
+            node_menu: NodeMenuState::default(),
+            pending_execute: None,
+            close_prompt: None,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,
-                inspector_visible: true,
                 results_visible: true,
                 explorer_width: 28,
-                inspector_width: 28,
                 results_height: 12,
+                console_height: 4,
             },
             mouse: true,
+            last_click: None,
+            drag: None,
             animation: true,
             layout_dirty: false,
             hits: HitMap::default(),
             file_picker: FilePicker::default(),
             file_picker_mode: FilePickerMode::Open,
+            recent_sql_files: Vec::new(),
             diagnostic_preview: None,
             diagnostics: DiagnosticsScreen::default(),
             transaction: TransactionState::Idle,
             results: ResultsState::default(),
-            tabs: TabsState::default(),
+            results_owner: None,
             palette: PaletteState::default(),
-            messages: Vec::new(),
+            messages: Notifications::default(),
             documents: vec![EditorDocument::scratch()],
             active_document: 0,
+            document_tab_focus: DocumentTabFocus::Document(0),
+            document_tabs_scroll: 0,
+            pending_document_close: None,
             execution_target: ExecutionTarget::Document,
             script_policy: ScriptPolicy::StopOnError,
             active_task: None,
@@ -1019,6 +1636,8 @@ impl Default for Model {
             project_id: String::new(),
             schema: String::new(),
             explorer: ExplorerState::default(),
+            catalog_objects: Vec::new(),
+            catalog_revision: 0,
             inspector: ObjectInspector::default(),
             data: DataScreen::default(),
             schema_editor: SchemaEditor::default(),
@@ -1034,6 +1653,7 @@ impl Default for Model {
             config_transfer: ConfigTransferScreen::default(),
             secret_prompt: SecretPrompt::default(),
             transaction_prompt: TransactionPrompt::default(),
+            document_name_prompt: DocumentNamePrompt::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
@@ -1065,18 +1685,126 @@ impl Model {
         seed.into()
     }
 
+    /// No real document is open -- the list is empty or holds only the stand-in. The
+    /// strip has nothing to put a cursor on but its `+` then.
+    pub fn nothing_open(&self) -> bool {
+        self.documents
+            .iter()
+            .all(|document| document.kind.is_placeholder())
+    }
+
+    pub fn sync_document_tab_focus(&mut self) {
+        if self.nothing_open() {
+            self.document_tab_focus = DocumentTabFocus::New;
+            return;
+        }
+        match self.document_tab_focus {
+            DocumentTabFocus::Document(index) if index >= self.documents.len() => {
+                self.document_tab_focus =
+                    DocumentTabFocus::Document(self.active_document.min(self.documents.len() - 1));
+            }
+            _ => {}
+        }
+    }
+
+    pub fn advance_document_tab_focus(&mut self, delta: i32) {
+        if self.nothing_open() {
+            self.document_tab_focus = DocumentTabFocus::New;
+            return;
+        }
+        // Documents only. `+` used to be on this cycle while the focus stayed in the
+        // editor, so landing on it left a slot that looked selected and answered no
+        // key -- Enter went to the buffer instead. Creating is Ctrl+N from anywhere,
+        // and the strip itself still walks onto `+` once it has the focus.
+        let current = match self.document_tab_focus {
+            DocumentTabFocus::Document(index) => index,
+            DocumentTabFocus::New => 0,
+        };
+        let next = (current as i32)
+            .wrapping_add(delta)
+            .rem_euclid(self.documents.len() as i32) as usize;
+        self.document_tab_focus = DocumentTabFocus::Document(next);
+        self.active_document = next;
+        self.focus = Focus::Editor;
+        self.sync_document_tabs_scroll();
+    }
+
+    /// Moves the cursor inside the strip, `+` included, and keeps the focus there. This
+    /// is the strip navigating itself; `advance_document_tab_focus` is the shortcut for
+    /// changing document without leaving the buffer.
+    pub fn move_tab_cursor(&mut self, delta: i32) {
+        if self.nothing_open() {
+            self.document_tab_focus = DocumentTabFocus::New;
+            self.focus = Focus::DocumentTabs;
+            return;
+        }
+        let slots = self.documents.len() + 1;
+        let current = match self.document_tab_focus {
+            DocumentTabFocus::Document(index) => index,
+            DocumentTabFocus::New => self.documents.len(),
+        };
+        let next = (current as i32)
+            .wrapping_add(delta)
+            .rem_euclid(slots as i32) as usize;
+        self.focus = Focus::DocumentTabs;
+        if next < self.documents.len() {
+            self.document_tab_focus = DocumentTabFocus::Document(next);
+            self.active_document = next;
+        } else {
+            self.document_tab_focus = DocumentTabFocus::New;
+        }
+        self.sync_document_tabs_scroll();
+    }
+
+    /// The strip's cursor is the active document, except while the strip holds the keys
+    /// with the cursor on `+`. The strip lights the cursor's tab, and every change of
+    /// document outside it -- a table opened from the tree, the tabs a connect restores,
+    /// a close -- moved the active document and left the cursor behind.
+    pub fn follow_active_document_tab(&mut self) {
+        let wanted = if self.nothing_open() {
+            DocumentTabFocus::New
+        } else {
+            DocumentTabFocus::Document(self.active_document)
+        };
+        let on_new_in_strip =
+            self.focus == Focus::DocumentTabs && self.document_tab_focus == DocumentTabFocus::New;
+        if self.document_tab_focus != wanted && !on_new_in_strip {
+            self.focus_active_document_tab();
+        }
+    }
+
+    pub fn focus_active_document_tab(&mut self) {
+        if self.nothing_open() {
+            self.document_tab_focus = DocumentTabFocus::New;
+        } else {
+            self.document_tab_focus = DocumentTabFocus::Document(self.active_document);
+        }
+        self.sync_document_tabs_scroll();
+    }
+
+    pub fn document_tabs_area_width(&self) -> u16 {
+        crate::layout::LayoutPlan::for_area_with_document_tabs(
+            ratatui::layout::Rect::new(0, 0, self.width, self.height),
+            Some(&self.effective_panes()),
+            true,
+        )
+        .document_tabs
+        .width
+    }
+
+    pub fn sync_document_tabs_scroll(&mut self) {
+        crate::widgets::document_tabs::sync_scroll(self, self.document_tabs_area_width());
+    }
+
     pub fn workbench_layout(&self) -> dexo_storage::WorkbenchLayout {
         dexo_storage::WorkbenchLayout {
             version: dexo_storage::LAYOUT_VERSION,
             explorer_visible: self.panes.explorer_visible,
-            inspector_visible: self.panes.inspector_visible,
             results_visible: self.panes.results_visible,
             explorer_width: self.panes.explorer_width,
-            inspector_width: self.panes.inspector_width,
             results_height: self.panes.results_height,
+            console_height: self.panes.console_height,
             focused_panel: format!("{:?}", self.focus).to_ascii_lowercase(),
-            active_tab: self.tabs.active,
-            tabs: self.tabs.titles.clone(),
             document_ids: self.documents.iter().map(|d| d.id.clone()).collect(),
             active_document_id: self
                 .documents
@@ -1094,23 +1822,153 @@ impl Model {
     pub fn apply_size(&mut self, width: u16, height: u16) {
         self.width = width;
         self.height = height;
-        self.layout_mode = LayoutPlan::for_area_with(
+        self.layout_mode = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, width, height),
             Some(&self.panes.clamp(width, height)),
+            true,
         )
         .mode;
         self.panes = self.panes.clamp(width, height);
         self.sync_grid_viewport();
+        self.sync_document_tabs_scroll();
+    }
+
+    /// The pane layout the active document needs. A table document has no editor: the
+    /// grid fills the editor's slot and the bottom pane is just a log, so it uses its
+    /// own height instead of the one tuned for an editor over a result grid.
+    pub fn effective_panes(&self) -> crate::layout::PaneLayout {
+        let mut panes = self.panes;
+        if self.active_document().kind.is_table() {
+            panes.results_height = self.panes.console_height;
+        }
+        panes
+    }
+
+    /// Switches the active document and brings its output pane with it. Assigning
+    /// `active_document` on its own leaves `results_owner` behind, and the next
+    /// `update` then parks the pane under the document that no longer owns it.
+    /// Drops the placeholder once a real document is open beside it. Every way of
+    /// opening one -- Ctrl+N, a file, a table, a connection's console -- pushes onto the
+    /// list, and this is the one place that has to know the stand-in should go.
+    pub fn drop_redundant_placeholder(&mut self) {
+        if self.documents.len() < 2 {
+            return;
+        }
+        let Some(index) = self
+            .documents
+            .iter()
+            .position(|document| document.kind.is_placeholder())
+        else {
+            return;
+        };
+        self.documents.remove(index);
+        if self.active_document > index {
+            self.active_document -= 1;
+        }
+        self.active_document = self.active_document.min(self.documents.len() - 1);
+        self.sync_document_tab_focus();
+    }
+
+    pub fn set_active_document(&mut self, index: usize) {
+        if index >= self.documents.len() {
+            return;
+        }
+        self.active_document = index;
+        self.swap_results_to_active_document();
+    }
+
+    /// Parks the output pane under the document it belongs to and picks up the active
+    /// document's. Results are per document: a query run in one file must not redraw
+    /// another file's grid.
+    pub fn swap_results_to_active_document(&mut self) -> bool {
+        let swapped = self.park_output_under_owner();
+        self.adopt_table_target();
+        swapped
+    }
+
+    fn park_output_under_owner(&mut self) -> bool {
+        let Some(active) = self
+            .documents
+            .get(self.active_document)
+            .map(|d| d.id.clone())
+        else {
+            return false;
+        };
+        let Some(owner) = self.results_owner.replace(active.clone()) else {
+            return false;
+        };
+        if owner == active {
+            return false;
+        }
+        let parked = std::mem::take(&mut self.results);
+        if let Some(previous) = self
+            .documents
+            .iter_mut()
+            .find(|document| document.id == owner)
+        {
+            previous.results = parked;
+            self.data.swap_browse(&mut previous.browse);
+        }
+        self.results = std::mem::take(&mut self.documents[self.active_document].results);
+        let active = &mut self.documents[self.active_document];
+        self.data.swap_browse(&mut active.browse);
+        true
+    }
+
+    /// A table document that never loaded -- new, or restored at boot -- parks the
+    /// default state, which names no table; paging it would ask for a table that is not
+    /// there.
+    fn adopt_table_target(&mut self) {
+        let Some(DocumentKind::Table(target)) = self
+            .documents
+            .get(self.active_document)
+            .map(|document| &document.kind)
+        else {
+            return;
+        };
+        if self.data.target != *target {
+            let mut fresh = crate::screens::data::DataScreen {
+                target: target.clone(),
+                ..Default::default()
+            };
+            self.data.swap_browse(&mut fresh);
+        }
     }
 
     pub fn sync_grid_viewport(&mut self) {
-        let plan = LayoutPlan::for_area_with(
+        let plan = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, self.width, self.height),
-            Some(&self.panes),
+            Some(&self.effective_panes()),
+            true,
         );
-        let width = plan.results.width.saturating_sub(2).max(1);
-        let height = plan.results.height.saturating_sub(2).max(1);
+        let pane = plan.grid_pane(self.active_document().kind.is_table());
+        let width = pane.width.saturating_sub(2).max(1);
+        let inner_h = pane.height.saturating_sub(2).max(1);
+        // The toolbar row used to be drawn only for multiple result sets, and this
+        // counted it the same way. It is unconditional now.
+        let height = inner_h
+            .saturating_sub(crate::widgets::grid::CHROME_ROWS)
+            .max(1);
         self.results.set_viewport_size(width, height);
+    }
+
+    /// Folds a freshly loaded page of catalog objects into what completion reads,
+    /// replacing any it already had by id.
+    pub fn absorb_catalog(&mut self, objects: &[dexo_driver_api::CatalogObject]) {
+        if objects.is_empty() {
+            return;
+        }
+        self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        for object in objects {
+            match self
+                .catalog_objects
+                .iter_mut()
+                .find(|existing| existing.id == object.id)
+            {
+                Some(existing) => *existing = object.clone(),
+                None => self.catalog_objects.push(object.clone()),
+            }
+        }
     }
 
     pub fn active_document(&self) -> &EditorDocument {
@@ -1129,5 +1987,19 @@ impl Model {
     pub fn set_sql(&mut self, text: impl AsRef<str>) {
         *self.active_document_mut() = EditorDocument::with_text(text);
         self.editor.reset_parse();
+    }
+}
+
+#[cfg(test)]
+mod editor_document_tests {
+    use super::EditorDocument;
+
+    #[test]
+    fn new_documents_get_unique_ids_and_connection() {
+        let a = EditorDocument::new_unique("console.sql", None, Some("conn-a".into()));
+        let b = EditorDocument::new_unique("q2.sql", None, Some("conn-a".into()));
+        assert_ne!(a.id, b.id);
+        assert_eq!(a.connection_id.as_deref(), Some("conn-a"));
+        assert_eq!(a.title, "console.sql");
     }
 }

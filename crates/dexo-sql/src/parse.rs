@@ -1,6 +1,5 @@
 use std::ops::Range;
 
-use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect};
 use tree_sitter::{InputEdit, Parser, Query, QueryCursor, StreamingIterator, Tree};
 
 use crate::dialect::Dialect;
@@ -23,23 +22,18 @@ pub struct HighlightSpan {
     pub byte_range: Range<usize>,
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct LocalDiagnostic {
-    pub message: String,
-    pub byte_range: Range<usize>,
-}
-
 #[derive(Clone, Debug)]
 pub struct StatementRegion {
     pub byte_range: Range<usize>,
 }
 
+/// What one parse of the buffer yields. It carried a full `sqlparser` AST and a list of
+/// error nodes too; nothing ever read either, and both were rebuilt for every character
+/// typed -- the AST by a second, non-incremental parser.
 #[derive(Debug)]
 pub struct ParsedSql {
     pub highlights: Vec<HighlightSpan>,
     pub regions: Vec<StatementRegion>,
-    pub ast: Option<Vec<sqlparser::ast::Statement>>,
-    pub diagnostics: Vec<LocalDiagnostic>,
 }
 
 pub struct ParserService {
@@ -127,22 +121,10 @@ impl ParserService {
                 byte_range: 0..sql.len(),
             });
         }
-        let mut diagnostics = Vec::new();
-        collect_errors(root, &mut diagnostics);
-        let ast = parse_ast(self.dialect, sql);
         ParsedSql {
             highlights,
             regions,
-            ast,
-            diagnostics,
         }
-    }
-}
-
-fn parse_ast(dialect: Dialect, sql: &str) -> Option<Vec<sqlparser::ast::Statement>> {
-    match dialect {
-        Dialect::Postgres => sqlparser::parser::Parser::parse_sql(&PostgreSqlDialect {}, sql).ok(),
-        Dialect::Mysql => sqlparser::parser::Parser::parse_sql(&MySqlDialect {}, sql).ok(),
     }
 }
 
@@ -221,19 +203,6 @@ fn highlight_from_node_kind(kind: &str) -> Highlight {
         Highlight::String
     } else {
         Highlight::Other
-    }
-}
-
-fn collect_errors(node: tree_sitter::Node, out: &mut Vec<LocalDiagnostic>) {
-    if node.is_error() || node.is_missing() {
-        out.push(LocalDiagnostic {
-            message: "local parse error".into(),
-            byte_range: node.start_byte()..node.end_byte().max(node.start_byte()),
-        });
-    }
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        collect_errors(child, out);
     }
 }
 

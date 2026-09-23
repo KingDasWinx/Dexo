@@ -2,7 +2,7 @@ use dexo_app::{
     ConnectionId, ConnectionPolicyOverrides, ConnectionProfile, Project, ProjectId, SecretRef,
 };
 use dexo_secrets::{SecretError, SecretStore};
-use dexo_storage::SessionRecoveryState;
+use dexo_storage::{RecoveryDocument, SessionRecoveryState};
 use dexo_tui::action::{Action, Effect};
 use dexo_tui::model::Model;
 use dexo_tui::runtime::connection_manager::connect_with_store;
@@ -94,12 +94,48 @@ fn bootstrap_lists_profiles_without_auto_connecting() {
         documents: Vec::new(),
         projects: Vec::new(),
         snippets: Vec::new(),
+        recent_sql_files: Vec::new(),
     };
     let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
     assert_eq!(model.connections.profiles.len(), 1);
     assert!(!model.connection.ready);
 }
 
+#[test]
+fn bootstrap_restores_checkpoints_automatically_without_a_prompt() {
+    let mut model = Model::default();
+    let bootstrap = BootstrapState {
+        active_project: Project {
+            id: ProjectId(uuid::Uuid::nil()),
+            name: "Default".into(),
+            created_at: "now".into(),
+        },
+        connections: Vec::new(),
+        recovery: SessionRecoveryState {
+            clean_shutdown: true,
+            layout: None,
+            documents: vec![RecoveryDocument {
+                id: "scratch".into(),
+                project_id: uuid::Uuid::nil().to_string(),
+                title: "scratch.sql".into(),
+                content: "select 42".into(),
+                updated_at: "now".into(),
+            }],
+            transaction: "idle".into(),
+        },
+        layout: None,
+        documents: Vec::new(),
+        projects: Vec::new(),
+        snippets: Vec::new(),
+        recent_sql_files: Vec::new(),
+    };
+
+    let _ = update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
+
+    assert!(!model.recovery.open);
+    assert_eq!(model.documents.len(), 1);
+    assert_eq!(model.documents[0].text(), "select 42");
+}
 #[test]
 fn secret_required_opens_prompt() {
     let mut model = Model::default();
@@ -222,18 +258,26 @@ fn profile_saved_and_deleted_update_the_browser() {
 }
 
 #[test]
-fn two_sessions_for_one_profile_and_close() {
+fn one_session_per_connection_and_switch() {
     let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile()]);
-    let a = SessionId(uuid::Uuid::from_u128(1));
-    let b = SessionId(uuid::Uuid::from_u128(2));
+    let staging = {
+        let mut profile = saved_profile();
+        profile.name = "staging".into();
+        profile.id = ConnectionId(uuid::Uuid::from_u128(2));
+        profile
+    };
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), staging]);
+    let prod = SessionId(uuid::Uuid::from_u128(1));
+    let staging_session = SessionId(uuid::Uuid::from_u128(2));
     let _ = update(
         &mut model,
         Action::ConnectionChanged {
             name: "prod".into(),
             ready: true,
             environment: "local".into(),
-            session: Some(a),
+            session: Some(prod),
             generation: 1,
             token: 0,
             read_only: false,
@@ -246,17 +290,38 @@ fn two_sessions_for_one_profile_and_close() {
             name: "prod".into(),
             ready: true,
             environment: "local".into(),
-            session: Some(b),
-            generation: 1,
+            session: Some(SessionId(uuid::Uuid::from_u128(9))),
+            generation: 2,
             token: 0,
             read_only: false,
             driver: "postgres".into(),
         },
     );
-    assert_eq!(model.connections.sessions.len(), 2);
-    assert_eq!(model.connections.profiles[0].sessions, 2);
-    let _ = update(&mut model, Action::SessionClosed { session: a });
     assert_eq!(model.connections.sessions.len(), 1);
+    assert_eq!(model.connections.profiles[0].sessions, 1);
+    let _ = update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "staging".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(staging_session),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "postgres".into(),
+        },
+    );
+    assert_eq!(model.active_session, Some(staging_session));
+    model.connections.selected_profile = 0;
+    let effects = update(&mut model, Action::ConnectSelected);
+    assert!(matches!(
+        effects.as_slice(),
+        [Effect::LoadCatalogChildren { .. }]
+    ));
+    assert_eq!(model.connection.name, "prod");
+    assert_eq!(model.connections.sessions.len(), 2);
+    assert!(update(&mut model, Action::ConnectSelected).is_empty());
 }
 
 #[test]
@@ -294,7 +359,12 @@ fn read_only_blocks_begin_transaction() {
     };
     let effects = update(&mut model, Action::BeginTransaction);
     assert!(effects.is_empty());
-    assert!(model.messages.iter().any(|m| m.contains("read-only")));
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|m| m.message.contains("read-only"))
+    );
 }
 
 #[test]
@@ -303,7 +373,7 @@ fn custom_environment_policy_is_visible_on_the_row() {
     model
         .connections
         .load_profiles(vec![custom_policy_profile()]);
-    let lines = model.connections.lines().join("\n");
+    let lines = model.connections.lines(None).join("\n");
     assert!(lines.contains("pci-lab"));
     assert!(lines.contains(" ro"));
 }
@@ -320,4 +390,103 @@ fn connection_tested_does_not_auto_connect() {
         },
     );
     assert!(!model.connection.ready);
+}
+
+#[test]
+fn closing_active_session_clears_live_explorer() {
+    use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+
+    let mut model = Model::default();
+    let session = SessionId(uuid::Uuid::from_u128(7));
+    model.connection.name = "prod".into();
+    model.connection.ready = true;
+    model.active_session = Some(session);
+    model.session_generation = 3;
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 3,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![CatalogObject::new(
+            ObjectId::new("catalog:db"),
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("db"), Some("db"), "db"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+    assert!(!model.explorer.roots.is_empty());
+
+    let effects = update(&mut model, Action::SessionClosed { session });
+
+    assert!(model.active_session.is_none());
+    assert!(!model.connection.ready);
+    assert!(model.explorer.roots.is_empty());
+    assert!(model.explorer.offline);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadOfflineCatalog { .. })),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn deleting_active_connection_clears_explorer() {
+    use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+
+    let mut model = Model::default();
+    let session = SessionId(uuid::Uuid::from_u128(8));
+    model.connections.load_profiles(vec![saved_profile()]);
+    model.connection.name = "prod".into();
+    model.connection.ready = true;
+    model.active_session = Some(session);
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![CatalogObject::new(
+            ObjectId::new("catalog:db"),
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("db"), Some("db"), "db"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+
+    let effects = update(
+        &mut model,
+        Action::ProfileDeleted {
+            name: "prod".into(),
+        },
+    );
+
+    assert!(model.connections.profiles.is_empty());
+    assert!(model.connections.sessions.is_empty());
+    assert!(model.active_session.is_none());
+    assert!(!model.connection.ready);
+    assert!(model.connection.name.is_empty());
+    assert!(model.explorer.roots.is_empty());
+    assert!(!model.explorer.offline);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseSession { .. })),
+        "{effects:?}"
+    );
 }

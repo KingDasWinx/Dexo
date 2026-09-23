@@ -15,4 +15,6 @@ pub use copy::{CopyFormat, SqlDialect, copy_selection};
 pub use filter::assert_typed_filter;
 pub use foreign_key::{ForeignKey, from_attributes, related_filter};
 pub use source::DataSource;
-pub use value::{FetchToken, ValueView, fetch_on_demand, inspect_value, save_bytes_atomic};
+pub use value::{
+    FetchToken, ValueView, fetch_on_demand, inspect_value, pretty_json, save_bytes_atomic,
+};

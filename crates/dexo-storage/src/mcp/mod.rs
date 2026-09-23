@@ -67,7 +67,7 @@ impl GrantLedger for SqliteGrantLedger {
         grant_repo::revoke(&conn, id).map_err(sql_err)
     }
 
-    fn revoke_profile(&self, profile: &str) -> Result<(), AppError> {
+    fn revoke_profile(&self, profile: &str) -> Result<usize, AppError> {
         let conn = self.conn.lock().expect("sqlite");
         grant_repo::revoke_profile(&conn, profile).map_err(sql_err)
     }

@@ -16,15 +16,10 @@ pub struct SessionRow {
     pub id: SessionId,
     pub connection: String,
     pub transaction: TransactionState,
-}
-
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ConnectionIntent {
-    Connect,
-    Duplicate,
-    Test,
-    Delete,
-    CloseSession,
+    pub generation: u64,
+    pub environment: String,
+    pub read_only: bool,
+    pub driver: String,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -38,7 +33,6 @@ pub struct ConnectionsScreen {
     pub pending: Option<crate::runtime::OperationId>,
     pub pending_connect: Option<u64>,
     pub delete_target: Option<ConnectionProfile>,
-    pub intent: Option<ConnectionIntent>,
     pub error: Option<String>,
 }
 
@@ -66,7 +60,16 @@ impl ConnectionsScreen {
             .map(|row| &row.profile)
     }
 
+    pub fn session_for(&self, name: &str) -> Option<&SessionRow> {
+        self.sessions
+            .iter()
+            .find(|session| session.connection == name)
+    }
+
     pub fn upsert_session(&mut self, row: SessionRow) {
+        // ponytail: one live session per connection name
+        self.sessions
+            .retain(|item| item.connection != row.connection || item.id == row.id);
         if let Some(existing) = self.sessions.iter_mut().find(|item| item.id == row.id) {
             *existing = row;
         } else {
@@ -93,50 +96,44 @@ impl ConnectionsScreen {
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec!["Connections".into()];
+    pub fn lines(&self, active: Option<SessionId>) -> Vec<String> {
+        let mut lines = Vec::new();
         for (index, row) in self.profiles.iter().enumerate() {
             let marker = if index == self.selected_profile {
                 ">"
             } else {
                 " "
             };
-            let group = row.profile.group_path.as_deref().unwrap_or("/");
+            let name = match row
+                .profile
+                .group_path
+                .as_deref()
+                .map(str::trim)
+                .filter(|group| !group.is_empty())
+            {
+                Some(group) => format!("{group}/{}", row.profile.name),
+                None => row.profile.name.clone(),
+            };
             let read_only = if row.profile.policy.read_only == Some(true) {
                 " ro"
             } else {
                 ""
             };
+            let session = self.session_for(&row.profile.name);
+            let status = match session {
+                Some(session) if active == Some(session.id) => "active",
+                Some(_) => "connected",
+                None => "offline",
+            };
+            let tx = session
+                .map(|session| format!(" {:?}", session.transaction))
+                .unwrap_or_default();
             lines.push(format!(
-                "{marker} {group} {} [{}] {} sessions{read_only}",
-                row.profile.name, row.profile.environment, row.sessions
+                "{marker} {name} [{}] {status}{tx}{read_only}",
+                row.profile.environment
             ));
         }
-        if self.sessions.is_empty() {
-            lines.push("sessions: none".into());
-        } else {
-            for session in &self.sessions {
-                let marker = if self.selected_session == Some(session.id) {
-                    "*"
-                } else {
-                    " "
-                };
-                lines.push(format!(
-                    "{marker} session {} {:?}",
-                    session.connection, session.transaction
-                ));
-            }
-        }
-        if let Some(intent) = self.intent {
-            let action = match intent {
-                ConnectionIntent::Connect => "connect",
-                ConnectionIntent::Duplicate => "duplicate",
-                ConnectionIntent::Test => "test",
-                ConnectionIntent::Delete => "delete",
-                ConnectionIntent::CloseSession => "close",
-            };
-            lines.push(format!("choose connection to {action}"));
-        }
+        lines.push("Enter connect  c close  t test  e edit  n new  d dup  x delete".into());
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }
@@ -156,5 +153,73 @@ impl ConnectionsScreen {
         self.delete_target
             .clone()
             .map(|profile| (profile, decision == DeleteSecretDecision::DeleteSecrets))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ConnectionsScreen, SessionRow};
+    use crate::runtime::SessionId;
+    use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+    use dexo_driver_api::TransactionState;
+
+    fn profile(name: &str) -> ConnectionProfile {
+        ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::nil()),
+            None,
+            name,
+            "postgres",
+            "local",
+            serde_json::json!({}),
+            SecretRef::new("ref".into()),
+        )
+    }
+
+    #[test]
+    fn rows_show_status_and_keep_one_session() {
+        let mut screen = ConnectionsScreen::default();
+        screen.load_profiles(vec![profile("prod")]);
+        let id = SessionId(uuid::Uuid::from_u128(1));
+        screen.upsert_session(SessionRow {
+            id,
+            connection: "prod".into(),
+            transaction: TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+        screen.upsert_session(SessionRow {
+            id: SessionId(uuid::Uuid::from_u128(2)),
+            connection: "prod".into(),
+            transaction: TransactionState::Idle,
+            generation: 2,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+        assert_eq!(screen.sessions.len(), 1);
+        let dump = screen.lines(Some(screen.sessions[0].id)).join("\n");
+        assert!(dump.contains("active"));
+        assert!(dump.contains("> prod [local] active"));
+        assert!(!dump.contains("/ prod"));
+        assert!(dump.contains("x delete"));
+        assert!(!dump.contains("sessions:"));
+        for line in dump.lines() {
+            assert!(
+                line.chars().count() <= 70,
+                "connections popup inner width is 70; line too long: {line:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn grouped_profiles_show_path_prefix() {
+        let mut screen = ConnectionsScreen::default();
+        let mut row = profile("db");
+        row.group_path = Some("lab/pg".into());
+        screen.load_profiles(vec![row]);
+        let dump = screen.lines(None).join("\n");
+        assert!(dump.contains("> lab/pg/db [local] offline"));
     }
 }

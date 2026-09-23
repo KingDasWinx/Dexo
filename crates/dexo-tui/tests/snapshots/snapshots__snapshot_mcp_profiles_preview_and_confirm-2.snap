@@ -3,9 +3,9 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 demo  local  public                                         
-┌▸ SQL · scratch.sql───────────────────────────────────────┐
+ scratch.sql ×  +                                           
 ┌MCP profiles──────────────────────────────────────────────┐
-│mcp profile=assistant enabled=true confirm=true           │
+│mcp profile=assistant enabled=true confirm=false          │
 │scope allow db.public.*                                   │
 │scope deny db.public.secrets                              │
 │tool catalog_search                                       │
@@ -14,11 +14,11 @@ demo  local  public
 │grant data_write data_insert 900s                         │
 │diff profile db.public.* -> grant db.public.items         │
 │confirm revoke all grants                                 │
-│                                                          │
-│                                                          │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+│e enable/disable  r revoke profile  R revoke all  up/down │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1

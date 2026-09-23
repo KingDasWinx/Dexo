@@ -9,14 +9,14 @@ pub const LAYOUT_VERSION: u32 = 2;
 pub struct WorkbenchLayout {
     pub version: u32,
     pub explorer_visible: bool,
-    pub inspector_visible: bool,
     pub results_visible: bool,
     pub explorer_width: u16,
-    pub inspector_width: u16,
     pub results_height: u16,
+    /// The bottom pane's height on a table document, where it holds only the console.
+    /// Absent from layouts saved before it existed, hence the default.
+    #[serde(default = "default_console_height")]
+    pub console_height: u16,
     pub focused_panel: String,
-    pub active_tab: usize,
-    pub tabs: Vec<String>,
     #[serde(default)]
     pub document_ids: Vec<String>,
     #[serde(default)]
@@ -32,20 +32,11 @@ impl Default for WorkbenchLayout {
         Self {
             version: LAYOUT_VERSION,
             explorer_visible: true,
-            inspector_visible: true,
             results_visible: true,
             explorer_width: 28,
-            inspector_width: 28,
             results_height: 12,
+            console_height: default_console_height(),
             focused_panel: "editor".into(),
-            active_tab: 0,
-            tabs: vec![
-                "SQL".into(),
-                "Data".into(),
-                "DDL".into(),
-                "Properties".into(),
-                "Explain".into(),
-            ],
             document_ids: Vec::new(),
             active_document_id: None,
             active_connection_id: None,
@@ -54,19 +45,19 @@ impl Default for WorkbenchLayout {
     }
 }
 
+fn default_console_height() -> u16 {
+    4
+}
+
 impl WorkbenchLayout {
     pub fn clamp(mut self, width: u16, height: u16) -> Self {
         let max_side = width.saturating_div(2).max(8);
         let max_results = height.saturating_sub(6).max(3);
         self.explorer_width = self.explorer_width.min(max_side).max(8);
-        self.inspector_width = self.inspector_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
-        if width < 80 {
-            self.inspector_visible = false;
-        }
+        self.console_height = self.console_height.min(max_results).max(3);
         if width < 60 || height < 24 {
             self.explorer_visible = false;
-            self.inspector_visible = false;
             self.results_visible = false;
         }
         self
@@ -213,7 +204,6 @@ mod tests {
         let layout = WorkbenchLayout {
             explorer_width: 40,
             focused_panel: "results".into(),
-            active_tab: 2,
             ..WorkbenchLayout::default()
         };
         LayoutRepository::new(db.connection())
@@ -231,13 +221,11 @@ mod tests {
     fn clamp_fits_compact_terminal() {
         let layout = WorkbenchLayout {
             explorer_width: 200,
-            inspector_width: 200,
             results_height: 80,
             ..WorkbenchLayout::default()
         }
         .clamp(50, 18);
         assert!(!layout.explorer_visible);
-        assert!(!layout.inspector_visible);
         assert!(!layout.results_visible);
         assert!(layout.explorer_width <= 25);
         assert!(layout.results_height <= 18);
@@ -255,7 +243,7 @@ mod tests {
         conn.execute_batch(crate::migrations::MIGRATION_6).unwrap();
         assert_eq!(migrations::read_schema_version(&conn), 6);
         migrations::apply_pending(&conn).unwrap();
-        assert_eq!(migrations::read_schema_version(&conn), 11);
+        assert_eq!(migrations::read_schema_version(&conn), 13);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",

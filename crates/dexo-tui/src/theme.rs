@@ -20,6 +20,9 @@ pub enum Role {
     Success,
     Selection,
     Focus,
+    Zebra,
+    OnFocus,
+    OnSelection,
 }
 
 impl Role {
@@ -37,6 +40,9 @@ impl Role {
             Self::Success => "success",
             Self::Selection => "selection",
             Self::Focus => "focus",
+            Self::Zebra => "zebra",
+            Self::OnFocus => "on-focus",
+            Self::OnSelection => "on-selection",
         }
     }
 
@@ -54,15 +60,137 @@ impl Role {
             Self::Success,
             Self::Selection,
             Self::Focus,
+            Self::Zebra,
+            Self::OnFocus,
+            Self::OnSelection,
         ]
     }
 }
 
+/// The surface: which background/foreground the app paints on. Independent of
+/// [`ACCENTS`], which only decides the system's primary color.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum ThemeKind {
+pub enum Mode {
     Light,
     Dark,
     LowColor,
+}
+
+impl Mode {
+    pub fn as_key(self) -> &'static str {
+        match self {
+            Self::Light => "light",
+            Self::Dark => "dark",
+            Self::LowColor => "low-color",
+        }
+    }
+
+    pub fn from_key(key: &str) -> Self {
+        match key {
+            "light" => Self::Light,
+            "low-color" | "lowcolor" | "high-contrast" => Self::LowColor,
+            _ => Self::Dark,
+        }
+    }
+
+    pub fn index(self) -> usize {
+        MODES.iter().position(|mode| *mode == self).unwrap_or(0)
+    }
+
+    pub fn step(self, delta: i32) -> Self {
+        MODES[step_index(self.index(), delta, MODES.len())]
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Light => "Light",
+            Self::Dark => "Dark",
+            Self::LowColor => "Low color",
+        }
+    }
+
+    pub fn theme(self) -> Theme {
+        match self {
+            Self::Light => builtin_light(),
+            Self::Dark => builtin_dark(),
+            Self::LowColor => builtin_low_color(),
+        }
+    }
+}
+
+pub const MODES: &[Mode] = &[Mode::Dark, Mode::Light, Mode::LowColor];
+
+/// The system's primary color, as `(key, hex, label)`. Fills `Focus` alone, so it
+/// reads the same whether the mode is light or dark.
+pub const ACCENTS: &[(&str, &str, &str)] = &[
+    ("cyan", "#03a9f4", "Cyan"),
+    ("blue", "#1f6feb", "Blue"),
+    ("violet", "#7c4dff", "Violet"),
+    ("green", "#2e9e5b", "Green"),
+    ("amber", "#d98a00", "Amber"),
+    ("rose", "#c2255c", "Rose"),
+];
+
+pub const DEFAULT_ACCENT: &str = "cyan";
+
+pub fn accent_index(key: &str) -> usize {
+    ACCENTS.iter().position(|(k, ..)| *k == key).unwrap_or(0)
+}
+
+pub fn step_accent(key: &str, delta: i32) -> &'static str {
+    ACCENTS[step_index(accent_index(key), delta, ACCENTS.len())].0
+}
+
+/// The accent's own color, so a picker can show each option in the color it names.
+pub fn accent_color(key: &str, caps: TerminalCapabilities) -> Option<Color> {
+    let (_, hex, _) = ACCENTS[accent_index(key)];
+    let color = parse_color(hex).ok()?;
+    match caps.color_depth {
+        ColorDepth::None => None,
+        ColorDepth::Ansi16 => Some(color.ansi16),
+        ColorDepth::Ansi256 => Some(color.ansi256),
+        ColorDepth::TrueColor => Some(color.truecolor),
+    }
+}
+
+/// Wraps around in both directions, so a picker can step back as easily as forward.
+fn step_index(current: usize, delta: i32, len: usize) -> usize {
+    let len = len as i32;
+    ((current as i32 + delta).rem_euclid(len)) as usize
+}
+
+/// Repaint `Focus` with the chosen accent. `OnFocus` is derived rather than
+/// tabled: the accent is user-picked, so a fixed foreground would go unreadable
+/// on half the choices.
+pub fn with_accent(mut theme: Theme, accent: &str) -> Theme {
+    let (_, hex, _) = ACCENTS[accent_index(accent)];
+    let Ok(color) = parse_color(hex) else {
+        return theme;
+    };
+    let palette = palette_from(color);
+    theme.slots.insert(Role::Focus, palette);
+    theme.slots.insert(Role::OnFocus, contrast_on(palette));
+    theme
+}
+
+/// How a saved mode reads as a theme mode. One mapping, so the entrance, which runs
+/// before the workbench exists, cannot come up in a different theme from it.
+pub fn mode_from_settings(mode: dexo_app::settings::ModeId) -> Mode {
+    match mode {
+        dexo_app::settings::ModeId::HighContrast => Mode::LowColor,
+        dexo_app::settings::ModeId::Light => Mode::Light,
+        dexo_app::settings::ModeId::Dark => Mode::Dark,
+    }
+}
+
+/// The theme the user saved, read straight from the settings file.
+pub fn saved_theme(data_dir: &std::path::Path) -> Theme {
+    let settings = dexo_app::settings::load_settings(data_dir);
+    theme_for(mode_from_settings(settings.mode), &settings.accent)
+}
+
+pub fn theme_for(mode: Mode, accent: &str) -> Theme {
+    with_accent(mode.theme(), accent)
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -75,7 +203,7 @@ struct RolePalette {
 #[derive(Clone, Debug, PartialEq)]
 pub struct Theme {
     pub name: String,
-    pub kind: ThemeKind,
+    pub mode: Mode,
     slots: HashMap<Role, RolePalette>,
 }
 
@@ -100,7 +228,8 @@ pub struct LoadedTheme {
 #[derive(Deserialize)]
 struct ThemeToml {
     name: Option<String>,
-    kind: Option<String>,
+    #[serde(alias = "kind")]
+    mode: Option<String>,
     #[serde(default)]
     roles: HashMap<String, String>,
 }
@@ -128,6 +257,47 @@ impl Theme {
         }
     }
 
+    /// The caret colour to hand the terminal. Dexo repaints the whole surface, so the
+    /// cursor colour the terminal was configured with no longer has anything to do with
+    /// what is behind it -- a light terminal theme fixes a near-black cursor, which on
+    /// Dexo's dark background is a caret nobody can see. `None` when the terminal is
+    /// running without colour, where it is better left alone.
+    pub fn caret_rgb(&self, caps: TerminalCapabilities) -> Option<(u8, u8, u8)> {
+        if caps.color_depth == ColorDepth::None {
+            return None;
+        }
+        self.rgb(Role::Foreground)
+    }
+
+    /// The background to hand the terminal as its default. Dexo paints its own ground,
+    /// but anything drawn around it -- the entrance, which resets to the terminal's
+    /// default after every cell -- lands on whatever the terminal was configured with.
+    pub fn background_rgb(&self, caps: TerminalCapabilities) -> Option<(u8, u8, u8)> {
+        if caps.color_depth == ColorDepth::None {
+            return None;
+        }
+        self.rgb(Role::Background)
+    }
+
+    /// A role's true colour, whatever the terminal can show. For handing to things that
+    /// speak hex -- the terminal's own OSC colours, the entrance's gradient.
+    pub fn rgb(&self, role: Role) -> Option<(u8, u8, u8)> {
+        match self.slots.get(&role)?.truecolor {
+            Color::Rgb(r, g, b) => Some((r, g, b)),
+            _ => None,
+        }
+    }
+
+    /// Foreground + background for the whole surface, so a light theme does not
+    /// leave dark text sitting on the terminal's own dark background.
+    pub fn base(&self, caps: TerminalCapabilities) -> Style {
+        let style = self.style(Role::Foreground, caps);
+        match self.color(Role::Background, caps) {
+            Some(bg) => style.bg(bg),
+            None => style,
+        }
+    }
+
     pub fn pane_border(&self, focused: bool, caps: TerminalCapabilities) -> Style {
         if focused {
             self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
@@ -145,21 +315,26 @@ impl Theme {
     }
 
     pub fn header(&self, caps: TerminalCapabilities) -> Style {
-        self.style(Role::Development, caps)
-            .add_modifier(Modifier::BOLD)
+        self.style(Role::Focus, caps).add_modifier(Modifier::BOLD)
     }
 
     pub fn active_row(&self, caps: TerminalCapabilities) -> Style {
-        match self.color(Role::Focus, caps) {
-            Some(color) => Style::default().bg(color).fg(Color::Black),
-            None => Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
+        match (
+            self.color(Role::Focus, caps),
+            self.color(Role::OnFocus, caps),
+        ) {
+            (Some(bg), Some(fg)) => Style::default().bg(bg).fg(fg),
+            _ => Style::default().add_modifier(Modifier::REVERSED | Modifier::BOLD),
         }
     }
 
     pub fn selected_row(&self, caps: TerminalCapabilities) -> Style {
-        match self.color(Role::Selection, caps) {
-            Some(color) => Style::default().bg(color).fg(Color::White),
-            None => Style::default().add_modifier(Modifier::REVERSED),
+        match (
+            self.color(Role::Selection, caps),
+            self.color(Role::OnSelection, caps),
+        ) {
+            (Some(bg), Some(fg)) => Style::default().bg(bg).fg(fg),
+            _ => Style::default().add_modifier(Modifier::REVERSED),
         }
     }
 
@@ -168,7 +343,10 @@ impl Theme {
             return Style::default();
         }
         match caps.color_depth {
-            ColorDepth::Ansi256 | ColorDepth::TrueColor => Style::default().bg(Color::Indexed(236)),
+            ColorDepth::Ansi256 | ColorDepth::TrueColor => match self.color(Role::Zebra, caps) {
+                Some(color) => Style::default().bg(color),
+                None => Style::default(),
+            },
             _ => Style::default(),
         }
     }
@@ -189,7 +367,7 @@ impl Theme {
 pub fn builtin_dark() -> Theme {
     theme(
         "dark",
-        ThemeKind::Dark,
+        Mode::Dark,
         &[
             (Role::Background, named(Color::Black, 235, 18, 18, 18)),
             (Role::Foreground, named(Color::White, 252, 230, 230, 230)),
@@ -203,6 +381,9 @@ pub fn builtin_dark() -> Theme {
             (Role::Success, named(Color::Green, 40, 60, 180, 80)),
             (Role::Selection, named(Color::Blue, 33, 30, 90, 180)),
             (Role::Focus, named(Color::Cyan, 51, 3, 169, 244)),
+            (Role::Zebra, named(Color::Reset, 236, 28, 28, 28)),
+            (Role::OnFocus, named(Color::Black, 16, 18, 18, 18)),
+            (Role::OnSelection, named(Color::White, 255, 240, 240, 240)),
         ],
     )
 }
@@ -210,7 +391,7 @@ pub fn builtin_dark() -> Theme {
 pub fn builtin_light() -> Theme {
     theme(
         "light",
-        ThemeKind::Light,
+        Mode::Light,
         &[
             (Role::Background, named(Color::White, 255, 250, 250, 250)),
             (Role::Foreground, named(Color::Black, 232, 20, 20, 20)),
@@ -224,6 +405,9 @@ pub fn builtin_light() -> Theme {
             (Role::Success, named(Color::Green, 28, 0, 130, 50)),
             (Role::Selection, named(Color::Blue, 27, 20, 80, 180)),
             (Role::Focus, named(Color::Magenta, 127, 120, 20, 140)),
+            (Role::Zebra, named(Color::Reset, 254, 240, 240, 240)),
+            (Role::OnFocus, named(Color::White, 255, 250, 250, 250)),
+            (Role::OnSelection, named(Color::White, 255, 250, 250, 250)),
         ],
     )
 }
@@ -231,7 +415,7 @@ pub fn builtin_light() -> Theme {
 pub fn builtin_low_color() -> Theme {
     theme(
         "low-color",
-        ThemeKind::LowColor,
+        Mode::LowColor,
         &[
             (Role::Background, named(Color::Reset, 0, 0, 0, 0)),
             (Role::Foreground, named(Color::White, 7, 200, 200, 200)),
@@ -245,6 +429,10 @@ pub fn builtin_low_color() -> Theme {
             (Role::Success, named(Color::Green, 2, 40, 160, 40)),
             (Role::Selection, named(Color::Blue, 4, 40, 80, 180)),
             (Role::Focus, named(Color::Magenta, 5, 160, 40, 160)),
+            // Terminal default background: no stripe, so it works on light and dark alike.
+            (Role::Zebra, flat(Color::Reset)),
+            (Role::OnFocus, named(Color::White, 7, 230, 230, 230)),
+            (Role::OnSelection, named(Color::White, 7, 230, 230, 230)),
         ],
     )
 }
@@ -261,38 +449,27 @@ pub fn parse_theme(src: &str) -> Result<Theme, ThemeError> {
         field: field_from_toml_error(&err),
         reason: err.message().to_string(),
     })?;
-    let kind = match parsed.kind.as_deref().unwrap_or("dark") {
-        "dark" => ThemeKind::Dark,
-        "light" => ThemeKind::Light,
-        "low-color" | "lowcolor" => ThemeKind::LowColor,
+    let mode = match parsed.mode.as_deref().unwrap_or("dark") {
+        "dark" => Mode::Dark,
+        "light" => Mode::Light,
+        "low-color" | "lowcolor" => Mode::LowColor,
         other => {
             return Err(ThemeError {
-                field: "kind".into(),
-                reason: format!("unknown theme kind `{other}`"),
+                field: "mode".into(),
+                reason: format!("unknown theme mode `{other}`"),
             });
         }
     };
-    let mut base = match kind {
-        ThemeKind::Dark => builtin_dark(),
-        ThemeKind::Light => builtin_light(),
-        ThemeKind::LowColor => builtin_low_color(),
-    };
+    let mut base = mode.theme();
     base.name = parsed.name.unwrap_or(base.name);
-    base.kind = kind;
+    base.mode = mode;
     for (key, value) in parsed.roles {
         let role = parse_role(&key)?;
         let color = parse_color(&value).map_err(|reason| ThemeError {
             field: format!("roles.{key}"),
             reason,
         })?;
-        base.slots.insert(
-            role,
-            RolePalette {
-                ansi16: color.ansi16,
-                ansi256: color.ansi256,
-                truecolor: color.truecolor,
-            },
-        );
+        base.slots.insert(role, palette_from(color));
     }
     Ok(base)
 }
@@ -315,10 +492,10 @@ pub fn load_theme_file(path: &Path, fallback: Theme) -> LoadedTheme {
 
 pub fn preview_lines(theme: &Theme, caps: TerminalCapabilities) -> String {
     let mut lines = vec![format!(
-        "theme={} kind={:?} depth={:?} unicode={}",
-        theme.name, theme.kind, caps.color_depth, caps.unicode
+        "theme={} mode={:?} depth={:?} unicode={}",
+        theme.name, theme.mode, caps.color_depth, caps.unicode
     )];
-    for role in [Role::Production, Role::Error, Role::Selection] {
+    for role in [Role::Production, Role::Error, Role::Selection, Role::Focus] {
         let marker = crate::accessibility::marker(role, caps.unicode);
         let color = theme
             .color(role, caps)
@@ -337,10 +514,49 @@ fn named(ansi16: Color, indexed: u8, r: u8, g: u8, b: u8) -> RolePalette {
     }
 }
 
-fn theme(name: &str, kind: ThemeKind, slots: &[(Role, RolePalette)]) -> Theme {
+fn palette_from(color: ParsedColor) -> RolePalette {
+    RolePalette {
+        ansi16: color.ansi16,
+        ansi256: color.ansi256,
+        truecolor: color.truecolor,
+    }
+}
+
+/// Text drawn on top of the accent, picked by measuring it.
+fn contrast_on(palette: RolePalette) -> RolePalette {
+    match palette.truecolor {
+        // 0.179 is the WCAG crossover where black text overtakes white.
+        Color::Rgb(r, g, b) if relative_luminance(r, g, b) > 0.179 => {
+            named(Color::Black, 16, 18, 18, 18)
+        }
+        _ => named(Color::White, 255, 240, 240, 240),
+    }
+}
+
+fn relative_luminance(r: u8, g: u8, b: u8) -> f32 {
+    fn channel(value: u8) -> f32 {
+        let value = f32::from(value) / 255.0;
+        if value <= 0.04045 {
+            value / 12.92
+        } else {
+            ((value + 0.055) / 1.055).powf(2.4)
+        }
+    }
+    0.2126 * channel(r) + 0.7152 * channel(g) + 0.0722 * channel(b)
+}
+
+fn flat(color: Color) -> RolePalette {
+    RolePalette {
+        ansi16: color,
+        ansi256: color,
+        truecolor: color,
+    }
+}
+
+fn theme(name: &str, mode: Mode, slots: &[(Role, RolePalette)]) -> Theme {
     Theme {
         name: name.into(),
-        kind,
+        mode,
         slots: slots.iter().copied().collect(),
     }
 }
@@ -463,8 +679,8 @@ fn field_from_toml_error(err: &toml::de::Error) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        Role, ThemeKind, builtin_dark, builtin_light, builtin_low_color, load_theme_file,
-        parse_theme, preview_lines,
+        Mode, Role, builtin_dark, builtin_light, builtin_low_color, load_theme_file, parse_theme,
+        preview_lines, theme_for,
     };
     use crate::capabilities::{ColorDepth, TerminalCapabilities};
 
@@ -479,16 +695,16 @@ mod tests {
         let err = loaded.error.expect("invalid theme");
         assert_eq!(err.field, "roles.production");
         assert!(err.reason.contains("unknown color"));
-        assert_eq!(loaded.theme.kind, ThemeKind::Dark);
+        assert_eq!(loaded.theme.mode, Mode::Dark);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), original);
         let _ = std::fs::remove_file(&path);
     }
 
     #[test]
     fn builtins_cover_light_dark_low_color() {
-        assert_eq!(builtin_light().kind, ThemeKind::Light);
-        assert_eq!(builtin_dark().kind, ThemeKind::Dark);
-        assert_eq!(builtin_low_color().kind, ThemeKind::LowColor);
+        assert_eq!(builtin_light().mode, Mode::Light);
+        assert_eq!(builtin_dark().mode, Mode::Dark);
+        assert_eq!(builtin_low_color().mode, Mode::LowColor);
     }
 
     #[test]
@@ -532,6 +748,65 @@ mod tests {
             ),
             Some(ratatui::style::Color::Rgb(204, 0, 0))
         );
+    }
+
+    #[test]
+    fn light_theme_repaints_rows_and_surface_instead_of_reusing_dark_constants() {
+        let caps = TerminalCapabilities {
+            color_depth: ColorDepth::TrueColor,
+            unicode: true,
+            mouse: true,
+        };
+        let (light, dark) = (builtin_light(), builtin_dark());
+        assert_ne!(light.base(caps), dark.base(caps));
+        assert_ne!(light.zebra(true, caps), dark.zebra(true, caps));
+        assert_ne!(light.active_row(caps), dark.active_row(caps));
+        assert_ne!(light.selected_row(caps), dark.selected_row(caps));
+        assert!(light.base(caps).bg.is_some());
+    }
+
+    #[test]
+    fn mode_moves_the_surface_and_accent_moves_the_primary_color_independently() {
+        let caps = TerminalCapabilities {
+            color_depth: ColorDepth::TrueColor,
+            unicode: true,
+            mouse: true,
+        };
+        let dark_cyan = theme_for(Mode::Dark, "cyan");
+        let light_cyan = theme_for(Mode::Light, "cyan");
+        let dark_rose = theme_for(Mode::Dark, "rose");
+
+        // Accent alone: primary color moves, surface holds still.
+        assert_ne!(
+            dark_cyan.color(Role::Focus, caps),
+            dark_rose.color(Role::Focus, caps)
+        );
+        assert_eq!(dark_cyan.base(caps), dark_rose.base(caps));
+
+        // Mode alone: surface moves, primary color holds still.
+        assert_ne!(dark_cyan.base(caps), light_cyan.base(caps));
+        assert_eq!(
+            dark_cyan.color(Role::Focus, caps),
+            light_cyan.color(Role::Focus, caps)
+        );
+    }
+
+    #[test]
+    fn every_accent_gets_readable_text_on_top_of_it() {
+        let caps = TerminalCapabilities {
+            color_depth: ColorDepth::TrueColor,
+            unicode: true,
+            mouse: true,
+        };
+        for (key, ..) in super::ACCENTS {
+            let theme = theme_for(Mode::Dark, key);
+            let row = theme.active_row(caps);
+            assert!(
+                row.bg.is_some() && row.fg.is_some(),
+                "accent {key} left the active row unstyled"
+            );
+            assert_ne!(row.bg, row.fg, "accent {key} paints text on itself");
+        }
     }
 
     #[test]

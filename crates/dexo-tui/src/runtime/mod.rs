@@ -1,4 +1,5 @@
 use std::sync::Arc;
+use std::time::Duration;
 
 use dexo_app::{
     ConnectionProfile, DriverRegistry, NewConnection, QueryService, SecretPersist,
@@ -123,6 +124,15 @@ impl SecretStore for SessionSecrets {
     }
 }
 
+/// How long a driver gets to answer before the connect is called a failure. An
+/// unroutable host otherwise leaves the dial hanging for the OS timeout, and the user
+/// sees a connection that never resolves either way.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// A connect that finished, waiting for `Effect::AdoptSession` to move it into the
+/// registry. Parked rather than returned because the dialling runs in its own task.
+type OpenedSession = (u64, ConnectionProfile, Arc<dyn dexo_driver_api::Session>);
+
 pub struct WorkbenchRuntime {
     action_tx: tokio::sync::mpsc::Sender<Action>,
     storage: Option<StorageWorker>,
@@ -131,6 +141,7 @@ pub struct WorkbenchRuntime {
     secrets: SessionSecrets,
     query: QueryService,
     live: Arc<tokio::sync::Mutex<Option<query_runner::LiveQuery>>>,
+    opening: Arc<tokio::sync::Mutex<Option<OpenedSession>>>,
     transfer: transfer_manager::TransferManager,
 }
 
@@ -148,6 +159,7 @@ impl WorkbenchRuntime {
             secrets: SessionSecrets::default(),
             query: QueryService::new(Arc::new(TaskRegistry::default())),
             live: Arc::new(tokio::sync::Mutex::new(None)),
+            opening: Arc::new(tokio::sync::Mutex::new(None)),
             transfer: transfer_manager::TransferManager::default(),
         }
     }
@@ -168,6 +180,7 @@ impl WorkbenchRuntime {
             crate::Effect::ConnectProfile { profile, token } => {
                 self.connect_profile(profile, token).await
             }
+            crate::Effect::AdoptSession { token } => self.adopt_session(token).await,
             crate::Effect::SubmitSecret {
                 kind,
                 profile,
@@ -201,8 +214,22 @@ impl WorkbenchRuntime {
             crate::Effect::ReleaseSavepoint { session, name } => {
                 self.release_savepoint(session, name).await
             }
+            crate::Effect::EnsureConnectionSql { connection_id } => {
+                self.ensure_connection_sql(connection_id).await
+            }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
+            crate::Effect::TouchRecentSqlFile { project_id, path } => {
+                if let Some(storage) = &self.storage {
+                    let _ = storage.touch_recent_sql_file(project_id, path);
+                }
+            }
+            crate::Effect::AutosaveDocument {
+                id,
+                path,
+                content,
+                revision,
+            } => self.autosave_document(id, path, content, revision).await,
             crate::Effect::PreviewDdl {
                 change,
                 session,
@@ -306,13 +333,44 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
-            crate::Effect::EnableMcpProfile { name } => self.enable_mcp_profile(name).await,
+            crate::Effect::SetMcpProfileEnabled { name, enabled } => {
+                self.set_mcp_profile_enabled(name, enabled).await
+            }
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
             crate::Effect::WriteDiagnostics { path, bundle } => {
                 diagnostic_manager::write(bundle, path, self.action_tx.clone()).await;
             }
             crate::Effect::RunTransfer(request) => self.dispatch_transfer(request).await,
+            crate::Effect::SearchCompletionObjects {
+                connection_id,
+                database_name,
+                document,
+                revision,
+                query,
+                limit,
+            } => {
+                // Spawned, never awaited here: this arm runs on the loop that also draws
+                // frames, and the search opens the catalog snapshot on disk.
+                if let Some(storage) = self.storage.clone() {
+                    let action_tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        if let Ok(objects) = storage
+                            .search_catalog_objects(connection_id, database_name, query, limit)
+                            .await
+                            && !objects.is_empty()
+                        {
+                            let _ = action_tx
+                                .send(Action::CompletionObjectsLoaded {
+                                    document,
+                                    revision,
+                                    objects,
+                                })
+                                .await;
+                        }
+                    });
+                }
+            }
             crate::Effect::LoadSnippets => {
                 if let Some(storage) = &self.storage
                     && let Ok(snippets) = storage.list_snippets().await
@@ -321,6 +379,11 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::CheckpointRecovery(request) => self.checkpoint_recovery(request).await,
+            crate::Effect::DiscardRecovery { document } => {
+                if let Some(storage) = &self.storage {
+                    let _ = storage.discard_recovery(document);
+                }
+            }
             crate::Effect::PersistHistory(request) => self.persist_history(request).await,
             crate::Effect::LoadHistory { connection_id } => self.load_history(connection_id).await,
             crate::Effect::ClearHistory { connection_id } => {
@@ -358,9 +421,13 @@ impl WorkbenchRuntime {
                 include_system,
             } => {
                 if let Some(active) = self.sessions.get(session) {
+                    let driver_parent = parent.clone().filter(|id| {
+                        id != &crate::screens::explorer::connection_id(&active.connection)
+                    });
                     catalog_manager::load_children(
                         Arc::clone(&active.session),
                         parent,
+                        driver_parent,
                         operation,
                         session,
                         generation,
@@ -403,6 +470,21 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
+            crate::Effect::LoadTableColumns {
+                target,
+                session,
+                generation,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    data_manager::fetch_table_columns(
+                        Arc::clone(&active.session),
+                        target,
+                        generation,
+                        self.action_tx.clone(),
+                    )
+                    .await;
+                }
+            }
             crate::Effect::FetchValue {
                 value,
                 offset,
@@ -438,6 +520,13 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
+            // ponytail: the read runs on the loop; spawn it if a Wayland round trip
+            // ever shows up as a stutter the way the connect did.
+            crate::Effect::ReadClipboard => match clipboard::read_text() {
+                Ok(text) if !text.is_empty() => self.emit(Action::Paste(text)).await,
+                Ok(_) => {}
+                Err(message) => self.emit(Action::ClipboardFailed { message }).await,
+            },
             crate::Effect::CopyToClipboard { text } => match clipboard::copy_text(text.clone()) {
                 Ok(()) => self.emit(Action::ClipboardWritten { text }).await,
                 Err(message) => self.emit(Action::ClipboardFailed { message }).await,
@@ -479,6 +568,11 @@ impl WorkbenchRuntime {
                 object_id,
                 favorite,
             } => self.persist_favorite(project_id, connection_id, object_id, favorite),
+            crate::Effect::CompleteOnboarding => {
+                if let Ok(paths) = AppPaths::discover() {
+                    let _ = crate::entrance::mark_complete(&paths.data_dir);
+                }
+            }
             crate::Effect::Shutdown | crate::Effect::Quit => self.shutdown().await,
         }
     }
@@ -639,35 +733,106 @@ impl WorkbenchRuntime {
     }
 
     async fn connect_profile(&mut self, profile: ConnectionProfile, token: u64) {
-        match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
-            Err(action) => self.emit(*action).await,
-            Ok(_) => match self.open_session(&profile).await {
-                Ok(session) => {
-                    let id = self.sessions.insert(profile.name.clone(), session);
-                    let generation = self
-                        .sessions
-                        .get(id)
-                        .map(|active| active.generation)
-                        .unwrap_or(1);
-                    let read_only =
-                        dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
-                            .map(|policy| policy.read_only)
-                            .unwrap_or(false);
-                    self.emit(Action::ConnectionChanged {
-                        name: profile.name,
-                        ready: true,
-                        environment: profile.environment,
-                        session: Some(id),
-                        generation,
-                        token,
-                        read_only,
-                        driver: profile.driver,
-                    })
-                    .await;
-                }
-                Err(message) => self.emit(Action::ConnectionFormError { message }).await,
-            },
+        if let Some((id, generation)) = self
+            .sessions
+            .find_by_connection(&profile.name)
+            .map(|active| (active.id, active.generation))
+        {
+            let read_only =
+                dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
+                    .map(|policy| policy.read_only)
+                    .unwrap_or(false);
+            self.emit(Action::ConnectionChanged {
+                name: profile.name,
+                ready: true,
+                environment: profile.environment,
+                session: Some(id),
+                generation,
+                token,
+                read_only,
+                driver: profile.driver,
+            })
+            .await;
+            return;
         }
+        // Everything up to the dial is local and fast; the dial itself is spawned, or a
+        // host that never answers holds the whole event loop and the UI stops drawing.
+        let secret =
+            match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
+                Ok(secret) => secret,
+                Err(action) => return self.emit(*action).await,
+            };
+        let request = self
+            .drivers
+            .get(&profile.driver)
+            .map_err(|error| error.to_string())
+            .and_then(|factory| {
+                profile
+                    .connect_request(secret)
+                    .map(|(connect, _)| (factory, connect))
+                    .map_err(|error| error.to_string())
+            });
+        let (factory, connect) = match request {
+            Ok(pair) => pair,
+            Err(message) => return self.emit(Action::ConnectionFormError { message }).await,
+        };
+        let opening = Arc::clone(&self.opening);
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            let action = match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await
+            {
+                Ok(Ok(session)) => {
+                    *opening.lock().await = Some((token, profile, Arc::from(session)));
+                    Action::SessionOpened { token }
+                }
+                Ok(Err(error)) => Action::ConnectionFormError {
+                    message: map_driver_error(error).to_string(),
+                },
+                Err(_) => Action::ConnectionFormError {
+                    message: format!(
+                        "{} did not answer within {}s",
+                        profile.name,
+                        CONNECT_TIMEOUT.as_secs()
+                    ),
+                },
+            };
+            let _ = action_tx.send(action).await;
+        });
+    }
+
+    /// Takes the session a spawned connect parked and publishes it. A token that no
+    /// longer matches means the user started another connect while this one dialled.
+    async fn adopt_session(&mut self, token: u64) {
+        let mut slot = self.opening.lock().await;
+        if slot.as_ref().is_none_or(|(opened, ..)| *opened != token) {
+            // A later connect has already parked over this one; taking the slot here
+            // would drop its session on the floor.
+            return;
+        }
+        let Some((_, profile, session)) = slot.take() else {
+            return;
+        };
+        drop(slot);
+        let id = self.sessions.insert(profile.name.clone(), session);
+        let generation = self
+            .sessions
+            .get(id)
+            .map(|active| active.generation)
+            .unwrap_or(1);
+        let read_only = dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)
+            .map(|policy| policy.read_only)
+            .unwrap_or(false);
+        self.emit(Action::ConnectionChanged {
+            name: profile.name,
+            ready: true,
+            environment: profile.environment,
+            session: Some(id),
+            generation,
+            token,
+            read_only,
+            driver: profile.driver,
+        })
+        .await;
     }
 
     async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId) {
@@ -803,9 +968,18 @@ impl WorkbenchRuntime {
         let (connect, _) = profile
             .connect_request(secret)
             .map_err(|error| error.to_string())?;
-        let boxed = factory
-            .connect(connect)
+        // These callers still dial on the event loop, so the cap is what keeps the UI
+        // from freezing for the OS timeout on an unroutable host.
+        // ponytail: spawn them like `connect_profile` if a 10s stall is still too long.
+        let boxed = tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect))
             .await
+            .map_err(|_| {
+                format!(
+                    "{} did not answer within {}s",
+                    profile.name,
+                    CONNECT_TIMEOUT.as_secs()
+                )
+            })?
             .map_err(map_driver_error)
             .map_err(|error| error.to_string())?;
         Ok(Arc::from(boxed))
@@ -924,6 +1098,7 @@ impl WorkbenchRuntime {
             Ok(content) => {
                 self.emit(Action::DocumentLoaded {
                     document: request.document,
+                    path: request.path,
                     content,
                 })
                 .await;
@@ -932,6 +1107,46 @@ impl WorkbenchRuntime {
                 self.emit(Action::OperationFailed {
                     key: OperationKey::new(OperationId::new(), "", request.document, 0),
                     message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
+    async fn ensure_connection_sql(&self, connection_id: String) {
+        let result = tokio::task::spawn_blocking({
+            let connection_id = connection_id.clone();
+            move || -> Result<_, String> {
+                let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+                let dir =
+                    dexo_storage::sql_files::ensure_connection_sql_dir(&paths, &connection_id)
+                        .map_err(|error| error.to_string())?;
+                let console = dexo_storage::sql_files::ensure_console_sql(&dir)
+                    .map_err(|error| error.to_string())?;
+                let files = dexo_storage::sql_files::list_sql_files(&dir)
+                    .map_err(|error| error.to_string())?;
+                let content =
+                    std::fs::read_to_string(&console).map_err(|error| error.to_string())?;
+                Ok((files, console, content))
+            }
+        })
+        .await
+        .map_err(|error| error.to_string());
+
+        match result {
+            Ok(Ok((files, console, content))) => {
+                self.emit(Action::ConnectionSqlReady {
+                    connection_id,
+                    files,
+                    console,
+                    content,
+                })
+                .await;
+            }
+            Ok(Err(message)) | Err(message) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
+                    message,
                 })
                 .await;
             }
@@ -956,9 +1171,13 @@ impl WorkbenchRuntime {
         };
         match result {
             Ok(()) => {
+                let document = request.document.clone();
+                let revision = request.revision;
                 if let Some(storage) = &self.storage {
                     let _ = storage.save_document(request);
                 }
+                self.emit(Action::DocumentSaved { document, revision })
+                    .await;
             }
             Err(document_io::DocumentIoError::ExternalConflict { path, .. }) => {
                 self.emit(Action::DocumentConflict {
@@ -979,6 +1198,24 @@ impl WorkbenchRuntime {
     async fn checkpoint_recovery(&mut self, request: RecoveryCheckpointRequest) {
         if let Some(storage) = &self.storage {
             let _ = storage.checkpoint_recovery(request);
+        }
+    }
+    async fn autosave_document(
+        &mut self,
+        id: String,
+        path: std::path::PathBuf,
+        content: String,
+        revision: u64,
+    ) {
+        match document_io::save_sql_atomic(&path, &content).await {
+            Ok(()) => self.emit(Action::DocumentAutosaved { id, revision }).await,
+            Err(error) => {
+                self.emit(Action::OperationFailed {
+                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
+                    message: error.to_string(),
+                })
+                .await;
+            }
         }
     }
 
@@ -1105,6 +1342,7 @@ impl WorkbenchRuntime {
                         .map(|document| (document.id, document.content))
                         .collect(),
                     layout: loaded.layout,
+                    recent_sql_files: loaded.recent_sql_files,
                 })
                 .await;
             }
@@ -1296,11 +1534,13 @@ impl WorkbenchRuntime {
         let Ok(profiles) = dexo_storage::McpProfileRepository::new(db.connection()).list() else {
             return;
         };
+        // The grants list used to be fixture-only: nothing read the ledger, so the
+        // screen showed a permanently empty section.
+        let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database).ok();
+        let now = unix_seconds();
         let profiles = profiles
             .into_iter()
             .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
-                name: profile.name,
-                enabled: profile.enabled,
                 scopes: profile
                     .selectors
                     .iter()
@@ -1311,6 +1551,12 @@ impl WorkbenchRuntime {
                     .iter()
                     .map(|rule| rule.tool.clone())
                     .collect(),
+                grants: ledger
+                    .as_ref()
+                    .map(|ledger| grant_lines(ledger, &profile.name, now))
+                    .unwrap_or_default(),
+                name: profile.name,
+                enabled: profile.enabled,
             })
             .collect();
         self.emit(Action::McpProfilesLoaded { profiles }).await;
@@ -1332,7 +1578,7 @@ impl WorkbenchRuntime {
         self.emit(Action::McpAuditLoaded { events }).await;
     }
 
-    async fn enable_mcp_profile(&self, name: String) {
+    async fn set_mcp_profile_enabled(&self, name: String, enabled: bool) {
         let Ok(paths) = AppPaths::discover() else {
             return;
         };
@@ -1341,7 +1587,7 @@ impl WorkbenchRuntime {
         };
         let repo = dexo_storage::McpProfileRepository::new(db.connection());
         if let Ok(Some(mut profile)) = repo.get_by_name(&name) {
-            profile.enabled = true;
+            profile.enabled = enabled;
             let _ = repo.save(&profile);
         }
         self.load_mcp_profiles().await;
@@ -1349,14 +1595,33 @@ impl WorkbenchRuntime {
 
     async fn revoke_mcp(&self, profile: String) {
         let Ok(paths) = AppPaths::discover() else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
             return;
         };
         let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            self.emit(Action::McpRevokeFailed {
+                message: "storage unavailable".into(),
+            })
+            .await;
             return;
         };
         use dexo_app::mcp::GrantLedger;
-        let _ = ledger.revoke_profile(&profile);
-        self.load_mcp_audit().await;
+        match ledger.revoke_profile(&profile) {
+            Ok(count) => {
+                self.emit(Action::McpGrantsRevoked { count }).await;
+                self.load_mcp_audit().await;
+                self.load_mcp_profiles().await;
+            }
+            Err(error) => {
+                self.emit(Action::McpRevokeFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
     }
 
     async fn revoke_all_mcp(&self) {
@@ -1378,6 +1643,7 @@ impl WorkbenchRuntime {
             Ok(count) => {
                 self.emit(Action::McpGrantsRevoked { count }).await;
                 self.load_mcp_audit().await;
+                self.load_mcp_profiles().await;
             }
             Err(error) => {
                 self.emit(Action::McpRevokeFailed {
@@ -1391,4 +1657,42 @@ impl WorkbenchRuntime {
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {
         &self.action_tx
     }
+}
+
+fn unix_seconds() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|elapsed| elapsed.as_secs() as i64)
+        .unwrap_or(0)
+}
+
+/// A profile's live grants, shaped for the profiles screen.
+fn grant_lines(
+    ledger: &dexo_storage::SqliteGrantLedger,
+    profile: &str,
+    now: i64,
+) -> Vec<crate::screens::mcp_profiles::GrantLine> {
+    use dexo_app::mcp::GrantLedger;
+    ledger
+        .active_grants(profile, now)
+        .into_iter()
+        .map(|grant| crate::screens::mcp_profiles::GrantLine {
+            id: grant.id.to_string(),
+            capability: grant.capability.as_str().into(),
+            tools: grant.tools.join(","),
+            expires_in_secs: grant.expires_at.saturating_sub(now),
+            // What the grant narrowed the profile down to, which is the only part
+            // of a grant the profile rows do not already show.
+            diff: format!(
+                "{} {}",
+                grant.connection,
+                grant
+                    .selectors
+                    .iter()
+                    .map(|rule| format!("{rule:?}"))
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            ),
+        })
+        .collect()
 }

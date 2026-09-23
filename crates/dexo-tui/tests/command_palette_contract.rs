@@ -1,9 +1,8 @@
 use dexo_tui::palette::{FlowIntent, PaletteInvocation};
 
-const COMMAND_IDS: [&str; 129] = [
+const COMMAND_IDS: &[&str] = &[
     "workbench.quit",
     "palette.open",
-    "query.execute",
     "query.execute_statement",
     "query.execute_selection",
     "query.execute_document",
@@ -18,17 +17,18 @@ const COMMAND_IDS: [&str; 129] = [
     "focus.explorer",
     "focus.editor",
     "focus.results",
-    "focus.inspector",
+    "focus.tabs",
+    "document.activate_tab",
+    "document.tab_prev",
+    "document.tab_next",
     "layout.cycle",
-    "layout.results_focus",
-    "layout.hide_inspector",
+    "layout.hide_explorer",
+    "layout.hide_results",
     "layout.reset",
     "layout.results_grow",
     "layout.results_shrink",
     "layout.explorer_grow",
     "layout.explorer_shrink",
-    "layout.inspector_grow",
-    "layout.inspector_shrink",
     "data.copy.csv",
     "data.copy.text",
     "data.copy.json",
@@ -36,6 +36,10 @@ const COMMAND_IDS: [&str; 129] = [
     "data.copy.sql",
     "data.apply",
     "data.revert",
+    "data.discard_all",
+    "data.refresh",
+    "data.toggle_delete",
+    "data.insert_row",
     "data.nav_back",
     "data.page_next",
     "data.page_prev",
@@ -53,6 +57,8 @@ const COMMAND_IDS: [&str; 129] = [
     "backup.restore",
     "schema.security",
     "explain.open",
+    "results.cycle_view",
+    "explain.analyze",
     "admin.sessions",
     "mcp.profiles",
     "explorer.expand",
@@ -60,29 +66,28 @@ const COMMAND_IDS: [&str; 129] = [
     "explorer.refresh_all",
     "explorer.inspect",
     "explorer.ddl",
-    "explorer.refresh_subtree",
     "explorer.up",
     "explorer.down",
     "explorer.dependencies",
-    "explorer.dependents",
-    "tab.sql",
-    "tab.data",
-    "tab.ddl",
-    "tab.properties",
-    "tab.explain",
-    "tab.next",
     "document.next",
+    "document.prev",
+    "document.next_focus",
+    "document.prev_focus",
+    "document.close",
     "document.new",
+    "document.rename",
     "document.save",
     "document.open",
     "results.select_row",
     "results.select_column",
     "results.next_tab",
     "results.prev_tab",
-    "inspector.next_tab",
-    "settings.theme",
+    "settings.mode",
+    "settings.accent",
     "settings.keymap",
     "settings.mouse",
+    "settings.animation",
+    "settings.unicode",
     "explorer.data",
     "editor.goto",
     "explorer.copy_name",
@@ -102,13 +107,15 @@ const COMMAND_IDS: [&str; 129] = [
     "results.extend_down",
     "results.actions",
     "results.toggle_pick",
-    "connection.add",
     "connection.browse",
-    "connection.connect",
-    "connection.duplicate",
-    "connection.test",
-    "connection.delete",
     "connection.close_session",
+    "connection.new",
+    "connection.edit",
+    "connection.test",
+    "connection.duplicate",
+    "connection.move_group",
+    "connection.delete",
+    "explorer.actions",
     "project.browse",
     "project.switch",
     "project.create",
@@ -124,6 +131,10 @@ const COMMAND_IDS: [&str; 129] = [
     "mcp.revoke_all",
     "editor.complete",
     "editor.format",
+    "editor.undo",
+    "editor.redo",
+    "editor.select_all",
+    "editor.paste",
     "editor.accept_completion",
     "editor.snippet",
     "editor.parameters",
@@ -148,10 +159,7 @@ const FLOW_IDS: &[&str] = &[
     "backup.dump",
     "backup.restore",
     "connection.connect",
-    "connection.duplicate",
-    "connection.test",
     "connection.delete",
-    "connection.close_session",
     "project.switch",
     "project.create",
     "project.rename",
@@ -187,14 +195,6 @@ const FLOW_INTENTS: &[(&str, FlowIntent)] = &[
     ("transfer.import", FlowIntent::TransferImport),
     ("backup.dump", FlowIntent::Backup),
     ("backup.restore", FlowIntent::Restore),
-    ("connection.connect", FlowIntent::ConnectionConnect),
-    ("connection.duplicate", FlowIntent::ConnectionDuplicate),
-    ("connection.test", FlowIntent::ConnectionTest),
-    ("connection.delete", FlowIntent::ConnectionDelete),
-    (
-        "connection.close_session",
-        FlowIntent::ConnectionCloseSession,
-    ),
     ("project.switch", FlowIntent::ProjectSwitch),
     ("project.create", FlowIntent::ProjectCreate),
     ("project.rename", FlowIntent::ProjectRename),
@@ -207,16 +207,108 @@ const FLOW_INTENTS: &[(&str, FlowIntent)] = &[
     ("editor.parameters", FlowIntent::SubmitParameters),
     ("editor.history.clear", FlowIntent::ClearHistory),
     ("diagnostics.export", FlowIntent::DiagnosticsExport),
+    ("connection.delete", FlowIntent::ConnectionDelete),
 ];
 
 #[test]
 fn registry_contains_each_command_exactly_once() {
-    let entries = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    let actual: std::collections::BTreeSet<_> = entries.iter().map(|e| e.id).collect();
-    let expected: std::collections::BTreeSet<_> = COMMAND_IDS.into_iter().collect();
-    assert_eq!(entries.len(), 129);
-    assert_eq!(actual.len(), 129, "duplicate command id");
+    let specs = dexo_tui::palette::command_specs();
+    let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
+    let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
+    assert_eq!(specs.len(), 140);
+    assert_eq!(actual.len(), 140, "duplicate command id");
     assert_eq!(actual, expected);
+}
+
+/// The curated subset. Without pinning it the palette silently re-inflates, one
+/// well-meaning `CommandSpec` at a time.
+#[test]
+fn palette_shows_only_the_curated_subset() {
+    let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
+    assert_eq!(visible.len(), 88);
+}
+
+/// A category with no display name falls back to the raw prefix, which looks like a
+/// bug in the gutter. Fail loudly the day someone adds `bookmark.save`.
+/// The help overlay used to resolve titles through the *visible* palette, so every
+/// demoted-but-bound command would have rendered as a raw dotted id.
+#[test]
+fn help_shows_titles_not_command_ids() {
+    let mut model = dexo_tui::Model::default();
+    dexo_tui::update(&mut model, dexo_tui::action::Action::ToggleHelp);
+    let view = dexo_tui::render::render_to_string(&model, 120, 40);
+    for spec in dexo_tui::palette::command_specs() {
+        assert!(
+            !view.contains(spec.id),
+            "help rendered the raw id `{}` instead of its title",
+            spec.id
+        );
+    }
+}
+
+#[test]
+fn every_command_prefix_has_a_category_label() {
+    for spec in dexo_tui::palette::command_specs() {
+        let prefix = spec.id.split('.').next().unwrap();
+        let label = dexo_tui::palette::category_label(spec.id);
+        assert_ne!(
+            label, prefix,
+            "{} has no entry in CATEGORIES (fell back to the raw prefix)",
+            spec.id
+        );
+    }
+}
+
+/// Demoting a command must not amount to deleting it: every id a keymap binds has to
+/// stay resolvable, palette or not.
+#[test]
+fn demoted_commands_stay_reachable_by_key() {
+    use dexo_tui::keymap::Keymap;
+
+    let model = dexo_tui::Model::default();
+    let visible: std::collections::BTreeSet<_> = dexo_tui::palette::palette_entries(&model)
+        .into_iter()
+        .map(|entry| entry.id)
+        .collect();
+    let mut demoted_and_bound = 0;
+    for keymap in [
+        Keymap::default_profile(),
+        Keymap::vim_profile(),
+        Keymap::emacs_profile(),
+    ] {
+        for id in keymap.command_ids() {
+            assert!(
+                dexo_tui::palette::invocation_by_id(&model, id).is_some(),
+                "bound command {id} is unreachable"
+            );
+            if !visible.contains(id) {
+                demoted_and_bound += 1;
+            }
+        }
+    }
+    assert!(
+        demoted_and_bound > 0,
+        "no demoted command is keybound -- the test is not exercising the split"
+    );
+}
+
+#[test]
+fn query_commands_expose_one_action_per_execution_scope() {
+    let entries = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
+    let actual: Vec<_> = entries
+        .iter()
+        .filter(|entry| entry.id.starts_with("query.execute"))
+        .map(|entry| (entry.id, entry.shortcut))
+        .collect();
+
+    assert_eq!(
+        actual,
+        vec![
+            ("query.execute_statement", Some("Ctrl+Enter")),
+            ("query.execute_selection", None),
+            ("query.execute_document", Some("Ctrl+Shift+F10")),
+        ]
+    );
 }
 
 #[test]
@@ -249,8 +341,8 @@ fn default_model_explains_missing_context() {
     for (id, reason) in [
         ("query.execute_statement", "connect a session first"),
         ("data.copy.csv", "no results available"),
-        ("explorer.expand", "select an explorer object first"),
-        ("editor.accept_completion", "no completion available"),
+        ("explorer.copy_name", "select an explorer object first"),
+        ("editor.history.clear", "history is empty"),
     ] {
         let entry = entries.iter().find(|entry| entry.id == id).unwrap();
         assert_eq!(entry.disabled_reason.as_deref(), Some(reason));
@@ -271,6 +363,7 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
             ActiveSession => {
                 model.active_session = Some(SessionId(uuid::Uuid::from_u128(1)));
                 model.session_generation = 1;
+                model.connection.name = "local".into();
             }
             Results => {
                 model.results.append_rows(vec![
@@ -303,6 +396,17 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                 }
                 model.results.select_cell(1, 1);
             }
+            SelectedConnection => {
+                model.connections.load_profiles(vec![dexo_app::ConnectionProfile::new(
+                    dexo_app::ConnectionId(uuid::Uuid::nil()),
+                    None,
+                    "prod",
+                    "postgres",
+                    "local",
+                    serde_json::json!({"host":"localhost","port":5432,"username":"u","database":"d"}),
+                    dexo_app::SecretRef::new("ref-1".into()),
+                )]);
+            }
             ExplorerNode => {
                 let selected = ObjectId::new("table:items");
                 model.explorer.roots = ["users", "items", "orders"]
@@ -316,6 +420,7 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                         state: dexo_tui::screens::explorer::NodeState::Collapsed,
                         expanded: false,
                         favorite: false,
+                        type_name: None,
                         children: Vec::new(),
                         restriction: None,
                         error: None,
@@ -339,23 +444,12 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                     .changes
                     .insert(vec![("id".into(), DbValue::I64(1))]);
             }
-            Breadcrumb => model.data.crumbs.push((model.data.target.clone(), None, 0)),
             ActiveQuery => model.active_operation = Some(OperationId::new()),
-            Completion => {
-                model.set_sql("sel");
-                dexo_tui::screens::editor::refresh_intelligence(model, true);
-            }
             Parameters => {
                 model.set_sql("select :id");
                 dexo_tui::screens::editor::refresh_intelligence(model, false);
             }
             History => model.editor.history.push("select 1".into()),
-            Recovery => {
-                model
-                    .recovery
-                    .checkpoints
-                    .push(("doc".into(), "now".into(), "select 1".into()))
-            }
         }
     }
 
@@ -374,16 +468,14 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
             Requirement::Results => model.results.clear(),
             Requirement::RowSelection => model.results.select_column(0),
             Requirement::ExplorerNode => model.explorer.selected = None,
+            Requirement::SelectedConnection => model.connections.load_profiles(Vec::new()),
             Requirement::LoadedDdl => model.inspector.ddl = None,
             Requirement::PendingChanges => {
                 model.data.changes = ChangeSet::for_table(&model.data.table)
             }
-            Requirement::Breadcrumb => model.data.crumbs.clear(),
             Requirement::ActiveQuery => model.active_operation = None,
-            Requirement::Completion => model.editor.completions.clear(),
             Requirement::Parameters => model.editor.parameters.clear(),
             Requirement::History => model.editor.history.clear(),
-            Requirement::Recovery => model.recovery.checkpoints.clear(),
         }
         model
     }
@@ -401,7 +493,10 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         }
     }
 
-    for id in COMMAND_IDS {
+    for id in palette_entries(&Model::default())
+        .into_iter()
+        .map(|entry| entry.id)
+    {
         let requirements = command_spec(id).unwrap().requirements;
         let mut ready_model = model_satisfying(requirements);
         apply_transaction_context(id, &mut ready_model);

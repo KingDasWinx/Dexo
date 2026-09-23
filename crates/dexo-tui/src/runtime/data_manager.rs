@@ -42,6 +42,41 @@ pub async fn fetch_page(
     }
 }
 
+pub async fn fetch_table_columns(
+    session: Arc<dyn Session>,
+    target: QualifiedName,
+    generation: u64,
+    action_tx: tokio::sync::mpsc::Sender<Action>,
+) {
+    let Some(data) = session.data() else {
+        let _ = action_tx
+            .send(Action::TableColumnsFailed {
+                generation,
+                message: "data capability unavailable".into(),
+            })
+            .await;
+        return;
+    };
+    match data.table_columns(&target).await {
+        Ok(columns) => {
+            let _ = action_tx
+                .send(Action::TableColumnsLoaded {
+                    generation,
+                    columns,
+                })
+                .await;
+        }
+        Err(error) => {
+            let _ = action_tx
+                .send(Action::TableColumnsFailed {
+                    generation,
+                    message: error.to_string(),
+                })
+                .await;
+        }
+    }
+}
+
 pub async fn apply_mutations(
     session: Arc<dyn Session>,
     mutations: Vec<dexo_driver_api::Mutation>,

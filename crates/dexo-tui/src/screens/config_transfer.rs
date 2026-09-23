@@ -29,7 +29,7 @@ impl ConfigTransferScreen {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec!["Config transfer".into()];
+        let mut lines = Vec::new();
         if !self.path.as_os_str().is_empty() {
             lines.push(format!("path: {}", self.path.display()));
         }
@@ -63,6 +63,12 @@ impl ConfigTransferScreen {
         if let Some(message) = &self.message {
             lines.push(message.clone());
         }
+        // Without this the screen advertised nothing and neither key was findable.
+        lines.push(if self.preview.is_some() {
+            "e export  i import  r rename  p replace  enter apply  esc close".into()
+        } else {
+            "e export  i import  esc close".to_string()
+        });
         lines
     }
 }

@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 default  no connection  —                                   
-┌▸ SQL · scratch.sql───────────────────────────────────────┐
+ scratch.sql ×  +                                           
 ┌Session recovery──────────────────────────────────────────┐
 │recovery open=true                                        │
 │transaction=unknown                                       │
@@ -21,4 +21,4 @@ default  no connection  —
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0
+disconnected  Ctrl+Enter run  Ctrl+N new sql      Ctrl+P  F1

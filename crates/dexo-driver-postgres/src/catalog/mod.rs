@@ -356,7 +356,7 @@ impl PostgresSession {
                     Some(parent.clone()),
                 )
                 .with_attribute("driver.postgres.attnum", serde_json::json!(attnum))
-                .with_attribute("driver.postgres.type", serde_json::json!(type_name))
+                .with_attribute("type", serde_json::json!(type_name))
                 .with_attribute("driver.postgres.not_null", serde_json::json!(not_null)),
             );
         }

@@ -1,8 +1,19 @@
 use dexo_driver_api::{CatalogObject, ObjectId};
 
+/// Which facet of the selected object the overlay is showing. DDL is long and
+/// Properties is short, so they are separate surfaces rather than one scroll.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum InspectorFacet {
+    #[default]
+    Properties,
+    Ddl,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ObjectInspector {
     pub open: bool,
+    pub facet: InspectorFacet,
+    pub scroll: u16,
     pub qualified_name: String,
     pub object: Option<CatalogObject>,
     pub ddl: Option<String>,
@@ -11,42 +22,14 @@ pub struct ObjectInspector {
     pub effective_privileges: Vec<String>,
     pub restrictions: Vec<String>,
     pub error: Option<String>,
-    pub tab: InspectorTab,
-}
-
-impl InspectorTab {
-    pub fn next(self) -> Self {
-        match self {
-            Self::Properties => Self::Ddl,
-            Self::Ddl => Self::Dependencies,
-            Self::Dependencies => Self::Privileges,
-            Self::Privileges => Self::Properties,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Properties => "properties",
-            Self::Ddl => "ddl",
-            Self::Dependencies => "dependencies",
-            Self::Privileges => "privileges",
-        }
-    }
-}
-
-#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
-pub enum InspectorTab {
-    #[default]
-    Properties,
-    Ddl,
-    Dependencies,
-    Privileges,
 }
 
 impl ObjectInspector {
-    pub fn open_loading(qualified: impl Into<String>) -> Self {
+    /// Resets the inspector for a new object without showing it. Opening the overlay is
+    /// the caller's decision: loading metadata is something opening a table does on its
+    /// own, and that must not put a modal over the grid.
+    pub fn loading(qualified: impl Into<String>) -> Self {
         Self {
-            open: true,
             qualified_name: qualified.into(),
             ..Self::default()
         }

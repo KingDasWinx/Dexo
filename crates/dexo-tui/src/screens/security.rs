@@ -49,7 +49,7 @@ impl SecurityScreen {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = vec!["security".into()];
+        let mut lines = Vec::new();
         for (index, principal) in self.principals.iter().enumerate() {
             let marker = if index == self.selected { ">" } else { " " };
             lines.push(format!("{marker} {principal}"));

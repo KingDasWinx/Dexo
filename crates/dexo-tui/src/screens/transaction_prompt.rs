@@ -1,3 +1,5 @@
+use crate::widgets::form::{FooterFocus, footer_line};
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SavepointIntent {
     Create,
@@ -11,6 +13,7 @@ pub struct TransactionPrompt {
     pub intent: Option<SavepointIntent>,
     pub name: String,
     pub error: Option<String>,
+    pub footer: FooterFocus,
 }
 
 impl TransactionPrompt {
@@ -21,10 +24,15 @@ impl TransactionPrompt {
             Some(SavepointIntent::Release) => "release savepoint",
             None => "savepoint",
         };
-        let mut lines = vec![action.into(), format!("name: {}", self.name)];
+        let mut lines = Vec::new();
+        if action != "savepoint" {
+            lines.push(action.into());
+        }
+        lines.push(format!("name: {}", self.name));
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }
+        lines.push(footer_line("Submit", self.footer));
         lines
     }
 }

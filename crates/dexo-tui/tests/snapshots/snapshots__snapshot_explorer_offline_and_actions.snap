@@ -1,13 +1,12 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 101
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
-┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│[offline]                 │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
+┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
+│[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │filter:public kind:- fav:f││   1▸select 1                                                         │
-│>  ▸ public               ││                                                                      │
+│>   ▸ public              ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -21,7 +20,7 @@ demo  local  public
 │                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────┐
-│                          ││                                                                      │
+│                          ││[Grid] Explain  Messages                                              │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -32,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help
+local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1

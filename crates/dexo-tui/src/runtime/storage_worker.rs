@@ -21,6 +21,7 @@ pub struct BootstrapState {
     pub documents: Vec<StoredDocument>,
     pub projects: Vec<Project>,
     pub snippets: Vec<dexo_sql::Snippet>,
+    pub recent_sql_files: Vec<PathBuf>,
 }
 
 #[derive(Clone, Debug)]
@@ -28,6 +29,7 @@ pub struct LoadedProject {
     pub project: Project,
     pub documents: Vec<StoredDocument>,
     pub layout: Option<WorkbenchLayout>,
+    pub recent_sql_files: Vec<PathBuf>,
 }
 
 pub enum StorageCommand {
@@ -49,16 +51,34 @@ pub enum StorageCommand {
     ListSnippets {
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_sql::Snippet>>>,
     },
+    /// Names matching `query` from the captured catalog snapshot. The in-memory catalog
+    /// only holds what the user expanded in the sidebar; the snapshot holds everything
+    /// the connection ever reported, and reading it is a disk hit that has no business
+    /// on the keystroke path.
+    SearchCatalogObjects {
+        connection_id: String,
+        database_name: String,
+        query: String,
+        limit: usize,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_driver_api::CatalogObject>>>,
+    },
     DeleteSnippet {
         id: String,
     },
     CheckpointRecovery(RecoveryCheckpointRequest),
+    DiscardRecovery {
+        document: String,
+    },
     PersistLayout {
         project_id: String,
         layout: WorkbenchLayout,
         reply: Option<tokio::sync::oneshot::Sender<anyhow::Result<()>>>,
     },
     SaveDocument(DocumentIoRequest),
+    TouchRecentSqlFile {
+        project_id: String,
+        path: String,
+    },
     FlushDocuments {
         project_id: String,
         documents: Vec<FlushedDocument>,
@@ -117,11 +137,11 @@ pub struct StorageWorker {
 
 impl StorageWorker {
     pub fn start(path: PathBuf) -> anyhow::Result<Self> {
+        let db = Database::open(&path)?;
         let (tx, rx) = std::sync::mpsc::channel();
         std::thread::Builder::new()
             .name("dexo-storage".into())
             .spawn(move || {
-                let db = Database::open(path).expect("open local Dexo database");
                 while let Ok(command) = rx.recv() {
                     match command {
                         StorageCommand::Bootstrap { reply } => {
@@ -169,6 +189,29 @@ impl StorageWorker {
                             let repo = SnippetRepository::new(db.connection());
                             let _ = repo.delete(&id);
                         }
+                        StorageCommand::SearchCatalogObjects {
+                            connection_id,
+                            database_name,
+                            query,
+                            limit,
+                            reply,
+                        } => {
+                            let cache = dexo_storage::CatalogCache::new(db.connection());
+                            let result =
+                                cache
+                                    .load_latest(&connection_id, &database_name)
+                                    .map(|objects| {
+                                        dexo_app::search_with_usage(objects, &[], &[], &query)
+                                            .into_iter()
+                                            .map(|hit| hit.object)
+                                            .take(limit)
+                                            .collect()
+                                    });
+                            let _ = reply.send(result);
+                        }
+                        StorageCommand::DiscardRecovery { document } => {
+                            let _ = RecoveryRepository::new(db.connection()).clear(&document);
+                        }
                         StorageCommand::CheckpointRecovery(request) => {
                             let repo = RecoveryRepository::new(db.connection());
                             let _ = repo.checkpoint(
@@ -183,21 +226,28 @@ impl StorageWorker {
                             layout,
                             reply,
                         } => {
-                            let result =
-                                LayoutRepository::new(db.connection()).save(&project_id, &layout);
+                            let result = (|| {
+                                LayoutRepository::new(db.connection())
+                                    .save(&project_id, &layout)?;
+                                SessionRecoveryRepository::new(db.connection())
+                                    .checkpoint_layout(&layout, "idle")
+                            })();
                             if let Some(reply) = reply {
                                 let _ = reply.send(result);
                             }
                         }
                         StorageCommand::SaveDocument(request) => {
-                            let repo = DocumentRepository::new(db.connection());
-                            let _ = repo.save(
-                                &request.document,
-                                None,
-                                &request.document,
-                                &request.content,
-                                Some(request.path.to_string_lossy().as_ref()),
-                                None,
+                            // The file is on disk and `flush_documents` owns the row, so
+                            // writing one here only left an orphan: no project id, and the
+                            // document id where the title belongs.
+                            let _ =
+                                RecoveryRepository::new(db.connection()).clear(&request.document);
+                        }
+                        StorageCommand::TouchRecentSqlFile { project_id, path } => {
+                            let _ = RecentItemsRepository::new(db.connection()).touch(
+                                &project_id,
+                                "sql_file",
+                                &path,
                             );
                         }
                         StorageCommand::FlushDocuments {
@@ -322,8 +372,31 @@ impl StorageWorker {
         receive.await?
     }
 
+    pub async fn search_catalog_objects(
+        &self,
+        connection_id: String,
+        database_name: String,
+        query: String,
+        limit: usize,
+    ) -> anyhow::Result<Vec<dexo_driver_api::CatalogObject>> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx.send(StorageCommand::SearchCatalogObjects {
+            connection_id,
+            database_name,
+            query,
+            limit,
+            reply,
+        })?;
+        receive.await?
+    }
+
     pub fn delete_snippet(&self, id: String) -> anyhow::Result<()> {
         self.tx.send(StorageCommand::DeleteSnippet { id })?;
+        Ok(())
+    }
+
+    pub fn discard_recovery(&self, document: String) -> anyhow::Result<()> {
+        self.tx.send(StorageCommand::DiscardRecovery { document })?;
         Ok(())
     }
 
@@ -361,6 +434,12 @@ impl StorageWorker {
 
     pub fn save_document(&self, request: DocumentIoRequest) -> anyhow::Result<()> {
         self.tx.send(StorageCommand::SaveDocument(request))?;
+        Ok(())
+    }
+
+    pub fn touch_recent_sql_file(&self, project_id: String, path: String) -> anyhow::Result<()> {
+        self.tx
+            .send(StorageCommand::TouchRecentSqlFile { project_id, path })?;
         Ok(())
     }
 
@@ -480,6 +559,16 @@ impl Drop for StorageWorker {
     }
 }
 
+fn list_recent_sql_files(db: &Database, project_id: &str) -> anyhow::Result<Vec<PathBuf>> {
+    Ok(RecentItemsRepository::new(db.connection())
+        .list(project_id)?
+        .into_iter()
+        .filter(|(kind, _, _)| kind == "sql_file")
+        .map(|(_, path, _)| PathBuf::from(path))
+        .take(20)
+        .collect())
+}
+
 fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
     let conn = db.connection();
     let projects = ProjectRepository::new(conn);
@@ -511,6 +600,7 @@ fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
             .collect()
     })?;
     let _ = RecentItemsRepository::new(conn).touch(&project_id, "project", &active_project.name);
+    let recent_sql_files = list_recent_sql_files(db, &project_id)?;
     Ok(BootstrapState {
         projects: ProjectRepository::new(conn).list()?,
         active_project,
@@ -519,6 +609,7 @@ fn bootstrap_state(db: &Database) -> anyhow::Result<BootstrapState> {
         layout,
         documents,
         snippets,
+        recent_sql_files,
     })
 }
 
@@ -527,7 +618,11 @@ fn flush_documents(
     project_id: &str,
     documents: &[FlushedDocument],
 ) -> anyhow::Result<()> {
+    let tx = db.connection().unchecked_transaction()?;
     let repo = DocumentRepository::new(db.connection());
+    // Rewrite rather than upsert: the rows the user closed have to go, or every launch
+    // reopens every document the project ever held.
+    repo.clear_project(project_id)?;
     for document in documents {
         let path = document
             .path
@@ -540,7 +635,14 @@ fn flush_documents(
             &document.content,
             path.as_deref(),
             None,
+            document.kind.as_deref(),
+            document.connection_id.as_deref(),
         )?;
+    }
+    tx.commit()?;
+    let recovery = RecoveryRepository::new(db.connection());
+    for document in recovery.list_for_project(project_id)? {
+        recovery.clear(&document.id)?;
     }
     Ok(())
 }
@@ -584,10 +686,12 @@ fn load_project(db: &Database, id: &str) -> anyhow::Result<LoadedProject> {
     let layout = LayoutRepository::new(db.connection()).load(&project_id)?;
     let _ =
         RecentItemsRepository::new(db.connection()).touch(&project_id, "project", &project.name);
+    let recent_sql_files = list_recent_sql_files(db, &project_id)?;
     Ok(LoadedProject {
         project,
         documents,
         layout,
+        recent_sql_files,
     })
 }
 

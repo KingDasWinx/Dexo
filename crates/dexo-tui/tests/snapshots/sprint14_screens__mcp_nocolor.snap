@@ -1,12 +1,11 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
-assertion_line: 40
 expression: "render_to_string(&model, 100, 30)"
 ---
 default  no connection  —                                                                           
-┌  Explorer────────────────┐ SQL │ Data │ DDL │ Properties │ Explain                                
-│No connection             │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
-│                          ││   1                                                                  │
+┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
+│[n]ew [e]dit [a]ctions    │┌> SQL · scratch.sql───────────────────────────────────────────────────┐
+│No connections — press n  ││   1                                                                  │
 │                          ││                                                                      │
 │             ┌MCP profiles──────────────────────────────────────────────────────────┐             │
 │             │mcp profile=assistant enabled=false confirm=false                     │             │
@@ -18,7 +17,7 @@ default  no connection  —
 │             │grant data_write data_insert 900s                                     │             │
 │             │diff profile db.public.* -> grant db.public.items                     │             │
 │             │confirm revoke all grants                                             │             │
-│             │                                                                      │             │
+│             │e enable/disable  r revoke profile  R revoke all  up/down select  esc │             │
 │             │                                                                      │─────────────┘
 │             │                                                                      │─────────────┐
 │             └──────────────────────────────────────────────────────────────────────┘             │
@@ -32,4 +31,4 @@ default  no connection  —
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-disconnected  tx:idle  FOCUS: Editor  layout:normal  rows:0  ctrl+p palette  F1 help
+disconnected  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                Ctrl+P  F1

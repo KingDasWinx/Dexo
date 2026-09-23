@@ -8,7 +8,12 @@ pub enum KeyContext {
     Editor,
     Explorer,
     Results,
-    Inspector,
+    /// The document tab strip. Its keys used to be special cases in `handle_key`, which
+    /// is how Enter on `+` came to work from the editor and nowhere else.
+    DocumentTabs,
+    /// The pane the grid gives up to the console on a table document. It holds no
+    /// navigation of its own -- only the keys that act on the pane itself.
+    Console,
     Palette,
     Modal,
 }
@@ -56,7 +61,31 @@ pub struct Keymap {
     pub bindings: Vec<Binding>,
 }
 
+/// Selectable keymaps, as `(profile, label)`.
+pub const PROFILES: &[(&str, &str)] = &[("default", "Default"), ("vim", "Vim"), ("emacs", "Emacs")];
+
+pub fn profile_index(name: &str) -> usize {
+    PROFILES
+        .iter()
+        .position(|(key, _)| *key == name)
+        .unwrap_or(0)
+}
+
+/// Wraps in both directions, so a picker can step back as easily as forward.
+pub fn step_profile(name: &str, delta: i32) -> &'static str {
+    let len = PROFILES.len() as i32;
+    PROFILES[((profile_index(name) as i32 + delta).rem_euclid(len)) as usize].0
+}
+
 impl Keymap {
+    pub fn named(name: &str) -> Self {
+        match name {
+            "vim" => Self::vim_profile(),
+            "emacs" => Self::emacs_profile(),
+            _ => Self::default_profile(),
+        }
+    }
+
     pub fn default_profile() -> Self {
         parse_keymap(DEFAULT_TOML).expect("builtin default keymap")
     }
@@ -152,10 +181,11 @@ impl Keymap {
     }
 
     pub fn help_sections(&self) -> Vec<(&'static str, Vec<(String, String)>)> {
-        let mut buckets: [(KeyContext, Vec<(String, String)>); 5] = [
+        let mut buckets: [(KeyContext, Vec<(String, String)>); 6] = [
             (KeyContext::Editor, Vec::new()),
             (KeyContext::Results, Vec::new()),
             (KeyContext::Explorer, Vec::new()),
+            (KeyContext::DocumentTabs, Vec::new()),
             (KeyContext::Global, Vec::new()),
             (KeyContext::Palette, Vec::new()),
         ];
@@ -164,13 +194,22 @@ impl Keymap {
             let entry = (chord, binding.command.clone());
             match binding.context {
                 KeyContext::Editor => buckets[0].1.push(entry),
-                KeyContext::Results => buckets[1].1.push(entry),
+                // the console is the results pane wearing a different hat
+                KeyContext::Results | KeyContext::Console => buckets[1].1.push(entry),
                 KeyContext::Explorer => buckets[2].1.push(entry),
-                KeyContext::Inspector | KeyContext::Global => buckets[3].1.push(entry),
-                KeyContext::Palette | KeyContext::Modal => buckets[4].1.push(entry),
+                KeyContext::DocumentTabs => buckets[3].1.push(entry),
+                KeyContext::Global => buckets[4].1.push(entry),
+                KeyContext::Palette | KeyContext::Modal => buckets[5].1.push(entry),
             }
         }
-        let names = ["Editor", "Results", "Explorer", "Workbench", "Overlays"];
+        let names = [
+            "Editor",
+            "Results",
+            "Explorer",
+            "Tabs",
+            "Workbench",
+            "Overlays",
+        ];
         buckets
             .into_iter()
             .zip(names)
@@ -280,6 +319,7 @@ pub fn parse_key(spec: &str) -> Result<KeySpec, String> {
         "enter" | "return" => KeyCode::Enter,
         "tab" => KeyCode::Tab,
         "backspace" => KeyCode::Backspace,
+        "delete" | "del" => KeyCode::Delete,
         "up" => KeyCode::Up,
         "down" => KeyCode::Down,
         "left" => KeyCode::Left,
@@ -305,7 +345,8 @@ fn parse_context(name: &str) -> Result<KeyContext, KeymapError> {
         "editor" => Ok(KeyContext::Editor),
         "explorer" => Ok(KeyContext::Explorer),
         "results" => Ok(KeyContext::Results),
-        "inspector" => Ok(KeyContext::Inspector),
+        "console" => Ok(KeyContext::Console),
+        "tabs" => Ok(KeyContext::DocumentTabs),
         "palette" => Ok(KeyContext::Palette),
         "modal" => Ok(KeyContext::Modal),
         other => Err(KeymapError {
@@ -345,6 +386,7 @@ fn key_label(key: &KeySpec) -> String {
         KeyCode::Enter => "enter".into(),
         KeyCode::Tab => "tab".into(),
         KeyCode::Backspace => "backspace".into(),
+        KeyCode::Delete => "delete".into(),
         KeyCode::Up => "up".into(),
         KeyCode::Down => "down".into(),
         KeyCode::Left => "left".into(),
@@ -362,48 +404,56 @@ profile = "default"
 "ctrl+p" = "palette.open"
 "ctrl+q" = "workbench.quit"
 "f1" = "help.open"
-"f5" = "query.execute"
-"f8" = "query.execute_statement"
 "f10" = "layout.cycle"
-"ctrl+c" = "query.cancel"
+"ctrl+f2" = "query.cancel"
 "ctrl+s" = "document.save"
 "ctrl+o" = "document.open"
-"ctrl+1" = "tab.sql"
-"ctrl+2" = "tab.data"
-"ctrl+3" = "tab.ddl"
-"ctrl+4" = "tab.properties"
-"ctrl+5" = "tab.explain"
-"ctrl+tab" = "tab.next"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
-"alt+4" = "focus.inspector"
+"alt+0" = "focus.tabs"
+"ctrl+w" = "document.close"
+"ctrl+tab" = "document.next"
+"ctrl+shift+tab" = "document.prev"
+"f2" = "document.rename"
+"ctrl+n" = "document.new"
+"alt+e" = "layout.hide_explorer"
+"alt+r" = "layout.hide_results"
+"alt+left" = "document.prev_focus"
+"alt+right" = "document.next_focus"
 "alt+-" = "layout.results_shrink"
 "alt+=" = "layout.results_grow"
 "alt+[" = "layout.explorer_shrink"
 "alt+]" = "layout.explorer_grow"
 [explorer]
 "enter" = "explorer.expand"
+"n" = "connection.new"
+"e" = "connection.edit"
+"d" = "explorer.ddl"
+"shift+d" = "connection.close_session"
 "c" = "explorer.copy_name"
+"a" = "explorer.actions"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "up" = "explorer.up"
 "down" = "explorer.down"
-"d" = "explorer.ddl"
 "?" = "help.open"
 "alt+=" = "layout.explorer_grow"
 "alt+-" = "layout.explorer_shrink"
 "alt++" = "layout.explorer_grow"
+"alt+left" = "layout.explorer_shrink"
+"alt+right" = "layout.explorer_grow"
 [editor]
 "ctrl+enter" = "query.execute_statement"
+"ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
-[inspector]
-"tab" = "inspector.next_tab"
-"?" = "help.open"
-"alt+=" = "layout.inspector_grow"
-"alt+-" = "layout.inspector_shrink"
-"alt++" = "layout.inspector_grow"
+"ctrl+z" = "editor.undo"
+"ctrl+y" = "editor.redo"
+"ctrl+a" = "editor.select_all"
+"ctrl+v" = "editor.paste"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
 [results]
 "up" = "results.up"
 "down" = "results.down"
@@ -416,12 +466,33 @@ profile = "default"
 "enter" = "results.actions"
 "ctrl+enter" = "results.toggle_pick"
 "r" = "results.select_row"
+"delete" = "data.toggle_delete"
+"i" = "data.insert_row"
+"ctrl+s" = "data.review"
+"ctrl+shift+r" = "data.discard_all"
+"ctrl+r" = "data.refresh"
+"e" = "transfer.export"
+"v" = "results.cycle_view"
 "c" = "results.select_column"
 "[" = "results.prev_tab"
 "]" = "results.next_tab"
 "n" = "data.page_next"
 "p" = "data.page_prev"
 "b" = "data.nav_back"
+"?" = "help.open"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[console]
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[tabs]
+"left" = "document.tab_prev"
+"right" = "document.tab_next"
+"enter" = "document.activate_tab"
+"ctrl+w" = "document.close"
+"esc" = "focus.editor"
 "?" = "help.open"
 "#;
 
@@ -431,38 +502,77 @@ profile = "vim"
 "ctrl+p" = "palette.open"
 "ctrl+q" = "workbench.quit"
 "f1" = "help.open"
-"f5" = "query.execute"
-"f8" = "query.execute_statement"
 "f10" = "layout.cycle"
+"ctrl+f2" = "query.cancel"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
-"alt+4" = "focus.inspector"
+"alt+0" = "focus.tabs"
+"ctrl+w" = "document.close"
+"ctrl+tab" = "document.next"
+"ctrl+shift+tab" = "document.prev"
+"f2" = "document.rename"
+"ctrl+n" = "document.new"
+"alt+e" = "layout.hide_explorer"
+"alt+r" = "layout.hide_results"
+"alt+left" = "document.prev_focus"
+"alt+right" = "document.next_focus"
 [editor]
 "ctrl+enter" = "query.execute_statement"
+"ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
+"ctrl+z" = "editor.undo"
+"ctrl+y" = "editor.redo"
+"ctrl+a" = "editor.select_all"
+"ctrl+v" = "editor.paste"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
 [explorer]
 "enter" = "explorer.expand"
+"n" = "connection.new"
+"e" = "connection.edit"
+"shift+d" = "connection.close_session"
 "c" = "explorer.copy_name"
+"a" = "explorer.actions"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "?" = "help.open"
 "alt+=" = "layout.explorer_grow"
 "alt+-" = "layout.explorer_shrink"
-[inspector]
-"alt+=" = "layout.inspector_grow"
-"alt+-" = "layout.inspector_shrink"
+"alt+left" = "layout.explorer_shrink"
+"alt+right" = "layout.explorer_grow"
 [results]
 "k" = "results.up"
 "j" = "results.down"
 "h" = "results.left"
 "l" = "results.right"
 "g g" = "results.top"
+"delete" = "data.toggle_delete"
+"i" = "data.insert_row"
+"ctrl+s" = "data.review"
+"ctrl+shift+r" = "data.discard_all"
+"ctrl+r" = "data.refresh"
+"e" = "transfer.export"
+"v" = "results.cycle_view"
 "shift+k" = "results.extend_up"
 "shift+j" = "results.extend_down"
 "enter" = "results.actions"
 "ctrl+enter" = "results.toggle_pick"
+"?" = "help.open"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[console]
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[tabs]
+"left" = "document.tab_prev"
+"right" = "document.tab_next"
+"enter" = "document.activate_tab"
+"ctrl+w" = "document.close"
+"esc" = "focus.editor"
 "?" = "help.open"
 "#;
 
@@ -471,39 +581,77 @@ profile = "emacs"
 [global]
 "alt+x" = "palette.open"
 "ctrl+x ctrl+c" = "workbench.quit"
+"ctrl+x ctrl+n" = "document.new"
 "f1" = "help.open"
-"f5" = "query.execute"
-"f8" = "query.execute_statement"
 "f10" = "layout.cycle"
-"ctrl+c ctrl+c" = "query.execute"
+"ctrl+f2" = "query.cancel"
+"ctrl+c ctrl+c" = "query.execute_document"
 "alt+1" = "focus.explorer"
 "alt+2" = "focus.editor"
 "alt+3" = "focus.results"
-"alt+4" = "focus.inspector"
+"alt+0" = "focus.tabs"
+"ctrl+w" = "document.close"
+"ctrl+tab" = "document.next"
+"ctrl+shift+tab" = "document.prev"
+"f2" = "document.rename"
+"alt+e" = "layout.hide_explorer"
+"alt+r" = "layout.hide_results"
+"alt+left" = "document.prev_focus"
+"alt+right" = "document.next_focus"
 [editor]
 "ctrl+enter" = "query.execute_statement"
+"ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
 "ctrl+shift+i" = "editor.format"
+"ctrl+z" = "editor.undo"
+"ctrl+y" = "editor.redo"
+"ctrl+a" = "editor.select_all"
+"ctrl+v" = "editor.paste"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
 [explorer]
 "enter" = "explorer.expand"
+"n" = "connection.new"
+"e" = "connection.edit"
+"shift+d" = "connection.close_session"
 "c" = "explorer.copy_name"
+"a" = "explorer.actions"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "?" = "help.open"
 "alt+=" = "layout.explorer_grow"
 "alt+-" = "layout.explorer_shrink"
-[inspector]
-"alt+=" = "layout.inspector_grow"
-"alt+-" = "layout.inspector_shrink"
+"alt+left" = "layout.explorer_shrink"
+"alt+right" = "layout.explorer_grow"
 [results]
 "ctrl+p" = "results.up"
 "ctrl+n" = "results.down"
+"delete" = "data.toggle_delete"
+"ctrl+s" = "data.review"
+"ctrl+shift+r" = "data.discard_all"
+"ctrl+r" = "data.refresh"
+"e" = "transfer.export"
+"v" = "results.cycle_view"
 "left" = "results.left"
 "right" = "results.right"
 "shift+up" = "results.extend_up"
 "shift+down" = "results.extend_down"
 "enter" = "results.actions"
 "ctrl+enter" = "results.toggle_pick"
+"?" = "help.open"
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[console]
+"alt+up" = "layout.results_grow"
+"alt+down" = "layout.results_shrink"
+
+[tabs]
+"left" = "document.tab_prev"
+"right" = "document.tab_next"
+"enter" = "document.activate_tab"
+"ctrl+w" = "document.close"
+"esc" = "focus.editor"
 "?" = "help.open"
 "#;
 
@@ -555,14 +703,127 @@ mod tests {
     }
 
     #[test]
+    fn sql_execution_shortcuts_match_datagrip_in_every_profile() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            for (chord, command) in [
+                ("ctrl+enter", "query.execute_statement"),
+                ("ctrl+shift+f10", "query.execute_document"),
+                ("ctrl+f2", "query.cancel"),
+            ] {
+                assert_eq!(
+                    keymap
+                        .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
+                        .unwrap(),
+                    Some(command),
+                    "profile {}",
+                    keymap.name
+                );
+            }
+
+            for chord in ["f5", "f8", "ctrl+c"] {
+                assert_eq!(
+                    keymap
+                        .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
+                        .unwrap(),
+                    None,
+                    "legacy shortcut {chord} remains active in profile {}",
+                    keymap.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn side_pane_resize_shortcuts_exist_in_every_profile() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            for (context, chord, command) in [
+                (KeyContext::Explorer, "alt+left", "layout.explorer_shrink"),
+                (KeyContext::Explorer, "alt+right", "layout.explorer_grow"),
+                (KeyContext::Results, "alt+up", "layout.results_grow"),
+                (KeyContext::Results, "alt+down", "layout.results_shrink"),
+                (KeyContext::Editor, "alt+up", "layout.results_grow"),
+                (KeyContext::Editor, "alt+down", "layout.results_shrink"),
+                // the console is that same pane on a table document
+                (KeyContext::Console, "alt+up", "layout.results_grow"),
+                (KeyContext::Console, "alt+down", "layout.results_shrink"),
+            ] {
+                assert_eq!(
+                    keymap
+                        .resolve(&parse_chord(chord).unwrap(), context)
+                        .unwrap(),
+                    Some(command),
+                    "profile {} in {context:?}",
+                    keymap.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn hide_panel_shortcuts_exist_in_every_profile() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            for (chord, command) in [
+                ("alt+e", "layout.hide_explorer"),
+                ("alt+r", "layout.hide_results"),
+            ] {
+                assert_eq!(
+                    keymap
+                        .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
+                        .unwrap(),
+                    Some(command),
+                    "profile {}",
+                    keymap.name
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn sidebar_disconnect_uses_uppercase_d_without_replacing_ddl() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            assert_eq!(
+                keymap
+                    .resolve(&parse_chord("shift+d").unwrap(), KeyContext::Explorer)
+                    .unwrap(),
+                Some("connection.close_session"),
+                "profile {}",
+                keymap.name
+            );
+        }
+        assert_eq!(
+            Keymap::default_profile()
+                .resolve(&parse_chord("d").unwrap(), KeyContext::Explorer)
+                .unwrap(),
+            Some("explorer.ddl")
+        );
+    }
+
+    #[test]
     fn same_key_allowed_in_disjoint_contexts() {
         let keymap = parse_keymap(
             r#"
 profile = "overlap"
 [explorer]
 "c" = "explorer.copy_name"
+"a" = "explorer.actions"
 [editor]
-"c" = "query.execute"
+"c" = "query.execute_document"
 "#,
         )
         .unwrap();
@@ -576,7 +837,7 @@ profile = "overlap"
             keymap
                 .resolve(&parse_chord("c").unwrap(), KeyContext::Editor)
                 .unwrap(),
-            Some("query.execute")
+            Some("query.execute_document")
         );
     }
 
@@ -586,13 +847,13 @@ profile = "overlap"
             r#"
 [editor]
 "ctrl+p" = "palette.open"
-"Ctrl+P" = "query.execute"
+"Ctrl+P" = "query.execute_document"
 "#,
         )
         .unwrap_err();
         assert!(err.field.contains("ctrl+p") || err.reason.contains("ambiguous"));
         assert!(
-            err.reason.contains("palette.open") && err.reason.contains("query.execute")
+            err.reason.contains("palette.open") && err.reason.contains("query.execute_document")
                 || err.field.contains("editor")
         );
     }
@@ -604,7 +865,7 @@ profile = "overlap"
             bindings: vec![
                 super::Binding {
                     chord: parse_chord("x").unwrap(),
-                    command: "query.execute".into(),
+                    command: "query.execute_document".into(),
                     context: KeyContext::Editor,
                 },
                 super::Binding {
@@ -618,16 +879,15 @@ profile = "overlap"
             .resolve(&parse_chord("x").unwrap(), KeyContext::Editor)
             .unwrap_err();
         assert_eq!(err.chord, "x");
-        assert!(err.commands.contains(&"query.execute".into()));
+        assert!(err.commands.contains(&"query.execute_document".into()));
         assert!(err.commands.contains(&"workbench.quit".into()));
     }
 
     fn assert_registered(ids: impl IntoIterator<Item = impl AsRef<str>>) {
-        let registered: std::collections::BTreeSet<_> =
-            crate::palette::palette_entries(&crate::model::Model::default())
-                .into_iter()
-                .map(|entry| entry.id)
-                .collect();
+        let registered: std::collections::BTreeSet<_> = crate::palette::command_specs()
+            .into_iter()
+            .map(|spec| spec.id)
+            .collect();
         for id in ids {
             let id = id.as_ref();
             assert!(registered.contains(id), "unregistered command: {id}");
@@ -635,13 +895,38 @@ profile = "overlap"
     }
 
     #[test]
-    fn every_registered_command_is_palette_reachable() {
+    fn every_bound_command_is_registered() {
         for keymap in [
             Keymap::default_profile(),
             Keymap::vim_profile(),
             Keymap::emacs_profile(),
         ] {
             assert_registered(keymap.command_ids());
+        }
+    }
+
+    #[test]
+    fn n_opens_connection_form_only_in_the_explorer_context() {
+        for keymap in [
+            Keymap::default_profile(),
+            Keymap::vim_profile(),
+            Keymap::emacs_profile(),
+        ] {
+            let chord = parse_chord("n").unwrap();
+            assert_eq!(
+                keymap
+                    .resolve(&chord, KeyContext::Explorer)
+                    .expect("resolve"),
+                Some("connection.new"),
+                "profile {}",
+                keymap.name
+            );
+            assert_eq!(
+                keymap.resolve(&chord, KeyContext::Editor).expect("resolve"),
+                None,
+                "`n` must stay typable in the editor, profile {}",
+                keymap.name
+            );
         }
     }
 

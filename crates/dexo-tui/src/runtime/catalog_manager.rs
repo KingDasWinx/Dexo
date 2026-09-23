@@ -10,6 +10,7 @@ use crate::runtime::{OperationId, SessionId};
 pub async fn load_children(
     session: Arc<dyn Session>,
     parent: Option<ObjectId>,
+    driver_parent: Option<ObjectId>,
     operation: OperationId,
     session_id: SessionId,
     generation: u64,
@@ -31,7 +32,7 @@ pub async fn load_children(
         return;
     };
     let options = CatalogListOptions { include_system };
-    match CatalogService::list_children(reader, parent.as_ref(), &options).await {
+    match CatalogService::list_children(reader, driver_parent.as_ref(), &options).await {
         Ok(list) => {
             let _ = action_tx
                 .send(Action::CatalogLoaded {

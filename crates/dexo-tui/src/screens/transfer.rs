@@ -1,5 +1,7 @@
 use dexo_app::transfer::{Detection, ErrorStrategy, ExportProgress, RejectedRow};
 
+use crate::widgets::form::{FooterFocus, footer_line};
+
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum TransferMode {
     #[default]
@@ -35,6 +37,8 @@ pub struct TransferScreen {
     pub error: Option<String>,
     pub message: Option<String>,
     pub confirm_restore: bool,
+    pub footer: FooterFocus,
+    pub scroll: usize,
 }
 
 impl Default for TransferScreen {
@@ -53,6 +57,8 @@ impl Default for TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 }
@@ -73,6 +79,8 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
@@ -94,6 +102,8 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
@@ -116,6 +126,8 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
@@ -139,13 +151,18 @@ impl TransferScreen {
             error: None,
             message: None,
             confirm_restore: false,
+            footer: FooterFocus::Input,
+            scroll: 0,
         }
     }
 
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!("{} {}", self.mode.as_str(), self.path),
-            format!("format={} strategy={:?}", self.format, self.strategy),
+            format!(
+                "format={} (Ctrl+F to cycle) strategy={:?}",
+                self.format, self.strategy
+            ),
             format!(
                 "progress rows={} bytes={} running={}",
                 self.progress.rows, self.progress.bytes, self.running
@@ -171,6 +188,7 @@ impl TransferScreen {
         for reject in &self.rejects {
             lines.push(format!("reject line={} {}", reject.line, reject.safe_error));
         }
+        lines.push(footer_line("Submit", self.footer));
         lines
     }
 }

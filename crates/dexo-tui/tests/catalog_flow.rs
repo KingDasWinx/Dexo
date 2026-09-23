@@ -254,7 +254,7 @@ fn clipboard_failure_is_not_success() {
         model
             .messages
             .iter()
-            .any(|message| message.contains("clipboard"))
+            .any(|message| message.message.contains("clipboard"))
     );
 }
 
@@ -453,9 +453,9 @@ fn offline_refresh_preserves_visible_tree() {
 }
 
 #[test]
-fn refresh_subtree_does_not_replace_roots() {
+fn refresh_node_does_not_replace_roots() {
     let mut model = connected_explorer_fixture();
-    let effects = update(&mut model, Action::RefreshCatalogSubtree);
+    let effects = update(&mut model, Action::RefreshCatalogNode);
     assert!(matches!(
         effects.as_slice(),
         [dexo_tui::Effect::LoadCatalogChildren {

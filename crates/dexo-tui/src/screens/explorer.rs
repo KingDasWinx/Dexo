@@ -22,6 +22,13 @@ pub enum ExplorerAction {
     CopyName,
 }
 
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum SidebarFocus {
+    Connections,
+    #[default]
+    Catalog,
+}
+
 impl ExplorerAction {
     pub fn all() -> [ExplorerAction; 6] {
         [
@@ -53,6 +60,30 @@ pub fn opens_table_data(kind: &ObjectKind) -> bool {
     )
 }
 
+pub fn connection_id(name: &str) -> ObjectId {
+    ObjectId::new(format!("connection:{name}"))
+}
+
+pub fn connection_name(id: &ObjectId) -> Option<&str> {
+    id.as_str().strip_prefix("connection:")
+}
+
+pub fn is_connection_node(node: &ExplorerNode) -> bool {
+    matches!(
+        node.kind,
+        ObjectKind::DriverSpecific(ref kind) if kind == "connection"
+    )
+}
+
+/// A synthetic grouping node ("Tables", "Columns"...). It has no counterpart in
+/// the driver, so anything that talks to a driver has to route around it.
+pub fn is_folder_node(node: &ExplorerNode) -> bool {
+    matches!(
+        node.kind,
+        ObjectKind::DriverSpecific(ref kind) if kind == "folder"
+    )
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ExplorerNode {
     pub id: ObjectId,
@@ -63,13 +94,36 @@ pub struct ExplorerNode {
     pub state: NodeState,
     pub expanded: bool,
     pub favorite: bool,
+    /// Data type of a column, shown beside its name. `None` for every other kind
+    /// and for columns read back from a snapshot cached before drivers set it.
+    pub type_name: Option<String>,
     pub children: Vec<ExplorerNode>,
     pub restriction: Option<String>,
     pub error: Option<String>,
 }
 
 impl ExplorerNode {
+    pub fn connection(name: &str) -> Self {
+        Self {
+            id: connection_id(name),
+            label: name.into(),
+            kind: ObjectKind::DriverSpecific("connection".into()),
+            qualified: name.into(),
+            schema: None,
+            state: NodeState::Collapsed,
+            expanded: false,
+            favorite: false,
+            type_name: None,
+            children: Vec::new(),
+            restriction: None,
+            error: None,
+        }
+    }
+
     pub fn can_expand(&self) -> bool {
+        if is_connection_node(self) {
+            return true;
+        }
         if !self.children.is_empty() {
             return true;
         }
@@ -98,6 +152,11 @@ impl ExplorerNode {
                 .get("favorite")
                 .and_then(|value| value.as_bool())
                 .unwrap_or(false),
+            type_name: object
+                .attributes
+                .get("type")
+                .and_then(|value| value.as_str())
+                .map(str::to_string),
             children: Vec::new(),
             restriction: None,
             error: None,
@@ -116,8 +175,11 @@ fn object_label(object: &CatalogObject) -> String {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ExplorerState {
+    pub sidebar_focus: SidebarFocus,
+    pub connection_cursor: usize,
     pub roots: Vec<ExplorerNode>,
     pub selected: Option<ObjectId>,
+    pub selected_connection: Option<String>,
     pub offline: bool,
     pub filter_name: String,
     pub filter_kind: Option<String>,
@@ -129,9 +191,38 @@ pub struct ExplorerState {
     pub include_system: bool,
     pub stale: bool,
     pub offset: usize,
+    /// Bumped by the methods that change which objects are in the tree. The editor
+    /// builds its completion catalog from `flatten()`, which walks and clones the whole
+    /// tree; doing that for every character typed is the kind of cost that shows up as a
+    /// stutter, so it rebuilds only when this moves.
+    pub revision: u64,
 }
 
 impl ExplorerState {
+    pub fn revision(&self) -> u64 {
+        self.revision
+    }
+
+    /// Ids the user starred. They live only in the tree, so the catalog has to come and
+    /// ask for them.
+    pub fn favorite_ids(&self) -> std::collections::HashSet<ObjectId> {
+        fn walk(nodes: &[ExplorerNode], out: &mut std::collections::HashSet<ObjectId>) {
+            for node in nodes {
+                if node.favorite {
+                    out.insert(node.id.clone());
+                }
+                walk(&node.children, out);
+            }
+        }
+        let mut out = std::collections::HashSet::new();
+        walk(&self.roots, &mut out);
+        out
+    }
+
+    fn touch(&mut self) {
+        self.revision = self.revision.wrapping_add(1);
+    }
+
     #[cfg(test)]
     pub fn fixture() -> Self {
         let schema = ExplorerNode {
@@ -143,6 +234,7 @@ impl ExplorerState {
             state: NodeState::Collapsed,
             expanded: false,
             favorite: false,
+            type_name: None,
             children: Vec::new(),
             restriction: None,
             error: None,
@@ -156,6 +248,7 @@ impl ExplorerState {
             state: NodeState::Expanded,
             expanded: true,
             favorite: false,
+            type_name: None,
             children: vec![schema],
             restriction: None,
             error: None,
@@ -169,6 +262,7 @@ impl ExplorerState {
             state: NodeState::Restricted,
             expanded: false,
             favorite: false,
+            type_name: None,
             children: Vec::new(),
             restriction: Some("permission denied".into()),
             error: None,
@@ -186,10 +280,208 @@ impl ExplorerState {
     }
 
     pub fn clear(&mut self) {
+        self.touch();
         self.roots.clear();
         self.selected = None;
+        self.selected_connection = None;
         self.last_load = None;
         self.stale = false;
+        self.offline = false;
+    }
+
+    pub fn sync_connection_roots(
+        &mut self,
+        profiles: &[crate::screens::connections::ConnectionRow],
+        active_connection: &str,
+    ) {
+        self.touch();
+        let mut next = Vec::with_capacity(profiles.len());
+        for row in profiles {
+            let id = connection_id(&row.profile.name);
+            let mut node = self
+                .roots
+                .iter()
+                .find(|node| node.id == id)
+                .cloned()
+                .unwrap_or_else(|| ExplorerNode::connection(&row.profile.name));
+            node.label = row.profile.name.clone();
+            node.qualified = row.profile.name.clone();
+            if row.sessions == 0 {
+                node.children.clear();
+                node.expanded = false;
+                node.state = NodeState::Collapsed;
+            } else if row.profile.name == active_connection {
+                node.expanded = true;
+            }
+            next.push(node);
+        }
+        self.roots = next;
+        if self.selected_node().is_none()
+            && let Some(first) = self.roots.first()
+        {
+            self.selected = Some(first.id.clone());
+            self.selected_connection = connection_name(&first.id).map(str::to_owned);
+        }
+    }
+
+    pub fn connection_name_for(&self, id: &ObjectId) -> Option<&str> {
+        fn contains(node: &ExplorerNode, id: &ObjectId) -> bool {
+            node.id == *id || node.children.iter().any(|child| contains(child, id))
+        }
+
+        if self.selected.as_ref() == Some(id)
+            && let Some(name) = self.selected_connection.as_deref()
+        {
+            return Some(name);
+        }
+
+        if let Some(name) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter()
+                .find(|root| connection_name(&root.id) == Some(name))
+            && contains(root, id)
+        {
+            return Some(name);
+        }
+
+        self.roots
+            .iter()
+            .find(|root| is_connection_node(root) && contains(root, id))
+            .and_then(|root| connection_name(&root.id))
+    }
+
+    pub fn selected_connection_name(&self) -> Option<&str> {
+        let id = self.selected.as_ref()?;
+        self.connection_name_for(id)
+    }
+
+    /// Restores an offline catalog snapshot (a flat, multi-level dump captured by
+    /// `capture_snapshot`) under the given connection's node, rebuilding the real
+    /// parent/child hierarchy from each object's `parent` id instead of dumping
+    /// every captured object (schemas, tables, columns, indexes, constraints...)
+    /// as flat siblings. Leaves sibling connection nodes untouched.
+    pub fn restore_connection_catalog(&mut self, connection_name: &str, page: CatalogList) {
+        self.touch();
+        let id = connection_id(connection_name);
+        let mut by_parent: std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>> =
+            std::collections::HashMap::new();
+        for object in page.objects {
+            by_parent
+                .entry(object.parent.clone())
+                .or_default()
+                .push(object);
+        }
+        let top_level = by_parent.remove(&None).unwrap_or_default();
+        let mut children: Vec<ExplorerNode> = top_level
+            .into_iter()
+            .map(|object| {
+                let child_id = object.id.clone();
+                let kind = object.kind.clone();
+                let mut node = ExplorerNode::from_object(object);
+                Self::attach_offline_descendants(&mut node, &child_id, &kind, &mut by_parent);
+                node
+            })
+            .collect();
+        for restriction in page.restrictions {
+            children.push(restriction_node(restriction));
+        }
+        if let Some(node) = Self::find_mut(&mut self.roots, &id) {
+            node.children = children;
+            node.expanded = true;
+            node.state = NodeState::Expanded;
+        }
+        self.offline = true;
+        self.stale = true;
+        self.selected = Some(id.clone());
+        self.selected_connection = Some(connection_name.to_owned());
+    }
+
+    fn attach_offline_descendants(
+        node: &mut ExplorerNode,
+        id: &ObjectId,
+        kind: &ObjectKind,
+        by_parent: &mut std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>>,
+    ) {
+        // A folder's id is synthetic and never a key in `by_parent`, so looking it
+        // up would dead-end here and strip every descendant below the folder.
+        if is_folder_node(node) {
+            for child in &mut node.children {
+                let (child_id, child_kind) = (child.id.clone(), child.kind.clone());
+                Self::attach_offline_descendants(child, &child_id, &child_kind, by_parent);
+            }
+            return;
+        }
+        let Some(direct_children) = by_parent.remove(&Some(id.clone())) else {
+            return;
+        };
+        node.children = group_catalog_children(id, kind, direct_children);
+        for child in &mut node.children {
+            let child_id = child.id.clone();
+            let child_kind = child.kind.clone();
+            Self::attach_offline_descendants(child, &child_id, &child_kind, by_parent);
+        }
+    }
+
+    pub fn replace_connection_catalog(
+        &mut self,
+        connection_name: &str,
+        page: CatalogList,
+        offline: bool,
+    ) {
+        let id = connection_id(connection_name);
+        if let Some(node) = Self::find_mut(&mut self.roots, &id) {
+            node.children = page
+                .objects
+                .into_iter()
+                .map(ExplorerNode::from_object)
+                .collect();
+            for restriction in page.restrictions {
+                node.children.push(restriction_node(restriction));
+            }
+            node.expanded = true;
+            node.state = NodeState::Expanded;
+            self.offline = offline;
+            self.stale = false;
+            self.selected = Some(id);
+            self.selected_connection = Some(connection_name.to_owned());
+        }
+    }
+
+    pub fn expand_local(&mut self, id: &ObjectId) {
+        let owner = self.connection_name_for(id).map(str::to_owned);
+        let root_index = owner.as_deref().and_then(|name| {
+            self.roots
+                .iter()
+                .position(|root| connection_name(&root.id) == Some(name))
+        });
+        let node = match root_index {
+            Some(index) => Self::find_mut(std::slice::from_mut(&mut self.roots[index]), id),
+            None => Self::find_mut(&mut self.roots, id),
+        };
+        if let Some(node) = node {
+            node.expanded = true;
+            if matches!(
+                node.state,
+                NodeState::Collapsed | NodeState::Stale | NodeState::Expanded
+            ) {
+                node.state = NodeState::Expanded;
+            }
+            self.selected = Some(id.clone());
+            self.selected_connection = owner;
+        }
+    }
+
+    fn find_mut<'a>(nodes: &'a mut [ExplorerNode], id: &ObjectId) -> Option<&'a mut ExplorerNode> {
+        for node in nodes {
+            if node.id == *id {
+                return Some(node);
+            }
+            if let Some(found) = Self::find_mut(&mut node.children, id) {
+                return Some(found);
+            }
+        }
+        None
     }
 
     pub fn mark_stale(&mut self) {
@@ -207,6 +499,15 @@ impl ExplorerState {
     }
 
     pub fn collapse(&mut self, id: &ObjectId) -> bool {
+        if self.selected.as_ref() == Some(id)
+            && let Some(owner) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter_mut()
+                .find(|root| connection_name(&root.id) == Some(owner))
+        {
+            return Self::collapse_in(std::slice::from_mut(root), id);
+        }
         Self::collapse_in(&mut self.roots, id)
     }
 
@@ -231,6 +532,21 @@ impl ExplorerState {
     }
 
     pub fn expand_with(&mut self, id: &ObjectId, operation: OperationId) -> bool {
+        if self.selected.as_ref() == Some(id)
+            && let Some(owner) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter_mut()
+                .find(|root| connection_name(&root.id) == Some(owner))
+        {
+            return Self::expand_in(
+                std::slice::from_mut(root),
+                id,
+                operation,
+                &mut self.last_load,
+                &mut self.selected,
+            );
+        }
         Self::expand_in(
             &mut self.roots,
             id,
@@ -251,6 +567,15 @@ impl ExplorerState {
             if node.id == *id {
                 node.expanded = true;
                 *selected = Some(id.clone());
+                if !node.children.is_empty()
+                    && matches!(
+                        node.state,
+                        NodeState::Collapsed | NodeState::Expanded | NodeState::Stale
+                    )
+                {
+                    node.state = NodeState::Expanded;
+                    return false;
+                }
                 if matches!(
                     node.state,
                     NodeState::Collapsed
@@ -273,11 +598,32 @@ impl ExplorerState {
         false
     }
 
+    /// Expands every ancestor of `id` so the node lands inside `visible_ids`.
+    /// Without it a goto into a collapsed group selects a row nobody can see and
+    /// the cursor falls back to row 0.
+    pub fn reveal(&mut self, id: &ObjectId) -> bool {
+        fn walk(nodes: &mut [ExplorerNode], id: &ObjectId) -> bool {
+            for node in nodes {
+                if node.id == *id {
+                    return true;
+                }
+                if walk(&mut node.children, id) {
+                    node.expanded = true;
+                    return true;
+                }
+            }
+            false
+        }
+        walk(&mut self.roots, id)
+    }
+
     pub fn apply_children(&mut self, parent: &ObjectId, page: CatalogList) {
+        self.touch();
         Self::apply_in(&mut self.roots, parent, page);
     }
 
     pub fn replace_roots(&mut self, page: CatalogList) {
+        self.touch();
         self.roots = page
             .objects
             .into_iter()
@@ -332,18 +678,31 @@ impl ExplorerState {
     }
 
     pub fn visible_ids(&self) -> Vec<ObjectId> {
+        self.visible_selections()
+            .into_iter()
+            .map(|(_, id)| id)
+            .collect()
+    }
+
+    fn visible_selections(&self) -> Vec<(Option<String>, ObjectId)> {
         let mut out = Vec::new();
-        self.collect_visible(&self.roots, &mut out);
+        self.collect_visible(&self.roots, None, &mut out);
         out
     }
 
-    fn collect_visible(&self, nodes: &[ExplorerNode], out: &mut Vec<ObjectId>) {
+    fn collect_visible(
+        &self,
+        nodes: &[ExplorerNode],
+        owner: Option<&str>,
+        out: &mut Vec<(Option<String>, ObjectId)>,
+    ) {
         for node in nodes {
+            let owner = connection_name(&node.id).or(owner);
             if self.matches(node) {
-                out.push(node.id.clone());
+                out.push((owner.map(str::to_owned), node.id.clone()));
             }
             if node.expanded {
-                self.collect_visible(&node.children, out);
+                self.collect_visible(&node.children, owner, out);
             }
         }
     }
@@ -388,34 +747,46 @@ impl ExplorerState {
         true
     }
 
+    /// The tree as catalog objects. `parent` has to name the nearest ancestor a driver
+    /// actually issued an id for -- a column's table, not the synthetic "Columns" folder
+    /// it is drawn under -- because that link is what `SnapshotCatalog` matches columns
+    /// on. Passing `None` here left every table with no columns, so completion after
+    /// `alias.` had nothing to offer.
     pub fn flatten(&self) -> Vec<CatalogObject> {
         let mut out = Vec::new();
-        fn walk(nodes: &[ExplorerNode], out: &mut Vec<CatalogObject>) {
+        fn walk(nodes: &[ExplorerNode], parent: Option<&ObjectId>, out: &mut Vec<CatalogObject>) {
             for node in nodes {
-                if matches!(&node.kind, ObjectKind::DriverSpecific(kind) if kind == "folder") {
-                    walk(&node.children, out);
+                if is_connection_node(node) || is_folder_node(node) {
+                    // Synthetic: it has no driver counterpart, so it cannot be a parent.
+                    walk(&node.children, parent, out);
                     continue;
                 }
                 let mut object = CatalogObject::new(
                     node.id.clone(),
                     node.kind.clone(),
                     dexo_app::parse_qualified(&node.qualified),
-                    None,
+                    parent.cloned(),
                 );
                 if node.favorite {
                     object
                         .attributes
                         .insert("favorite".into(), serde_json::json!(true));
                 }
+                if let Some(type_name) = &node.type_name {
+                    object
+                        .attributes
+                        .insert("type".into(), serde_json::json!(type_name));
+                }
                 out.push(object);
-                walk(&node.children, out);
+                walk(&node.children, Some(&node.id), out);
             }
         }
-        walk(&self.roots, &mut out);
+        walk(&self.roots, None, &mut out);
         out
     }
 
     pub fn apply_favorites(&mut self, ids: &[String]) {
+        self.touch();
         fn walk(nodes: &mut [ExplorerNode], ids: &[String]) {
             for node in nodes {
                 node.favorite = ids.iter().any(|id| id == node.id.as_str());
@@ -426,6 +797,7 @@ impl ExplorerState {
     }
 
     pub fn toggle_favorite(&mut self, id: &ObjectId) {
+        self.touch();
         Self::toggle_in(&mut self.roots, id);
     }
 
@@ -443,28 +815,59 @@ impl ExplorerState {
     }
 
     pub fn select(&mut self, id: ObjectId) {
+        self.selected_connection = self.connection_name_for(&id).map(str::to_owned);
         self.selected = Some(id);
     }
 
+    pub fn select_in_connection(&mut self, connection: &str, id: ObjectId) {
+        fn contains(node: &ExplorerNode, id: &ObjectId) -> bool {
+            node.id == *id || node.children.iter().any(|child| contains(child, id))
+        }
+
+        if self
+            .roots
+            .iter()
+            .find(|root| connection_name(&root.id) == Some(connection))
+            .is_some_and(|root| contains(root, &id))
+        {
+            self.selected = Some(id);
+            self.selected_connection = Some(connection.to_owned());
+        } else {
+            self.select(id);
+        }
+    }
+
+    pub fn select_visible(&mut self, index: usize) {
+        if let Some((connection, id)) = self.visible_selections().get(index).cloned() {
+            self.selected = Some(id);
+            self.selected_connection = connection;
+        }
+    }
+
     pub fn move_selection(&mut self, delta: i32) {
-        let ids = self.visible_ids();
-        if ids.is_empty() {
+        let selections = self.visible_selections();
+        if selections.is_empty() {
             return;
         }
-        let current = self
-            .selected
-            .as_ref()
-            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+        let current = selections
+            .iter()
+            .position(|(connection, id)| {
+                self.selected.as_ref() == Some(id)
+                    && self.selected_connection.as_ref() == connection.as_ref()
+            })
             .unwrap_or(0);
-        let next = (current as i32 + delta).clamp(0, ids.len() as i32 - 1) as usize;
-        self.selected = Some(ids[next].clone());
+        let next = (current as i32 + delta).clamp(0, selections.len() as i32 - 1) as usize;
+        self.selected_connection = selections[next].0.clone();
+        self.selected = Some(selections[next].1.clone());
     }
 
     pub fn selected_index(&self) -> usize {
-        let ids = self.visible_ids();
-        self.selected
-            .as_ref()
-            .and_then(|id| ids.iter().position(|candidate| candidate == id))
+        self.visible_selections()
+            .iter()
+            .position(|(connection, id)| {
+                self.selected.as_ref() == Some(id)
+                    && self.selected_connection.as_ref() == connection.as_ref()
+            })
             .unwrap_or(0)
     }
 
@@ -478,10 +881,8 @@ impl ExplorerState {
     }
 
     pub fn copy_selected_name(&mut self) {
-        if let Some(id) = &self.selected
-            && let Some(node) = Self::find(&self.roots, id)
-        {
-            self.copied = Some(node.qualified.clone());
+        if let Some(qualified) = self.selected_node().map(|node| node.qualified.clone()) {
+            self.copied = Some(qualified);
         }
     }
 
@@ -498,9 +899,20 @@ impl ExplorerState {
     }
 
     pub fn selected_node(&self) -> Option<&ExplorerNode> {
-        self.selected
-            .as_ref()
-            .and_then(|id| Self::find(&self.roots, id))
+        let id = self.selected.as_ref()?;
+        if let Some(connection) = self.selected_connection.as_deref()
+            && let Some(root) = self
+                .roots
+                .iter()
+                .find(|root| connection_name(&root.id) == Some(connection))
+        {
+            return Self::find(std::slice::from_ref(root), id);
+        }
+        Self::find(&self.roots, id)
+    }
+
+    pub fn is_selected(&self, connection: Option<&str>, id: &ObjectId) -> bool {
+        self.selected.as_ref() == Some(id) && self.selected_connection.as_deref() == connection
     }
 }
 
@@ -523,36 +935,39 @@ fn group_catalog_children(
                 (bucket_partition, "Partitions"),
             ],
         ),
-        ObjectKind::Schema => group_schema_children(parent, objects),
+        ObjectKind::Schema => group_by_kind(
+            parent,
+            objects,
+            &[
+                (bucket_table, "Tables"),
+                (bucket_view, "Views"),
+                (bucket_matview, "Materialized Views"),
+                (bucket_function, "Functions"),
+                (bucket_procedure, "Procedures"),
+                (bucket_sequence, "Sequences"),
+                (bucket_type, "Types"),
+            ],
+        ),
+        // MySQL has no schema level and hangs relations straight off the catalog,
+        // so the catalog arm carries table-like buckets that stay empty on Postgres.
+        ObjectKind::Catalog => group_by_kind(
+            parent,
+            objects,
+            &[
+                (bucket_schema, "Schemas"),
+                (bucket_table, "Tables"),
+                (bucket_view, "Views"),
+                (bucket_procedure, "Procedures"),
+                (bucket_function, "Functions"),
+                (bucket_event, "Events"),
+                (bucket_extension, "Extensions"),
+                (bucket_fdw, "Foreign Data Wrappers"),
+                (bucket_publication, "Publications"),
+                (bucket_user_role, "Users & Roles"),
+            ],
+        ),
         _ => objects.into_iter().map(ExplorerNode::from_object).collect(),
     }
-}
-
-fn group_schema_children(parent: &ObjectId, objects: Vec<CatalogObject>) -> Vec<ExplorerNode> {
-    let mut tables = Vec::new();
-    let mut rest = Vec::new();
-    for object in objects {
-        if matches!(
-            object.kind,
-            ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
-        ) {
-            tables.push(ExplorerNode::from_object(object));
-        } else {
-            rest.push(object);
-        }
-    }
-    let mut children = tables;
-    children.extend(group_by_kind(
-        parent,
-        rest,
-        &[
-            (bucket_function, "Functions"),
-            (bucket_procedure, "Procedures"),
-            (bucket_sequence, "Sequences"),
-            (bucket_type, "Types"),
-        ],
-    ));
-    children
 }
 
 type KindBucket<'a> = (fn(&ObjectKind) -> bool, &'a str);
@@ -601,6 +1016,7 @@ fn folder_node(
         state: NodeState::Expanded,
         expanded: false,
         favorite: false,
+        type_name: None,
         children,
         restriction: None,
         error: None,
@@ -640,6 +1056,33 @@ fn bucket_sequence(kind: &ObjectKind) -> bool {
 fn bucket_type(kind: &ObjectKind) -> bool {
     matches!(kind, ObjectKind::DriverSpecific(name) if name == "enum" || name == "domain")
 }
+fn bucket_schema(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Schema)
+}
+fn bucket_table(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::Table)
+}
+fn bucket_view(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::View)
+}
+fn bucket_matview(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::MaterializedView)
+}
+fn bucket_event(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "event")
+}
+fn bucket_extension(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "extension")
+}
+fn bucket_fdw(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "fdw")
+}
+fn bucket_publication(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::DriverSpecific(name) if name == "publication")
+}
+fn bucket_user_role(kind: &ObjectKind) -> bool {
+    matches!(kind, ObjectKind::User | ObjectKind::Role)
+}
 
 fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> ExplorerNode {
     ExplorerNode {
@@ -651,6 +1094,7 @@ fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> Explore
         state: NodeState::Restricted,
         expanded: false,
         favorite: false,
+        type_name: None,
         children: Vec::new(),
         restriction: Some(restriction.reason),
         error: None,
@@ -669,7 +1113,7 @@ fn is_system_node(node: &ExplorerNode) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::{ExplorerAction, ExplorerState, NodeState};
+    use super::{ExplorerAction, ExplorerNode, ExplorerState, NodeState};
     use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
 
     #[test]
@@ -797,14 +1241,21 @@ mod tests {
         );
         {
             let schema = &explorer.roots[0];
-            assert!(schema.children.iter().any(|n| n.label == "users"));
+            // Every class gets its own group now; nothing hangs off the schema bare.
+            let labels: Vec<&str> = schema.children.iter().map(|n| n.label.as_str()).collect();
+            assert_eq!(labels, ["Tables", "Functions"]);
+            let tables = schema
+                .children
+                .iter()
+                .find(|n| n.label == "Tables")
+                .expect("tables folder");
+            assert!(tables.children.iter().any(|n| n.label == "users"));
             let functions = schema
                 .children
                 .iter()
                 .find(|n| n.label == "Functions")
                 .expect("functions folder");
             assert!(functions.children.iter().any(|n| n.label == "armor"));
-            assert!(!schema.children.iter().any(|n| n.label == "armor"));
         }
 
         explorer.apply_children(
@@ -827,11 +1278,16 @@ mod tests {
                 restrictions: vec![],
             },
         );
+        // Addressed by id, so the extra folder level must not hide it from `apply_in`.
         let table = explorer.roots[0]
             .children
             .iter()
+            .find(|n| n.label == "Tables")
+            .expect("tables folder")
+            .children
+            .iter()
             .find(|n| n.label == "users")
-            .unwrap();
+            .expect("table survived the extra level");
         assert!(table.children.iter().any(|n| n.label == "Columns"));
         assert!(table.children.iter().any(|n| n.label == "Indexes"));
         assert!(!table.children.iter().any(|n| n.kind == ObjectKind::Column));
@@ -842,5 +1298,190 @@ mod tests {
             .unwrap();
         assert!(columns.children.iter().any(|n| n.label == "id"));
         assert!(!columns.children.iter().any(|n| n.label == "users.id"));
+    }
+
+    #[test]
+    fn catalog_children_group_by_class_and_skip_empty_groups() {
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("catalog:db"),
+                ObjectKind::Catalog,
+                QualifiedName::new(Some("db"), None::<String>, "db"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        let parent = ObjectId::new("catalog:db");
+        let child = |id: &str, kind: ObjectKind, name: &str| {
+            CatalogObject::new(
+                ObjectId::new(id),
+                kind,
+                QualifiedName::new(Some("db"), None::<String>, name),
+                Some(parent.clone()),
+            )
+        };
+        explorer.apply_children(
+            &parent,
+            CatalogList {
+                objects: vec![
+                    child("schema:public", ObjectKind::Schema, "public"),
+                    child("user:alice", ObjectKind::User, "alice"),
+                    child(
+                        "ext:pgcrypto",
+                        ObjectKind::DriverSpecific("extension".into()),
+                        "pgcrypto",
+                    ),
+                    child(
+                        "event:nightly",
+                        ObjectKind::DriverSpecific("event".into()),
+                        "nightly",
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        // Exact and ordered: catches a reshuffled bucket list, and the absence of
+        // Tables/Views/Functions is what proves empty groups stay out.
+        let labels: Vec<&str> = explorer.roots[0]
+            .children
+            .iter()
+            .map(|n| n.label.as_str())
+            .collect();
+        assert_eq!(labels, ["Schemas", "Events", "Extensions", "Users & Roles"]);
+    }
+
+    #[test]
+    fn offline_restore_reaches_columns_through_folders() {
+        let mut explorer = ExplorerState {
+            roots: vec![ExplorerNode::connection("prod")],
+            ..ExplorerState::default()
+        };
+        let object = |id: &str, kind: ObjectKind, name: &str, parent: Option<&str>| {
+            CatalogObject::new(
+                ObjectId::new(id),
+                kind,
+                QualifiedName::new(Some("db"), Some("public"), name),
+                parent.map(ObjectId::new),
+            )
+        };
+        explorer.restore_connection_catalog(
+            "prod",
+            CatalogList {
+                objects: vec![
+                    object("catalog:db", ObjectKind::Catalog, "db", None),
+                    object(
+                        "schema:public",
+                        ObjectKind::Schema,
+                        "public",
+                        Some("catalog:db"),
+                    ),
+                    object(
+                        "table:orders",
+                        ObjectKind::Table,
+                        "orders",
+                        Some("schema:public"),
+                    ),
+                    object(
+                        "col:id",
+                        ObjectKind::Column,
+                        "orders.id",
+                        Some("table:orders"),
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        // Folder ids are synthetic, so the restore walk has to step through them
+        // instead of looking them up as parents. Otherwise this dead-ends at "Schemas".
+        let path = [
+            "db", "Schemas", "public", "Tables", "orders", "Columns", "id",
+        ];
+        let mut nodes = explorer.roots[0].children.as_slice();
+        for (depth, label) in path.iter().enumerate() {
+            let node = nodes.iter().find(|n| n.label == *label).unwrap_or_else(|| {
+                panic!("offline restore lost the tree at {label} (depth {depth})")
+            });
+            nodes = node.children.as_slice();
+        }
+    }
+
+    #[test]
+    fn replace_connection_catalog_attaches_children_under_profile() {
+        use crate::screens::connections::ConnectionRow;
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::nil()),
+            None,
+            "prod",
+            "postgres",
+            "local",
+            serde_json::json!({}),
+            SecretRef::new("ref".into()),
+        );
+        let mut explorer = ExplorerState::default();
+        explorer.sync_connection_roots(
+            &[ConnectionRow {
+                profile,
+                sessions: 1,
+            }],
+            "prod",
+        );
+        explorer.replace_connection_catalog(
+            "prod",
+            CatalogList {
+                objects: vec![CatalogObject::new(
+                    ObjectId::new("table:orders"),
+                    ObjectKind::Table,
+                    QualifiedName::new(Some("db"), Some("public"), "orders"),
+                    None,
+                )],
+                restrictions: vec![],
+            },
+            false,
+        );
+        assert_eq!(explorer.roots.len(), 1);
+        assert_eq!(explorer.roots[0].children.len(), 1);
+        assert_eq!(explorer.roots[0].children[0].label, "orders");
+    }
+
+    #[test]
+    fn duplicate_object_ids_preserve_their_connection_during_selection() {
+        fn root(name: &str, shared_id: &ObjectId) -> ExplorerNode {
+            let mut root = ExplorerNode::connection(name);
+            root.expanded = true;
+            root.children = vec![ExplorerNode {
+                id: shared_id.clone(),
+                label: "public".into(),
+                kind: ObjectKind::Schema,
+                qualified: format!("{name}.public"),
+                schema: Some("public".into()),
+                state: NodeState::Collapsed,
+                expanded: false,
+                favorite: false,
+                type_name: None,
+                children: Vec::new(),
+                restriction: None,
+                error: None,
+            }];
+            root
+        }
+
+        let shared_id = ObjectId::new("pg:schema:2200");
+        let mut explorer = ExplorerState {
+            roots: vec![root("prod", &shared_id), root("staging", &shared_id)],
+            ..ExplorerState::default()
+        };
+
+        explorer.select_visible(1);
+        assert_eq!(explorer.selected_connection_name(), Some("prod"));
+        explorer.move_selection(2);
+        assert_eq!(explorer.selected_connection_name(), Some("staging"));
+        assert_eq!(
+            explorer.selected_node().map(|node| node.qualified.as_str()),
+            Some("staging.public")
+        );
+        assert_eq!(explorer.selected_index(), 3);
     }
 }

@@ -46,20 +46,24 @@ async fn admin_refresh_uses_selected_session_and_ignores_stale_response() {
 }
 
 #[tokio::test]
-async fn saved_theme_keymap_and_mouse_survive_restart() {
+async fn saved_mode_accent_keymap_and_mouse_survive_restart() {
     let dir = tempfile::tempdir().unwrap();
     let settings = dexo_app::settings::SettingsFile {
-        theme: dexo_app::settings::ThemeId::HighContrast,
+        mode: dexo_app::settings::ModeId::HighContrast,
+        accent: "violet".into(),
         mouse: false,
         keymap: dexo_app::settings::KeymapConfig {
             run_statement: "Ctrl+Enter".into(),
+            profile: "vim".into(),
         },
         ..dexo_app::settings::SettingsFile::default()
     };
     dexo_app::settings::save_settings(dir.path(), &settings).unwrap();
     let loaded = dexo_app::settings::load_settings(dir.path());
-    assert_eq!(loaded.theme, dexo_app::settings::ThemeId::HighContrast);
+    assert_eq!(loaded.mode, dexo_app::settings::ModeId::HighContrast);
+    assert_eq!(loaded.accent, "violet");
     assert_eq!(loaded.keymap.run_statement, "Ctrl+Enter");
+    assert_eq!(loaded.keymap.profile, "vim");
     assert!(!loaded.mouse);
 }
 
@@ -111,6 +115,28 @@ fn settings_open_applies_without_fixture() {
     assert!(model.settings.open);
 }
 
+/// Arrow keys are the advertised way to change a setting, so they have to be inverses:
+/// step forward past what you wanted and left must bring it straight back.
+#[test]
+fn left_and_right_are_inverses_on_every_settings_row() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    fn press(model: &mut Model, code: KeyCode) {
+        update(model, Action::Key(KeyEvent::new(code, KeyModifiers::NONE)));
+    }
+
+    let mut model = Model::default();
+    update(&mut model, Action::OpenSettings);
+    for row in 0..dexo_tui::screens::settings::FIELD_COUNT {
+        model.settings.focus = row;
+        let before = model.settings.clone();
+        press(&mut model, KeyCode::Right);
+        assert_ne!(model.settings, before, "row {row} ignored the right arrow");
+        press(&mut model, KeyCode::Left);
+        assert_eq!(model.settings, before, "row {row} did not step back");
+    }
+}
+
 #[test]
 fn open_admin_emits_load_when_session_ready() {
     let mut model = Model {
@@ -147,24 +173,285 @@ fn choose_effects(model: &mut Model, query: &str) -> Vec<dexo_tui::Effect> {
     effects
 }
 
+fn press(model: &mut Model, ch: char) {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    update(
+        model,
+        Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+    );
+}
+
+/// Enabling a profile hands an MCP client tool access to the database, so it takes
+/// the same two presses that revoking already took. The screen used to have no key
+/// for it at all -- it could list and revoke, never enable.
+#[test]
+fn enabling_an_mcp_profile_takes_two_presses() {
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    assert!(!model.mcp_profiles.enabled);
+
+    let armed = update(&mut model, Action::Key(key('e')));
+    assert!(armed.is_empty(), "arming must not grant anything yet");
+    assert!(!model.mcp_profiles.enabled);
+    assert!(model.mcp_profiles.preview.contains("confirm enable"));
+
+    let effects = update(&mut model, Action::Key(key('e')));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::SetMcpProfileEnabled { enabled: true, .. }
+        )),
+        "{effects:?}"
+    );
+    assert!(model.mcp_profiles.enabled);
+}
+
+/// The grants section was fixture-only: nothing ever read the ledger, so the screen
+/// showed an empty list no matter what a profile actually held.
+#[test]
+fn selecting_a_profile_shows_its_own_grants() {
+    use dexo_tui::screens::mcp_profiles::{GrantLine, McpProfileSummary, McpProfilesScreen};
+
+    let line = |id: &str, tools: &str| GrantLine {
+        id: id.into(),
+        capability: "data_write".into(),
+        tools: tools.into(),
+        expires_in_secs: 900,
+        diff: "prod db.public.items".into(),
+    };
+    let profile = |name: &str, grants: Vec<GrantLine>| McpProfileSummary {
+        name: name.into(),
+        enabled: false,
+        scopes: vec![],
+        tools: vec![],
+        grants,
+    };
+
+    let mut screen = McpProfilesScreen {
+        open: true,
+        ..Default::default()
+    };
+    screen.load_profiles(vec![
+        profile("assistant", vec![line("g1", "data_insert")]),
+        profile(
+            "reviewer",
+            vec![line("g2", "data_update"), line("g3", "data_delete")],
+        ),
+    ]);
+
+    assert_eq!(screen.grants.len(), 1);
+    assert!(screen.lines().join("\n").contains("data_insert"));
+
+    screen.select_next();
+    assert_eq!(screen.name, "reviewer");
+    assert_eq!(screen.grants.len(), 2, "grants must follow the selection");
+    let view = screen.lines().join("\n");
+    assert!(view.contains("data_update") && view.contains("data_delete"));
+    assert!(
+        !view.contains("data_insert"),
+        "the other profile's grants must not leak in"
+    );
+}
+
+/// Disabling only takes access away, so it commits on the first press. Enabling grants
+/// it, so it still arms first. The asymmetry is the point.
+#[test]
+fn disabling_a_profile_takes_one_press_while_enabling_takes_two() {
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    update(&mut model, Action::Key(key('e')));
+    update(&mut model, Action::Key(key('e')));
+    assert!(model.mcp_profiles.enabled);
+
+    let effects = update(&mut model, Action::Key(key('e')));
+    assert!(!model.mcp_profiles.enabled, "one press must disable");
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::SetMcpProfileEnabled { enabled: false, .. }
+        )),
+        "{effects:?}"
+    );
+
+    // and it is armed again on the way back up
+    let armed = update(&mut model, Action::Key(key('e')));
+    assert!(armed.is_empty());
+    assert!(!model.mcp_profiles.enabled);
+}
+
+/// `r` acts on the selected row; the global sweep moved to `R`. A screen listing
+/// profiles where an unmodified key hits everything is the surprising one.
+#[test]
+fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    let armed = update(&mut model, Action::Key(key('r')));
+    assert!(armed.is_empty(), "per-profile revoke must arm first");
+    assert!(
+        model
+            .mcp_profiles
+            .preview
+            .contains("confirm revoke grants for")
+    );
+
+    let effects = update(&mut model, Action::Key(key('r')));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::RevokeMcpGrants { profile } if profile == "assistant"
+        )),
+        "{effects:?}"
+    );
+
+    let mut model = Model {
+        mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        ..Model::default()
+    };
+    update(&mut model, Action::Key(key('R')));
+    let effects = update(&mut model, Action::Key(key('R')));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::RevokeAllMcpGrants)),
+        "{effects:?}"
+    );
+}
+
+/// Moving the cursor must not let a confirmation armed on one profile commit on
+/// whichever profile happens to be selected next.
+#[test]
+fn moving_off_a_profile_disarms_its_pending_enable() {
+    use dexo_tui::screens::mcp_profiles::McpProfileSummary;
+
+    let summary = |name: &str| McpProfileSummary {
+        name: name.into(),
+        enabled: false,
+        scopes: vec![],
+        tools: vec![],
+        grants: vec![],
+    };
+    let mut screen = dexo_tui::screens::mcp_profiles::McpProfilesScreen {
+        open: true,
+        ..Default::default()
+    };
+    screen.load_profiles(vec![summary("assistant"), summary("reviewer")]);
+    let mut model = Model {
+        mcp_profiles: screen,
+        ..Model::default()
+    };
+
+    update(&mut model, Action::Key(key('e')));
+    assert!(model.mcp_profiles.confirm_enable);
+    update(&mut model, Action::Key(arrow_down()));
+    assert!(!model.mcp_profiles.confirm_enable);
+    assert_eq!(model.mcp_profiles.name, "reviewer");
+
+    let effects = update(&mut model, Action::Key(key('e')));
+    assert!(effects.is_empty(), "the new profile must arm on its own");
+    assert!(!model.mcp_profiles.enabled);
+}
+
+fn key(ch: char) -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)
+}
+
+fn arrow_down() -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)
+}
+
+/// The screen opened, showed a path field and could reach neither ExportConfig nor
+/// ImportConfig: there was no way to name a file. Both keys now route through the
+/// same file picker the transfer and diagnostics flows already use.
+#[test]
+fn config_transfer_reaches_export_and_import_through_the_picker() {
+    for (ch, mode) in [
+        (
+            'e',
+            dexo_tui::screens::file_picker::FilePickerMode::ConfigExport,
+        ),
+        (
+            'i',
+            dexo_tui::screens::file_picker::FilePickerMode::ConfigImport,
+        ),
+    ] {
+        let mut model = Model::default();
+        update(&mut model, Action::OpenConfigTransfer);
+        assert!(model.config_transfer.open);
+
+        update(&mut model, Action::Key(key(ch)));
+        assert!(model.file_picker.open, "{ch} did not open the picker");
+        assert_eq!(model.file_picker_mode, mode);
+
+        // stand in for the user typing a filename rather than picking a row
+        model.file_picker.focus = dexo_tui::screens::file_picker::FilePickerFocus::Name;
+        model.file_picker.name.set_text("config.toml");
+        let effects = update(&mut model, Action::Key(enter()));
+        let reached = effects.iter().any(|effect| match ch {
+            'e' => matches!(effect, dexo_tui::Effect::ExportConfig { .. }),
+            _ => matches!(effect, dexo_tui::Effect::ImportConfig { .. }),
+        });
+        assert!(reached, "{ch} produced {effects:?}");
+    }
+}
+
+/// The keys are only usable if the screen says they exist; it had no footer at all.
+#[test]
+fn config_transfer_advertises_its_keys() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenConfigTransfer);
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(view.contains("e export"), "{view}");
+    assert!(view.contains("i import"), "{view}");
+}
+
+fn enter() -> crossterm::event::KeyEvent {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)
+}
+
 fn model_with_local_state() -> Model {
     let mut model = Model::default();
     model.recovery.checkpoints = vec![("scratch".into(), "scratch.sql".into(), "select 1".into())];
     model
 }
 
+/// Reset and discard live inside their own screens now, so they are reached by the
+/// screen key rather than the palette. The confirmation must still be shown either way.
 #[test]
 fn destructive_local_commands_open_their_owner_before_confirmation() {
-    for (id, visible) in [
-        ("settings.reset", "confirm_reset=true"),
-        ("recovery.discard", "confirm_discard=true"),
-        ("mcp.revoke_all", "confirm revoke all grants"),
-    ] {
-        let mut model = model_with_local_state();
-        choose(&mut model, id);
-        let view = dexo_tui::render::render_to_string(&model, 100, 30);
-        assert!(view.contains(visible), "{id} confirmation is hidden");
-    }
+    let mut model = model_with_local_state();
+    update(&mut model, Action::OpenSettings);
+    press(&mut model, 'r');
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("[Confirm reset]"),
+        "settings reset confirmation is hidden"
+    );
+
+    let mut model = model_with_local_state();
+    update(&mut model, Action::OpenRecovery);
+    press(&mut model, 'n');
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("confirm_discard=true"),
+        "recovery discard confirmation is hidden"
+    );
+
+    let mut model = model_with_local_state();
+    choose(&mut model, "mcp.revoke_all");
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(
+        view.contains("confirm revoke all grants"),
+        "mcp revoke confirmation is hidden"
+    );
 }
 
 #[test]

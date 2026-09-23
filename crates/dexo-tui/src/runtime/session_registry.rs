@@ -27,12 +27,26 @@ impl SessionRegistry {
         connection: impl Into<String>,
         session: Arc<dyn Session>,
     ) -> SessionId {
+        let connection = connection.into();
+        if let Some(id) = self
+            .sessions
+            .values()
+            .find(|active| active.connection == connection)
+            .map(|active| active.id)
+        {
+            if let Some(active) = self.sessions.get_mut(&id) {
+                active.session = session;
+                active.generation = active.generation.saturating_add(1);
+                active.transaction = TransactionState::Idle;
+            }
+            return id;
+        }
         let id = SessionId(Uuid::new_v4());
         self.sessions.insert(
             id,
             ActiveSession {
                 id,
-                connection: connection.into(),
+                connection,
                 generation: 1,
                 transaction: TransactionState::Idle,
                 session,

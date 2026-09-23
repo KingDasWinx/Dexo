@@ -11,6 +11,8 @@ fn snapshot_settings_full_and_compact() {
     model.settings = dexo_tui::screens::settings::SettingsScreen::fixture();
     insta::assert_snapshot!("settings_full", render_to_string(&model, 160, 50));
     insta::assert_snapshot!("settings_compact", render_to_string(&model, 60, 20));
+    // Below the option rows' width the rows collapse to the active value alone.
+    insta::assert_snapshot!("settings_narrow", render_to_string(&model, 44, 20));
 }
 
 #[test]

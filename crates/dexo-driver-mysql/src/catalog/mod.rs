@@ -370,7 +370,7 @@ impl MysqlSession {
         let mut restrictions = Vec::new();
         let columns: Vec<mysql_async::Row> = self
             .exec_rows(
-                "SELECT COLUMN_NAME, DATA_TYPE, IS_NULLABLE, GENERATION_EXPRESSION, EXTRA, COLLATION_NAME
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, GENERATION_EXPRESSION, EXTRA, COLLATION_NAME
                  FROM information_schema.COLUMNS
                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
                  ORDER BY ORDINAL_POSITION",
@@ -390,7 +390,7 @@ impl MysqlSession {
                 QualifiedName::new(Some(schema), None::<String>, format!("{table}.{name}")),
                 Some(parent.clone()),
             )
-            .with_attribute("driver.mysql.type", serde_json::json!(data_type))
+            .with_attribute("type", serde_json::json!(data_type))
             .with_attribute("driver.mysql.nullable", serde_json::json!(nullable))
             .with_attribute("driver.mysql.extra", serde_json::json!(extra.clone()));
             if let Some(collation) = collation {

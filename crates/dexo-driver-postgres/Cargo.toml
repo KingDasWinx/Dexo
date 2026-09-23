@@ -9,7 +9,9 @@ repository.workspace = true
 [dependencies]
 async-trait.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
+fallible-iterator = "0.2"
 futures-util = "0.3"
+postgres-protocol = "0.6.12"
 secrecy.workspace = true
 serde_json.workspace = true
 tokio.workspace = true

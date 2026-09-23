@@ -5,9 +5,9 @@ expression: "render_to_string(&model, 60, 20)"
 demo  local  public                                         
 ┌Transfer──────────────────────────────────────────────────┐
 │export out.csv                                            │
-│format=csv strategy=Stop                                  │
+│format=csv (Ctrl+F to cycle) strategy=Stop                │
 │progress rows=10000 bytes=80000 running=true              │
-│                                                          │
+│ [Submit]   [Cancel]                                      │
 │                                                          │
 │                                                          │
 │                                                          │
@@ -21,4 +21,4 @@ demo  local  public
 └──────────────────────────────────────────────────────────┘
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-connected:local  tx:idle  FOCUS: Editor  layout:normal  rows
+local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1

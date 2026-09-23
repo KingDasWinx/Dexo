@@ -68,6 +68,8 @@ impl DdlPreviewState {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaEditor {
+    /// The form used to be the DDL tab's fallback content, so nothing ever opened it.
+    pub open: bool,
     pub kind: FormKind,
     pub fields: Vec<FormField>,
     pub focus: usize,
@@ -86,6 +88,7 @@ impl Default for SchemaEditor {
 impl SchemaEditor {
     pub fn table_form(target: impl Into<String>) -> Self {
         Self {
+            open: false,
             kind: FormKind::Table,
             fields: vec![
                 FormField {
