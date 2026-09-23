@@ -16,9 +16,9 @@ Dexo is a keyboard-first TUI, CLI, and local MCP server for PostgreSQL and MySQL
 ## Demo
 
 <div align="center">
-  <video src="assets/demo.mp4" width="800" controls muted playsinline>
-    A short walkthrough of the Dexo workbench.
-  </video>
+  <img src="assets/entrance.gif" width="640" alt="Dexo's animated entrance">
+  <br><br>
+  <img src="assets/screenshots/workbench.webp" alt="The Dexo workbench: catalog tree, SQL editor with highlighting, and a results grid">
 </div>
 
 ## Features
@@ -31,6 +31,27 @@ Dexo is a keyboard-first TUI, CLI, and local MCP server for PostgreSQL and MySQL
 - 🖥️ **CLI for the same app layer** — query, inspect, schema, export, import, explain, sessions, and doctor without opening the TUI.
 - 🔌 **MCP over stdio** — profiles start disabled and read-only; write tools appear only while a temporary grant is active.
 - 🔒 **Local-first** — no telemetry, sanitized diagnostics on demand, crash recovery, and dual `MIT OR Apache-2.0` licensing.
+
+## Screenshots
+
+<table>
+  <tr>
+    <td width="50%"><img src="assets/screenshots/table-data.webp" alt="Browsing a table"><br><sub><b>Table data</b> — open a table from the tree; the grid pages on demand and the console logs each fetch.</sub></td>
+    <td width="50%"><img src="assets/screenshots/record.webp" alt="Record detail"><br><sub><b>Record detail</b> — Enter on a row shows every field with copy, filter, and refresh actions.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/actions.webp" alt="Connection actions"><br><sub><b>Connection actions</b> — <kbd>a</kbd> on any tree node lists what it can do, with its shortcut.</sub></td>
+    <td><img src="assets/screenshots/palette.webp" alt="Command palette"><br><sub><b>Command palette</b> — <kbd>Ctrl</kbd>+<kbd>P</kbd> reaches every command, grouped by area.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/connection-form.webp" alt="Add connection form"><br><sub><b>Connections</b> — PostgreSQL and MySQL, with TLS, SSH, and proxies under advanced options.</sub></td>
+    <td><img src="assets/screenshots/help.webp" alt="Keybindings help"><br><sub><b>Keybindings</b> — <kbd>F1</kbd> lists the active keymap per pane: Default, Vim, or Emacs.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="assets/screenshots/workbench-light.webp" alt="Light theme"><br><sub><b>Light mode</b> — the same workbench in the light theme with the violet accent.</sub></td>
+    <td><img src="assets/screenshots/settings-light.webp" alt="Settings"><br><sub><b>Settings</b> — mode, accent, keymap, mouse, animation, and Unicode, saved per user.</sub></td>
+  </tr>
+</table>
 
 ## Status
 
