@@ -21,10 +21,9 @@ fn saved_profile() -> ConnectionProfile {
 }
 
 fn sync_sidebar(model: &mut Model) {
-    model.explorer.sync_connection_roots(
-        &model.connections.profiles,
-        model.connection.name.as_str(),
-    );
+    model
+        .explorer
+        .sync_connection_roots(&model.connections.profiles, model.connection.name.as_str());
 }
 
 fn select_connection(model: &mut Model, name: &str) {
@@ -420,7 +419,9 @@ fn shift_d_on_child_closes_its_owning_connection() {
     let mut staging = saved_profile();
     staging.name = "staging".into();
     let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile(), staging]);
+    model
+        .connections
+        .load_profiles(vec![saved_profile(), staging]);
     for (name, session) in [("prod", prod_session), ("staging", staging_session)] {
         let _ = update(
             &mut model,
@@ -608,9 +609,7 @@ fn second_activate_expands_collapsed_connected_folder() {
             driver: "postgres".into(),
         },
     );
-    model
-        .explorer
-        .collapse(&connection_id("prod"));
+    model.explorer.collapse(&connection_id("prod"));
     model.focus = Focus::Explorer;
     select_connection(&mut model, "prod");
 
@@ -645,9 +644,7 @@ fn clicking_connected_connection_expands_collapsed_folder() {
             driver: "postgres".into(),
         },
     );
-    model
-        .explorer
-        .collapse(&connection_id("prod"));
+    model.explorer.collapse(&connection_id("prod"));
     paint(&mut model);
 
     click_target(&mut model, HitTarget::ExplorerNode(0));
@@ -682,15 +679,17 @@ fn reactivating_a_different_open_session_keeps_sidebar_focus() {
             driver: "postgres".into(),
         },
     );
-    model.connections.upsert_session(dexo_tui::screens::connections::SessionRow {
-        id: SessionId(uuid::Uuid::from_u128(2)),
-        connection: "staging".into(),
-        transaction: dexo_driver_api::TransactionState::Idle,
-        generation: 2,
-        environment: "local".into(),
-        read_only: false,
-        driver: "postgres".into(),
-    });
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: SessionId(uuid::Uuid::from_u128(2)),
+            connection: "staging".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 2,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
     sync_sidebar(&mut model);
     model.focus = Focus::Explorer;
     select_connection(&mut model, "staging");
@@ -777,7 +776,10 @@ fn catalog_of(names: &[&str]) -> CatalogList {
 /// that node, otherwise a click selects the neighbouring object.
 fn assert_catalog_hits_land_on_their_row(model: &Model, labels: &[&str]) {
     fn node_label(model: &Model, id: &ObjectId) -> Option<String> {
-        fn walk(nodes: &[dexo_tui::screens::explorer::ExplorerNode], id: &ObjectId) -> Option<String> {
+        fn walk(
+            nodes: &[dexo_tui::screens::explorer::ExplorerNode],
+            id: &ObjectId,
+        ) -> Option<String> {
             for node in nodes {
                 if node.id == *id {
                     return Some(node.label.clone());
@@ -828,12 +830,12 @@ fn catalog_hits_match_rendered_rows_under_active_connection() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
     model.connection.name = "prod".into();
-    model.explorer.sync_connection_roots(&model.connections.profiles, "prod");
-    model.explorer.replace_connection_catalog(
-        "prod",
-        catalog_of(&["alpha", "beta"]),
-        false,
-    );
+    model
+        .explorer
+        .sync_connection_roots(&model.connections.profiles, "prod");
+    model
+        .explorer
+        .replace_connection_catalog("prod", catalog_of(&["alpha", "beta"]), false);
 
     assert_catalog_hits_land_on_their_row(&model, &["alpha", "beta"]);
 }
@@ -843,7 +845,9 @@ fn catalog_hits_match_rendered_rows_when_offline_with_cached_catalog() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
     model.connection.name = "prod".into();
-    model.explorer.sync_connection_roots(&model.connections.profiles, "prod");
+    model
+        .explorer
+        .sync_connection_roots(&model.connections.profiles, "prod");
     model
         .explorer
         .replace_connection_catalog("prod", catalog_of(&["alpha", "beta"]), true);

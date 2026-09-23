@@ -60,7 +60,10 @@ pub async fn fetch_table_columns(
     match data.table_columns(&target).await {
         Ok(columns) => {
             let _ = action_tx
-                .send(Action::TableColumnsLoaded { generation, columns })
+                .send(Action::TableColumnsLoaded {
+                    generation,
+                    columns,
+                })
                 .await;
         }
         Err(error) => {

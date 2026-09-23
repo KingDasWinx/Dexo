@@ -348,7 +348,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         );
         hits.register(
             HitTarget::DocumentTabClose(item.index),
-            Rect::new(x.saturating_add(item.title_width), area.y, item.close_width, 1),
+            Rect::new(
+                x.saturating_add(item.title_width),
+                area.y,
+                item.close_width,
+                1,
+            ),
         );
         x = x.saturating_add(tab_width);
     }

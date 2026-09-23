@@ -180,7 +180,7 @@ mod tests {
             None,
             Some("conn-1"),
         )
-            .unwrap();
+        .unwrap();
         assert_eq!(repo.get("d1").unwrap().unwrap().content, "select 1");
         assert_eq!(repo.list_for_project("p1").unwrap().len(), 1);
         repo.delete("d1").unwrap();

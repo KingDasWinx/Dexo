@@ -156,8 +156,7 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
         .iter()
         .map(|&index| widths.get(index).copied().unwrap_or(8))
         .collect();
-    let (cell_widths, overflowed) =
-        allocate_column_widths(&natural_widths, area.width as usize);
+    let (cell_widths, overflowed) = allocate_column_widths(&natural_widths, area.width as usize);
     let mut header = Vec::new();
     let mut remaining = area.width as usize;
     let header_style = model.theme.header(model.capabilities);

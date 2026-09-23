@@ -185,10 +185,7 @@ impl FilePicker {
 
     pub fn activate_selected(&mut self) -> Option<PathBuf> {
         if self.section == FilePickerSection::Recent {
-            return self
-                .recent_paths
-                .get(self.recent_selected)
-                .cloned();
+            return self.recent_paths.get(self.recent_selected).cloned();
         }
         let entry = self.entries.get(self.selected)?.clone();
         if entry.is_dir {
@@ -272,9 +269,7 @@ impl FilePicker {
         if self.recent_paths.is_empty() {
             return;
         }
-        if delta > 0
-            && self.recent_selected + 1 >= self.recent_paths.len()
-        {
+        if delta > 0 && self.recent_selected + 1 >= self.recent_paths.len() {
             self.section = FilePickerSection::Browser;
             self.selected = 0;
             self.offset = 0;
@@ -320,8 +315,9 @@ impl FilePicker {
             FilePickerFocus::List if self.section == FilePickerSection::Recent => {
                 self.move_recent(1);
             }
-            FilePickerFocus::List if self.section == FilePickerSection::Browser
-                && self.selected + 1 >= self.entries.len() =>
+            FilePickerFocus::List
+                if self.section == FilePickerSection::Browser
+                    && self.selected + 1 >= self.entries.len() =>
             {
                 self.focus = FilePickerFocus::Name;
             }
@@ -337,7 +333,9 @@ impl FilePicker {
             FilePickerFocus::List if self.section == FilePickerSection::Recent => {
                 self.move_recent(-1);
             }
-            FilePickerFocus::List if self.section == FilePickerSection::Browser && self.selected == 0 => {
+            FilePickerFocus::List
+                if self.section == FilePickerSection::Browser && self.selected == 0 =>
+            {
                 self.move_browser_up(rows);
             }
             FilePickerFocus::List => self.move_selection(-1, rows),
@@ -436,7 +434,10 @@ impl FilePicker {
             kinds.push(FilePickerLineKind::BrowserEntry(index));
         }
 
-        lines.push(self.name.labeled_line("name:", self.focus == FilePickerFocus::Name));
+        lines.push(
+            self.name
+                .labeled_line("name:", self.focus == FilePickerFocus::Name),
+        );
         kinds.push(FilePickerLineKind::Name);
         if let Some(error) = &self.error {
             lines.push(error.clone());

@@ -101,7 +101,6 @@ fn bootstrap_lists_profiles_without_auto_connecting() {
     assert!(!model.connection.ready);
 }
 
-
 #[test]
 fn bootstrap_restores_checkpoints_automatically_without_a_prompt() {
     let mut model = Model::default();
@@ -403,15 +402,17 @@ fn closing_active_session_clears_live_explorer() {
     model.connection.ready = true;
     model.active_session = Some(session);
     model.session_generation = 3;
-    model.connections.upsert_session(dexo_tui::screens::connections::SessionRow {
-        id: session,
-        connection: "prod".into(),
-        transaction: dexo_driver_api::TransactionState::Idle,
-        generation: 3,
-        environment: "local".into(),
-        read_only: false,
-        driver: "postgres".into(),
-    });
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 3,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
     model.explorer.replace_roots(CatalogList {
         objects: vec![CatalogObject::new(
             ObjectId::new("catalog:db"),
@@ -447,15 +448,17 @@ fn deleting_active_connection_clears_explorer() {
     model.connection.name = "prod".into();
     model.connection.ready = true;
     model.active_session = Some(session);
-    model.connections.upsert_session(dexo_tui::screens::connections::SessionRow {
-        id: session,
-        connection: "prod".into(),
-        transaction: dexo_driver_api::TransactionState::Idle,
-        generation: 1,
-        environment: "local".into(),
-        read_only: false,
-        driver: "postgres".into(),
-    });
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
     model.explorer.replace_roots(CatalogList {
         objects: vec![CatalogObject::new(
             ObjectId::new("catalog:db"),

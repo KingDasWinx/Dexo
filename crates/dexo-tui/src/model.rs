@@ -1743,7 +1743,9 @@ impl Model {
             DocumentTabFocus::Document(index) => index,
             DocumentTabFocus::New => self.documents.len(),
         };
-        let next = (current as i32).wrapping_add(delta).rem_euclid(slots as i32) as usize;
+        let next = (current as i32)
+            .wrapping_add(delta)
+            .rem_euclid(slots as i32) as usize;
         self.focus = Focus::DocumentTabs;
         if next < self.documents.len() {
             self.document_tab_focus = DocumentTabFocus::Document(next);

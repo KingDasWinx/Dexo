@@ -72,7 +72,11 @@ impl DocumentNamePrompt {
 
 pub fn normalize_document_name(input: &str, fallback: &str) -> Result<String, String> {
     let trimmed = input.trim();
-    let name = if trimmed.is_empty() { fallback.trim() } else { trimmed };
+    let name = if trimmed.is_empty() {
+        fallback.trim()
+    } else {
+        trimmed
+    };
     if name.is_empty() {
         return Err("name is required".into());
     }
@@ -100,7 +104,10 @@ mod tests {
 
     #[test]
     fn bare_name_gets_sql_extension() {
-        assert_eq!(normalize_document_name("reports", "query-1.sql").unwrap(), "reports.sql");
+        assert_eq!(
+            normalize_document_name("reports", "query-1.sql").unwrap(),
+            "reports.sql"
+        );
     }
 
     #[test]

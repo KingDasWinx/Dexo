@@ -2111,9 +2111,7 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
     let list_rows = popup.height.saturating_sub(5).max(4) as usize;
-    let layout = model
-        .file_picker
-        .layout(model.file_picker_mode, list_rows);
+    let layout = model.file_picker.layout(model.file_picker_mode, list_rows);
     paint_popup(
         frame,
         model,
@@ -2136,8 +2134,8 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             Some(crate::screens::file_picker::FilePickerLineKind::Name) => {
                 hits.register(HitTarget::FormField(0), rect);
             }
-            Some(crate::screens::file_picker::FilePickerLineKind::Footer) if line.contains("[Cancel]")
-            =>
+            Some(crate::screens::file_picker::FilePickerLineKind::Footer)
+                if line.contains("[Cancel]") =>
             {
                 crate::widgets::form::register_footer(
                     hits,

@@ -260,10 +260,8 @@ impl DataMutator for MysqlSession {
         let schema = target.schema().unwrap_or_default().to_string();
         let object = target.object().to_string();
         let mut conn = self.conn.lock().await;
-        let rows: Vec<mysql_async::Row> = conn
-            .exec(sql, (schema, object))
-            .await
-            .map_err(map_error)?;
+        let rows: Vec<mysql_async::Row> =
+            conn.exec(sql, (schema, object)).await.map_err(map_error)?;
         Ok(rows
             .into_iter()
             .map(|mut row| dexo_driver_api::ColumnKeyInfo {
@@ -351,7 +349,9 @@ impl DataMutator for MysqlSession {
                 let _ = conn.query_drop("ROLLBACK").await;
                 return Err(DriverError::new(
                     DriverErrorCategory::Conflict,
-                    format!("mutation conflict: expected to affect exactly 1 row, affected {affected}"),
+                    format!(
+                        "mutation conflict: expected to affect exactly 1 row, affected {affected}"
+                    ),
                 ));
             }
         }

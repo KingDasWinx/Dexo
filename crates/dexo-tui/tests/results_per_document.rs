@@ -117,4 +117,3 @@ fn a_select_elsewhere_leaves_the_table_tab_alone() {
         "the table tab showed the other file's select"
     );
 }
-

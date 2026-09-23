@@ -159,7 +159,10 @@ pub trait DataMutator: Send + Sync {
         limit: u32,
     ) -> Result<Vec<u8>, DriverError>;
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError>;
-    async fn table_columns(&self, target: &QualifiedName) -> Result<Vec<ColumnKeyInfo>, DriverError>;
+    async fn table_columns(
+        &self,
+        target: &QualifiedName,
+    ) -> Result<Vec<ColumnKeyInfo>, DriverError>;
 }
 
 #[cfg(test)]

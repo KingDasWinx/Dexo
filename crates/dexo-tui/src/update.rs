@@ -103,10 +103,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     });
                 model.connections.selected_session = Some(id);
             }
-            model.explorer.sync_connection_roots(
-                &model.connections.profiles,
-                model.connection.name.as_str(),
-            );
+            model
+                .explorer
+                .sync_connection_roots(&model.connections.profiles, model.connection.name.as_str());
             if ready {
                 model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
                 let connection = crate::screens::explorer::connection_id(&model.connection.name);
@@ -586,7 +585,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.absorb_catalog(&list.objects);
             let capture = replace_roots
                 || parent.as_ref()
-                    == Some(&crate::screens::explorer::connection_id(&model.connection.name));
+                    == Some(&crate::screens::explorer::connection_id(
+                        &model.connection.name,
+                    ));
             if capture {
                 if let Some(parent) = parent {
                     model.explorer.apply_children(&parent, list);
@@ -690,8 +691,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ScrollDocumentTabsNext => {
             if !model.documents.is_empty() {
-                model.document_tabs_scroll = (model.document_tabs_scroll + 1)
-                    .min(model.documents.len().saturating_sub(1));
+                model.document_tabs_scroll =
+                    (model.document_tabs_scroll + 1).min(model.documents.len().saturating_sub(1));
             }
             Vec::new()
         }
@@ -809,7 +810,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::TableColumnsLoaded { generation, columns } => {
+        Action::TableColumnsLoaded {
+            generation,
+            columns,
+        } => {
             if generation == model.session_generation {
                 model.data.table = dexo_app::data::TableMeta {
                     columns: columns
@@ -827,7 +831,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::TableColumnsFailed { generation, message } => {
+        Action::TableColumnsFailed {
+            generation,
+            message,
+        } => {
             if generation == model.session_generation {
                 model.messages.error(message);
             }
@@ -1387,7 +1394,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.mcp_audit.events = events;
             Vec::new()
         }
-        Action::DocumentLoaded { document, path, content } => {
+        Action::DocumentLoaded {
+            document,
+            path,
+            content,
+        } => {
             if let Some(doc) = model.documents.iter_mut().find(|item| item.id == document) {
                 let title = path
                     .file_name()
@@ -3100,7 +3111,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 }
                 Vec::new()
             }
-            KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
+            KeyCode::Char(ch)
+                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
+            {
                 if let Some(field) = model
                     .data
                     .insert_form
@@ -3496,10 +3509,9 @@ fn explorer_visible_rows(model: &Model) -> usize {
 }
 
 fn sync_explorer_connections(model: &mut Model) {
-    model.explorer.sync_connection_roots(
-        &model.connections.profiles,
-        model.connection.name.as_str(),
-    );
+    model
+        .explorer
+        .sync_connection_roots(&model.connections.profiles, model.connection.name.as_str());
 }
 
 fn selected_connection_profile_index(model: &Model) -> Option<usize> {
@@ -3591,10 +3603,7 @@ fn activate_connection_node(model: &mut Model) -> Vec<Effect> {
     if let Some(node) = model.explorer.selected_node() {
         if node.expanded {
             if crate::screens::explorer::is_connection_node(node) && node.children.is_empty() {
-                if matches!(
-                    node.state,
-                    crate::screens::explorer::NodeState::Loading(_)
-                ) {
+                if matches!(node.state, crate::screens::explorer::NodeState::Loading(_)) {
                     return Vec::new();
                 }
                 return expand_selected_catalog(model);
@@ -3650,7 +3659,9 @@ fn enter_offline_explorer(model: &mut Model) -> Vec<Effect> {
     }
     model
         .explorer
-        .select(crate::screens::explorer::connection_id(&model.connection.name));
+        .select(crate::screens::explorer::connection_id(
+            &model.connection.name,
+        ));
     vec![Effect::LoadOfflineCatalog {
         connection_id: model.connection.name.clone(),
         database_name: catalog_database(model),
@@ -3786,10 +3797,7 @@ fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effe
         | KeyCode::Delete
             if model.document_name_prompt.footer == crate::widgets::form::FooterFocus::Input =>
         {
-            let _ = model
-                .document_name_prompt
-                .name
-                .handle_key(key);
+            let _ = model.document_name_prompt.name.handle_key(key);
             Vec::new()
         }
         _ => Vec::new(),
@@ -4868,9 +4876,10 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
     match model.data.row_changes.get(&row_index).copied() {
         Some(dexo_app::data::RowEditState::Deleted) => {
             if let Some(identity) = row_identity_at(model, row_index)
-                && let Some(position) = find_pending_index(&model.data.changes, |change| {
-                    matches!(change, dexo_app::data::PendingChange::Delete { identity: existing, .. } if existing == &identity)
-                })
+                && let Some(position) = find_pending_index(
+                    &model.data.changes,
+                    |change| matches!(change, dexo_app::data::PendingChange::Delete { identity: existing, .. } if existing == &identity),
+                )
             {
                 model.data.changes.revert(position);
             }
@@ -4880,9 +4889,10 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
             let Some(original) = row_original_at(model, row_index) else {
                 return Vec::new();
             };
-            if let Some(position) = find_pending_index(&model.data.changes, |change| {
-                matches!(change, dexo_app::data::PendingChange::Insert { values } if is_subset_of(values, &original))
-            }) {
+            if let Some(position) = find_pending_index(
+                &model.data.changes,
+                |change| matches!(change, dexo_app::data::PendingChange::Insert { values } if is_subset_of(values, &original)),
+            ) {
                 model.data.changes.revert(position);
             }
             model.results.remove_row(row_index);
@@ -4985,7 +4995,10 @@ fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
     effects
 }
 
-fn document_index_for_table(model: &Model, target: &dexo_driver_api::QualifiedName) -> Option<usize> {
+fn document_index_for_table(
+    model: &Model,
+    target: &dexo_driver_api::QualifiedName,
+) -> Option<usize> {
     model.documents.iter().position(|document| {
         matches!(&document.kind, crate::model::DocumentKind::Table(existing) if existing == target)
     })
@@ -5760,9 +5773,7 @@ fn open_rename_document_prompt(model: &mut Model) {
 }
 
 fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
-    use crate::screens::document_name_prompt::{
-        DocumentNameIntent, normalize_document_name,
-    };
+    use crate::screens::document_name_prompt::{DocumentNameIntent, normalize_document_name};
 
     let intent = model.document_name_prompt.intent;
     let fallback = model.document_name_prompt.default_name.clone();
@@ -5780,11 +5791,13 @@ fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
     match intent {
         Some(DocumentNameIntent::Create) => {
             let connection_id = active_connection_uuid(model);
-            model.documents.push(crate::model::EditorDocument::new_unique(
-                name,
-                None,
-                connection_id,
-            ));
+            model
+                .documents
+                .push(crate::model::EditorDocument::new_unique(
+                    name,
+                    None,
+                    connection_id,
+                ));
             model.active_document = model.documents.len() - 1;
             model.focus_active_document_tab();
             model.focus = Focus::Editor;
@@ -6410,8 +6423,10 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             let _ = model.file_picker.name.handle_key(key);
             Vec::new()
         }
-        KeyCode::Left if model.file_picker.focus == FilePickerFocus::List
-            && model.file_picker.section == crate::screens::file_picker::FilePickerSection::Browser =>
+        KeyCode::Left
+            if model.file_picker.focus == FilePickerFocus::List
+                && model.file_picker.section
+                    == crate::screens::file_picker::FilePickerSection::Browser =>
         {
             model.file_picker.parent();
             Vec::new()
@@ -6962,11 +6977,13 @@ fn open_document_path(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect
         .unwrap_or_else(|| "untitled.sql".into());
     let document_id = uuid::Uuid::new_v4().to_string();
     let connection_id = active_connection_uuid(model);
-    model.documents.push(crate::model::EditorDocument::new_unique(
-        title,
-        Some(normalized.clone()),
-        connection_id,
-    ));
+    model
+        .documents
+        .push(crate::model::EditorDocument::new_unique(
+            title,
+            Some(normalized.clone()),
+            connection_id,
+        ));
     model.active_document = model.documents.len().saturating_sub(1);
     model.sync_document_tabs_scroll();
     let mut effects = touch_recent_sql_file(model, &normalized);
@@ -7393,14 +7410,25 @@ mod tests {
             ..Model::default()
         };
         let first = super::open_document_path(&mut model, path.clone());
-        assert!(first.iter().any(|effect| matches!(effect, Effect::LoadDocument { .. })));
+        assert!(
+            first
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadDocument { .. }))
+        );
         assert_eq!(model.documents.len(), 2);
         assert_eq!(model.active_document, 1);
         assert_eq!(model.documents[1].path.as_ref(), Some(&path));
-        assert_eq!(model.recent_sql_files.first().map(|p| p.as_path()), Some(path.as_path()));
+        assert_eq!(
+            model.recent_sql_files.first().map(|p| p.as_path()),
+            Some(path.as_path())
+        );
 
         let second = super::open_document_path(&mut model, path.clone());
-        assert!(second.iter().all(|effect| !matches!(effect, Effect::LoadDocument { .. })));
+        assert!(
+            second
+                .iter()
+                .all(|effect| !matches!(effect, Effect::LoadDocument { .. }))
+        );
         assert_eq!(model.documents.len(), 2);
         assert_eq!(model.active_document, 1);
     }
@@ -7769,7 +7797,10 @@ mod tests {
                 kind: crate::model::DocumentKind::Table(target.clone()).storage_tag(),
                 connection_id: None,
             }));
-        assert!(model.documents[1].kind.is_table(), "the kind did not survive the row");
+        assert!(
+            model.documents[1].kind.is_table(),
+            "the kind did not survive the row"
+        );
 
         model.explorer.replace_roots(CatalogList {
             objects: vec![CatalogObject::new(
@@ -7783,7 +7814,11 @@ mod tests {
         model.explorer.select(ObjectId::new("table:brands"));
         update(&mut model, Action::ExplorerExpand);
 
-        assert_eq!(model.documents.len(), 2, "opening the table made a second tab");
+        assert_eq!(
+            model.documents.len(),
+            2,
+            "opening the table made a second tab"
+        );
         assert_eq!(model.active_document().id, "doc-brands");
     }
 
