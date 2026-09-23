@@ -2,10 +2,13 @@
 members = ["cargo:."]
 
 [dist]
-cargo-dist-version = "0.28.2"
-ci = ["github"]
-installers = ["shell", "powershell"]
-install-path = "CARGO_HOME"
+cargo-dist-version = "0.33.0"
+ci = "github"
+installers = ["shell", "powershell", "homebrew"]
+tap = "KingDasWinx/homebrew-tap"
+formula = "dexo"
+publish-jobs = ["homebrew", "./publish-scoop"]
+post-announce-jobs = ["./publish-winget", "./package-linux"]
 targets = [
   "x86_64-unknown-linux-gnu",
   "aarch64-unknown-linux-gnu",
@@ -13,6 +16,12 @@ targets = [
   "aarch64-apple-darwin",
   "x86_64-pc-windows-msvc",
 ]
+install-path = "CARGO_HOME"
 unix-archive = ".tar.gz"
 windows-archive = ".zip"
-# ponytail: Homebrew tap and MSI/WiX need publisher setup; archives + shell/ps1 are the 1.0 channels.
+cargo-cyclonedx = true
+pr-run-mode = "plan"
+
+[dist.github-custom-runners]
+x86_64-unknown-linux-gnu = "ubuntu-22.04"
+aarch64-unknown-linux-gnu = "ubuntu-22.04-arm"

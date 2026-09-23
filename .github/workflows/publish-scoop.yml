@@ -1,0 +1,73 @@
+name: Publish Scoop manifest
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  scoop:
+    runs-on: ubuntu-22.04
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Read the release
+        id: release
+        run: |
+          tag=$(jq -r '.announcement_tag' <<<"$PLAN")
+          version=$(jq -r '.releases[0].app_version' <<<"$PLAN")
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'dexo-x86_64-pc-windows-msvc.zip.sha256' --output windows.sha256
+          {
+            echo "tag=$tag"
+            echo "version=$version"
+            echo "sha256=$(cut -d' ' -f1 windows.sha256)"
+          } >> "$GITHUB_OUTPUT"
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: KingDasWinx/scoop-bucket
+          token: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+          path: bucket
+      - name: Write the manifest
+        env:
+          TAG: ${{ steps.release.outputs.tag }}
+          VERSION: ${{ steps.release.outputs.version }}
+          SHA256: ${{ steps.release.outputs.sha256 }}
+        run: |
+          mkdir -p bucket/bucket
+          base="https://github.com/KingDasWinx/Dexo/releases/download"
+          jq -n \
+            --arg version "$VERSION" \
+            --arg url "$base/$TAG/dexo-x86_64-pc-windows-msvc.zip" \
+            --arg hash "$SHA256" \
+            --arg template "$base/v\$version/dexo-x86_64-pc-windows-msvc.zip" \
+            '{
+              version: $version,
+              description: "A local-first database workbench for PostgreSQL and MySQL in the terminal",
+              homepage: "https://github.com/KingDasWinx/Dexo",
+              license: "MIT OR Apache-2.0",
+              architecture: { "64bit": { url: $url, hash: $hash } },
+              bin: "dexo.exe",
+              checkver: { github: "https://github.com/KingDasWinx/Dexo" },
+              autoupdate: {
+                architecture: { "64bit": { url: $template, hash: { url: "$url.sha256" } } }
+              }
+            }' > bucket/bucket/dexo.json
+          cat bucket/bucket/dexo.json
+      - name: Commit
+        env:
+          VERSION: ${{ steps.release.outputs.version }}
+        working-directory: bucket
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add bucket/dexo.json
+          if git diff --cached --quiet; then
+            echo "manifest already at $VERSION"
+            exit 0
+          fi
+          git commit -m "dexo $VERSION"
+          git push

@@ -1,0 +1,22 @@
+name: Publish to winget
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  # winget-releaser only updates a package that already exists in microsoft/winget-pkgs,
+  # so the job stays off until the first version is merged there and WINGET_ENABLED is set.
+  winget:
+    if: ${{ vars.WINGET_ENABLED == 'true' && !fromJson(inputs.plan).announcement_is_prerelease }}
+    runs-on: windows-latest
+    steps:
+      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        with:
+          identifier: KingDasWinx.Dexo
+          installers-regex: 'x86_64-pc-windows-msvc\.zip$'
+          release-tag: ${{ fromJson(inputs.plan).announcement_tag }}
+          token: ${{ secrets.WINGET_TOKEN }}
