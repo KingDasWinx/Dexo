@@ -807,7 +807,11 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     }
     match key.code {
         KeyCode::Char(ch) if !ctrl => {
+            let end = word_end(model);
             insert_text(model, &ch.to_string());
+            if !(ch.is_alphanumeric() || matches!(ch, '_' | '$' | '.')) {
+                capitalize_keyword(model, end);
+            }
             suggest_live(model);
             true
         }
@@ -816,7 +820,9 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             true
         }
         KeyCode::Enter => {
+            let end = word_end(model);
             insert_newline(model);
+            capitalize_keyword(model, end);
             true
         }
         KeyCode::Tab if model.editor.completion_open => {
@@ -848,7 +854,9 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             // Tab has three owners here, in this order: the open popup takes it, then an
             // active snippet, and only then does it indent.
             if !move_snippet_stop(model, 1) {
+                let end = word_end(model);
                 insert_text(model, "    ");
+                capitalize_keyword(model, end);
             }
             true
         }
@@ -976,6 +984,54 @@ fn insert_text(model: &mut Model, text: &str) {
     };
     reveal_cursor(doc);
     shift_snippet_stops(model, mark);
+}
+
+/// Where a word being finished by the next key ends, in characters -- the cursor, unless
+/// that key replaces a selection.
+fn word_end(model: &Model) -> Option<usize> {
+    let doc = model.active_document();
+    doc.selection().is_none().then(|| doc.cursor())
+}
+
+/// Writes the reserved word that ends at `end` in capitals, once a key has finished it:
+/// `select ` becomes `SELECT `. Left as typed inside a string or a comment, after a dot
+/// (`t.order` is a column), as part of a `:param` or `$1`, and in quotes. Same length,
+/// so the cursor and every position the editor holds stay where they are.
+fn capitalize_keyword(model: &mut Model, end: Option<usize>) {
+    let Some(end) = end else {
+        return;
+    };
+    let dialect = editor_dialect(model);
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let byte_end = text
+        .char_indices()
+        .nth(end)
+        .map_or(text.len(), |(at, _)| at);
+    let start = text[..byte_end]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_'))
+        .map_or(0, |(at, ch)| at + ch.len_utf8());
+    let word = &text[start..byte_end];
+    if word.is_empty()
+        || !dexo_sql::is_reserved(word)
+        || word.bytes().all(|byte| !byte.is_ascii_lowercase())
+    {
+        return;
+    }
+    let before = text[..start].chars().next_back();
+    if before.is_some_and(|ch| ch.is_alphanumeric() || "._$:@\"`'".contains(ch))
+        || dexo_sql::suppressed_at(&text, byte_end, dialect)
+    {
+        return;
+    }
+    let upper = word.to_ascii_uppercase();
+    let from = end - word.len();
+    let cursor = doc.sql.cursor();
+    if doc.sql.replace_chars(from..end, &upper).is_ok() {
+        let _ = doc.sql.set_cursor(cursor);
+    }
 }
 
 fn insert_newline(model: &mut Model) {

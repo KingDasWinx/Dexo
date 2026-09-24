@@ -38,16 +38,16 @@ fn complete(prefix: &str) -> String {
 #[test]
 fn accepting_a_table_inserts_the_table_and_nothing_else() {
     for (prefix, expected) in [
-        ("select * from ev", "select * from events_1m"),
-        ("select * from a join ev", "select * from a join events_1m"),
-        ("select * from a, ev", "select * from a, events_1m"),
-        ("select ev", "select events_1m"),
-        ("update ev", "update events_1m"),
-        ("delete from ev", "delete from events_1m"),
-        ("truncate ev", "truncate events_1m"),
-        ("drop table ev", "drop table events_1m"),
-        ("alter table ev", "alter table events_1m"),
-        ("create index on ev", "create index on events_1m"),
+        ("select * from ev", "SELECT * FROM events_1m"),
+        ("select * from a join ev", "SELECT * FROM a JOIN events_1m"),
+        ("select * from a, ev", "SELECT * FROM a, events_1m"),
+        ("select ev", "SELECT events_1m"),
+        ("update ev", "UPDATE events_1m"),
+        ("delete from ev", "DELETE FROM events_1m"),
+        ("truncate ev", "TRUNCATE events_1m"),
+        ("drop table ev", "DROP TABLE events_1m"),
+        ("alter table ev", "ALTER TABLE events_1m"),
+        ("create index on ev", "CREATE INDEX ON events_1m"),
     ] {
         assert_eq!(complete(prefix), expected, "after {prefix:?}");
     }
@@ -56,5 +56,5 @@ fn accepting_a_table_inserts_the_table_and_nothing_else() {
 /// The one that was not a matter of taste.
 #[test]
 fn an_insert_target_is_never_aliased() {
-    assert_eq!(complete("insert into ev"), "insert into events_1m");
+    assert_eq!(complete("insert into ev"), "INSERT INTO events_1m");
 }

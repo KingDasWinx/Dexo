@@ -142,7 +142,7 @@ fn a_table_named_only_before_the_dot_is_asked_about_too() {
         &mut model,
         Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
     );
-    assert_eq!(model.active_document().text(), "select venda.id");
+    assert_eq!(model.active_document().text(), "SELECT venda.id");
 }
 
 #[test]
@@ -190,6 +190,6 @@ fn accepting_a_function_puts_the_cursor_between_its_parentheses() {
         &mut model,
         Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
     );
-    assert_eq!(model.active_document().text(), "select count()");
+    assert_eq!(model.active_document().text(), "SELECT count()");
     assert_eq!(model.active_document().cursor(), "select count(".len());
 }

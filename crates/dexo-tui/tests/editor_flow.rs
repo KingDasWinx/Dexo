@@ -123,7 +123,7 @@ fn send_text(model: &mut Model, text: &str) {
 fn editor_types_unicode_moves_and_undoes() {
     let mut model = Model::default();
     send_text(&mut model, "select 'ação'");
-    assert_eq!(model.active_document().text(), "select 'ação'");
+    assert_eq!(model.active_document().text(), "SELECT 'ação'");
     update(&mut model, ctrl('z'));
     assert_eq!(model.active_document().text(), "");
 }
@@ -183,15 +183,15 @@ fn editor_select_all_indent_tab_and_redo() {
     );
     update(&mut model, key(KeyCode::End));
     update(&mut model, key(KeyCode::Enter));
-    assert_eq!(model.active_document().text(), "select 1\n");
+    assert_eq!(model.active_document().text(), "SELECT 1\n");
     send_text(&mut model, "  two");
     update(&mut model, key(KeyCode::Enter));
-    assert_eq!(model.active_document().text(), "select 1\n  two\n  ");
+    assert_eq!(model.active_document().text(), "SELECT 1\n  two\n  ");
     update(&mut model, key(KeyCode::Tab));
-    assert_eq!(model.active_document().text(), "select 1\n  two\n      ");
+    assert_eq!(model.active_document().text(), "SELECT 1\n  two\n      ");
     update(&mut model, ctrl('z'));
     update(&mut model, ctrl('y'));
-    assert_eq!(model.active_document().text(), "select 1\n  two\n      ");
+    assert_eq!(model.active_document().text(), "SELECT 1\n  two\n      ");
 }
 
 #[test]
