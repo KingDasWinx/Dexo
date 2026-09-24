@@ -1,5 +1,29 @@
 # Changelog
 
+## 1.4.0
+
+### Features
+
+- Reserved words go in capitals as they are typed
+- Alt+Shift+F formats SQL the way prettier would
+- Completion that knows where it is and what the tables hold
+- Copy and cut in the SQL editor
+
+### Fixes
+
+- Connecting to a database no longer opens a SQL of its own
+- The view scrolls only when the cursor reaches its edge
+- ORDER BY comes up after a table and keeps its colour
+- A table name before a dot offers its columns without a FROM
+- Deleting a connection asks in a dialog of its own
+- A password field shows one mark per character typed
+- The completion popup gets out of the way
+- An unfinished statement no longer swallows or discolours the next
+- Save As names the tab after the new file
+- A dropped storage handle no longer stops storage for everyone
+- Ctrl+Backspace and Ctrl+Delete delete a whole word
+- Enter on a table expands it instead of opening its rows
+
 ## 1.3.0
 
 ### Features
