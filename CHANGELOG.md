@@ -1,5 +1,12 @@
 # Changelog
 
+## 1.3.0
+
+### Features
+
+- A Windows installer and a portable .exe
+- Tell the user when a newer Dexo is out
+
 ## 1.2.0
 
 ### Features
