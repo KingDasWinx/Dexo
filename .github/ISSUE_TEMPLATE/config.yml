@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Report a bug
+    url: https://forms.gle/gw1i6tGgVsJsgCxGA
+    about: The quickest way to tell us something is broken.
+  - name: Report a security vulnerability
+    url: https://github.com/KingDasWinx/Dexo/security/advisories/new
+    about: Privately, so it can be fixed before anyone else knows about it.
