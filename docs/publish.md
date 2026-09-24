@@ -175,6 +175,17 @@ O `release.yml` é gerado a partir do `dist-workspace.toml` pela ferramenta [dis
    ```
 3. `dist generate --check` confere se o `release.yml` está em dia. O PR roda o job `plan`, que pega config quebrada antes do merge.
 
+## O aviso de atualização
+
+Quem usa o Dexo fica sabendo das versões novas sozinho:
+
+- Uma vez por dia, na abertura, o Dexo pergunta ao GitHub qual é a última versão estável. É a URL `releases/latest`, sem token; o resultado fica em cache por 24h no arquivo `update-check.json`, na pasta de dados.
+- Se houver versão mais nova, aparece um toast e um aviso fixo na barra de status, com **o comando certo para o jeito que a pessoa instalou**: `brew upgrade dexo`, `scoop update dexo`, `winget upgrade KingDasWinx.Dexo`, `dexo-update` (instaladores shell/PowerShell) ou o link da Release (`.deb`, `.rpm`).
+- Pré-releases nunca disparam o aviso.
+- Dá para desligar em **Settings → Updates**, ou com `DEXO_NO_UPDATE_CHECK=1`.
+
+Na prática: depois de `./publish.sh`, os usuários começam a ver o aviso em até um dia, na próxima vez que abrirem o Dexo.
+
 ## Como o usuário instala
 
 | Sistema | Comando |

@@ -57,6 +57,17 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
         spans.push(Span::raw(format!("{conn}  ctrl+p  F1")));
+        if let Some(notice) = &model.update_notice {
+            let arrow = if model.capabilities.unicode {
+                "↑"
+            } else {
+                "update"
+            };
+            spans.push(Span::styled(
+                format!("  {arrow} {}", notice.version),
+                model.theme.style(Role::Warning, model.capabilities),
+            ));
+        }
         if let Some(hint) = footer_hint(model) {
             spans.push(Span::raw(format!("  {hint}")));
         }
@@ -80,22 +91,50 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let doors = "Ctrl+P  F1";
     let room = (area.width as usize).saturating_sub(used);
-    let reserved = doors.chars().count() + 2;
+    // A newer release outranks the key hint: the hint comes back with F1, the command
+    // to update does not come back at all.
+    let notice = update_notice(model, room.saturating_sub(doors.chars().count() + 2));
+    let reserved = doors.chars().count() + 2 + notice.as_ref().map_or(0, |n| n.chars().count() + 2);
     if let Some(hint) = footer_hint(model)
         && room > reserved
     {
         spans.push(Span::raw(fit_hint(hint, room - reserved)));
     }
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    let gap = (area.width as usize).saturating_sub(used + doors.chars().count());
+    let right = notice.as_ref().map_or(0, |n| n.chars().count() + 2) + doors.chars().count();
+    let gap = (area.width as usize).saturating_sub(used + right);
     if gap > 0 {
         spans.push(Span::raw(" ".repeat(gap)));
+        if let Some(notice) = notice {
+            spans.push(Span::styled(
+                notice,
+                model.theme.style(Role::Warning, model.capabilities),
+            ));
+            spans.push(Span::raw("  "));
+        }
         spans.push(Span::styled(
             doors.to_string(),
             model.theme.style(Role::Muted, model.capabilities),
         ));
     }
     frame.render_widget(Paragraph::new(Line::from(spans)), area);
+}
+
+/// The version and the command that installs it, or only the version when the
+/// command does not fit in `budget`.
+fn update_notice(model: &Model, budget: usize) -> Option<String> {
+    let notice = model.update_notice.as_ref()?;
+    let arrow = if model.capabilities.unicode {
+        "↑"
+    } else {
+        "update"
+    };
+    let full = format!("{arrow} {}: {}", notice.version, notice.command);
+    if full.chars().count() <= budget {
+        return Some(full);
+    }
+    let short = format!("{arrow} {}", notice.version);
+    (short.chars().count() <= budget).then_some(short)
 }
 
 /// Drops whole hints rather than cutting a chord in half -- "Ctrl+W" teaches nothing.

@@ -67,6 +67,13 @@ pub struct SettingsFile {
     /// the user's theme and keymap down with it.
     #[serde(default)]
     pub completion_trigger: dexo_sql::TriggerMode,
+    /// The once-a-day look for a newer release; the only request Dexo makes on its own.
+    #[serde(default = "default_update_check")]
+    pub update_check: bool,
+}
+
+fn default_update_check() -> bool {
+    true
 }
 
 impl Default for SettingsFile {
@@ -81,6 +88,7 @@ impl Default for SettingsFile {
             animation: true,
             unicode: UnicodeMode::Unicode,
             recovery_interval_secs: 5,
+            update_check: true,
         }
     }
 }

@@ -21,6 +21,7 @@ pub mod session_manager;
 pub mod settings;
 pub mod transaction_service;
 pub mod transfer;
+pub mod update;
 
 pub use catalog_service::{CatalogService, SnapshotCatalog, parse_qualified};
 pub use connection_policy::{ConnectionPolicy, ConnectionPolicyOverrides, Environment};

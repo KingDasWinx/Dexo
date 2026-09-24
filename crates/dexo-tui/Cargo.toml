@@ -14,6 +14,7 @@ dexo-runtime = { path = "../dexo-runtime" }
 dexo-sql = { path = "../dexo-sql" }
 dexo-secrets = { path = "../dexo-secrets" }
 dexo-storage = { path = "../dexo-storage" }
+dexo-transport = { path = "../dexo-transport" }
 ratatui.workspace = true
 secrecy.workspace = true
 serde.workspace = true

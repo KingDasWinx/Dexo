@@ -11,7 +11,7 @@
   </p>
 </div>
 
-Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and nothing is sent anywhere.
+Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
 
 <div align="center">
   <img src="assets/entrance.gif" width="640" alt="Dexo's animated entrance">
@@ -161,6 +161,7 @@ Dexo is tested on Linux, macOS, and Windows in CI. Each driver runs its integrat
 - TLS verifies certificates by default; disabling verification is an explicit, visible setting.
 - SSH tunnels check known hosts, and a changed host key requires confirmation.
 - There is no telemetry. Diagnostics are generated only on request, previewed, and written locally.
+- Once a day, Dexo asks GitHub which release is the latest, to tell you when an update is out. The request carries only the running version in its `User-Agent`. Turn it off under Settings → Updates, or with `DEXO_NO_UPDATE_CHECK=1`.
 
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 

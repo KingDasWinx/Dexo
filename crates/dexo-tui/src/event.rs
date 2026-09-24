@@ -40,6 +40,7 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     let worker = StorageWorker::start(paths.database).map_err(map_tui)?;
     let bootstrap = worker.bootstrap().await.map_err(map_tui)?;
     let (action_tx, action_rx) = tokio::sync::mpsc::channel(32);
+    crate::runtime::update_check::spawn(paths.data_dir.clone(), action_tx.clone());
     let mut runtime = WorkbenchRuntime::new(action_tx, worker, registry);
     let mut guard = TerminalGuard::enter(CrosstermTerminal)?;
     // The workbench does not exist yet, so the theme is read from what was saved -- the

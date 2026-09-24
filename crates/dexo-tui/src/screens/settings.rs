@@ -11,8 +11,8 @@ pub struct FieldOptions {
 /// to the active value alone.
 pub const WIDE_MIN_WIDTH: u16 = 58;
 
-/// Rows the user can move through: the six settings, then the reset action.
-pub const FIELD_COUNT: usize = 6;
+/// Rows the user can move through: the seven settings, then the reset action.
+pub const FIELD_COUNT: usize = 7;
 pub const RESET_FOCUS: usize = FIELD_COUNT;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -25,6 +25,7 @@ pub struct SettingsScreen {
     pub mouse: bool,
     pub animation: bool,
     pub unicode: bool,
+    pub updates: bool,
     pub confirm_reset: bool,
     pub focus: usize,
     pub completion_trigger: dexo_sql::TriggerMode,
@@ -41,6 +42,7 @@ impl Default for SettingsScreen {
             mouse: true,
             animation: true,
             unicode: true,
+            updates: true,
             confirm_reset: false,
             focus: 0,
         }
@@ -97,6 +99,7 @@ impl SettingsScreen {
             on_off_field("Mouse", self.mouse),
             on_off_field("Animation", self.animation),
             on_off_field("Unicode", self.unicode),
+            on_off_field("Updates", self.updates),
         ]
     }
 
