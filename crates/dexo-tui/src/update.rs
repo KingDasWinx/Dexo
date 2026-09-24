@@ -33,6 +33,11 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     model.drop_redundant_placeholder();
     swapped |= model.swap_results_to_active_document();
     model.follow_active_document_tab();
+    // Switching tabs left the previous document's colours painted over the new one
+    // until the next edit, and a file loaded from disk came up uncoloured.
+    if !crate::screens::editor::highlights_are_current(model) {
+        crate::screens::editor::refresh_intelligence(model, false);
+    }
     if swapped || model.active_document().kind.is_table() != was_table {
         model.sync_grid_viewport();
     }

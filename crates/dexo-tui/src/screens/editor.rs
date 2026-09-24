@@ -17,6 +17,9 @@ pub struct ParameterValue {
 pub struct EditorState {
     parser: ParserService,
     last_sql: String,
+    /// The document and revision `highlights` were built for. Anything else on screen
+    /// -- another tab, a file that just loaded -- means they belong to other text.
+    painted: Option<(String, u64)>,
     pub highlights: Vec<HighlightSpan>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
@@ -71,6 +74,7 @@ impl Clone for EditorState {
         Self {
             parser: ParserService::postgres(),
             last_sql: self.last_sql.clone(),
+            painted: self.painted.clone(),
             highlights: self.highlights.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
@@ -124,6 +128,7 @@ impl Default for EditorState {
         Self {
             parser: ParserService::postgres(),
             last_sql: String::new(),
+            painted: None,
             highlights: Vec::new(),
             parameters: Vec::new(),
             completions: Vec::new(),
@@ -163,6 +168,16 @@ fn editor_dialect(model: &Model) -> Dialect {
     }
 }
 
+/// Whether the highlights on screen were built for the text the active document holds.
+pub fn highlights_are_current(model: &Model) -> bool {
+    let document = model.active_document();
+    model
+        .editor
+        .painted
+        .as_ref()
+        .is_some_and(|(id, revision)| *id == document.id && *revision == document.sql.revision())
+}
+
 pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let sql = model.active_document().text();
     let byte_cursor = model.active_document().byte_cursor();
@@ -170,6 +185,8 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let parsed = model.editor.parser.parse_edited(&old, &sql);
     model.editor.last_sql = sql.clone();
     model.editor.highlights = parsed.highlights;
+    let document = model.active_document();
+    model.editor.painted = Some((document.id.clone(), document.sql.revision()));
     model.editor.parameters = named_parameters(&sql, editor_dialect(model))
         .into_iter()
         .map(|parameter| ParameterValue {
