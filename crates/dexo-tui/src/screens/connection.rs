@@ -323,10 +323,12 @@ impl ConnectionForm {
                 .unwrap_or(field.value.as_str());
             return format!("{marker} driver: < {name} >  left/right");
         }
-        let value = if field.secret && !field.value.is_empty() {
-            "***"
+        // One mark per character typed, so a slip of the finger shows; the characters
+        // themselves never reach the screen.
+        let value = if field.secret {
+            "*".repeat(field.value.chars().count())
         } else {
-            field.value.as_str()
+            field.value.clone()
         };
         format!("{marker} {}: {value}", field.label)
     }
@@ -657,7 +659,8 @@ mod tests {
         }
         form.sync_descriptor_fields();
         let dump = form.lines().join("\n");
-        assert!(dump.contains("password: ***"));
+        let masked = format!("password: {}\n", "*".repeat("SUPER_SECRET_SENTINEL".len()));
+        assert!(dump.contains(&masked), "one mark per character:\n{dump}");
         assert!(!dump.contains("SUPER_SECRET_SENTINEL"));
         assert!(dump.contains("Advanced options"));
         assert!(!dump.contains("tls_mode"));
