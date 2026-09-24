@@ -630,7 +630,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::OpenObjectDdl => {
             open_inspector_facet(model, crate::screens::object_inspector::InspectorFacet::Ddl)
         }
-        Action::OpenObjectData => open_object_data(model),
+        Action::OpenObjectData => open_selected_table(model),
         Action::OpenDependencies => open_inspector_facet(
             model,
             crate::screens::object_inspector::InspectorFacet::Properties,
@@ -4763,13 +4763,7 @@ fn expand_or_open_selected(model: &mut Model) -> Vec<Effect> {
         model.explorer.collapse(&id);
         return Vec::new();
     }
-    if model
-        .explorer
-        .selected_node()
-        .is_some_and(|node| crate::screens::explorer::opens_table_data(&node.kind))
-    {
-        return open_selected_table(model);
-    }
+    // Enter only walks the tree; the table's rows open from the actions menu or `o`.
     expand_selected_catalog(model)
 }
 
@@ -4786,6 +4780,16 @@ fn expand_selected_catalog(model: &mut Model) -> Vec<Effect> {
 }
 
 fn open_selected_table(model: &mut Model) -> Vec<Effect> {
+    if !model
+        .explorer
+        .selected_node()
+        .is_some_and(|node| crate::screens::explorer::opens_table_data(&node.kind))
+    {
+        model
+            .messages
+            .warn("Select a table or view to open its data.".into());
+        return Vec::new();
+    }
     let mut effects = open_object_data(model);
     effects.extend(load_inspector(model));
     if let Some(id) = model.explorer.selected.clone() {
@@ -7867,7 +7871,7 @@ mod tests {
             restrictions: vec![],
         });
         model.explorer.select(ObjectId::new("table:brands"));
-        update(&mut model, Action::ExplorerExpand);
+        update(&mut model, Action::OpenObjectData);
 
         assert_eq!(
             model.documents.len(),
@@ -7905,7 +7909,7 @@ mod tests {
         });
         model.explorer.select(ObjectId::new("table:orders"));
 
-        update(&mut model, Action::ExplorerExpand);
+        update(&mut model, Action::OpenObjectData);
 
         assert!(model.active_document().kind.is_table());
         assert_eq!(
@@ -7915,11 +7919,90 @@ mod tests {
         );
     }
 
+    /// Enter walks the tree: on a table it shows the columns and indexes and leaves the
+    /// rows alone. Opening the data is the actions menu's first entry, or `o`.
+    #[test]
+    fn enter_on_a_table_expands_it_and_o_opens_its_data() {
+        use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
+
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            focus: Focus::Explorer,
+            ..Model::default()
+        };
+        model.explorer.replace_roots(CatalogList {
+            objects: vec![catalog_object("table:orders", ObjectKind::Table, "orders")],
+            restrictions: vec![],
+        });
+        model.explorer.select(ObjectId::new("table:orders"));
+
+        let effects = update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTableData { .. })),
+            "Enter opened the table: {effects:?}"
+        );
+        assert!(!model.active_document().kind.is_table());
+        assert!(
+            model
+                .explorer
+                .selected_node()
+                .is_some_and(|node| node.expanded)
+        );
+
+        let effects = update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::NONE)),
+        );
+        assert!(
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadTableData { .. })),
+            "o did not open the table: {effects:?}"
+        );
+        assert!(model.active_document().kind.is_table());
+    }
+
+    #[test]
+    fn opening_data_on_something_that_is_not_a_table_only_says_so() {
+        use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
+
+        let mut model = Model {
+            session_generation: 1,
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        model.explorer.replace_roots(CatalogList {
+            objects: vec![catalog_object(
+                "schema:public",
+                ObjectKind::Schema,
+                "public",
+            )],
+            restrictions: vec![],
+        });
+        model.explorer.select(ObjectId::new("schema:public"));
+        let documents = model.documents.len();
+
+        let effects = update(&mut model, Action::OpenObjectData);
+
+        assert!(effects.is_empty(), "{effects:?}");
+        assert_eq!(model.documents.len(), documents);
+        assert_eq!(
+            model.messages.last().map(|entry| entry.message.as_str()),
+            Some("Select a table or view to open its data.")
+        );
+    }
+
     /// Opening a table loads its metadata so `explorer.ddl` and Properties have something
     /// to show. It used to open the Properties overlay along with it -- harmless while the
     /// inspector was a pane, a modal over the grid once it became an overlay.
     #[test]
-    fn explorer_enter_opens_table_data_without_a_properties_modal() {
+    fn opening_table_data_from_the_tree_skips_the_properties_modal() {
         use dexo_driver_api::{CatalogList, ObjectId, ObjectKind};
 
         let mut model = Model {
@@ -7932,7 +8015,7 @@ mod tests {
             restrictions: vec![],
         });
         model.explorer.select(ObjectId::new("table:orders"));
-        let effects = update(&mut model, Action::ExplorerExpand);
+        let effects = update(&mut model, Action::OpenObjectData);
         assert!(
             effects
                 .iter()

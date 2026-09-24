@@ -730,9 +730,9 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "explorer.data",
-            title: "Open Object Data",
-            keywords: &["rows", "table"],
-            shortcut: None,
+            title: "Open Table Data",
+            keywords: &["rows", "table", "view", "browse"],
+            shortcut: Some("o"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectData),
         },
