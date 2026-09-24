@@ -391,7 +391,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             .collect(),
         Action::TestConnection => test_connection(model),
         Action::DeleteConnection => {
-            model.connections.delete_target = model.connections.selected().cloned();
+            let target = model.connections.selected().cloned();
+            model.connections.ask_delete(target);
             Vec::new()
         }
         Action::MoveConnectionGroup { group } => model
@@ -1886,6 +1887,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Palette) => mouse_palette(model, hit),
         Some(OverlayKind::Help) => mouse_help(model, hit),
         Some(OverlayKind::ClosePrompt) => mouse_close_prompt(model, hit),
+        Some(OverlayKind::DeleteConnection) => mouse_delete_connection(model, hit),
         Some(OverlayKind::NodeMenu) => mouse_node_menu(model, hit),
         Some(OverlayKind::ResultsMenu) => mouse_results_menu(model, hit),
         Some(OverlayKind::Review) => mouse_review(model, hit),
@@ -2126,27 +2128,6 @@ fn mouse_config_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
 }
 
 fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
-    if model.connections.delete_target.is_some() {
-        return match hit {
-            Some(HitTarget::Button(HitButton::KeepSecrets)) => update(
-                model,
-                Action::ConfirmDeleteProfile {
-                    decision: crate::screens::secret_prompt::DeleteSecretDecision::KeepSecrets,
-                },
-            ),
-            Some(HitTarget::Button(HitButton::DeleteSecrets)) => update(
-                model,
-                Action::ConfirmDeleteProfile {
-                    decision: crate::screens::secret_prompt::DeleteSecretDecision::DeleteSecrets,
-                },
-            ),
-            Some(HitTarget::Button(HitButton::Cancel)) => {
-                model.connections.delete_target = None;
-                Vec::new()
-            }
-            _ => Vec::new(),
-        };
-    }
     match hit {
         Some(HitTarget::ListRow(index)) => {
             if index < model.connections.profiles.len() {
@@ -2943,6 +2924,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.close_prompt.is_some() {
         return handle_close_prompt_key(model, key);
     }
+    if model.connections.delete_target.is_some() {
+        return handle_delete_connection_key(model, key);
+    }
     if model.node_menu.open {
         return handle_node_menu_key(model, key);
     }
@@ -3492,28 +3476,64 @@ fn handle_secret_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    if model.connections.delete_target.is_some() {
-        return match key.code {
-            KeyCode::Esc => {
-                model.connections.delete_target = None;
-                Vec::new()
-            }
-            KeyCode::Char('k') => update(
-                model,
-                Action::ConfirmDeleteProfile {
-                    decision: crate::screens::secret_prompt::DeleteSecretDecision::KeepSecrets,
-                },
-            ),
-            KeyCode::Char('d') => update(
-                model,
-                Action::ConfirmDeleteProfile {
-                    decision: crate::screens::secret_prompt::DeleteSecretDecision::DeleteSecrets,
-                },
-            ),
-            _ => Vec::new(),
-        };
+/// The "Delete connection" dialog: arrows and Tab move between its buttons, Enter
+/// presses the focused one, Esc cancels. No letter deletes -- `d` duplicates in the list
+/// under it, and used to delete here.
+fn handle_delete_connection_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::connections::DeleteChoice;
+    match key.code {
+        KeyCode::Esc => resolve_delete_connection(model, DeleteChoice::Cancel),
+        KeyCode::Left
+        | KeyCode::Right
+        | KeyCode::Up
+        | KeyCode::Down
+        | KeyCode::Tab
+        | KeyCode::BackTab => {
+            model.connections.delete_choice = model.connections.delete_choice.toggle();
+            Vec::new()
+        }
+        KeyCode::Enter => {
+            let choice = model.connections.delete_choice;
+            resolve_delete_connection(model, choice)
+        }
+        _ => Vec::new(),
     }
+}
+
+fn mouse_delete_connection(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::screens::connections::DeleteChoice;
+    match hit {
+        Some(HitTarget::Button(HitButton::ConfirmDelete)) => {
+            resolve_delete_connection(model, DeleteChoice::Delete)
+        }
+        Some(HitTarget::Button(HitButton::Cancel)) => {
+            resolve_delete_connection(model, DeleteChoice::Cancel)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// The saved password goes with the connection: a duplicate gets passwords of its own,
+/// so nothing else can be using it.
+fn resolve_delete_connection(
+    model: &mut Model,
+    choice: crate::screens::connections::DeleteChoice,
+) -> Vec<Effect> {
+    match choice {
+        crate::screens::connections::DeleteChoice::Cancel => {
+            model.connections.ask_delete(None);
+            Vec::new()
+        }
+        crate::screens::connections::DeleteChoice::Delete => update(
+            model,
+            Action::ConfirmDeleteProfile {
+                decision: crate::screens::secret_prompt::DeleteSecretDecision::DeleteSecrets,
+            },
+        ),
+    }
+}
+
+fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
         KeyCode::Esc => {
             model.connections.open = false;

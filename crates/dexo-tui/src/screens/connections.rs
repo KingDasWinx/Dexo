@@ -32,9 +32,42 @@ pub struct ConnectionsScreen {
     pub form: ConnectionForm,
     pub pending: Option<crate::runtime::OperationId>,
     pub pending_connect: Option<u64>,
+    /// The connection a "Delete connection" dialog is asking about, and which of its
+    /// buttons has the focus.
     pub delete_target: Option<ConnectionProfile>,
+    pub delete_choice: DeleteChoice,
     pub error: Option<String>,
 }
+
+/// The buttons of the "Delete connection" dialog. Cancel comes first in the focus, so
+/// an Enter pressed out of habit deletes nothing.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum DeleteChoice {
+    Delete,
+    #[default]
+    Cancel,
+}
+
+impl DeleteChoice {
+    pub fn toggle(self) -> Self {
+        match self {
+            Self::Delete => Self::Cancel,
+            Self::Cancel => Self::Delete,
+        }
+    }
+}
+
+/// The key hints under the list. Rendering registers a click target on each, by label,
+/// so the line and its targets cannot drift apart.
+pub const HINTS: [&str; 7] = [
+    "Enter connect",
+    "n new",
+    "e edit",
+    "d duplicate",
+    "t test",
+    "x delete",
+    "c close",
+];
 
 impl ConnectionsScreen {
     pub fn load_profiles(&mut self, profiles: Vec<ConnectionProfile>) {
@@ -96,7 +129,41 @@ impl ConnectionsScreen {
         }
     }
 
+    /// Opens the "Delete connection" dialog on `profile`, focused on Cancel.
+    pub fn ask_delete(&mut self, profile: Option<ConnectionProfile>) {
+        self.delete_target = profile;
+        self.delete_choice = DeleteChoice::Cancel;
+    }
+
     pub fn lines(&self, active: Option<SessionId>) -> Vec<String> {
+        let mut lines = self.profile_lines(active);
+        lines.push(String::new());
+        lines.extend(self.footer_lines(70));
+        lines
+    }
+
+    /// The hints, wrapped to `width` columns, and the last error if there is one.
+    pub fn footer_lines(&self, width: usize) -> Vec<String> {
+        let mut lines: Vec<String> = Vec::new();
+        for hint in HINTS {
+            match lines.last_mut() {
+                Some(line) if line.chars().count() + 2 + hint.chars().count() <= width => {
+                    line.push_str("  ");
+                    line.push_str(hint);
+                }
+                _ => lines.push(hint.to_string()),
+            }
+        }
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
+        }
+        lines
+    }
+
+    pub fn profile_lines(&self, active: Option<SessionId>) -> Vec<String> {
+        if self.profiles.is_empty() {
+            return vec!["  No connections yet. n adds one.".into()];
+        }
         let mut lines = Vec::new();
         for (index, row) in self.profiles.iter().enumerate() {
             let marker = if index == self.selected_profile {
@@ -131,16 +198,6 @@ impl ConnectionsScreen {
             lines.push(format!(
                 "{marker} {name} [{}] {status}{tx}{read_only}",
                 row.profile.environment
-            ));
-        }
-        lines.push("Enter connect  c close  t test  e edit  n new  d dup  x delete".into());
-        if let Some(error) = &self.error {
-            lines.push(error.clone());
-        }
-        if let Some(target) = &self.delete_target {
-            lines.push(format!(
-                "delete {}? k keep secrets  d delete secrets  esc cancel",
-                target.name
             ));
         }
         lines

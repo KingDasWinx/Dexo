@@ -62,8 +62,6 @@ pub enum HitButton {
     ApplyDiff,
     Export,
     Revoke,
-    KeepSecrets,
-    DeleteSecrets,
     ConfirmDirty,
     ToggleConnections,
     ConfirmDelete,
@@ -89,6 +87,7 @@ pub enum OverlayKind {
     ResultsMenu,
     NodeMenu,
     ClosePrompt,
+    DeleteConnection,
     Review,
     DdlPreview,
     SchemaDiff,
@@ -177,6 +176,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
     [
         // A question about losing work sits above everything else.
         (model.close_prompt.is_some(), OverlayKind::ClosePrompt),
+        (
+            model.connections.delete_target.is_some(),
+            OverlayKind::DeleteConnection,
+        ),
         (model.editor.snippet_open, OverlayKind::Snippets),
         (model.editor.history_open, OverlayKind::History),
         (model.editor.parameter_prompt, OverlayKind::Parameters),

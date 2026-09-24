@@ -918,25 +918,26 @@ impl WorkbenchRuntime {
     }
 
     async fn delete_profile(&mut self, profile: ConnectionProfile, delete_secrets: bool) {
-        if delete_secrets {
-            match self.secrets.delete(profile.secret_ref.as_str()) {
-                Ok(()) => {}
-                Err(SecretError::Unavailable) | Err(SecretError::Internal) => {
+        // A keychain that will not let go of the password is no reason to keep a
+        // connection the user asked to delete; they are told what was left behind.
+        let password_left = delete_secrets
+            && matches!(
+                self.secrets.delete(profile.secret_ref.as_str()),
+                Err(SecretError::Unavailable) | Err(SecretError::Internal)
+            );
+        match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
+            Ok(()) => {
+                let name = profile.name.clone();
+                self.emit(Action::ProfileDeleted { name }).await;
+                if password_left {
                     self.emit(Action::ConnectionFormError {
                         message: format!(
-                            "keychain delete failed for {}; choose keep secrets to remove the profile only",
+                            "deleted {}, but its saved password could not be removed from the keychain",
                             profile.name
                         ),
                     })
                     .await;
-                    return;
                 }
-            }
-        }
-        match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
-            Ok(()) => {
-                self.emit(Action::ProfileDeleted { name: profile.name })
-                    .await;
             }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }
