@@ -1,0 +1,28 @@
+name: Windows portable
+
+on:
+  workflow_call:
+    inputs:
+      plan:
+        required: true
+        type: string
+
+jobs:
+  # dist ships Windows as a .zip and an .msi; the portable build is the same dexo.exe
+  # on its own, for people who want to download and run it.
+  portable:
+    runs-on: ubuntu-22.04
+    env:
+      PLAN: ${{ inputs.plan }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - name: Attach dexo.exe to the release
+        run: |
+          tag=$(jq -r '.announcement_tag' <<<"$PLAN")
+          gh release download "$tag" --repo "$GITHUB_REPOSITORY" \
+            --pattern 'dexo-x86_64-pc-windows-msvc.zip' --output windows.zip
+          unzip -p windows.zip dexo.exe > dexo-x86_64-pc-windows-msvc.exe
+          test -s dexo-x86_64-pc-windows-msvc.exe
+          sha256sum dexo-x86_64-pc-windows-msvc.exe > dexo-x86_64-pc-windows-msvc.exe.sha256
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+            dexo-x86_64-pc-windows-msvc.exe dexo-x86_64-pc-windows-msvc.exe.sha256

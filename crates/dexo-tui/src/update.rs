@@ -782,6 +782,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             persist_settings(model);
             Vec::new()
         }
+        Action::ToggleUpdateCheck => {
+            model.settings.updates = !model.settings.updates;
+            if !model.settings.updates {
+                model.update_notice = None;
+            }
+            persist_settings(model);
+            Vec::new()
+        }
+        Action::UpdateAvailable { version, command } => {
+            model.messages.info(format!(
+                "Dexo {version} is available. Update with: {command}"
+            ));
+            model.update_notice = Some(crate::model::UpdateNotice { version, command });
+            Vec::new()
+        }
         Action::ChangeDataPage { offset } => change_data_page(model, offset),
         Action::ApplyRemoteSort | Action::ApplyRemoteFilter => apply_remote_query(model),
         Action::DataPageLoaded {
@@ -6057,6 +6072,7 @@ fn step_focused_setting(model: &mut Model, delta: i32) -> Vec<Effect> {
         3 => update(model, Action::ToggleMouse),
         4 => update(model, Action::ToggleAnimation),
         5 => update(model, Action::ToggleUnicode),
+        6 => update(model, Action::ToggleUpdateCheck),
         _ => update(model, Action::ConfirmResetSettings),
     }
 }
@@ -6105,6 +6121,7 @@ fn persist_settings(model: &Model) {
             profile: model.keymap.name.clone(),
         },
         completion_trigger: model.settings.completion_trigger,
+        update_check: model.settings.updates,
         ..manager.active.clone()
     };
     let _ = manager.save(&paths.data_dir, next);
@@ -6126,6 +6143,7 @@ fn apply_saved_settings(model: &mut Model) {
     model.settings.mode = mode.as_key().into();
     model.settings.accent = manager.active.accent.clone();
     model.settings.completion_trigger = manager.active.completion_trigger;
+    model.settings.updates = manager.active.update_check;
     model.theme = crate::theme::theme_for(mode, &model.settings.accent);
     sync_settings_screen(model);
 }

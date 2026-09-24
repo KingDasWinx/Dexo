@@ -11,7 +11,7 @@
   </p>
 </div>
 
-Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and nothing is sent anywhere.
+Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
 
 <div align="center">
   <img src="assets/entrance.gif" width="640" alt="Dexo's animated entrance">
@@ -53,17 +53,45 @@ Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a term
 
 ## Installation
 
-Dexo requires Rust 1.93 or later to build.
+**Homebrew** (macOS, Linux)
+
+```sh
+brew install kingdaswinx/tap/dexo
+```
+
+**Scoop** (Windows)
+
+```powershell
+scoop bucket add dexo https://github.com/KingDasWinx/scoop-bucket
+scoop install dexo
+```
+
+**Windows installer or portable** — from the [latest release](https://github.com/kingdaswinx/Dexo/releases/latest), `dexo-x86_64-pc-windows-msvc.msi` installs Dexo under Program Files and adds it to `PATH`; `dexo-x86_64-pc-windows-msvc.exe` runs as is, without installing. Both are unsigned, so Windows SmartScreen may ask for confirmation.
+
+**Installer scripts**
+
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/kingdaswinx/Dexo/releases/latest/download/dexo-installer.sh | sh
+```
+
+```powershell
+irm https://github.com/kingdaswinx/Dexo/releases/latest/download/dexo-installer.ps1 | iex
+```
+
+**Debian, Ubuntu, Fedora** — download the `.deb` or `.rpm` from the [latest release](https://github.com/kingdaswinx/Dexo/releases/latest) (requires glibc 2.35 or later):
+
+```sh
+sudo apt install ./dexo_*_amd64.deb
+sudo dnf install ./dexo-*.x86_64.rpm
+```
+
+**From source** (Rust 1.93 or later)
 
 ```sh
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
 ```
 
-From a local checkout:
-
-```sh
-cargo install --locked --path crates/dexo
-```
+Every release also ships archives for each platform, SHA-256 checksums, and a CycloneDX SBOM. See the [install guide](docs/src/install.md) for details.
 
 ## Getting started
 
@@ -135,6 +163,7 @@ Dexo is tested on Linux, macOS, and Windows in CI. Each driver runs its integrat
 - TLS verifies certificates by default; disabling verification is an explicit, visible setting.
 - SSH tunnels check known hosts, and a changed host key requires confirmation.
 - There is no telemetry. Diagnostics are generated only on request, previewed, and written locally.
+- Once a day, Dexo asks GitHub which release is the latest, to tell you when an update is out. The request carries only the running version in its `User-Agent`. Turn it off under Settings → Updates, or with `DEXO_NO_UPDATE_CHECK=1`.
 
 Please report vulnerabilities privately as described in [SECURITY.md](SECURITY.md).
 

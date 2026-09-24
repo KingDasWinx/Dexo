@@ -158,6 +158,12 @@ pub struct PendingExecute {
     pub token: u64,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UpdateNotice {
+    pub version: String,
+    pub command: String,
+}
+
 /// What to do with a dirty document on its way out.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CloseChoice {
@@ -1558,6 +1564,9 @@ pub struct Model {
     pub last_click: Option<LastClick>,
     pub drag: Option<DragState>,
     pub animation: bool,
+    /// A newer release and the command that installs it. Kept on the status bar until
+    /// the user updates, since a toast is gone before anyone reads the command.
+    pub update_notice: Option<UpdateNotice>,
     pub layout_dirty: bool,
     pub hits: HitMap,
     pub file_picker: FilePicker,
@@ -1607,6 +1616,7 @@ impl Default for Model {
             last_click: None,
             drag: None,
             animation: true,
+            update_notice: None,
             layout_dirty: false,
             hits: HitMap::default(),
             file_picker: FilePicker::default(),

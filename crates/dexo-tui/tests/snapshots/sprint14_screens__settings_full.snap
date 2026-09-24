@@ -21,10 +21,10 @@ default  no connection  —
 │                          ││                   │  Mouse      [On]  Off                                        │                                               │
 │                          ││                   │  Animation  [On]  Off                                        │                                               │
 │                          ││                   │  Unicode    [On]  Off                                        │                                               │
+│                          ││                   │  Updates    [On]  Off                                        │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │  [Reset to defaults]                                         │                                               │
 │                          ││                   │  up/down field  left/right change  r reset  esc close        │                                               │
-│                          ││                   │                                                              │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

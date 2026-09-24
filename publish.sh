@@ -20,7 +20,7 @@ dry_run=false
 [[ -n $bump ]] || die "usage: ./publish.sh <patch|minor|major|X.Y.Z[-pre]> [--dry-run]"
 
 [[ $(git branch --show-current) == main ]] || die "releases are cut from main"
-[[ -z $(git status --porcelain) ]] || die "the working tree has uncommitted changes"
+[[ -z $(git status --porcelain --untracked-files=no) ]] || die "the working tree has uncommitted changes"
 git fetch --quiet --tags origin
 [[ $(git rev-parse HEAD) == "$(git rev-parse origin/main)" ]] ||
   die "main is not in sync with origin/main; pull or push first"

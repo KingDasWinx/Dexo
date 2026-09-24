@@ -209,6 +209,13 @@ pub enum Action {
     ToggleMouse,
     ToggleAnimation,
     ToggleUnicode,
+    ToggleUpdateCheck,
+    /// A newer release is out. `command` is how this install updates, picked from where
+    /// the binary lives.
+    UpdateAvailable {
+        version: String,
+        command: String,
+    },
     ChangeDataPage {
         offset: u64,
     },

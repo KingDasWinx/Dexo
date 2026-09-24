@@ -393,3 +393,12 @@ jobs:
     with:
       plan: ${{ needs.plan.outputs.val }}
     secrets: inherit
+
+  custom-package-windows:
+    needs:
+      - plan
+      - announce
+    uses: ./.github/workflows/package-windows.yml
+    with:
+      plan: ${{ needs.plan.outputs.val }}
+    secrets: inherit

@@ -34,6 +34,7 @@ pub mod session_registry;
 pub mod settings_manager;
 pub mod storage_worker;
 pub mod transfer_manager;
+pub mod update_check;
 
 pub use session_registry::SessionId;
 use session_registry::SessionRegistry;

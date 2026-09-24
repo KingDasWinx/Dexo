@@ -1892,6 +1892,7 @@ dependencies = [
  "dexo-secrets",
  "dexo-sql",
  "dexo-storage",
+ "dexo-transport",
  "futures-util",
  "image",
  "insta",
