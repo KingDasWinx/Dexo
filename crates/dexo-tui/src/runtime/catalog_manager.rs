@@ -130,6 +130,8 @@ pub async fn capture_snapshot(
     database_name: String,
     include_system: bool,
     db_path: std::path::PathBuf,
+    generation: u64,
+    action_tx: tokio::sync::mpsc::Sender<Action>,
 ) {
     let Some(reader) = session.catalog() else {
         return;
@@ -157,4 +159,11 @@ pub async fn capture_snapshot(
             &objects,
         );
     }
+    let _ = action_tx
+        .send(Action::CompletionCatalogLoaded {
+            generation,
+            objects,
+            complete: true,
+        })
+        .await;
 }

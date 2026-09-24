@@ -48,7 +48,7 @@ pub struct EditorState {
     /// The completion catalog, and the catalog and explorer revisions it was built from.
     /// Building it walks and clones every object the connection has loaded, so doing it
     /// for every character typed is a cost the editor cannot afford.
-    catalog_key: Option<(u64, u64)>,
+    catalog_key: Option<(u64, u64, String)>,
     catalog_snapshot: Option<dexo_app::SnapshotCatalog>,
     /// The bytes the open popup's items would replace, and whether accepting a table
     /// there should bring an alias with it. Both come from the analysis that built the
@@ -61,6 +61,11 @@ pub struct EditorState {
     /// A search the popup would like answered from the catalog snapshot. Drained by
     /// `update`, which is the only place that can turn it into an effect.
     completion_request: Option<(String, u64, String)>,
+    /// Tables whose columns the statement needs and nothing in memory has, waiting to be
+    /// asked of the session; and every table already asked about, by generation and
+    /// lowercased name, so a table that has no columns is asked once, not per key.
+    columns_pending: Vec<dexo_driver_api::QualifiedName>,
+    columns_asked: std::collections::HashSet<String>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -107,6 +112,8 @@ impl Clone for EditorState {
             snippet_stops: Vec::new(),
             snippet_stop: 0,
             completion_request: None,
+            columns_pending: Vec::new(),
+            columns_asked: std::collections::HashSet::new(),
         }
     }
 }
@@ -155,13 +162,15 @@ impl Default for EditorState {
             history_selected: 0,
             history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
-            catalog: FakeCatalog::table("public.users", ["id", "email"]),
+            catalog: FakeCatalog::default(),
             catalog_key: None,
             catalog_snapshot: None,
             completion_replace: 0..0,
             snippet_stops: Vec::new(),
             snippet_stop: 0,
             completion_request: None,
+            columns_pending: Vec::new(),
+            columns_asked: std::collections::HashSet::new(),
         }
     }
 }
@@ -217,12 +226,16 @@ pub fn close_completion(model: &mut Model) {
 /// Rebuilds the completion catalog only when something it is built from actually
 /// changed: a page of catalog objects arriving, or the user starring something.
 fn sync_catalog(model: &mut Model) {
-    let key = (model.catalog_revision, model.explorer.revision());
-    if model.editor.catalog_key == Some(key) {
+    let key = (
+        model.catalog_revision,
+        model.explorer.revision(),
+        model.connection.name.clone(),
+    );
+    if model.editor.catalog_key.as_ref() == Some(&key) {
         return;
     }
     model.editor.catalog_key = Some(key);
-    if model.catalog_objects.is_empty() {
+    if model.catalog_objects.is_empty() || model.catalog_connection != model.connection.name {
         model.editor.catalog_snapshot = None;
         return;
     }
@@ -264,12 +277,24 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
         Some(snapshot) => complete_with(&context, snapshot),
         None => complete_with(&context, &model.editor.catalog),
     };
+    model.editor.completion_replace = context.replace.clone();
+    // Before the empty check: an empty list is exactly when the answer is elsewhere.
+    request_more_objects(model, &context, items.len());
+    request_columns(model, &context);
     if items.is_empty() {
         close_completion(model);
+        // Nothing to show yet, but an answer is on its way: remember where it was asked,
+        // so it can open here when it lands.
+        if model.editor.completion_request.is_some() || !model.editor.columns_pending.is_empty() {
+            let document = model.active_document();
+            model.editor.completion_at = Some((
+                document.id.clone(),
+                document.sql.revision(),
+                document.cursor(),
+            ));
+        }
         return;
     }
-    model.editor.completion_replace = context.replace.clone();
-    request_more_objects(model, &context, items.len());
     model.editor.completions = items;
     model.editor.completion_open = true;
     model.editor.completion_selected = 0;
@@ -298,10 +323,147 @@ pub fn completion_went_stale(model: &Model) -> bool {
         })
 }
 
+/// Whether a late answer still has somewhere to go: the popup is open, or it was asked
+/// for right here and had nothing to show yet.
+fn awaiting_answer(model: &Model) -> bool {
+    model.editor.completion_open
+        || (model.editor.completion_at.is_some() && !completion_went_stale(model))
+}
+
+/// Recomputes the popup after the catalog grew, if it is still wanted where it was.
+pub fn refresh_waiting_completion(model: &mut Model) {
+    if model.focus != crate::model::Focus::Editor || !awaiting_answer(model) {
+        return;
+    }
+    let sql = model.active_document().text();
+    let at = model.active_document().byte_cursor();
+    // An open popup was already asked for; a waiting one only opens if typing would.
+    let live = !model.editor.completion_open;
+    apply_completions(model, &sql, at, live);
+}
+
+/// Queues a column lookup for every table the statement names that completion holds no
+/// columns for: the sidebar and the snapshot only know what they have walked.
+fn request_columns(model: &mut Model, context: &dexo_sql::CursorContext) {
+    use dexo_sql::Intent;
+    model.editor.columns_pending.clear();
+    if !matches!(
+        context.intent,
+        Intent::Column
+            | Intent::JoinCondition
+            | Intent::AliasColumn
+            | Intent::InsertColumn
+            | Intent::UpdateColumn
+    ) || model.active_session.is_none()
+        || !model.connection.ready
+    {
+        return;
+    }
+    let generation = model.session_generation;
+    for source in &context.row_sources {
+        if !matches!(
+            source.kind,
+            dexo_sql::RowSourceKind::Table | dexo_sql::RowSourceKind::MutationTarget
+        ) {
+            continue;
+        }
+        let known = model
+            .editor
+            .catalog_snapshot
+            .as_ref()
+            .and_then(|snapshot| dexo_sql::completion::resolve_source(source, snapshot));
+        if known
+            .as_ref()
+            .is_some_and(|table| !table.columns.is_empty())
+        {
+            continue;
+        }
+        // The catalog's own name for the table when it has one: it carries the schema a
+        // bare `from users` leaves out. Without one the driver looks in the current one.
+        let target = match known {
+            Some(table) if !table.schema.is_empty() => {
+                dexo_driver_api::QualifiedName::new(None::<String>, Some(table.schema), table.name)
+            }
+            _ => dexo_driver_api::QualifiedName::new(
+                None::<String>,
+                source.schema.clone(),
+                source.name.clone(),
+            ),
+        };
+        let key = format!(
+            "{generation}:{}",
+            target.display_unquoted().to_ascii_lowercase()
+        );
+        if model.editor.columns_asked.insert(key) {
+            model.editor.columns_pending.push(target);
+        }
+    }
+}
+
+/// Folds columns the session answered into the catalog completion reads, under the
+/// table object that owns them -- or one made up for it when the sidebar never loaded
+/// that table.
+pub fn absorb_completion_columns(
+    model: &mut Model,
+    target: &dexo_driver_api::QualifiedName,
+    columns: &[String],
+) {
+    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    if columns.is_empty() {
+        return;
+    }
+    let owner = model
+        .catalog_objects
+        .iter()
+        .find(|object| {
+            matches!(
+                object.kind,
+                ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+            ) && object
+                .qualified_name
+                .object()
+                .eq_ignore_ascii_case(target.object())
+                && target.schema().is_none_or(|schema| {
+                    object
+                        .qualified_name
+                        .schema()
+                        .is_some_and(|own| own.eq_ignore_ascii_case(schema))
+                })
+        })
+        .map(|object| (object.id.clone(), object.qualified_name.clone()));
+    let mut objects = Vec::new();
+    let (parent, name) = match owner {
+        Some(found) => found,
+        None => {
+            let id = ObjectId::new(format!("completion:{}", target.display_unquoted()));
+            objects.push(CatalogObject::new(
+                id.clone(),
+                ObjectKind::Table,
+                target.clone(),
+                None,
+            ));
+            (id, target.clone())
+        }
+    };
+    for column in columns {
+        objects.push(CatalogObject::new(
+            ObjectId::new(format!("{}/completion-column:{column}", parent.as_ref())),
+            ObjectKind::Column,
+            QualifiedName::new(
+                None::<String>,
+                name.schema().map(str::to_string),
+                format!("{}.{column}", name.object()),
+            ),
+            Some(parent.clone()),
+        ));
+    }
+    model.absorb_catalog(&objects);
+}
+
 /// Asks the snapshot for more names when the objects in memory did not fill the list.
 /// The in-memory catalog only holds what has been expanded in the sidebar, so on a large
-/// database the table you want is usually not in it yet. Never for columns: those are
-/// answered from memory or not at all.
+/// database the table you want is usually not in it yet. Never for columns:
+/// `request_columns` asks the session for those.
 fn request_more_objects(model: &mut Model, context: &dexo_sql::CursorContext, found: usize) {
     model.editor.completion_request = None;
     let names = matches!(
@@ -327,17 +489,30 @@ fn request_more_objects(model: &mut Model, context: &dexo_sql::CursorContext, fo
 /// Turns a pending search into an effect. Separate from the analysis because only
 /// `update` can emit effects.
 pub fn take_completion_effects(model: &mut Model) -> Vec<crate::Effect> {
-    let Some((document, revision, query)) = model.editor.completion_request.take() else {
-        return Vec::new();
-    };
-    vec![crate::Effect::SearchCompletionObjects {
-        connection_id: model.connection.name.clone(),
-        database_name: crate::update::catalog_database(model),
-        document,
-        revision,
-        query,
-        limit: dexo_sql::rank::CAP,
-    }]
+    let mut effects = Vec::new();
+    if let Some(session) = model.active_session {
+        let generation = model.session_generation;
+        effects.extend(
+            std::mem::take(&mut model.editor.columns_pending)
+                .into_iter()
+                .map(|target| crate::Effect::LoadCompletionColumns {
+                    session,
+                    generation,
+                    target,
+                }),
+        );
+    }
+    if let Some((document, revision, query)) = model.editor.completion_request.take() {
+        effects.push(crate::Effect::SearchCompletionObjects {
+            connection_id: model.connection.name.clone(),
+            database_name: crate::update::catalog_database(model),
+            document,
+            revision,
+            query,
+            limit: dexo_sql::rank::CAP,
+        });
+    }
+    effects
 }
 
 /// Folds names that arrived from the snapshot into the open popup. They are late by
@@ -348,7 +523,7 @@ pub fn merge_completion_objects(
     revision: u64,
     objects: Vec<dexo_driver_api::CatalogObject>,
 ) {
-    if !model.editor.completion_open {
+    if !awaiting_answer(model) {
         return;
     }
     let current = model.active_document();
@@ -391,6 +566,10 @@ pub fn merge_completion_objects(
         model.editor.completions.len(),
         COMPLETION_ROWS,
     );
+    if !model.editor.completion_open {
+        model.editor.completion_open = true;
+        model.editor.completion_replace = context.replace.clone();
+    }
 }
 
 fn suggest_live(model: &mut Model) {
@@ -502,7 +681,19 @@ pub fn accept_completion(model: &mut Model) {
         _ => dialect.quote_if_needed(&item.label),
     };
     let range = model.editor.completion_replace.clone();
+    // A function comes with its parentheses and the cursor between them, unless they
+    // are already there.
+    let call = item.kind == dexo_sql::CompletionKind::Function && {
+        let sql = model.active_document().text();
+        !sql[range.end.min(sql.len())..].starts_with('(')
+    };
+    let text = if call { format!("{text}()") } else { text };
     replace_range(model, range, &text);
+    if call {
+        let doc = model.active_document_mut();
+        let inside = doc.sql.cursor().saturating_sub(1);
+        let _ = doc.sql.set_cursor(inside);
+    }
     model.editor.completion_open = false;
     model.editor.completions.clear();
     refresh_intelligence(model, false);

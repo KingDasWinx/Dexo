@@ -1308,6 +1308,45 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             crate::screens::editor::merge_completion_objects(model, &document, revision, objects);
             Vec::new()
         }
+        Action::CompletionCatalogLoaded {
+            generation,
+            objects,
+            complete,
+        } => {
+            if generation != model.session_generation {
+                return Vec::new();
+            }
+            if complete {
+                model.catalog_objects.clear();
+                model.catalog_revision = model.catalog_revision.wrapping_add(1);
+                model.absorb_catalog(&objects);
+            } else {
+                let known: std::collections::HashSet<_> = model
+                    .catalog_objects
+                    .iter()
+                    .map(|object| object.id.clone())
+                    .collect();
+                let missing: Vec<_> = objects
+                    .into_iter()
+                    .filter(|object| !known.contains(&object.id))
+                    .collect();
+                model.absorb_catalog(&missing);
+            }
+            crate::screens::editor::refresh_waiting_completion(model);
+            crate::screens::editor::take_completion_effects(model)
+        }
+        Action::CompletionColumnsLoaded {
+            generation,
+            target,
+            columns,
+        } => {
+            if generation != model.session_generation {
+                return Vec::new();
+            }
+            crate::screens::editor::absorb_completion_columns(model, &target, &columns);
+            crate::screens::editor::refresh_waiting_completion(model);
+            crate::screens::editor::take_completion_effects(model)
+        }
         Action::FormatSql => {
             crate::screens::editor::apply_format(model);
             Vec::new()
@@ -4728,10 +4767,17 @@ pub(crate) fn catalog_database(model: &Model) -> String {
 fn catalog_followup_effects(model: &Model, capture: bool) -> Vec<Effect> {
     let mut effects = Vec::new();
     if capture && let Some(session) = model.active_session {
+        // The previous capture answers completion while the new one walks the database.
+        effects.push(Effect::LoadCompletionCatalog {
+            connection_id: model.connection.name.clone(),
+            database_name: catalog_database(model),
+            generation: model.session_generation,
+        });
         effects.push(Effect::CaptureCatalogSnapshot {
             connection_id: model.connection.name.clone(),
             database_name: catalog_database(model),
             session,
+            generation: model.session_generation,
             include_system: model.explorer.include_system,
         });
     }

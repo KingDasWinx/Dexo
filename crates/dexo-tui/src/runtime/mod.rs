@@ -536,19 +536,75 @@ impl WorkbenchRuntime {
                 connection_id,
                 database_name,
                 session,
+                generation,
                 include_system,
             } => {
+                // Spawned: the walk visits every object in the database, and awaiting it
+                // here froze the screen for as long as that took.
                 if let Some(active) = self.sessions.get(session)
                     && let Ok(paths) = AppPaths::discover()
                 {
-                    catalog_manager::capture_snapshot(
+                    tokio::spawn(catalog_manager::capture_snapshot(
                         Arc::clone(&active.session),
                         connection_id,
                         database_name,
                         include_system,
                         paths.database,
-                    )
-                    .await;
+                        generation,
+                        self.action_tx.clone(),
+                    ));
+                }
+            }
+            crate::Effect::LoadCompletionCatalog {
+                connection_id,
+                database_name,
+                generation,
+            } => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let objects = AppPaths::discover()
+                        .ok()
+                        .and_then(|paths| Database::open(&paths.database).ok())
+                        .and_then(|db| {
+                            dexo_storage::CatalogCache::new(db.connection())
+                                .load_latest(&connection_id, &database_name)
+                                .ok()
+                        })
+                        .unwrap_or_default();
+                    if !objects.is_empty() {
+                        let _ = action_tx.blocking_send(Action::CompletionCatalogLoaded {
+                            generation,
+                            objects,
+                            complete: false,
+                        });
+                    }
+                });
+            }
+            crate::Effect::LoadCompletionColumns {
+                session,
+                generation,
+                target,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    let session = Arc::clone(&active.session);
+                    let action_tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        let Some(data) = session.data() else {
+                            return;
+                        };
+                        let columns = data
+                            .table_columns(&target)
+                            .await
+                            .map(|columns| columns.into_iter().map(|column| column.name).collect())
+                            .unwrap_or_default();
+                        let _ = action_tx
+                            .send(Action::CompletionColumnsLoaded {
+                                generation,
+                                target,
+                                columns,
+                            })
+                            .await;
+                    });
                 }
             }
             crate::Effect::LoadOfflineCatalog {

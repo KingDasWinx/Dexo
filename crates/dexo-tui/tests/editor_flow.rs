@@ -17,6 +17,12 @@ fn ctrl(ch: char) -> Action {
 
 fn model_with_sql(sql: &str) -> Model {
     let mut model = Model::default();
+    model.absorb_catalog(&[dexo_driver_api::CatalogObject::new(
+        dexo_driver_api::ObjectId::new("table:users"),
+        dexo_driver_api::ObjectKind::Table,
+        dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "users"),
+        None,
+    )]);
     model.set_sql(sql);
     model
 }

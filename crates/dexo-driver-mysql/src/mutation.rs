@@ -253,7 +253,7 @@ impl DataMutator for MysqlSession {
                       )
                 ) > 0 AS is_unique
             FROM information_schema.COLUMNS c
-            WHERE c.TABLE_SCHEMA = ?
+            WHERE c.TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE())
               AND c.TABLE_NAME = ?
             ORDER BY c.ORDINAL_POSITION
         ";

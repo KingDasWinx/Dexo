@@ -1,9 +1,10 @@
 use crate::completion::{CompletionItem, CompletionKind};
 
-/// How many items the popup is worth building. It paints eight rows; anything past a
-/// screenful or two is never seen, and the cap is what keeps a catalog with a hundred
-/// thousand columns from being sorted for every character typed.
-pub const CAP: usize = 50;
+/// How many items the popup is worth building. Enough to scroll through every column
+/// of a wide join plus the functions and keywords an expression can hold; the cap is
+/// what keeps a catalog with a hundred thousand columns from being kept for every
+/// character typed.
+pub const CAP: usize = 200;
 
 /// How well `candidate` answers what the user has typed, or `None` if it does not.
 ///
@@ -117,12 +118,10 @@ pub fn finish(mut items: Vec<CompletionItem>) -> Vec<CompletionItem> {
     // Priority is part of the weight, not just a tiebreak: two poor matches are ordered
     // by which kind of thing the position wanted, so a table beats a keyword that merely
     // happens to contain the same letters.
+    // Ties keep the order they were found in: a table's columns in the order the table
+    // declares them, keywords in the order a statement uses them.
     let weight = |item: &CompletionItem| item.score + kind_priority(item.kind);
-    items.sort_by(|a, b| {
-        weight(b)
-            .cmp(&weight(a))
-            .then_with(|| a.label.cmp(&b.label))
-    });
+    items.sort_by_key(|item| std::cmp::Reverse(weight(item)));
     let mut seen = std::collections::HashSet::new();
     items.retain(|item| seen.insert((item.kind, item.label.clone())));
     items.truncate(CAP);

@@ -59,6 +59,20 @@ impl Token {
     pub fn is_keyword(&self, sql: &str, keyword: &str) -> bool {
         self.kind == TokenKind::Word && self.text(sql).eq_ignore_ascii_case(keyword)
     }
+
+    /// Whether `cursor` is inside this string or comment, where a completion popup has
+    /// no business opening.
+    pub fn holds(&self, sql: &str, cursor: usize) -> bool {
+        if !matches!(self.kind, TokenKind::String | TokenKind::Comment) || cursor <= self.span.start
+        {
+            return false;
+        }
+        // An unterminated run swallows the rest of the buffer, so the cursor is inside it
+        // even when it sits at the very end; so does a line comment, which ends at the
+        // newline it does not include.
+        let line_comment = self.kind == TokenKind::Comment && !self.text(sql).starts_with("/*");
+        cursor < self.span.end || !self.closed || (line_comment && cursor == self.span.end)
+    }
 }
 
 /// Splits `sql` into tokens, keeping comments and strings rather than skipping them —
@@ -169,13 +183,9 @@ pub fn tokenize(sql: &str, dialect: Dialect) -> Vec<Token> {
 /// has no business opening.
 pub fn suppressed_at(sql: &str, cursor: usize, dialect: Dialect) -> bool {
     let cursor = cursor.min(sql.len());
-    tokenize(sql, dialect).iter().any(|token| {
-        matches!(token.kind, TokenKind::String | TokenKind::Comment)
-            && cursor > token.span.start
-            // An unterminated run swallows the rest of the buffer, so the cursor is
-            // inside it even when it sits at the very end.
-            && (cursor < token.span.end || !token.closed)
-    })
+    tokenize(sql, dialect)
+        .iter()
+        .any(|token| token.holds(sql, cursor))
 }
 
 fn is_ident_start(byte: u8) -> bool {

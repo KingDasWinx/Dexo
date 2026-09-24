@@ -32,6 +32,16 @@ pub trait Catalog {
     fn tables(&self) -> Vec<TableInfo>;
     fn functions(&self) -> Vec<FunctionInfo>;
 
+    /// The table a statement names, matched without regard to case. Defaulted to a scan;
+    /// a catalog that holds a whole database should answer from an index, because this
+    /// runs for every table in the statement on every character typed.
+    fn table(&self, schema: Option<&str>, name: &str) -> Option<TableInfo> {
+        self.tables().into_iter().find(|table| {
+            table.name.eq_ignore_ascii_case(name)
+                && schema.is_none_or(|schema| table.schema.eq_ignore_ascii_case(schema))
+        })
+    }
+
     /// Foreign keys declared on `qualified`. Defaulted: a catalog that does not know
     /// about constraints simply offers no join conditions.
     fn foreign_keys(&self, qualified: &str) -> Vec<ForeignKey> {
@@ -164,9 +174,20 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
         Intent::JoinCondition => {
             push_join_conditions(&mut items, context, catalog, prefix);
             push_scope_columns(&mut items, context, catalog, prefix);
+            push_aliases(&mut items, context, prefix);
         }
+        // An expression can be any of these; the ranking, not the list, says which the
+        // position most likely wants.
         Intent::Column => {
             push_scope_columns(&mut items, context, catalog, prefix);
+            push_aliases(&mut items, context, prefix);
+            // No FROM yet: `select users.` is as likely as a function.
+            if context.row_sources.is_empty() {
+                push_tables(&mut items, catalog, prefix, None);
+            }
+            push_functions(&mut items, catalog, prefix);
+            push_builtins(&mut items, prefix);
+            push_keywords(&mut items, KEYWORDS, prefix);
         }
         Intent::InsertColumn | Intent::UpdateColumn => {
             let target = context
@@ -189,18 +210,22 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
             }
         }
         Intent::Routine => push_functions(&mut items, catalog, prefix),
+        // A name being made up: nothing to look up, but the next clause may be what is
+        // being typed.
+        Intent::Alias => push_keywords(&mut items, AFTER_TABLE, prefix),
         Intent::Keyword => {
             // Nothing recognised, so nothing is ruled out.
             push_tables(&mut items, catalog, prefix, None);
             push_functions(&mut items, catalog, prefix);
-            push_keywords(&mut items, prefix);
+            push_builtins(&mut items, prefix);
+            push_keywords(&mut items, KEYWORDS, prefix);
         }
     }
     // A recognised position that turned up nothing at all would leave the user staring at
     // an empty box; keywords are always a legitimate answer.
     if items.is_empty() && context.confidence != Confidence::High {
         push_tables(&mut items, catalog, prefix, None);
-        push_keywords(&mut items, prefix);
+        push_keywords(&mut items, KEYWORDS, prefix);
     }
     rank::finish(items)
 }
@@ -322,6 +347,27 @@ fn push_scope_columns(
     }
 }
 
+/// The names the statement's tables go by, so `u` is on offer before `u.` is typed.
+fn push_aliases(items: &mut Vec<CompletionItem>, context: &CursorContext, prefix: &str) {
+    for source in &context.row_sources {
+        let label = source.qualifier();
+        if label.is_empty() {
+            continue;
+        }
+        let Some(score) = rank::match_score(label, prefix) else {
+            continue;
+        };
+        items.push(CompletionItem {
+            label: label.to_string(),
+            kind: CompletionKind::Alias,
+            detail: Some(source.qualified()),
+            target_id: None,
+            signature: None,
+            score,
+        });
+    }
+}
+
 fn push_tables(
     items: &mut Vec<CompletionItem>,
     catalog: &dyn Catalog,
@@ -369,19 +415,52 @@ fn push_functions(items: &mut Vec<CompletionItem>, catalog: &dyn Catalog, prefix
     }
 }
 
-fn push_keywords(items: &mut Vec<CompletionItem>, prefix: &str) {
-    for keyword in KEYWORDS {
+/// Functions every database ships, which no catalog lists.
+fn push_builtins(items: &mut Vec<CompletionItem>, prefix: &str) {
+    let upper = shouted(prefix);
+    for (name, signature) in BUILTINS {
+        let Some(score) = rank::match_score(name, prefix) else {
+            continue;
+        };
+        items.push(CompletionItem {
+            label: cased(name, upper),
+            kind: CompletionKind::Function,
+            detail: Some("built-in".into()),
+            target_id: None,
+            signature: Some((*signature).into()),
+            score,
+        });
+    }
+}
+
+fn push_keywords(items: &mut Vec<CompletionItem>, words: &[&str], prefix: &str) {
+    let upper = shouted(prefix);
+    for keyword in words {
         let Some(score) = rank::match_score(keyword, prefix) else {
             continue;
         };
         items.push(CompletionItem {
-            label: (*keyword).into(),
+            label: cased(keyword, upper),
             kind: CompletionKind::Keyword,
             detail: None,
             target_id: None,
             signature: None,
             score,
         });
+    }
+}
+
+/// Whether the user is writing keywords in capitals: `SEL` should become `SELECT`.
+fn shouted(prefix: &str) -> bool {
+    prefix.chars().any(|ch| ch.is_ascii_uppercase())
+        && !prefix.chars().any(|ch| ch.is_ascii_lowercase())
+}
+
+fn cased(word: &str, upper: bool) -> String {
+    if upper {
+        word.to_ascii_uppercase()
+    } else {
+        word.to_string()
     }
 }
 
@@ -401,16 +480,7 @@ pub fn current_token(prefix: &str) -> String {
 /// over the whole lowercased buffer, which found `users_archive ua` and reached into
 /// other statements; the name now comes from the parsed FROM list instead.
 pub fn resolve_source(source: &RowSource, catalog: &dyn Catalog) -> Option<TableInfo> {
-    let wanted = source.name.to_ascii_lowercase();
-    let schema = source.schema.as_ref().map(|s| s.to_ascii_lowercase());
-    catalog
-        .tables()
-        .into_iter()
-        .filter(|table| table.name.to_ascii_lowercase() == wanted)
-        .find(|table| match &schema {
-            Some(schema) => table.schema.to_ascii_lowercase() == *schema,
-            None => true,
-        })
+    catalog.table(source.schema.as_deref(), &source.name)
 }
 
 fn split_qualified(qualified: &str) -> (String, String) {
@@ -423,8 +493,169 @@ fn split_qualified(qualified: &str) -> (String, String) {
 }
 
 const KEYWORDS: &[&str] = &[
-    "select", "from", "where", "join", "inner", "left", "right", "on", "group", "order", "limit",
-    "insert", "update", "delete", "with", "values",
+    "select",
+    "from",
+    "where",
+    "and",
+    "or",
+    "not",
+    "in",
+    "is",
+    "null",
+    "is null",
+    "is not null",
+    "like",
+    "ilike",
+    "between",
+    "exists",
+    "as",
+    "distinct",
+    "all",
+    "any",
+    "join",
+    "inner join",
+    "left join",
+    "right join",
+    "full join",
+    "cross join",
+    "left",
+    "right",
+    "full",
+    "outer",
+    "cross",
+    "natural",
+    "lateral",
+    "on",
+    "using",
+    "group by",
+    "having",
+    "order by",
+    "partition by",
+    "asc",
+    "desc",
+    "nulls first",
+    "nulls last",
+    "limit",
+    "offset",
+    "fetch",
+    "union",
+    "union all",
+    "intersect",
+    "except",
+    "case",
+    "when",
+    "then",
+    "else",
+    "end",
+    "insert into",
+    "values",
+    "update",
+    "set",
+    "delete from",
+    "returning",
+    "with",
+    "recursive",
+    "over",
+    "window",
+    "filter",
+    "true",
+    "false",
+    "default",
+    "create",
+    "table",
+    "view",
+    "index",
+    "alter",
+    "add",
+    "column",
+    "drop",
+    "truncate",
+    "primary key",
+    "foreign key",
+    "references",
+    "unique",
+    "check",
+    "constraint",
+    "not null",
+    "begin",
+    "commit",
+    "rollback",
+    "explain",
+    "analyze",
+];
+
+/// What can follow a table in a FROM list, besides its alias.
+const AFTER_TABLE: &[&str] = &[
+    "where",
+    "join",
+    "inner join",
+    "left join",
+    "right join",
+    "full join",
+    "cross join",
+    "on",
+    "using",
+    "as",
+    "group by",
+    "order by",
+    "having",
+    "limit",
+    "offset",
+    "union",
+    "union all",
+    "set",
+    "values",
+    "returning",
+    "window",
+];
+
+/// Name and signature. Common to PostgreSQL and MySQL, or so widely used in one that
+/// leaving it out would be the thing people notice.
+const BUILTINS: &[(&str, &str)] = &[
+    ("count", "count(expr)"),
+    ("sum", "sum(expr)"),
+    ("avg", "avg(expr)"),
+    ("min", "min(expr)"),
+    ("max", "max(expr)"),
+    ("coalesce", "coalesce(value, ...)"),
+    ("nullif", "nullif(a, b)"),
+    ("greatest", "greatest(value, ...)"),
+    ("least", "least(value, ...)"),
+    ("cast", "cast(expr as type)"),
+    ("lower", "lower(text)"),
+    ("upper", "upper(text)"),
+    ("length", "length(text)"),
+    ("substring", "substring(text, start, length)"),
+    ("trim", "trim(text)"),
+    ("ltrim", "ltrim(text)"),
+    ("rtrim", "rtrim(text)"),
+    ("concat", "concat(text, ...)"),
+    ("replace", "replace(text, from, to)"),
+    ("position", "position(sub in text)"),
+    ("left", "left(text, n)"),
+    ("right", "right(text, n)"),
+    ("round", "round(number, digits)"),
+    ("floor", "floor(number)"),
+    ("ceil", "ceil(number)"),
+    ("abs", "abs(number)"),
+    ("mod", "mod(a, b)"),
+    ("now", "now()"),
+    ("current_date", "current_date"),
+    ("current_timestamp", "current_timestamp"),
+    ("extract", "extract(field from source)"),
+    ("date_trunc", "date_trunc(field, source)"),
+    ("to_char", "to_char(value, format)"),
+    ("date_format", "date_format(date, format)"),
+    ("ifnull", "ifnull(value, fallback)"),
+    ("string_agg", "string_agg(expr, delimiter)"),
+    ("group_concat", "group_concat(expr)"),
+    ("array_agg", "array_agg(expr)"),
+    ("json_agg", "json_agg(expr)"),
+    ("row_number", "row_number() over (...)"),
+    ("rank", "rank() over (...)"),
+    ("dense_rank", "dense_rank() over (...)"),
+    ("lag", "lag(expr) over (...)"),
+    ("lead", "lead(expr) over (...)"),
 ];
 
 #[cfg(test)]
