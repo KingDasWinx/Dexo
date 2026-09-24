@@ -136,9 +136,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                         include_system: model.explorer.include_system,
                     });
                 }
-                if let Some(connection_id) = active_connection_uuid(model) {
-                    effects.push(Effect::EnsureConnectionSql { connection_id });
-                }
                 if let Some(action) = replay {
                     effects.extend(update(model, action));
                 }
@@ -151,57 +148,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     generation,
                 }]
             }
-        }
-        Action::ConnectionSqlReady {
-            connection_id,
-            files: _,
-            console,
-            content,
-        } => {
-            if active_connection_uuid(model).as_deref() != Some(connection_id.as_str()) {
-                return Vec::new();
-            }
-            if let Some(index) = model
-                .documents
-                .iter()
-                .position(|document| document.path.as_deref() == Some(console.as_path()))
-            {
-                model.active_document = index;
-                if model.documents[index].connection_id.is_none() {
-                    model.documents[index].connection_id = Some(connection_id);
-                }
-                // Consoles stored before they were named after their connection come
-                // back as `console.sql`, which is what made a row of them unreadable.
-                if !model.connection.name.is_empty()
-                    && model.documents[index].title == "console.sql"
-                {
-                    model.documents[index].title = model.connection.name.clone();
-                }
-            } else {
-                // The file on disk is `<connection uuid>/console.sql`, so its name is
-                // the same for every connection and a row of consoles was a row of
-                // identical tabs. The console *is* the connection's, so it is named
-                // after it.
-                let title = if model.connection.name.is_empty() {
-                    console
-                        .file_name()
-                        .and_then(|file| file.to_str())
-                        .unwrap_or("console.sql")
-                        .to_owned()
-                } else {
-                    model.connection.name.clone()
-                };
-                let mut document = crate::model::EditorDocument::new_unique(
-                    title,
-                    Some(console),
-                    Some(connection_id),
-                );
-                document.sql = dexo_sql::SqlDocument::new(content);
-                document.saved_revision = document.sql.revision();
-                model.documents.push(document);
-                model.active_document = model.documents.len() - 1;
-            }
-            Vec::new()
         }
         Action::OpenConnectionForm => {
             model.connection_form = crate::screens::connection::ConnectionForm::open();

@@ -219,89 +219,14 @@ fn ready_connection_switches_sidebar_to_catalog_without_stealing_focus() {
     assert_eq!(model.focus, Focus::Explorer);
 }
 
+/// Every connect opened a `console.sql` of its own -- created on disk if it was not
+/// there -- and switched to it. Connecting opens nothing; Ctrl+N does when asked.
 #[test]
-fn connect_opens_console_sql_for_connection() {
-    let connection_id = uuid::Uuid::nil();
-    let console = std::path::PathBuf::from("/tmp/sql/42/console.sql");
+fn connecting_opens_no_document() {
     let mut model = Model::default();
     model.connections.load_profiles(vec![saved_profile()]);
-    model.connection.name = "prod".into();
-
-    let _ = update(
-        &mut model,
-        Action::ConnectionSqlReady {
-            connection_id: connection_id.to_string(),
-            files: vec![console.clone()],
-            console: console.clone(),
-            content: "select 1;".into(),
-        },
-    );
-
-    let doc = model.active_document();
-    assert_eq!(doc.path.as_deref(), Some(console.as_path()));
-    assert_eq!(
-        doc.connection_id.as_deref(),
-        Some(connection_id.to_string().as_str())
-    );
-    assert_eq!(doc.text(), "select 1;");
-}
-
-#[test]
-fn stale_connection_sql_result_leaves_documents_unchanged() {
-    let console = std::path::PathBuf::from("/tmp/sql/stale/console.sql");
-    let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile()]);
-    model.connection.name = "prod".into();
-
-    let _ = update(
-        &mut model,
-        Action::ConnectionSqlReady {
-            connection_id: uuid::Uuid::from_u128(42).to_string(),
-            files: vec![console.clone()],
-            console,
-            content: "select stale;".into(),
-        },
-    );
-
-    assert_eq!(model.documents.len(), 1);
-    assert_eq!(model.active_document().path, None);
-}
-
-#[test]
-fn ready_console_binds_an_existing_unbound_document() {
-    let connection_id = uuid::Uuid::nil().to_string();
-    let console = std::path::PathBuf::from("/tmp/sql/42/console.sql");
-    let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile()]);
-    model.connection.name = "prod".into();
-    model.documents = vec![EditorDocument::new_unique(
-        "console.sql",
-        Some(console.clone()),
-        None,
-    )];
-
-    let _ = update(
-        &mut model,
-        Action::ConnectionSqlReady {
-            connection_id: connection_id.clone(),
-            files: vec![console.clone()],
-            console,
-            content: "select 1;".into(),
-        },
-    );
-
-    assert_eq!(model.documents.len(), 1);
-    assert_eq!(
-        model.active_document().connection_id.as_deref(),
-        Some(connection_id.as_str())
-    );
-}
-
-#[test]
-fn ready_connection_ensures_its_console_sql() {
-    let connection_id = uuid::Uuid::nil().to_string();
-    let mut model = Model::default();
-    model.connections.load_profiles(vec![saved_profile()]);
+    let before: Vec<String> = model.documents.iter().map(|doc| doc.id.clone()).collect();
+    let active = model.active_document().id.clone();
 
     let effects = update(
         &mut model,
@@ -317,10 +242,15 @@ fn ready_connection_ensures_its_console_sql() {
         },
     );
 
-    assert!(effects.iter().any(|effect| matches!(
-        effect,
-        Effect::EnsureConnectionSql { connection_id: id } if id == &connection_id
-    )));
+    let after: Vec<String> = model.documents.iter().map(|doc| doc.id.clone()).collect();
+    assert_eq!(after, before);
+    assert_eq!(model.active_document().id, active);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadDocument(_) | Effect::SaveDocument(_))),
+        "{effects:?}"
+    );
 }
 
 #[test]
