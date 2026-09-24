@@ -66,6 +66,8 @@ scoop bucket add dexo https://github.com/KingDasWinx/scoop-bucket
 scoop install dexo
 ```
 
+**Windows installer or portable** — from the [latest release](https://github.com/kingdaswinx/Dexo/releases/latest), `dexo-x86_64-pc-windows-msvc.msi` installs Dexo under Program Files and adds it to `PATH`; `dexo-x86_64-pc-windows-msvc.exe` runs as is, without installing. Both are unsigned, so Windows SmartScreen may ask for confirmation.
+
 **Installer scripts**
 
 ```sh

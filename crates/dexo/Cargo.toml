@@ -7,6 +7,7 @@ license.workspace = true
 repository.workspace = true
 description = "A local-first database workbench for PostgreSQL and MySQL in the terminal"
 homepage = "https://github.com/kingdaswinx/Dexo"
+authors = ["KingDasWinx"]
 
 [dependencies]
 anyhow.workspace = true
@@ -35,3 +36,9 @@ tempfile.workspace = true
 tokio = { workspace = true, features = ["macros", "rt-multi-thread"] }
 uuid.workspace = true
 futures-util = "0.3"
+
+[package.metadata.wix]
+upgrade-guid = "5009E787-FEAC-4A2A-BB8C-EE755C9FF8B5"
+path-guid = "F1C767E7-574A-4C2C-AB00-961A561BF81F"
+license = false
+eula = false

@@ -71,12 +71,13 @@ O script termina mostrando o link do Actions. Leva uns 15 minutos, principalment
 | `custom-publish-scoop` | Atualiza o `KingDasWinx/scoop-bucket` |
 | `announce` | Finaliza a publicação |
 | `custom-package-linux` | Anexa os `.deb`/`.rpm` na Release |
+| `custom-package-windows` | Anexa o `.exe` portátil do Windows na Release |
 | `custom-publish-winget` | Abre o PR no `microsoft/winget-pkgs` (se o winget estiver ligado) |
 
 ### 5. Confira
 
 - [ ] A [Release](https://github.com/KingDasWinx/Dexo/releases) nova aparece como **Latest**.
-- [ ] Ela tem os `.tar.gz`/`.zip`, os `.deb`/`.rpm`, os instaladores e o `dexo.cdx.xml`.
+- [ ] Ela tem os `.tar.gz`/`.zip`, o `.msi` e o `.exe` do Windows, os `.deb`/`.rpm`, os instaladores e o `dexo.cdx.xml`.
 - [ ] O [homebrew-tap](https://github.com/KingDasWinx/homebrew-tap) e o [scoop-bucket](https://github.com/KingDasWinx/scoop-bucket) têm um commit com a versão nova.
 - [ ] Se o winget estiver ligado, existe um PR novo em [winget-pkgs](https://github.com/microsoft/winget-pkgs/pulls?q=KingDasWinx.Dexo). O merge é feito pela Microsoft, e costuma ser automático depois da validação.
 
@@ -105,7 +106,8 @@ Para testar o pipeline sem publicar nos gerenciadores de pacote:
 ```
 
 - **Faz:** compila tudo e cria uma Release marcada como *pre-release*.
-- **Não faz:** não publica no Homebrew, no Scoop nem no winget, não mexe no `CHANGELOG.md` e não gera os `.deb`/`.rpm` (limitação do GitHub Actions: jobs que dependem de um job pulado também são pulados).
+- **Não faz:** não publica no Homebrew, no Scoop nem no winget, não mexe no `CHANGELOG.md` e não gera os `.deb`/`.rpm` nem o `.exe` portátil (limitação do GitHub Actions: jobs que dependem de um job pulado também são pulados). O `.msi` **é** gerado, porque sai junto com os builds.
+- **Quando usar:** sempre que mudar algo no pipeline, por exemplo no `dist-workspace.toml` ou no instalador `.msi`. O `.msi` só é compilado no Windows do CI, então a pré-release é o único jeito de testá-lo antes de uma versão de verdade.
 - Depois, `./publish.sh minor` a partir de `1.3.0-rc.1` lança a `1.3.0`, não a `1.4.0`. O changelog da `1.3.0` inclui tudo desde a última versão estável.
 
 ## Quando algo dá errado
@@ -125,7 +127,7 @@ Em todos esses casos, nada foi alterado.
 ### Um job falhou no Actions
 
 - **Não crie outra versão.** Abra a execução no Actions e clique em **Re-run failed jobs**.
-- Se falhar o **Homebrew** ou o **Scoop**, a GitHub Release já foi publicada, mas os `.deb`/`.rpm` e o winget **não rodam**, porque dependem de todos os anteriores. Depois do re-run, eles rodam.
+- Se falhar o **Homebrew** ou o **Scoop**, a GitHub Release já foi publicada, mas os `.deb`/`.rpm`, o `.exe` portátil e o winget **não rodam**, porque dependem de todos os anteriores. Depois do re-run, eles rodam.
 - Se falhar um **build**, nada foi publicado. Corrija o código no `main` e lance a próxima versão, porque a tag com problema fica sem Release.
 
 ### Erro 401/403 no Homebrew, no Scoop ou no winget: o token expirou
@@ -158,6 +160,8 @@ O job do winget só roda quando a variável `WINGET_ENABLED` vale `true`:
 | `.github/workflows/publish-scoop.yml` | Atualiza o Scoop |
 | `.github/workflows/publish-winget.yml` | Abre o PR no winget |
 | `.github/workflows/package-linux.yml` | Gera e anexa os `.deb`/`.rpm` |
+| `.github/workflows/package-windows.yml` | Anexa o `.exe` portátil |
+| `crates/dexo/wix/main.wxs` | Template do `.msi`, **gerado pelo dist** (os GUIDs ficam no `crates/dexo/Cargo.toml` e nunca devem mudar) |
 | `packaging/nfpm.yaml` | Metadados dos pacotes `.deb`/`.rpm` (nome, dependências, licenças) |
 
 ### Mudar algo no pipeline
@@ -180,7 +184,7 @@ O `release.yml` é gerado a partir do `dist-workspace.toml` pela ferramenta [dis
 Quem usa o Dexo fica sabendo das versões novas sozinho:
 
 - Uma vez por dia, na abertura, o Dexo pergunta ao GitHub qual é a última versão estável. É a URL `releases/latest`, sem token; o resultado fica em cache por 24h no arquivo `update-check.json`, na pasta de dados.
-- Se houver versão mais nova, aparece um toast e um aviso fixo na barra de status, com **o comando certo para o jeito que a pessoa instalou**: `brew upgrade dexo`, `scoop update dexo`, `winget upgrade KingDasWinx.Dexo`, `dexo-update` (instaladores shell/PowerShell) ou o link da Release (`.deb`, `.rpm`).
+- Se houver versão mais nova, aparece um toast e um aviso fixo na barra de status, com **o comando certo para o jeito que a pessoa instalou**: `brew upgrade dexo`, `scoop update dexo`, `winget upgrade KingDasWinx.Dexo`, `dexo-update` (instaladores shell/PowerShell) ou o link da Release (`.deb`, `.rpm`, `.msi` e `.exe`).
 - Pré-releases nunca disparam o aviso.
 - Dá para desligar em **Settings → Updates**, ou com `DEXO_NO_UPDATE_CHECK=1`.
 
@@ -193,6 +197,8 @@ Na prática: depois de `./publish.sh`, os usuários começam a ver o aviso em at
 | macOS / Linux (Homebrew) | `brew install kingdaswinx/tap/dexo` |
 | Windows (Scoop) | `scoop bucket add dexo https://github.com/KingDasWinx/scoop-bucket` e depois `scoop install dexo` |
 | Windows (winget, depois do merge) | `winget install KingDasWinx.Dexo` |
+| Windows (instalador) | Baixar o `.msi` da Release e dar dois cliques |
+| Windows (portátil) | Baixar o `.exe` da Release e rodar |
 | Debian / Ubuntu | Baixar o `.deb` da Release e rodar `sudo apt install ./dexo_*_amd64.deb` |
 | Fedora | Baixar o `.rpm` da Release e rodar `sudo dnf install ./dexo-*.x86_64.rpm` |
 | Qualquer Unix | `curl --proto '=https' --tlsv1.2 -LsSf https://github.com/kingdaswinx/Dexo/releases/latest/download/dexo-installer.sh \| sh` |

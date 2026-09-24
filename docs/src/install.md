@@ -14,6 +14,15 @@ irm https://github.com/kingdaswinx/Dexo/releases/latest/download/dexo-installer.
 
 Both install `dexo` into Cargo's bin directory (`~/.cargo/bin`).
 
+## Windows installer or portable
+
+From the [latest release](https://github.com/kingdaswinx/Dexo/releases/latest):
+
+- `dexo-x86_64-pc-windows-msvc.msi` installs Dexo under `C:\Program Files\dexo`, adds it to `PATH`, and appears in "Add or remove programs". A newer `.msi` replaces the older version.
+- `dexo-x86_64-pc-windows-msvc.exe` is the portable build: download it and run it, nothing is installed.
+
+Both are unsigned, so Windows SmartScreen may show "Windows protected your PC" when they are downloaded through a browser; choose **More info → Run anyway**.
+
 ## Linux packages
 
 Download the `.deb` or `.rpm` for your architecture from the [latest release](https://github.com/kingdaswinx/Dexo/releases/latest), then:
