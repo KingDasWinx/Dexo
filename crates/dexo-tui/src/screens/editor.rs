@@ -65,6 +65,9 @@ pub struct EditorState {
     /// lowercased name, so a table that has no columns is asked once, not per key.
     columns_pending: Vec<dexo_driver_api::QualifiedName>,
     columns_asked: std::collections::HashSet<String>,
+    /// Document, cursor, and revision the view was last scrolled for. The view follows
+    /// the cursor only when one of them moves, so the wheel can look elsewhere.
+    followed: Option<(String, usize, u64)>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -112,6 +115,7 @@ impl Clone for EditorState {
             completion_request: None,
             columns_pending: Vec::new(),
             columns_asked: std::collections::HashSet::new(),
+            followed: None,
         }
     }
 }
@@ -167,6 +171,7 @@ impl Default for EditorState {
             completion_request: None,
             columns_pending: Vec::new(),
             columns_asked: std::collections::HashSet::new(),
+            followed: None,
         }
     }
 }
@@ -176,6 +181,64 @@ fn editor_dialect(model: &Model) -> Dialect {
         Dialect::Mysql
     } else {
         Dialect::Postgres
+    }
+}
+
+/// Rows and columns of text the editor pane shows, from the layout the frame is drawn
+/// with.
+fn text_area(model: &Model) -> Option<(usize, usize)> {
+    if model.width == 0 || model.height == 0 {
+        return None;
+    }
+    let plan = crate::layout::LayoutPlan::for_area_with_document_tabs(
+        ratatui::layout::Rect::new(0, 0, model.width, model.height),
+        Some(&model.effective_panes()),
+        true,
+    );
+    let inner = ratatui::widgets::Block::bordered().inner(plan.content);
+    let rows = inner.height as usize;
+    let cols = inner.width.saturating_sub(crate::widgets::editor::GUTTER) as usize;
+    (rows > 0 && cols > 0).then_some((rows, cols))
+}
+
+/// Scrolls just far enough to keep the cursor on screen, and only once it reaches an
+/// edge: the arrows walk to the last row or column before the text moves, as in any
+/// editor. It used to assume a pane 12 rows by 80 columns, so a taller one started
+/// scrolling halfway down.
+pub fn follow_cursor(model: &mut Model) {
+    let doc = model.active_document();
+    if doc.kind.is_table() || doc.kind.is_placeholder() {
+        return;
+    }
+    let key = (doc.id.clone(), doc.cursor(), doc.sql.revision());
+    if model.editor.followed.as_ref() == Some(&key) {
+        return;
+    }
+    let Some((rows, cols)) = text_area(model) else {
+        return;
+    };
+    model.editor.followed = Some(key);
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let (line, col) = line_col(&text, doc.sql.cursor());
+    if line < doc.viewport_line {
+        doc.viewport_line = line;
+    } else if line >= doc.viewport_line + rows {
+        doc.viewport_line = line + 1 - rows;
+    }
+    // The view scrolls in screen columns, which a wide character takes two of.
+    let x: usize = text
+        .split('\n')
+        .nth(line)
+        .unwrap_or("")
+        .chars()
+        .take(col)
+        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum();
+    if x < doc.viewport_column {
+        doc.viewport_column = x;
+    } else if x >= doc.viewport_column + cols {
+        doc.viewport_column = x + 1 - cols;
     }
 }
 
@@ -624,7 +687,6 @@ pub fn apply_format(model: &mut Model) {
     // as in dbx.
     doc.anchor = selection.map(|_| range.start);
     let _ = doc.sql.set_cursor(range.start + formatted.chars().count());
-    reveal_cursor(doc);
     refresh_intelligence(model, false);
 }
 
@@ -678,7 +740,6 @@ fn select_snippet_stop(model: &mut Model) {
         Some(stop.start)
     };
     let _ = doc.sql.set_cursor(stop.end);
-    reveal_cursor(doc);
 }
 
 /// Moves to the next hole, or leaves the snippet when there are none left. Returns
@@ -762,7 +823,6 @@ fn replace_range(model: &mut Model, range: std::ops::Range<usize>, text: &str) {
     }
     doc.anchor = None;
     let _ = doc.sql.replace_bytes(range, text);
-    reveal_cursor(doc);
 }
 
 pub fn submit_parameters(model: &mut Model) {
@@ -848,6 +908,14 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
         }
         KeyCode::Esc if model.editor.completion_open => {
             model.editor.completion_open = false;
+            true
+        }
+        KeyCode::PageUp => {
+            page(model, -1, shift);
+            true
+        }
+        KeyCode::PageDown => {
+            page(model, 1, shift);
             true
         }
         KeyCode::Tab => {
@@ -982,7 +1050,6 @@ fn insert_text(model: &mut Model, text: &str) {
     } else {
         doc.sql.insert(doc.sql.cursor(), text)
     };
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
 }
 
@@ -1039,7 +1106,6 @@ fn insert_newline(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.insert(doc.sql.cursor(), &format!("\n{indent}"));
-    reveal_cursor(doc);
 }
 
 fn backspace(model: &mut Model, word: bool) {
@@ -1060,7 +1126,6 @@ fn backspace(model: &mut Model, word: bool) {
             let _ = doc.sql.delete(start..cursor);
         }
     }
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
 }
 
@@ -1083,7 +1148,6 @@ fn delete(model: &mut Model, word: bool) {
             let _ = doc.sql.delete(cursor..end);
         }
     }
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
 }
 
@@ -1127,7 +1191,6 @@ pub fn cut(model: &mut Model) -> Option<String> {
         .collect();
     doc.anchor = None;
     let _ = doc.sql.delete(range);
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
     Some(text)
 }
@@ -1136,14 +1199,12 @@ pub fn undo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.undo();
-    reveal_cursor(doc);
 }
 
 pub fn redo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.redo();
-    reveal_cursor(doc);
 }
 
 pub fn select_all(model: &mut Model) {
@@ -1168,7 +1229,6 @@ fn move_chars(model: &mut Model, delta: i32, shift: bool, word: bool) {
         cursor = (cursor + 1).min(len);
     }
     apply_move(doc, cursor, shift);
-    reveal_cursor(doc);
 }
 
 fn move_line_edge(model: &mut Model, home: bool, shift: bool) {
@@ -1177,7 +1237,6 @@ fn move_line_edge(model: &mut Model, home: bool, shift: bool) {
     let text = doc.sql.text();
     let (line_start, line_end) = line_bounds(&text, doc.sql.cursor());
     apply_move(doc, if home { line_start } else { line_end }, shift);
-    reveal_cursor(doc);
 }
 
 fn move_vertical(model: &mut Model, delta: i32, shift: bool) {
@@ -1185,14 +1244,23 @@ fn move_vertical(model: &mut Model, delta: i32, shift: bool) {
     let doc = model.active_document_mut();
     let text = doc.sql.text();
     let (line, col) = line_col(&text, doc.sql.cursor());
-    let next_line = if delta < 0 {
-        line.saturating_sub(1)
-    } else {
-        line + 1
-    };
+    let next_line = line.saturating_add_signed(delta as isize);
     let cursor = cursor_at(&text, next_line, col);
     apply_move(doc, cursor, shift);
-    reveal_cursor(doc);
+}
+
+/// PageUp and PageDown: the view and the cursor move a screenful together, so the
+/// cursor keeps its row on screen. They did nothing outside the completion popup.
+fn page(model: &mut Model, direction: i32, shift: bool) {
+    let rows = text_area(model).map_or(1, |(rows, _)| rows);
+    let doc = model.active_document_mut();
+    let lines = doc.sql.text().matches('\n').count() + 1;
+    doc.viewport_line = if direction < 0 {
+        doc.viewport_line.saturating_sub(rows)
+    } else {
+        (doc.viewport_line + rows).min(lines.saturating_sub(rows))
+    };
+    move_vertical(model, direction * rows as i32, shift);
 }
 
 fn apply_move(doc: &mut EditorDocument, cursor: usize, shift: bool) {
@@ -1211,7 +1279,6 @@ pub(crate) fn extend_selection_to(model: &mut Model, cursor: usize) {
     end_typing(model);
     let doc = model.active_document_mut();
     apply_move(doc, cursor, true);
-    reveal_cursor(doc);
 }
 
 pub(crate) fn end_typing(model: &mut Model) {
@@ -1410,21 +1477,4 @@ pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> crate::widgets:
         FooterKey::Pass => {}
     }
     outcome
-}
-
-pub fn reveal_cursor(doc: &mut EditorDocument) {
-    let text = doc.sql.text();
-    let (line, col) = line_col(&text, doc.sql.cursor());
-    if line < doc.viewport_line {
-        doc.viewport_line = line;
-    }
-    if line >= doc.viewport_line + 12 {
-        doc.viewport_line = line.saturating_sub(11);
-    }
-    if col < doc.viewport_column {
-        doc.viewport_column = col;
-    }
-    if col >= doc.viewport_column + 80 {
-        doc.viewport_column = col.saturating_sub(79);
-    }
 }

@@ -45,6 +45,7 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     if !crate::screens::editor::highlights_are_current(model) {
         crate::screens::editor::refresh_intelligence(model, false);
     }
+    crate::screens::editor::follow_cursor(model);
     if swapped || model.active_document().kind.is_table() != was_table {
         model.sync_grid_viewport();
     }

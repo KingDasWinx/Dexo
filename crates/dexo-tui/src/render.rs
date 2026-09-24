@@ -2005,7 +2005,7 @@ fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
     let inner = Block::bordered().inner(plan.content);
     let doc = model.active_document();
     let (line, col) = crate::screens::editor::line_col_of(&doc.text(), doc.cursor());
-    let gutter = 5u16;
+    let gutter = crate::widgets::editor::GUTTER;
     let cursor_x = inner
         .x
         .saturating_add(gutter)
