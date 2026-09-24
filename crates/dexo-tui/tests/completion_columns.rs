@@ -110,6 +110,41 @@ fn a_table_nothing_knows_is_asked_of_the_session_and_the_popup_opens_on_the_answ
     );
 }
 
+/// `select venda.` is typed before the FROM exists: the qualifier alone names the
+/// table whose columns are wanted.
+#[test]
+fn a_table_named_only_before_the_dot_is_asked_about_too() {
+    let mut model = connected();
+    model.absorb_catalog(&[table("venda")]);
+    let effects = type_text(&mut model, "select venda.");
+    let target = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::LoadCompletionColumns { target, .. } => Some(target.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("no column lookup: {effects:?}"));
+    assert_eq!(target.object(), "venda");
+    assert_eq!(target.schema(), Some("public"));
+
+    update(
+        &mut model,
+        Action::CompletionColumnsLoaded {
+            generation: 3,
+            target,
+            columns: vec!["id".into(), "cliente_id".into(), "total".into()],
+        },
+    );
+    assert!(model.editor.completion_open, "the answer did not open it");
+    assert_eq!(offered(&model), ["id", "cliente_id", "total"]);
+
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
+    assert_eq!(model.active_document().text(), "select venda.id");
+}
+
 #[test]
 fn an_answer_for_another_connection_is_dropped() {
     let mut model = connected();

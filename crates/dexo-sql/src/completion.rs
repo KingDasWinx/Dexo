@@ -199,7 +199,7 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
                 push_columns(&mut items, &table, prefix);
             }
         }
-        Intent::Table | Intent::Schema => {
+        Intent::Table => {
             // A qualifier here names a schema: `public.` narrows the list to that
             // schema's tables. If nothing matches it was not a schema after all, so
             // offer the whole list rather than an empty popup.
@@ -208,6 +208,20 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
             if items.is_empty() {
                 push_tables(&mut items, catalog, prefix, None);
             }
+        }
+        // A qualifier the statement does not declare: `select venda.` typed before the
+        // FROM, or a table's own name where it goes by an alias. It is a table's
+        // columns if a table goes by that name, and a schema's tables if a schema does.
+        Intent::Schema => {
+            if let Some(table) = named_table(&context.qualifier, catalog) {
+                push_columns(&mut items, &table, prefix);
+            }
+            push_tables(
+                &mut items,
+                catalog,
+                prefix,
+                context.qualifier.last().map(String::as_str),
+            );
         }
         Intent::Routine => push_functions(&mut items, catalog, prefix),
         // A name being made up: nothing to look up, but the next clause may be what is
@@ -222,8 +236,9 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
         }
     }
     // A recognised position that turned up nothing at all would leave the user staring at
-    // an empty box; keywords are always a legitimate answer.
-    if items.is_empty() && context.confidence != Confidence::High {
+    // an empty box; keywords are always a legitimate answer. Not after a dot, though:
+    // only a member of what precedes it can go there.
+    if items.is_empty() && context.confidence != Confidence::High && context.qualifier.is_empty() {
         push_tables(&mut items, catalog, prefix, None);
         push_keywords(&mut items, KEYWORDS, prefix);
     }
@@ -481,6 +496,12 @@ pub fn current_token(prefix: &str) -> String {
 /// other statements; the name now comes from the parsed FROM list instead.
 pub fn resolve_source(source: &RowSource, catalog: &dyn Catalog) -> Option<TableInfo> {
     catalog.table(source.schema.as_deref(), &source.name)
+}
+
+/// The table a dotted qualifier spells out: `venda`, `public.venda`, `db.public.venda`.
+pub fn named_table(qualifier: &[String], catalog: &dyn Catalog) -> Option<TableInfo> {
+    let (name, rest) = qualifier.split_last()?;
+    catalog.table(rest.last().map(String::as_str), name)
 }
 
 fn split_qualified(qualified: &str) -> (String, String) {

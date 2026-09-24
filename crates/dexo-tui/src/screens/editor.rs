@@ -350,13 +350,26 @@ fn request_columns(model: &mut Model, context: &dexo_sql::CursorContext) {
             | Intent::AliasColumn
             | Intent::InsertColumn
             | Intent::UpdateColumn
+            | Intent::Schema
     ) || model.active_session.is_none()
         || !model.connection.ready
     {
         return;
     }
     let generation = model.session_generation;
-    for source in &context.row_sources {
+    // `venda.` before any FROM names a table too. If it is a schema instead, the lookup
+    // finds no columns, once.
+    let named = (context.intent == Intent::Schema)
+        .then(|| context.qualifier.split_last())
+        .flatten()
+        .map(|(name, rest)| dexo_sql::RowSource {
+            kind: dexo_sql::RowSourceKind::Table,
+            schema: rest.last().cloned(),
+            name: name.clone(),
+            alias: None,
+            depth: 0,
+        });
+    for source in context.row_sources.iter().chain(named.as_ref()) {
         if !matches!(
             source.kind,
             dexo_sql::RowSourceKind::Table | dexo_sql::RowSourceKind::MutationTarget

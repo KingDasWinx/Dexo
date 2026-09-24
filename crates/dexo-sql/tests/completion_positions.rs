@@ -134,6 +134,32 @@ fn a_qualifier_narrows_to_that_table() {
     assert_eq!(found, ["status"]);
 }
 
+/// `venda.` offered nothing of `venda` unless the FROM already named it -- and the
+/// select list is usually typed first.
+#[test]
+fn a_table_name_before_a_dot_offers_its_columns_even_without_a_from() {
+    for sample in [
+        "select orders.|",
+        "orders.|",
+        "select orders.| from users",
+        "select public.orders.|",
+        // By its own name where the FROM gave it an alias.
+        "select * from orders o where orders.|",
+    ] {
+        let found = columns(sample);
+        assert_eq!(found, ["id", "user_id", "total", "status"], "{sample}");
+    }
+    assert_eq!(columns("select orders.to|"), ["total"]);
+}
+
+#[test]
+fn after_a_dot_only_members_are_offered() {
+    // A schema's tables.
+    assert_eq!(labels("select public.|"), ["users", "orders"]);
+    // Nothing goes by that name: nothing, rather than every table and keyword.
+    assert!(labels("select nothing_here.|").is_empty());
+}
+
 #[test]
 fn table_positions_offer_tables() {
     for sample in [

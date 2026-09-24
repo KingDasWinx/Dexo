@@ -78,6 +78,17 @@ async fn completes_live_columns(session: Box<dyn Session>) {
     assert!(model.editor.completion_open);
     assert!(offered.contains(&"total"), "{offered:?}");
     assert!(offered.contains(&"status"), "{offered:?}");
+
+    // Before any FROM, the name before the dot is the table.
+    model.set_sql("select live_orders.");
+    update(&mut model, Action::RefreshSqlIntelligence);
+    let offered: Vec<_> = model
+        .editor
+        .completions
+        .iter()
+        .map(|item| item.label.as_str())
+        .collect();
+    assert_eq!(offered, ["id", "total", "status"]);
 }
 
 #[tokio::test]
