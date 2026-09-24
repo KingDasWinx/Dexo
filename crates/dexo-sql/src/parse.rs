@@ -76,7 +76,7 @@ impl ParserService {
     pub fn parse(&mut self, sql: &str) -> ParsedSql {
         let statements = crate::statement::split_statements(sql);
         let mut highlights = Vec::new();
-        for segment in segments(sql, &statements) {
+        for segment in crate::statement::segments(sql, &statements) {
             let text = &sql[segment.clone()];
             let tree = self
                 .parser
@@ -118,26 +118,6 @@ impl ParserService {
             None => highlights_from_walk(root, sql),
         }
     }
-}
-
-/// The buffer cut at each statement's start, so every piece holds one statement with
-/// the `;` and comments that follow it -- nothing in the buffer is left unparsed.
-fn segments(sql: &str, statements: &[crate::statement::StatementSpan]) -> Vec<Range<usize>> {
-    let mut cuts: Vec<usize> = statements
-        .iter()
-        .skip(1)
-        .map(|statement| statement.byte_range.start)
-        .collect();
-    cuts.push(sql.len());
-    let mut start = 0;
-    cuts.into_iter()
-        .map(|end| {
-            let segment = start..end;
-            start = end;
-            segment
-        })
-        .filter(|segment| !segment.is_empty())
-        .collect()
 }
 
 fn highlights_from_query(query: &Query, root: tree_sitter::Node, sql: &str) -> Vec<HighlightSpan> {

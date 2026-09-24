@@ -457,6 +457,26 @@ fn skip_balanced_paren(sql: &str, start: usize) -> Option<usize> {
     None
 }
 
+/// The buffer cut at each statement's start, so every piece holds one statement with
+/// the `;` and comments that follow it -- nothing in the buffer is left unparsed.
+pub(crate) fn segments(sql: &str, statements: &[StatementSpan]) -> Vec<Range<usize>> {
+    let mut cuts: Vec<usize> = statements
+        .iter()
+        .skip(1)
+        .map(|statement| statement.byte_range.start)
+        .collect();
+    cuts.push(sql.len());
+    let mut start = 0;
+    cuts.into_iter()
+        .map(|end| {
+            let segment = start..end;
+            start = end;
+            segment
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{StatementEffect, split_statements, statement_at};

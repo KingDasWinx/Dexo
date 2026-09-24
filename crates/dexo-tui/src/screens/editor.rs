@@ -27,7 +27,6 @@ pub struct EditorState {
     pub highlights: Vec<HighlightSpan>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
-    pub format_preview: Option<String>,
     pub completion_open: bool,
     pub completion_selected: usize,
     pub completion_offset: usize,
@@ -88,7 +87,6 @@ impl Clone for EditorState {
             highlights: self.highlights.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
-            format_preview: self.format_preview.clone(),
             completion_open: self.completion_open,
             completion_selected: self.completion_selected,
             completion_offset: self.completion_offset,
@@ -123,7 +121,6 @@ impl PartialEq for EditorState {
         self.highlights == other.highlights
             && self.parameters == other.parameters
             && self.completions == other.completions
-            && self.format_preview == other.format_preview
             && self.snippets == other.snippets
             && self.history == other.history
     }
@@ -145,7 +142,6 @@ impl Default for EditorState {
             highlights: Vec::new(),
             parameters: Vec::new(),
             completions: Vec::new(),
-            format_preview: None,
             completion_open: false,
             completion_selected: 0,
             completion_offset: 0,
@@ -583,16 +579,40 @@ fn is_sensitive_name(name: &str) -> bool {
     lower.contains("password") || lower.contains("secret") || lower.contains("token")
 }
 
+/// Formats the selection, or the whole document without one, as one edit: it undoes
+/// in one step and the document stays the same file on the same connection. It used to
+/// replace the document with a new untitled one.
 pub fn apply_format(model: &mut Model) {
-    let sql = model.active_document().text();
-    match format_sql(&sql, editor_dialect(model)) {
-        Ok(formatted) => {
-            model.editor.format_preview = Some(formatted.clone());
-            model.set_sql(&formatted);
-            refresh_intelligence(model, false);
-        }
-        Err(error) => model.messages.error(error.to_string()),
+    let doc = model.active_document();
+    let text = doc.text();
+    let selection = doc.selection();
+    let range = selection.clone().unwrap_or(0..text.chars().count());
+    let source: String = text.chars().skip(range.start).take(range.len()).collect();
+    if source.trim().is_empty() {
+        return;
     }
+    let formatted = match format_sql(&source, editor_dialect(model)) {
+        Ok(formatted) => formatted,
+        Err(error) => {
+            model.messages.error(error.to_string());
+            return;
+        }
+    };
+    if formatted == source {
+        return;
+    }
+    end_typing(model);
+    model.editor.snippet_stops.clear();
+    let doc = model.active_document_mut();
+    if doc.sql.replace_chars(range.clone(), &formatted).is_err() {
+        return;
+    }
+    // A formatted selection stays selected; otherwise the cursor lands after the text,
+    // as in dbx.
+    doc.anchor = selection.map(|_| range.start);
+    let _ = doc.sql.set_cursor(range.start + formatted.chars().count());
+    reveal_cursor(doc);
+    refresh_intelligence(model, false);
 }
 
 pub fn insert_active_snippet(model: &mut Model) {

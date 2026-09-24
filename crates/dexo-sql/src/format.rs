@@ -1,221 +1,293 @@
 use crate::dialect::Dialect;
 use crate::document::SqlError;
+use crate::lex::{Token, TokenKind, tokenize};
+use crate::statement::{segments, split_statements};
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-enum Token<'a> {
-    Ws(&'a str),
-    Comment(&'a str),
-    Literal(&'a str),
-    Word(&'a str),
-    Punct(&'a str),
-}
-
-pub fn format_sql(sql: &str, _dialect: Dialect) -> Result<String, SqlError> {
-    let tokens = tokenize(sql);
-    let formatted = render(&tokens);
-    let original_sig = significant(&tokens);
-    let roundtrip_sig = significant(&tokenize(&formatted));
-    if original_sig != roundtrip_sig {
+/// Lays `sql` out one clause per line, with lists, subqueries and CASE blocks indented
+/// and keywords in capitals. Each statement is formatted on its own and kept exactly as
+/// written if the result would not mean the same thing, so one the formatter cannot
+/// handle never costs the others. `FormatUnsafe` only when none could be formatted.
+pub fn format_sql(sql: &str, dialect: Dialect) -> Result<String, SqlError> {
+    let mut pieces = Vec::new();
+    let mut formatted_any = false;
+    let mut kept_any = false;
+    for range in segments(sql, &split_statements(sql)) {
+        let text = sql[range].trim();
+        if text.is_empty() {
+            continue;
+        }
+        match format_statement(text, dialect) {
+            Some(formatted) => {
+                formatted_any = true;
+                pieces.push(formatted);
+            }
+            None => {
+                kept_any = true;
+                pieces.push(text.to_string());
+            }
+        }
+    }
+    if kept_any && !formatted_any {
         return Err(SqlError::FormatUnsafe);
     }
-    Ok(formatted)
-}
-
-pub fn format_preview(original: &str, formatted: &str) -> String {
-    format!("- {original}\n+ {formatted}")
-}
-
-fn significant(tokens: &[Token<'_>]) -> Vec<String> {
-    tokens
-        .iter()
-        .filter_map(|token| match token {
-            Token::Ws(_) => None,
-            Token::Comment(text) | Token::Literal(text) | Token::Punct(text) => {
-                Some((*text).to_string())
-            }
-            Token::Word(word) if is_keyword(word) => Some(word.to_ascii_uppercase()),
-            Token::Word(word) => Some((*word).to_string()),
-        })
-        .collect()
-}
-
-fn render(tokens: &[Token<'_>]) -> String {
-    let mut out = String::new();
-    let mut pending_space = false;
-    for token in tokens {
-        match token {
-            Token::Ws(_) => pending_space = true,
-            Token::Comment(text) | Token::Literal(text) => {
-                if pending_space && !out.is_empty() && !out.ends_with('\n') {
-                    out.push(' ');
-                }
-                out.push_str(text);
-                pending_space = false;
-            }
-            Token::Word(word) => {
-                if is_break_keyword(word) && !out.is_empty() && !out.ends_with('\n') {
-                    out.push('\n');
-                } else if pending_space && !out.is_empty() && !out.ends_with('\n') {
-                    out.push(' ');
-                }
-                if is_keyword(word) {
-                    out.push_str(&word.to_ascii_uppercase());
-                } else {
-                    out.push_str(word);
-                }
-                pending_space = false;
-            }
-            Token::Punct(p) => {
-                if pending_space
-                    && *p != ","
-                    && *p != ";"
-                    && !out.ends_with('\n')
-                    && !out.is_empty()
-                {
-                    out.push(' ');
-                }
-                out.push_str(p);
-                pending_space = *p == "," || *p == ";";
-                if *p == ";" {
-                    out.push('\n');
-                    pending_space = false;
-                }
-            }
-        }
+    let mut out = pieces.join("\n\n");
+    if sql.ends_with('\n') {
+        out.push('\n');
     }
-    out.trim().to_string()
+    Ok(out)
 }
 
-fn is_keyword(word: &str) -> bool {
-    matches!(
-        word.to_ascii_uppercase().as_str(),
-        "SELECT"
-            | "FROM"
-            | "WHERE"
-            | "JOIN"
-            | "INNER"
-            | "LEFT"
-            | "RIGHT"
-            | "ON"
-            | "GROUP"
-            | "BY"
-            | "ORDER"
-            | "LIMIT"
-            | "INSERT"
-            | "INTO"
-            | "UPDATE"
-            | "DELETE"
-            | "WITH"
-            | "AS"
-            | "AND"
-            | "OR"
-            | "NOT"
-            | "VALUES"
-            | "SET"
-    )
-}
-
-fn is_break_keyword(word: &str) -> bool {
-    matches!(
-        word.to_ascii_uppercase().as_str(),
-        "SELECT" | "FROM" | "WHERE" | "JOIN" | "GROUP" | "ORDER" | "LIMIT" | "VALUES" | "SET"
-    )
-}
-
-fn tokenize(sql: &str) -> Vec<Token<'_>> {
-    let bytes = sql.as_bytes();
-    let mut tokens = Vec::new();
-    let mut i = 0;
-    while i < bytes.len() {
-        let start = i;
-        match bytes[i] {
-            b' ' | b'\t' | b'\r' | b'\n' => {
-                while i < bytes.len() && bytes[i].is_ascii_whitespace() {
-                    i += 1;
-                }
-                tokens.push(Token::Ws(&sql[start..i]));
-            }
-            b'-' if bytes.get(i + 1) == Some(&b'-') => {
-                while i < bytes.len() && bytes[i] != b'\n' {
-                    i += 1;
-                }
-                tokens.push(Token::Comment(&sql[start..i]));
-            }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i = (i + 2).min(bytes.len());
-                tokens.push(Token::Comment(&sql[start..i]));
-            }
-            b'\'' | b'"' | b'`' => {
-                let quote = bytes[i];
-                i += 1;
-                while i < bytes.len() {
-                    if bytes[i] == quote {
-                        if bytes.get(i + 1) == Some(&quote) {
-                            i += 2;
-                            continue;
-                        }
-                        i += 1;
-                        break;
-                    }
-                    i += 1;
-                }
-                tokens.push(Token::Literal(&sql[start..i]));
-            }
-            b'$' => {
-                if let Some(end) = dollar_end(sql, i) {
-                    tokens.push(Token::Literal(&sql[i..end]));
-                    i = end;
-                } else {
-                    i += 1;
-                    tokens.push(Token::Punct(&sql[start..i]));
-                }
-            }
-            b if b.is_ascii_alphanumeric() || b == b'_' => {
-                i += 1;
-                while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-                    i += 1;
-                }
-                tokens.push(Token::Word(&sql[start..i]));
-            }
-            _ => {
-                i += 1;
-                tokens.push(Token::Punct(&sql[start..i]));
-            }
-        }
-    }
-    tokens
-}
-
-fn dollar_end(sql: &str, start: usize) -> Option<usize> {
-    let bytes = sql.as_bytes();
-    let mut i = start + 1;
-    while i < bytes.len() && (bytes[i].is_ascii_alphanumeric() || bytes[i] == b'_') {
-        i += 1;
-    }
-    if bytes.get(i) != Some(&b'$') {
+fn format_statement(text: &str, dialect: Dialect) -> Option<String> {
+    // sqlformat misreads string bodies it does not know -- `$$it's$$` derails it for the
+    // rest of the statement -- so it never sees one: each literal goes in as a plain
+    // word and comes back out afterwards.
+    if text.contains(MARK) {
         return None;
     }
-    let tag = &sql[start..=i];
-    i += 1;
-    sql[i..].find(tag).map(|rel| i + rel + tag.len())
+    let tokens = tokenize(text, dialect);
+    let mut literals = Vec::new();
+    let mut masked = String::with_capacity(text.len());
+    let mut at = 0;
+    for token in tokens
+        .iter()
+        .filter(|token| token.kind == TokenKind::String)
+    {
+        masked.push_str(&text[at..token.span.start]);
+        masked.push_str(&placeholder(literals.len()));
+        literals.push(token.text(text));
+        at = token.span.end;
+    }
+    masked.push_str(&text[at..]);
+
+    let options = sqlformat::FormatOptions {
+        indent: sqlformat::Indent::Spaces(2),
+        // Capitals are applied below, to reserved words only: sqlformat's own list
+        // takes in names like `level`, and a MySQL table name is case-sensitive.
+        uppercase: None,
+        lines_between_queries: 1,
+        dialect: match dialect {
+            Dialect::Postgres => sqlformat::Dialect::PostgreSql,
+            Dialect::Mysql => sqlformat::Dialect::Generic,
+        },
+        ..Default::default()
+    };
+    let formatted = sqlformat::format(&masked, &sqlformat::QueryParams::None, &options);
+    let mut out = capitalize(&formatted, dialect);
+    for (index, literal) in literals.iter().enumerate().rev() {
+        out = out.replacen(&placeholder(index), literal, 1);
+    }
+    same_meaning(text, &out, dialect).then_some(out)
 }
+
+const MARK: &str = "__dexo_literal_";
+
+fn placeholder(index: usize) -> String {
+    format!("{MARK}{index}__")
+}
+
+fn capitalize(sql: &str, dialect: Dialect) -> String {
+    let mut out = String::with_capacity(sql.len());
+    let mut at = 0;
+    for token in tokenize(sql, dialect) {
+        if token.kind == TokenKind::Word && is_reserved(token.text(sql)) {
+            out.push_str(&sql[at..token.span.start]);
+            out.push_str(&token.text(sql).to_ascii_uppercase());
+            at = token.span.end;
+        }
+    }
+    out.push_str(&sql[at..]);
+    out
+}
+
+/// The same tokens in the same order, whatever the whitespace between them. Reserved
+/// words may change case; nothing else may change at all.
+fn same_meaning(before: &str, after: &str, dialect: Dialect) -> bool {
+    let significant = |sql: &str| -> Vec<(TokenKind, String)> {
+        tokenize(sql, dialect)
+            .iter()
+            .map(|token: &Token| {
+                let text = token.text(sql);
+                let text = match token.kind {
+                    TokenKind::Word if is_reserved(text) => text.to_ascii_uppercase(),
+                    TokenKind::Comment => text.trim_end().to_string(),
+                    _ => text.to_string(),
+                };
+                (token.kind, text)
+            })
+            .collect()
+    };
+    significant(before) == significant(after)
+}
+
+/// Words reserved in MySQL as well as PostgreSQL. Only these are capitalized: neither
+/// database lets one stand unquoted for a table, so changing its case cannot change
+/// which table a statement names.
+fn is_reserved(word: &str) -> bool {
+    RESERVED
+        .iter()
+        .any(|reserved| reserved.eq_ignore_ascii_case(word))
+}
+
+const RESERVED: &[&str] = &[
+    "add",
+    "all",
+    "alter",
+    "and",
+    "as",
+    "asc",
+    "between",
+    "by",
+    "case",
+    "check",
+    "column",
+    "constraint",
+    "create",
+    "cross",
+    "default",
+    "delete",
+    "desc",
+    "distinct",
+    "drop",
+    "else",
+    "end",
+    "exists",
+    "false",
+    "fetch",
+    "for",
+    "foreign",
+    "from",
+    "grant",
+    "group",
+    "having",
+    "in",
+    "index",
+    "inner",
+    "insert",
+    "interval",
+    "into",
+    "is",
+    "join",
+    "key",
+    "lateral",
+    "left",
+    "like",
+    "limit",
+    "natural",
+    "not",
+    "null",
+    "offset",
+    "on",
+    "or",
+    "order",
+    "outer",
+    "over",
+    "partition",
+    "primary",
+    "recursive",
+    "references",
+    "returning",
+    "right",
+    "select",
+    "set",
+    "table",
+    "then",
+    "true",
+    "union",
+    "unique",
+    "update",
+    "using",
+    "values",
+    "when",
+    "where",
+    "window",
+    "with",
+];
 
 #[cfg(test)]
 mod tests {
     use super::format_sql;
     use crate::dialect::Dialect;
 
+    fn format(sql: &str) -> String {
+        format_sql(sql, Dialect::Postgres).unwrap()
+    }
+
     #[test]
     fn format_is_idempotent_and_preserves_literals() {
         let sql = "select 1 from t where name='a  b' -- keep";
-        let once = format_sql(sql, Dialect::Postgres).unwrap();
-        let twice = format_sql(&once, Dialect::Postgres).unwrap();
+        let once = format(sql);
+        let twice = format(&once);
         assert_eq!(once, twice);
         assert!(once.contains("'a  b'"));
         assert!(once.contains("-- keep"));
+    }
+
+    #[test]
+    fn clauses_go_on_their_own_lines_and_their_contents_are_indented() {
+        let formatted = format(
+            "select u.id, count(o.id) as total from users u left join orders o on o.user_id = u.id \
+             where u.id in (select user_id from vip) group by u.id order by total desc",
+        );
+        assert_eq!(
+            formatted,
+            "SELECT\n  u.id,\n  count(o.id) AS total\nFROM\n  users u\n  LEFT JOIN orders o ON \
+             o.user_id = u.id\nWHERE\n  u.id IN (\n    SELECT\n      user_id\n    FROM\n      \
+             vip\n  )\nGROUP BY\n  u.id\nORDER BY\n  total DESC"
+        );
+    }
+
+    /// sqlformat alone turned `$$it's$$` into `$$it ' s` and scrambled everything after.
+    #[test]
+    fn dollar_quoted_and_escaped_strings_come_through_untouched() {
+        let sql = "update t set b = $$it's$$, c = $tag$x;y$tag$, d = e'a\\'b' where id = :id";
+        let formatted = format(sql);
+        assert!(formatted.contains("$$it's$$"), "{formatted}");
+        assert!(formatted.contains("$tag$x;y$tag$"), "{formatted}");
+        assert!(formatted.contains("e'a\\'b'"), "{formatted}");
+        assert!(formatted.contains(":id"), "{formatted}");
+    }
+
+    #[test]
+    fn postgres_operators_are_not_split() {
+        let formatted = format(
+            "select \"Mixed Col\" from t where data->>'k' = 'v' and x::int > 1 and tags @> array['a']",
+        );
+        for piece in [
+            "\"Mixed Col\"",
+            "data ->> 'k'",
+            "x::int",
+            "tags @> array['a']",
+        ] {
+            assert!(formatted.contains(piece), "{piece} in\n{formatted}");
+        }
+    }
+
+    /// `level` and `status` are words sqlformat capitalizes; as names they are left be.
+    #[test]
+    fn only_reserved_words_change_case() {
+        let formatted = format("select level, status, Name from Users where level > 1");
+        assert!(formatted.contains("level,"), "{formatted}");
+        assert!(formatted.contains("Users"), "{formatted}");
+        assert!(formatted.contains("Name"), "{formatted}");
+        assert!(formatted.starts_with("SELECT"), "{formatted}");
+    }
+
+    #[test]
+    fn each_statement_is_formatted_on_its_own() {
+        let formatted = format("select 1; -- one\nselect 2;\n");
+        assert_eq!(formatted, "SELECT\n  1;\n-- one\n\nSELECT\n  2;\n");
+        assert_eq!(format(&formatted), formatted);
+    }
+
+    #[test]
+    fn mysql_comments_and_quoting_survive() {
+        let formatted = format_sql(
+            "select `a`, b from `t` where c = 'it''s' # note\nand d <=> null",
+            Dialect::Mysql,
+        )
+        .unwrap();
+        assert!(formatted.contains("`a`"), "{formatted}");
+        assert!(formatted.contains("'it''s'"), "{formatted}");
+        assert!(formatted.contains("# note"), "{formatted}");
     }
 }

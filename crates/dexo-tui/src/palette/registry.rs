@@ -1099,8 +1099,8 @@ fn command_spec_list() -> Vec<CommandSpec> {
         CommandSpec {
             id: "editor.format",
             title: "Format SQL",
-            keywords: &["pretty", "indent"],
-            shortcut: Some("Ctrl+Shift+I"),
+            keywords: &["pretty", "indent", "prettier"],
+            shortcut: Some("Alt+Shift+F"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::FormatSql),
         },
