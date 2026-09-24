@@ -1955,7 +1955,9 @@ fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 /// Vim/Neovim pum: align with the cursor, prefer below, flip above if it does not fit.
 fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
-    let plan = LayoutPlan::for_area_with(area, Some(&model.effective_panes()));
+    // The same plan the frame is drawn with: without the tab row the editor sits one row
+    // higher, and the popup's top border landed on the cursor's own line.
+    let plan = LayoutPlan::for_area_with_document_tabs(area, Some(&model.effective_panes()), true);
     let inner = Block::bordered().inner(plan.content);
     let doc = model.active_document();
     let (line, col) = crate::screens::editor::line_col_of(&doc.text(), doc.cursor());

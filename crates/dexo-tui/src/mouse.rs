@@ -222,8 +222,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
     .find_map(|(open, kind)| open.then_some(kind))
 }
 
+/// The completion popup is not modal: clicks and the wheel away from it still reach the
+/// editor, so the workbench keeps its hit areas while it is open.
 pub fn overlay_blocks_workbench(model: &Model) -> bool {
-    top_overlay(model).is_some()
+    !matches!(top_overlay(model), None | Some(OverlayKind::Completion))
 }
 
 pub fn popup_inner(popup: Rect) -> Rect {

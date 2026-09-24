@@ -20,6 +20,10 @@ pub struct EditorState {
     /// The document and revision `highlights` were built for. Anything else on screen
     /// -- another tab, a file that just loaded -- means they belong to other text.
     painted: Option<(String, u64)>,
+    /// Document, revision, and cursor the open popup was computed for. When any of them
+    /// moves without the popup being recomputed, it is answering a question nobody is
+    /// asking any more.
+    completion_at: Option<(String, u64, usize)>,
     pub highlights: Vec<HighlightSpan>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
@@ -75,6 +79,7 @@ impl Clone for EditorState {
             parser: ParserService::postgres(),
             last_sql: self.last_sql.clone(),
             painted: self.painted.clone(),
+            completion_at: self.completion_at.clone(),
             highlights: self.highlights.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
@@ -129,6 +134,7 @@ impl Default for EditorState {
             parser: ParserService::postgres(),
             last_sql: String::new(),
             painted: None,
+            completion_at: None,
             highlights: Vec::new(),
             parameters: Vec::new(),
             completions: Vec::new(),
@@ -200,7 +206,8 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
-fn close_completion(model: &mut Model) {
+pub fn close_completion(model: &mut Model) {
+    model.editor.completion_at = None;
     model.editor.completions.clear();
     model.editor.completion_open = false;
     model.editor.completion_selected = 0;
@@ -267,6 +274,28 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
     model.editor.completion_open = true;
     model.editor.completion_selected = 0;
     model.editor.completion_offset = 0;
+    let document = model.active_document();
+    model.editor.completion_at = Some((
+        document.id.clone(),
+        document.sql.revision(),
+        document.cursor(),
+    ));
+}
+
+/// The popup belongs to one spot in one document. Moving the cursor, editing without
+/// recomputing (Delete, undo, a paste), or switching documents leaves it behind -- the
+/// dbx rule: it goes away, and typing brings it back.
+pub fn completion_went_stale(model: &Model) -> bool {
+    let document = model.active_document();
+    model
+        .editor
+        .completion_at
+        .as_ref()
+        .is_none_or(|(id, revision, cursor)| {
+            *id != document.id
+                || *revision != document.sql.revision()
+                || *cursor != document.cursor()
+        })
 }
 
 /// Asks the snapshot for more names when the objects in memory did not fill the list.
@@ -360,7 +389,7 @@ pub fn merge_completion_objects(
         model.editor.completion_selected,
         model.editor.completion_offset,
         model.editor.completions.len(),
-        8,
+        COMPLETION_ROWS,
     );
 }
 
@@ -479,6 +508,9 @@ pub fn accept_completion(model: &mut Model) {
     refresh_intelligence(model, false);
 }
 
+/// Rows the completion popup shows at once.
+pub const COMPLETION_ROWS: usize = 8;
+
 pub fn move_completion(model: &mut Model, delta: i32) {
     if model.editor.completions.is_empty() {
         return;
@@ -490,7 +522,7 @@ pub fn move_completion(model: &mut Model, delta: i32) {
         model.editor.completion_selected,
         model.editor.completion_offset,
         model.editor.completions.len(),
-        8,
+        COMPLETION_ROWS,
     );
 }
 
@@ -539,6 +571,16 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // Sideways keys mean "not this": they close the popup even when the cursor has
+    // nowhere to go, like Right at the end of the text.
+    let sideways = matches!(
+        key.code,
+        KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
+    ) || (matches!(key.code, KeyCode::Up | KeyCode::Down)
+        && !key.modifiers.is_empty());
+    if sideways {
+        close_completion(model);
+    }
     match key.code {
         KeyCode::Char(ch) if !ctrl => {
             insert_text(model, &ch.to_string());
@@ -557,12 +599,21 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             accept_completion(model);
             true
         }
-        KeyCode::Up if model.editor.completion_open => {
+        // Only bare arrows walk the list; Shift+Up still extends the selection.
+        KeyCode::Up if model.editor.completion_open && key.modifiers.is_empty() => {
             move_completion(model, -1);
             true
         }
-        KeyCode::Down if model.editor.completion_open => {
+        KeyCode::Down if model.editor.completion_open && key.modifiers.is_empty() => {
             move_completion(model, 1);
+            true
+        }
+        KeyCode::PageUp if model.editor.completion_open => {
+            move_completion(model, -(COMPLETION_ROWS as i32));
+            true
+        }
+        KeyCode::PageDown if model.editor.completion_open => {
+            move_completion(model, COMPLETION_ROWS as i32);
             true
         }
         KeyCode::Esc if model.editor.completion_open => {

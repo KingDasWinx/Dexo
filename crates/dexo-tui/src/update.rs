@@ -33,6 +33,13 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     model.drop_redundant_placeholder();
     swapped |= model.swap_results_to_active_document();
     model.follow_active_document_tab();
+    if model.editor.completion_open
+        && (model.focus != Focus::Editor
+            || model.palette.open
+            || crate::screens::editor::completion_went_stale(model))
+    {
+        crate::screens::editor::close_completion(model);
+    }
     // Switching tabs left the previous document's colours painted over the new one
     // until the next edit, and a file loaded from disk came up uncoloured.
     if !crate::screens::editor::highlights_are_current(model) {
@@ -1874,12 +1881,15 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Diagnostics) => mouse_diagnostics(model, hit),
         Some(OverlayKind::McpAudit) => mouse_mcp_audit(model, hit),
         Some(OverlayKind::FilePicker) => mouse_file_picker(model, hit, doubled),
+        // A click away from the popup dismisses it and still lands where it was aimed,
+        // the way clicking elsewhere in a code editor does.
         Some(OverlayKind::Completion) => {
             if let Some(HitTarget::ListRow(index)) = hit {
                 model.editor.completion_selected = index;
                 update(model, Action::AcceptCompletion)
             } else {
-                Vec::new()
+                crate::screens::editor::close_completion(model);
+                mouse_workbench(model, mouse, hit, doubled)
             }
         }
         Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
@@ -2706,8 +2716,16 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     if overlay == Some(OverlayKind::Completion) {
-        crate::screens::editor::move_completion(model, delta);
-        return Vec::new();
+        if matches!(
+            model.hits.at(mouse.column, mouse.row),
+            Some(HitTarget::ListRow(_))
+        ) {
+            crate::screens::editor::move_completion(model, delta);
+            return Vec::new();
+        }
+        // Scrolling the text means reading elsewhere; the popup would float over the
+        // wrong line.
+        crate::screens::editor::close_completion(model);
     }
     if overlay == Some(OverlayKind::History) {
         if delta < 0 {
