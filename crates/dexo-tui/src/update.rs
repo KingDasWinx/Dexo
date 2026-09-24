@@ -6547,14 +6547,21 @@ fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
         crate::screens::file_picker::FilePickerMode::Open => open_document_path(model, path),
         crate::screens::file_picker::FilePickerMode::Save => {
             let doc = model.active_document_mut();
+            // Save As gives the document a new file, and the tab names the file it now
+            // lives in. Only here: a plain save keeps a name the user chose with F2.
+            if let Some(name) = path.file_name() {
+                doc.title = name.to_string_lossy().into_owned();
+            }
             doc.path = Some(path.clone());
-            vec![Effect::SaveDocument(crate::action::DocumentIoRequest {
+            let effects = vec![Effect::SaveDocument(crate::action::DocumentIoRequest {
                 document: doc.id.clone(),
                 path,
                 content: doc.text(),
                 revision: doc.sql.revision(),
                 expected_fingerprint: None,
-            })]
+            })];
+            model.sync_document_tabs_scroll();
+            effects
         }
         crate::screens::file_picker::FilePickerMode::Transfer => {
             model.transfer.path = path.display().to_string();
