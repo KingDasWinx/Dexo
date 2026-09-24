@@ -1,6 +1,6 @@
 use crate::dialect::Dialect;
 use crate::document::SqlError;
-use crate::lex::{Token, TokenKind, tokenize};
+use crate::lex::{Token, TokenKind, is_reserved, tokenize};
 use crate::statement::{segments, split_statements};
 
 /// Lays `sql` out one clause per line, with lists, subqueries and CASE blocks indented
@@ -118,90 +118,6 @@ fn same_meaning(before: &str, after: &str, dialect: Dialect) -> bool {
     };
     significant(before) == significant(after)
 }
-
-/// Words reserved in MySQL as well as PostgreSQL. Only these are capitalized: neither
-/// database lets one stand unquoted for a table, so changing its case cannot change
-/// which table a statement names.
-fn is_reserved(word: &str) -> bool {
-    RESERVED
-        .iter()
-        .any(|reserved| reserved.eq_ignore_ascii_case(word))
-}
-
-const RESERVED: &[&str] = &[
-    "add",
-    "all",
-    "alter",
-    "and",
-    "as",
-    "asc",
-    "between",
-    "by",
-    "case",
-    "check",
-    "column",
-    "constraint",
-    "create",
-    "cross",
-    "default",
-    "delete",
-    "desc",
-    "distinct",
-    "drop",
-    "else",
-    "end",
-    "exists",
-    "false",
-    "fetch",
-    "for",
-    "foreign",
-    "from",
-    "grant",
-    "group",
-    "having",
-    "in",
-    "index",
-    "inner",
-    "insert",
-    "interval",
-    "into",
-    "is",
-    "join",
-    "key",
-    "lateral",
-    "left",
-    "like",
-    "limit",
-    "natural",
-    "not",
-    "null",
-    "offset",
-    "on",
-    "or",
-    "order",
-    "outer",
-    "over",
-    "partition",
-    "primary",
-    "recursive",
-    "references",
-    "returning",
-    "right",
-    "select",
-    "set",
-    "table",
-    "then",
-    "true",
-    "union",
-    "unique",
-    "update",
-    "using",
-    "values",
-    "when",
-    "where",
-    "window",
-    "with",
-];
 
 #[cfg(test)]
 mod tests {

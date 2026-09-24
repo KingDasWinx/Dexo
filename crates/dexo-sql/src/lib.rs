@@ -27,7 +27,7 @@ pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};
 pub use format::format_sql;
-pub use lex::{Token, TokenKind, suppressed_at, tokenize};
+pub use lex::{Token, TokenKind, is_reserved, suppressed_at, tokenize};
 pub use navigation::definition_at;
 pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};

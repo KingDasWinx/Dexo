@@ -88,6 +88,7 @@ impl ParserService {
                 span
             }));
         }
+        let highlights = mark_reserved_words(sql, self.dialect, highlights);
         let mut regions: Vec<StatementRegion> = statements
             .into_iter()
             .map(|statement| StatementRegion {
@@ -118,6 +119,63 @@ impl ParserService {
             None => highlights_from_walk(root, sql),
         }
     }
+}
+
+/// The grammar gives up on constructs it does not know -- `distinct on`, `for update`,
+/// `cast(x as t)` -- and colours nothing after them, reserved words included; it also
+/// calls `null` a string. A reserved word outside a string or comment is a keyword
+/// wherever it stands, so the lexer's reading wins over the grammar's for those. After a
+/// dot it is a column name (`t.order`) and is left alone.
+fn mark_reserved_words(
+    sql: &str,
+    dialect: Dialect,
+    mut highlights: Vec<HighlightSpan>,
+) -> Vec<HighlightSpan> {
+    let tokens = crate::lex::tokenize(sql, dialect);
+    let mut words: Vec<(Range<usize>, Highlight)> = Vec::new();
+    for (index, token) in tokens.iter().enumerate() {
+        let after_dot = index
+            .checked_sub(1)
+            .and_then(|previous| tokens.get(previous))
+            .is_some_and(|previous| previous.text(sql) == ".");
+        let text = token.text(sql);
+        if token.kind == crate::lex::TokenKind::Word && !after_dot && crate::lex::is_reserved(text)
+        {
+            // `true` and `false` keep the boolean colour.
+            let kind = if text.eq_ignore_ascii_case("true") || text.eq_ignore_ascii_case("false") {
+                Highlight::Number
+            } else {
+                Highlight::Keyword
+            };
+            words.push((token.span.clone(), kind));
+        }
+    }
+    if words.is_empty() {
+        return highlights;
+    }
+    // Every span on a reserved word gives way; the grammar sometimes puts two there.
+    highlights.sort_by_key(|span| (span.byte_range.start, span.byte_range.end));
+    let mut out = Vec::with_capacity(highlights.len() + words.len());
+    let mut first = 0;
+    for span in highlights {
+        while first < words.len() && words[first].0.end <= span.byte_range.start {
+            first += 1;
+        }
+        let overlaps = words[first..]
+            .iter()
+            .take_while(|(word, _)| word.start < span.byte_range.end)
+            .any(|(word, _)| word.end > span.byte_range.start);
+        if !overlaps {
+            out.push(span);
+        }
+    }
+    out.extend(words.into_iter().map(|(range, kind)| HighlightSpan {
+        kind,
+        text: sql[range.clone()].to_string(),
+        byte_range: range,
+    }));
+    out.sort_by_key(|span| span.byte_range.start);
+    out
 }
 
 fn highlights_from_query(query: &Query, root: tree_sitter::Node, sql: &str) -> Vec<HighlightSpan> {
@@ -297,6 +355,39 @@ mod tests {
         assert_eq!(
             kind_at(sql, sql.find("--").unwrap()),
             Some(Highlight::Comment)
+        );
+    }
+
+    /// The grammar knows no `distinct on`, `for update` or `cast(x as t)`, and coloured
+    /// nothing from there on; it also called `null` a string.
+    #[test]
+    fn reserved_words_are_keywords_where_the_grammar_gives_up() {
+        for (sql, word) in [
+            ("select distinct on (a) * from t order by a desc", "from"),
+            ("select distinct on (a) * from t order by a desc", "order"),
+            ("select distinct on (a) * from t order by a desc", "desc"),
+            ("select * from t for update", "update"),
+            ("select cast(a as int) from t", "cast"),
+            ("select * from t where a is not null", "null"),
+            ("select * from t having count(*) > 1 order by a", "having"),
+        ] {
+            let at = sql.find(&format!(" {word}")).unwrap() + 1;
+            assert_eq!(
+                kind_at(sql, at),
+                Some(Highlight::Keyword),
+                "{word} in {sql}"
+            );
+        }
+        // A column that happens to be called `order` keeps its own colour after a dot,
+        // and a boolean stays a boolean.
+        let sql = "select t.order from t where ok = true";
+        assert_ne!(
+            kind_at(sql, sql.find("order").unwrap()),
+            Some(Highlight::Keyword)
+        );
+        assert_eq!(
+            kind_at(sql, sql.find("true").unwrap()),
+            Some(Highlight::Number)
         );
     }
 

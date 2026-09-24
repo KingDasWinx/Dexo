@@ -31,7 +31,7 @@ pub enum Intent {
     JoinCondition,
     /// A name being declared rather than looked up: the alias after a table in a FROM
     /// list, or after `AS`. Offering names here turned `from users u` + Enter into
-    /// `from users users`, so the popup only comes up when asked for.
+    /// `from users users`, so only the clauses that can follow are offered.
     Alias,
     /// Nothing recognised. Offer the lot, as before.
     Keyword,
@@ -193,8 +193,10 @@ pub fn should_open(mode: TriggerMode, context: &CursorContext, origin: TriggerOr
     if origin == TriggerOrigin::Explicit {
         return true;
     }
+    // After a table only a clause keyword is on offer, and only from two letters on: a
+    // one-letter alias followed by Enter must stay an alias.
     if context.intent == Intent::Alias {
-        return false;
+        return mode != TriggerMode::Manual && context.prefix.chars().count() >= 2;
     }
     let started = !context.prefix.is_empty() || !context.qualifier.is_empty();
     match mode {

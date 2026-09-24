@@ -224,9 +224,13 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
             );
         }
         Intent::Routine => push_functions(&mut items, catalog, prefix),
-        // A name being made up: nothing to look up, but the next clause may be what is
-        // being typed.
-        Intent::Alias => push_keywords(&mut items, AFTER_TABLE, prefix),
+        // A name being made up, or the next clause: `from venda or` is ORDER BY on its
+        // way. Only clauses the letters start, so an alias rarely brings any up.
+        Intent::Alias => {
+            push_keywords(&mut items, AFTER_TABLE, prefix);
+            let typed = prefix.to_ascii_lowercase();
+            items.retain(|item| item.label.to_ascii_lowercase().starts_with(&typed));
+        }
         Intent::Keyword => {
             // Nothing recognised, so nothing is ruled out.
             push_tables(&mut items, catalog, prefix, None);
@@ -448,14 +452,15 @@ fn push_builtins(items: &mut Vec<CompletionItem>, prefix: &str) {
     }
 }
 
+/// Keywords always go in capitals, however they were typed: the editor writes them that
+/// way.
 fn push_keywords(items: &mut Vec<CompletionItem>, words: &[&str], prefix: &str) {
-    let upper = shouted(prefix);
     for keyword in words {
         let Some(score) = rank::match_score(keyword, prefix) else {
             continue;
         };
         items.push(CompletionItem {
-            label: cased(keyword, upper),
+            label: keyword.to_ascii_uppercase(),
             kind: CompletionKind::Keyword,
             detail: None,
             target_id: None,

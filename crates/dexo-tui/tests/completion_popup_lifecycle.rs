@@ -110,7 +110,7 @@ fn the_popup_opens_below_the_cursor_line() {
         "the popup border is drawn on the cursor line:\n{frame}"
     );
     assert!(
-        frame.contains("select"),
+        frame.contains("SELECT"),
         "the popup is not on screen:\n{frame}"
     );
 }

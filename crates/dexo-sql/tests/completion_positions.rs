@@ -196,7 +196,33 @@ fn where_a_name_is_being_declared_nothing_opens_on_its_own() {
     }
     // Asked for, the next clause is on offer.
     let found = labels("select * from users w|");
-    assert_eq!(found.first().map(String::as_str), Some("where"));
+    assert_eq!(found.first().map(String::as_str), Some("WHERE"));
+}
+
+/// `from venda or` offered nothing until Ctrl+Space: after a table only the alias was
+/// expected. Two letters that start a clause bring it up.
+#[test]
+fn the_clause_after_a_table_comes_up_while_typing() {
+    for (sample, first) in [
+        ("select * from users or|", "ORDER BY"),
+        ("select * from users u or|", "ORDER BY"),
+        ("select * from users wh|", "WHERE"),
+        ("select * from users u le|", "LEFT JOIN"),
+        ("select * from users li|", "LIMIT"),
+        ("select * from users where id = 1 or|", "OR"),
+        ("select * from users where id = 1 ord|", "ORDER BY"),
+        ("select status from orders group by status or|", "OR"),
+    ] {
+        assert!(opens_while_typing(sample), "{sample}");
+        assert_eq!(
+            labels(sample).first().map(String::as_str),
+            Some(first),
+            "{sample}"
+        );
+    }
+    // An alias that starts no clause brings nothing up.
+    assert!(labels("select * from users usr|").is_empty());
+    assert!(!opens_while_typing("select * from users u|"));
 }
 
 #[test]
@@ -239,11 +265,11 @@ fn other_statements_do_not_leak_in() {
 }
 
 #[test]
-fn keywords_follow_the_case_being_typed() {
-    let found = labels("SEL|");
-    assert!(found.contains(&"SELECT".into()), "{found:?}");
-    let found = labels("sel|");
-    assert!(found.contains(&"select".into()), "{found:?}");
+fn keywords_are_offered_in_capitals_however_they_are_typed() {
+    for sample in ["SEL|", "sel|", "Sel|"] {
+        let found = labels(sample);
+        assert!(found.contains(&"SELECT".into()), "{sample}: {found:?}");
+    }
 }
 
 #[test]

@@ -69,10 +69,10 @@ fn typing_opens_completion_and_tab_replaces_token() {
             .editor
             .completions
             .iter()
-            .any(|item| item.label == "select")
+            .any(|item| item.label == "SELECT")
     );
     update(&mut model, key(KeyCode::Tab));
-    assert_eq!(model.active_document().text(), "select");
+    assert_eq!(model.active_document().text(), "SELECT");
     assert!(!model.editor.completion_open);
 }
 

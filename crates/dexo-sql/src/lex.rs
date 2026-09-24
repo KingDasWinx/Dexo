@@ -188,6 +188,122 @@ pub fn suppressed_at(sql: &str, cursor: usize, dialect: Dialect) -> bool {
         .any(|token| token.holds(sql, cursor))
 }
 
+/// Whether `word` is an SQL keyword that can never be a bare name: the formatter
+/// capitalizes it, the highlighter colours it even where the grammar lost its way, and
+/// the editor capitalizes it as it is typed. Reserved in MySQL as well as PostgreSQL,
+/// or too odd a name to find on a table -- a MySQL table name is case-sensitive, so a
+/// word that could be one must never change case.
+pub fn is_reserved(word: &str) -> bool {
+    RESERVED
+        .binary_search_by(|reserved| cmp_ignore_case(reserved, word))
+        .is_ok()
+}
+
+fn cmp_ignore_case(reserved: &str, word: &str) -> std::cmp::Ordering {
+    reserved
+        .bytes()
+        .cmp(word.bytes().map(|byte| byte.to_ascii_lowercase()))
+}
+
+/// Sorted: looked up for every word on every keystroke.
+const RESERVED: &[&str] = &[
+    "add",
+    "all",
+    "alter",
+    "analyze",
+    "and",
+    "any",
+    "as",
+    "asc",
+    "begin",
+    "between",
+    "by",
+    "case",
+    "cast",
+    "check",
+    "column",
+    "commit",
+    "constraint",
+    "create",
+    "cross",
+    "current_date",
+    "current_time",
+    "current_timestamp",
+    "database",
+    "default",
+    "delete",
+    "desc",
+    "distinct",
+    "drop",
+    "else",
+    "end",
+    "except",
+    "exists",
+    "explain",
+    "extract",
+    "false",
+    "fetch",
+    "for",
+    "foreign",
+    "from",
+    "function",
+    "grant",
+    "group",
+    "having",
+    "ilike",
+    "in",
+    "index",
+    "inner",
+    "insert",
+    "intersect",
+    "interval",
+    "into",
+    "is",
+    "join",
+    "key",
+    "lateral",
+    "left",
+    "like",
+    "limit",
+    "natural",
+    "not",
+    "null",
+    "nulls",
+    "offset",
+    "on",
+    "or",
+    "order",
+    "outer",
+    "over",
+    "partition",
+    "primary",
+    "procedure",
+    "recursive",
+    "references",
+    "returning",
+    "right",
+    "rollback",
+    "schema",
+    "select",
+    "set",
+    "some",
+    "table",
+    "then",
+    "trigger",
+    "true",
+    "truncate",
+    "union",
+    "unique",
+    "update",
+    "using",
+    "values",
+    "view",
+    "when",
+    "where",
+    "window",
+    "with",
+];
+
 fn is_ident_start(byte: u8) -> bool {
     byte.is_ascii_alphabetic() || byte == b'_' || byte >= 0x80
 }
@@ -202,4 +318,14 @@ fn take_while(bytes: &[u8], from: usize, predicate: impl Fn(u8) -> bool) -> usiz
         end += 1;
     }
     end
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn reserved_words_are_sorted_for_the_binary_search() {
+        assert!(super::RESERVED.windows(2).all(|pair| pair[0] < pair[1]));
+        assert!(super::is_reserved("SELECT") && super::is_reserved("Order"));
+        assert!(!super::is_reserved("status") && !super::is_reserved("level"));
+    }
 }
