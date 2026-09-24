@@ -521,6 +521,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
     match key.code {
         KeyCode::Char(ch) if !ctrl => {
             insert_text(model, &ch.to_string());
@@ -563,13 +564,20 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             move_snippet_stop(model, -1);
             true
         }
+        // Ctrl (Alt on macOS) takes the word Ctrl+Left would cross. Terminals without the
+        // extended keyboard protocol send Ctrl+Backspace as ^H, which arrives as Ctrl+H.
         KeyCode::Backspace => {
-            backspace(model);
+            backspace(model, ctrl || alt);
+            suggest_live(model);
+            true
+        }
+        KeyCode::Char('h') if ctrl => {
+            backspace(model, true);
             suggest_live(model);
             true
         }
         KeyCode::Delete => {
-            delete(model);
+            delete(model, ctrl || alt);
             true
         }
         KeyCode::Left => {
@@ -686,7 +694,7 @@ fn insert_newline(model: &mut Model) {
     reveal_cursor(doc);
 }
 
-fn backspace(model: &mut Model) {
+fn backspace(model: &mut Model, word: bool) {
     let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
@@ -695,15 +703,20 @@ fn backspace(model: &mut Model) {
         let _ = doc.sql.delete(range);
     } else {
         let cursor = doc.sql.cursor();
-        if cursor > 0 {
-            let _ = doc.sql.delete(cursor - 1..cursor);
+        let start = if word {
+            word_jump(&doc.sql.text(), cursor, -1)
+        } else {
+            cursor.saturating_sub(1)
+        };
+        if start < cursor {
+            let _ = doc.sql.delete(start..cursor);
         }
     }
     reveal_cursor(doc);
     shift_snippet_stops(model, mark);
 }
 
-fn delete(model: &mut Model) {
+fn delete(model: &mut Model, word: bool) {
     let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
@@ -712,9 +725,14 @@ fn delete(model: &mut Model) {
         let _ = doc.sql.delete(range);
     } else {
         let cursor = doc.sql.cursor();
-        let len = doc.sql.text().chars().count();
-        if cursor < len {
-            let _ = doc.sql.delete(cursor..cursor + 1);
+        let text = doc.sql.text();
+        let end = if word {
+            word_jump(&text, cursor, 1)
+        } else {
+            (cursor + 1).min(text.chars().count())
+        };
+        if cursor < end {
+            let _ = doc.sql.delete(cursor..end);
         }
     }
     reveal_cursor(doc);
