@@ -189,6 +189,10 @@ Local state is a single SQLite database with versioned migrations.
 - [Security policy](SECURITY.md)
 - [Code of conduct](CODE_OF_CONDUCT.md)
 
+## Reporting bugs
+
+Found a bug or something that behaves oddly? Tell us through the [bug report form](https://forms.gle/gw1i6tGgVsJsgCxGA). Security issues go privately through [SECURITY.md](SECURITY.md) instead.
+
 ## License
 
 Dexo is dual-licensed under the MIT License or the Apache License 2.0, at your option.
