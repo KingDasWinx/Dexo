@@ -453,6 +453,8 @@ profile = "default"
 "ctrl+y" = "editor.redo"
 "ctrl+a" = "editor.select_all"
 "ctrl+v" = "editor.paste"
+"ctrl+c" = "editor.copy"
+"ctrl+x" = "editor.cut"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 [results]
@@ -527,6 +529,8 @@ profile = "vim"
 "ctrl+y" = "editor.redo"
 "ctrl+a" = "editor.select_all"
 "ctrl+v" = "editor.paste"
+"ctrl+c" = "editor.copy"
+"ctrl+x" = "editor.cut"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 [explorer]
@@ -609,6 +613,7 @@ profile = "emacs"
 "ctrl+y" = "editor.redo"
 "ctrl+a" = "editor.select_all"
 "ctrl+v" = "editor.paste"
+"alt+w" = "editor.copy"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 [explorer]
@@ -727,7 +732,7 @@ mod tests {
                 );
             }
 
-            for chord in ["f5", "f8", "ctrl+c"] {
+            for chord in ["f5", "f8"] {
                 assert_eq!(
                     keymap
                         .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
@@ -737,7 +742,42 @@ mod tests {
                     keymap.name
                 );
             }
+            // Ctrl+C copies now; what must never come back is Ctrl+C running a query.
+            let ctrl_c = keymap
+                .resolve(&parse_chord("ctrl+c").unwrap(), KeyContext::Editor)
+                .unwrap();
+            assert!(
+                !ctrl_c.is_some_and(|command| command.starts_with("query.")),
+                "ctrl+c runs {ctrl_c:?} in profile {}",
+                keymap.name
+            );
         }
+    }
+
+    /// Emacs keeps Ctrl+C as the prefix of Ctrl+C Ctrl+C, so it copies with its own
+    /// Alt+W; the other profiles take the usual Ctrl+C and Ctrl+X.
+    #[test]
+    fn every_profile_can_copy_from_the_editor() {
+        for (keymap, chord) in [
+            (Keymap::default_profile(), "ctrl+c"),
+            (Keymap::vim_profile(), "ctrl+c"),
+            (Keymap::emacs_profile(), "alt+w"),
+        ] {
+            assert_eq!(
+                keymap
+                    .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
+                    .unwrap(),
+                Some("editor.copy"),
+                "profile {}",
+                keymap.name
+            );
+        }
+        assert_eq!(
+            Keymap::default_profile()
+                .resolve(&parse_chord("ctrl+x").unwrap(), KeyContext::Editor)
+                .unwrap(),
+            Some("editor.cut")
+        );
     }
 
     #[test]

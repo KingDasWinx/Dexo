@@ -565,6 +565,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::PasteFromClipboard => vec![Effect::ReadClipboard],
+        Action::EditorCopy => crate::screens::editor::copy(model)
+            .map(|text| vec![Effect::CopyToClipboard { text }])
+            .unwrap_or_default(),
+        Action::EditorCut => {
+            let effects = crate::screens::editor::cut(model)
+                .map(|text| vec![Effect::CopyToClipboard { text }])
+                .unwrap_or_default();
+            crate::screens::editor::refresh_intelligence(model, false);
+            effects
+        }
         Action::MoveDocumentTabCursor(delta) => {
             model.move_tab_cursor(delta);
             Vec::new()

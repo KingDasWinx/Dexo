@@ -67,6 +67,9 @@ pub enum Action {
     Paste(String),
     /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
     PasteFromClipboard,
+    /// The selection, or the line under the cursor when nothing is selected.
+    EditorCopy,
+    EditorCut,
     /// The answer to the unsaved-changes prompt.
     ResolveClose(crate::model::CloseChoice),
     DuplicateConnection,

@@ -739,6 +739,51 @@ fn delete(model: &mut Model, word: bool) {
     shift_snippet_stops(model, mark);
 }
 
+/// What Ctrl+C and Ctrl+X take: the selection, or the whole line under the cursor with
+/// its newline when nothing is selected -- the VS Code rule, so a bare Ctrl+C on a line
+/// still copies it.
+fn clipboard_range(doc: &EditorDocument) -> Option<std::ops::Range<usize>> {
+    if let Some(range) = doc.selection() {
+        return (!range.is_empty()).then_some(range);
+    }
+    let text = doc.sql.text();
+    let (start, end) = line_bounds(&text, doc.sql.cursor());
+    let end = (end + 1).min(text.chars().count());
+    (start < end).then_some(start..end)
+}
+
+pub fn copy(model: &Model) -> Option<String> {
+    let doc = model.active_document();
+    let range = clipboard_range(doc)?;
+    Some(
+        doc.sql
+            .text()
+            .chars()
+            .skip(range.start)
+            .take(range.len())
+            .collect(),
+    )
+}
+
+pub fn cut(model: &mut Model) -> Option<String> {
+    let mark = edit_mark(model);
+    end_typing(model);
+    let doc = model.active_document_mut();
+    let range = clipboard_range(doc)?;
+    let text = doc
+        .sql
+        .text()
+        .chars()
+        .skip(range.start)
+        .take(range.len())
+        .collect();
+    doc.anchor = None;
+    let _ = doc.sql.delete(range);
+    reveal_cursor(doc);
+    shift_snippet_stops(model, mark);
+    Some(text)
+}
+
 pub fn undo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();

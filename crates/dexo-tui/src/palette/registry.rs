@@ -1065,6 +1065,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::EditorRedo),
         },
         CommandSpec {
+            id: "editor.copy",
+            title: "Copy",
+            keywords: &["clipboard", "selection", "line"],
+            shortcut: Some("Ctrl+C"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorCopy),
+        },
+        CommandSpec {
+            id: "editor.cut",
+            title: "Cut",
+            keywords: &["clipboard", "selection", "line"],
+            shortcut: Some("Ctrl+X"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditorCut),
+        },
+        CommandSpec {
             id: "editor.paste",
             title: "Paste",
             keywords: &["clipboard", "insert"],
