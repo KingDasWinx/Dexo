@@ -179,7 +179,7 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
                         "Enter connect  a actions  n new  e edit"
                     }
                 } else if crate::screens::explorer::opens_table_data(&node.kind) {
-                    "Enter open table  a actions"
+                    "Enter expand  o open  a actions"
                 } else {
                     "Enter expand  a actions"
                 }

@@ -9,6 +9,9 @@ use crate::model::{Focus, Model};
 use crate::screens::editor::line_col_of;
 use crate::theme::Role;
 
+/// Columns the line numbers and the statement marker take, left of the text.
+pub const GUTTER: u16 = 5;
+
 pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if area.width == 0 || area.height == 0 {
         return;
@@ -44,7 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     } else {
         text.split('\n').collect()
     };
-    let gutter = 5u16;
+    let gutter = GUTTER;
     let text_width = inner.width.saturating_sub(gutter);
     let sel = doc.selection();
     let cursor = doc.cursor();

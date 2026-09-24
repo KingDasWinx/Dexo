@@ -174,6 +174,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.editor.snippet_open {
         render_snippets(frame, model, hits);
     }
+    if model.connections.delete_target.is_some() {
+        render_delete_connection(frame, model, hits);
+    }
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
@@ -1145,8 +1148,10 @@ fn render_ddl_preview(
 }
 
 fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
-    let width = area.width.clamp(10, max_width);
-    let height = area.height.clamp(6, max_height);
+    // At least 10x6 when the screen has it, and never more than the screen. `clamp`
+    // panicked on a popup asking for fewer rows than the floor.
+    let width = area.width.min(max_width.max(10));
+    let height = area.height.min(max_height.max(6));
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 3;
     Rect::new(x, y, width, height)
@@ -1360,83 +1365,122 @@ fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     });
 }
 
+/// The saved connections, sized to them: the list scrolls to keep the selection in
+/// view once there are more than fit, and the hints stay on screen underneath.
 fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 72, 18);
-    let lines = model.connections.lines(model.active_session);
+    let area = frame.area();
+    let screen = &model.connections;
+    let profiles = screen.profile_lines(model.active_session);
+    // The popup is 72 wide at most, 70 inside its borders.
+    let footer = screen.footer_lines((area.width.min(72) as usize).saturating_sub(2));
+    // Borders, the blank line above the hints, and a row of air above and below.
+    let chrome = 2 + 1 + footer.len();
+    let room = (area.height as usize).saturating_sub(chrome + 2).max(1);
+    let rows = profiles.len().clamp(1, room);
+    let offset = scroll_to_selection(screen.selected_profile, 0, profiles.len(), rows);
+    let mut lines: Vec<String> = profiles.into_iter().skip(offset).take(rows).collect();
+    lines.push(String::new());
+    lines.extend(footer);
+    let popup = centered(area, 72, (lines.len() + 2) as u16);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Connections"),
+        overlay_block(model, "Connections"),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    let buttons = [
+        None,
+        Some(HitButton::New),
+        Some(HitButton::Edit),
+        Some(HitButton::Duplicate),
+        Some(HitButton::Test),
+        Some(HitButton::Delete),
+        Some(HitButton::CloseSession),
+    ];
     for_popup_lines(popup, &lines, |i, line, rect| {
-        if i < model.connections.profiles.len() {
-            hits.register(HitTarget::ListRow(i), rect);
+        if i < rows && offset + i < screen.profiles.len() {
+            hits.register(HitTarget::ListRow(offset + i), rect);
         }
-        if line.contains("keep secrets") {
-            register_label(
-                hits,
-                rect,
-                line,
-                "k keep secrets",
-                HitTarget::Button(HitButton::KeepSecrets),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "d delete secrets",
-                HitTarget::Button(HitButton::DeleteSecrets),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "esc cancel",
-                HitTarget::Button(HitButton::Cancel),
-            );
-        }
-        if line.contains(" n new ") || line.contains("n new") {
-            register_label(hits, rect, line, "n new", HitTarget::Button(HitButton::New));
-            register_label(
-                hits,
-                rect,
-                line,
-                "e edit",
-                HitTarget::Button(HitButton::Edit),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "d duplicate",
-                HitTarget::Button(HitButton::Duplicate),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "t test",
-                HitTarget::Button(HitButton::Test),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "x delete",
-                HitTarget::Button(HitButton::Delete),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "c close",
-                HitTarget::Button(HitButton::CloseSession),
-            );
+        if i > rows {
+            for (label, button) in crate::screens::connections::HINTS.iter().zip(buttons) {
+                if let Some(button) = button {
+                    register_label(hits, rect, line, label, HitTarget::Button(button));
+                }
+            }
         }
     });
+}
+
+/// "Delete connection", drawn like "Unsaved changes": sized to its text, the focused
+/// button marked with `>` so it reads without colour, Cancel focused first.
+fn render_delete_connection(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    use crate::screens::connections::DeleteChoice;
+    let area = frame.area();
+    let Some(target) = &model.connections.delete_target else {
+        return;
+    };
+    if area.width < 20 || area.height < 7 {
+        return;
+    }
+    let mut name: String = target.name.chars().take(40).collect();
+    if target.name.chars().count() > 40 {
+        name.push('…');
+    }
+    let buttons = [
+        (DeleteChoice::Delete, "[Delete]", HitButton::ConfirmDelete),
+        (DeleteChoice::Cancel, "[Cancel]", HitButton::Cancel),
+    ];
+    let footer: String = buttons
+        .iter()
+        .map(|(choice, label, _)| {
+            let marker = if *choice == model.connections.delete_choice {
+                ">"
+            } else {
+                " "
+            };
+            format!("{marker}{label}")
+        })
+        .collect::<Vec<_>>()
+        .join("  ");
+    let mut notes = vec!["Its saved password is removed as well.".to_string()];
+    if model.connections.session_for(&target.name).is_some() {
+        notes.push("Its open session is closed.".to_string());
+    }
+    let mut lines = vec![format!("Delete \"{name}\"? This cannot be undone.")];
+    lines.extend(notes.iter().cloned());
+    lines.push(String::new());
+    lines.push(footer.clone());
+    let content_width = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let width = (content_width as u16 + 4).min(area.width);
+    let popup = centered(area, width, lines.len() as u16 + 2);
+    let warning = model.theme.style(Role::Warning, model.capabilities);
+    let body: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            if (1..=notes.len()).contains(&index) {
+                Line::styled(text.clone(), warning)
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, "Delete connection")),
+        popup,
+    );
+    register_overlay(hits, popup);
+    let footer_row = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
+    for (_, label, button) in buttons {
+        register_label(hits, footer_row, &footer, label, HitTarget::Button(button));
+    }
 }
 
 fn render_projects(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
@@ -1955,11 +1999,13 @@ fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 /// Vim/Neovim pum: align with the cursor, prefer below, flip above if it does not fit.
 fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
-    let plan = LayoutPlan::for_area_with(area, Some(&model.effective_panes()));
+    // The same plan the frame is drawn with: without the tab row the editor sits one row
+    // higher, and the popup's top border landed on the cursor's own line.
+    let plan = LayoutPlan::for_area_with_document_tabs(area, Some(&model.effective_panes()), true);
     let inner = Block::bordered().inner(plan.content);
     let doc = model.active_document();
     let (line, col) = crate::screens::editor::line_col_of(&doc.text(), doc.cursor());
-    let gutter = 5u16;
+    let gutter = crate::widgets::editor::GUTTER;
     let cursor_x = inner
         .x
         .saturating_add(gutter)

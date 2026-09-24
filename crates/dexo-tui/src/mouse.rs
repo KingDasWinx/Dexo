@@ -62,8 +62,6 @@ pub enum HitButton {
     ApplyDiff,
     Export,
     Revoke,
-    KeepSecrets,
-    DeleteSecrets,
     ConfirmDirty,
     ToggleConnections,
     ConfirmDelete,
@@ -89,6 +87,7 @@ pub enum OverlayKind {
     ResultsMenu,
     NodeMenu,
     ClosePrompt,
+    DeleteConnection,
     Review,
     DdlPreview,
     SchemaDiff,
@@ -177,6 +176,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
     [
         // A question about losing work sits above everything else.
         (model.close_prompt.is_some(), OverlayKind::ClosePrompt),
+        (
+            model.connections.delete_target.is_some(),
+            OverlayKind::DeleteConnection,
+        ),
         (model.editor.snippet_open, OverlayKind::Snippets),
         (model.editor.history_open, OverlayKind::History),
         (model.editor.parameter_prompt, OverlayKind::Parameters),
@@ -222,8 +225,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
     .find_map(|(open, kind)| open.then_some(kind))
 }
 
+/// The completion popup is not modal: clicks and the wheel away from it still reach the
+/// editor, so the workbench keeps its hit areas while it is open.
 pub fn overlay_blocks_workbench(model: &Model) -> bool {
-    top_overlay(model).is_some()
+    !matches!(top_overlay(model), None | Some(OverlayKind::Completion))
 }
 
 pub fn popup_inner(popup: Rect) -> Rect {

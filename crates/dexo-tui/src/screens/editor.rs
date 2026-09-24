@@ -17,10 +17,16 @@ pub struct ParameterValue {
 pub struct EditorState {
     parser: ParserService,
     last_sql: String,
+    /// The document and revision `highlights` were built for. Anything else on screen
+    /// -- another tab, a file that just loaded -- means they belong to other text.
+    painted: Option<(String, u64)>,
+    /// Document, revision, and cursor the open popup was computed for. When any of them
+    /// moves without the popup being recomputed, it is answering a question nobody is
+    /// asking any more.
+    completion_at: Option<(String, u64, usize)>,
     pub highlights: Vec<HighlightSpan>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
-    pub format_preview: Option<String>,
     pub completion_open: bool,
     pub completion_selected: usize,
     pub completion_offset: usize,
@@ -41,7 +47,7 @@ pub struct EditorState {
     /// The completion catalog, and the catalog and explorer revisions it was built from.
     /// Building it walks and clones every object the connection has loaded, so doing it
     /// for every character typed is a cost the editor cannot afford.
-    catalog_key: Option<(u64, u64)>,
+    catalog_key: Option<(u64, u64, String)>,
     catalog_snapshot: Option<dexo_app::SnapshotCatalog>,
     /// The bytes the open popup's items would replace, and whether accepting a table
     /// there should bring an alias with it. Both come from the analysis that built the
@@ -54,6 +60,14 @@ pub struct EditorState {
     /// A search the popup would like answered from the catalog snapshot. Drained by
     /// `update`, which is the only place that can turn it into an effect.
     completion_request: Option<(String, u64, String)>,
+    /// Tables whose columns the statement needs and nothing in memory has, waiting to be
+    /// asked of the session; and every table already asked about, by generation and
+    /// lowercased name, so a table that has no columns is asked once, not per key.
+    columns_pending: Vec<dexo_driver_api::QualifiedName>,
+    columns_asked: std::collections::HashSet<String>,
+    /// Document, cursor, and revision the view was last scrolled for. The view follows
+    /// the cursor only when one of them moves, so the wheel can look elsewhere.
+    followed: Option<(String, usize, u64)>,
 }
 
 impl std::fmt::Debug for EditorState {
@@ -71,10 +85,11 @@ impl Clone for EditorState {
         Self {
             parser: ParserService::postgres(),
             last_sql: self.last_sql.clone(),
+            painted: self.painted.clone(),
+            completion_at: self.completion_at.clone(),
             highlights: self.highlights.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
-            format_preview: self.format_preview.clone(),
             completion_open: self.completion_open,
             completion_selected: self.completion_selected,
             completion_offset: self.completion_offset,
@@ -98,6 +113,9 @@ impl Clone for EditorState {
             snippet_stops: Vec::new(),
             snippet_stop: 0,
             completion_request: None,
+            columns_pending: Vec::new(),
+            columns_asked: std::collections::HashSet::new(),
+            followed: None,
         }
     }
 }
@@ -107,7 +125,6 @@ impl PartialEq for EditorState {
         self.highlights == other.highlights
             && self.parameters == other.parameters
             && self.completions == other.completions
-            && self.format_preview == other.format_preview
             && self.snippets == other.snippets
             && self.history == other.history
     }
@@ -124,10 +141,11 @@ impl Default for EditorState {
         Self {
             parser: ParserService::postgres(),
             last_sql: String::new(),
+            painted: None,
+            completion_at: None,
             highlights: Vec::new(),
             parameters: Vec::new(),
             completions: Vec::new(),
-            format_preview: None,
             completion_open: false,
             completion_selected: 0,
             completion_offset: 0,
@@ -144,13 +162,16 @@ impl Default for EditorState {
             history_selected: 0,
             history_confirm_clear: false,
             history_policy: HistoryPolicy::SqlOnly,
-            catalog: FakeCatalog::table("public.users", ["id", "email"]),
+            catalog: FakeCatalog::default(),
             catalog_key: None,
             catalog_snapshot: None,
             completion_replace: 0..0,
             snippet_stops: Vec::new(),
             snippet_stop: 0,
             completion_request: None,
+            columns_pending: Vec::new(),
+            columns_asked: std::collections::HashSet::new(),
+            followed: None,
         }
     }
 }
@@ -163,6 +184,74 @@ fn editor_dialect(model: &Model) -> Dialect {
     }
 }
 
+/// Rows and columns of text the editor pane shows, from the layout the frame is drawn
+/// with.
+fn text_area(model: &Model) -> Option<(usize, usize)> {
+    if model.width == 0 || model.height == 0 {
+        return None;
+    }
+    let plan = crate::layout::LayoutPlan::for_area_with_document_tabs(
+        ratatui::layout::Rect::new(0, 0, model.width, model.height),
+        Some(&model.effective_panes()),
+        true,
+    );
+    let inner = ratatui::widgets::Block::bordered().inner(plan.content);
+    let rows = inner.height as usize;
+    let cols = inner.width.saturating_sub(crate::widgets::editor::GUTTER) as usize;
+    (rows > 0 && cols > 0).then_some((rows, cols))
+}
+
+/// Scrolls just far enough to keep the cursor on screen, and only once it reaches an
+/// edge: the arrows walk to the last row or column before the text moves, as in any
+/// editor. It used to assume a pane 12 rows by 80 columns, so a taller one started
+/// scrolling halfway down.
+pub fn follow_cursor(model: &mut Model) {
+    let doc = model.active_document();
+    if doc.kind.is_table() || doc.kind.is_placeholder() {
+        return;
+    }
+    let key = (doc.id.clone(), doc.cursor(), doc.sql.revision());
+    if model.editor.followed.as_ref() == Some(&key) {
+        return;
+    }
+    let Some((rows, cols)) = text_area(model) else {
+        return;
+    };
+    model.editor.followed = Some(key);
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let (line, col) = line_col(&text, doc.sql.cursor());
+    if line < doc.viewport_line {
+        doc.viewport_line = line;
+    } else if line >= doc.viewport_line + rows {
+        doc.viewport_line = line + 1 - rows;
+    }
+    // The view scrolls in screen columns, which a wide character takes two of.
+    let x: usize = text
+        .split('\n')
+        .nth(line)
+        .unwrap_or("")
+        .chars()
+        .take(col)
+        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+        .sum();
+    if x < doc.viewport_column {
+        doc.viewport_column = x;
+    } else if x >= doc.viewport_column + cols {
+        doc.viewport_column = x + 1 - cols;
+    }
+}
+
+/// Whether the highlights on screen were built for the text the active document holds.
+pub fn highlights_are_current(model: &Model) -> bool {
+    let document = model.active_document();
+    model
+        .editor
+        .painted
+        .as_ref()
+        .is_some_and(|(id, revision)| *id == document.id && *revision == document.sql.revision())
+}
+
 pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let sql = model.active_document().text();
     let byte_cursor = model.active_document().byte_cursor();
@@ -170,6 +259,8 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     let parsed = model.editor.parser.parse_edited(&old, &sql);
     model.editor.last_sql = sql.clone();
     model.editor.highlights = parsed.highlights;
+    let document = model.active_document();
+    model.editor.painted = Some((document.id.clone(), document.sql.revision()));
     model.editor.parameters = named_parameters(&sql, editor_dialect(model))
         .into_iter()
         .map(|parameter| ParameterValue {
@@ -183,7 +274,8 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
-fn close_completion(model: &mut Model) {
+pub fn close_completion(model: &mut Model) {
+    model.editor.completion_at = None;
     model.editor.completions.clear();
     model.editor.completion_open = false;
     model.editor.completion_selected = 0;
@@ -193,12 +285,16 @@ fn close_completion(model: &mut Model) {
 /// Rebuilds the completion catalog only when something it is built from actually
 /// changed: a page of catalog objects arriving, or the user starring something.
 fn sync_catalog(model: &mut Model) {
-    let key = (model.catalog_revision, model.explorer.revision());
-    if model.editor.catalog_key == Some(key) {
+    let key = (
+        model.catalog_revision,
+        model.explorer.revision(),
+        model.connection.name.clone(),
+    );
+    if model.editor.catalog_key.as_ref() == Some(&key) {
         return;
     }
     model.editor.catalog_key = Some(key);
-    if model.catalog_objects.is_empty() {
+    if model.catalog_objects.is_empty() || model.catalog_connection != model.connection.name {
         model.editor.catalog_snapshot = None;
         return;
     }
@@ -240,22 +336,206 @@ fn apply_completions(model: &mut Model, sql: &str, byte_cursor: usize, live: boo
         Some(snapshot) => complete_with(&context, snapshot),
         None => complete_with(&context, &model.editor.catalog),
     };
+    model.editor.completion_replace = context.replace.clone();
+    // Before the empty check: an empty list is exactly when the answer is elsewhere.
+    request_more_objects(model, &context, items.len());
+    request_columns(model, &context);
     if items.is_empty() {
         close_completion(model);
+        // Nothing to show yet, but an answer is on its way: remember where it was asked,
+        // so it can open here when it lands.
+        if model.editor.completion_request.is_some() || !model.editor.columns_pending.is_empty() {
+            let document = model.active_document();
+            model.editor.completion_at = Some((
+                document.id.clone(),
+                document.sql.revision(),
+                document.cursor(),
+            ));
+        }
         return;
     }
-    model.editor.completion_replace = context.replace.clone();
-    request_more_objects(model, &context, items.len());
     model.editor.completions = items;
     model.editor.completion_open = true;
     model.editor.completion_selected = 0;
     model.editor.completion_offset = 0;
+    let document = model.active_document();
+    model.editor.completion_at = Some((
+        document.id.clone(),
+        document.sql.revision(),
+        document.cursor(),
+    ));
+}
+
+/// The popup belongs to one spot in one document. Moving the cursor, editing without
+/// recomputing (Delete, undo, a paste), or switching documents leaves it behind -- the
+/// dbx rule: it goes away, and typing brings it back.
+pub fn completion_went_stale(model: &Model) -> bool {
+    let document = model.active_document();
+    model
+        .editor
+        .completion_at
+        .as_ref()
+        .is_none_or(|(id, revision, cursor)| {
+            *id != document.id
+                || *revision != document.sql.revision()
+                || *cursor != document.cursor()
+        })
+}
+
+/// Whether a late answer still has somewhere to go: the popup is open, or it was asked
+/// for right here and had nothing to show yet.
+fn awaiting_answer(model: &Model) -> bool {
+    model.editor.completion_open
+        || (model.editor.completion_at.is_some() && !completion_went_stale(model))
+}
+
+/// Recomputes the popup after the catalog grew, if it is still wanted where it was.
+pub fn refresh_waiting_completion(model: &mut Model) {
+    if model.focus != crate::model::Focus::Editor || !awaiting_answer(model) {
+        return;
+    }
+    let sql = model.active_document().text();
+    let at = model.active_document().byte_cursor();
+    // An open popup was already asked for; a waiting one only opens if typing would.
+    let live = !model.editor.completion_open;
+    apply_completions(model, &sql, at, live);
+}
+
+/// Queues a column lookup for every table the statement names that completion holds no
+/// columns for: the sidebar and the snapshot only know what they have walked.
+fn request_columns(model: &mut Model, context: &dexo_sql::CursorContext) {
+    use dexo_sql::Intent;
+    model.editor.columns_pending.clear();
+    if !matches!(
+        context.intent,
+        Intent::Column
+            | Intent::JoinCondition
+            | Intent::AliasColumn
+            | Intent::InsertColumn
+            | Intent::UpdateColumn
+            | Intent::Schema
+    ) || model.active_session.is_none()
+        || !model.connection.ready
+    {
+        return;
+    }
+    let generation = model.session_generation;
+    // `venda.` before any FROM names a table too. If it is a schema instead, the lookup
+    // finds no columns, once.
+    let named = (context.intent == Intent::Schema)
+        .then(|| context.qualifier.split_last())
+        .flatten()
+        .map(|(name, rest)| dexo_sql::RowSource {
+            kind: dexo_sql::RowSourceKind::Table,
+            schema: rest.last().cloned(),
+            name: name.clone(),
+            alias: None,
+            depth: 0,
+        });
+    for source in context.row_sources.iter().chain(named.as_ref()) {
+        if !matches!(
+            source.kind,
+            dexo_sql::RowSourceKind::Table | dexo_sql::RowSourceKind::MutationTarget
+        ) {
+            continue;
+        }
+        let known = model
+            .editor
+            .catalog_snapshot
+            .as_ref()
+            .and_then(|snapshot| dexo_sql::completion::resolve_source(source, snapshot));
+        if known
+            .as_ref()
+            .is_some_and(|table| !table.columns.is_empty())
+        {
+            continue;
+        }
+        // The catalog's own name for the table when it has one: it carries the schema a
+        // bare `from users` leaves out. Without one the driver looks in the current one.
+        let target = match known {
+            Some(table) if !table.schema.is_empty() => {
+                dexo_driver_api::QualifiedName::new(None::<String>, Some(table.schema), table.name)
+            }
+            _ => dexo_driver_api::QualifiedName::new(
+                None::<String>,
+                source.schema.clone(),
+                source.name.clone(),
+            ),
+        };
+        let key = format!(
+            "{generation}:{}",
+            target.display_unquoted().to_ascii_lowercase()
+        );
+        if model.editor.columns_asked.insert(key) {
+            model.editor.columns_pending.push(target);
+        }
+    }
+}
+
+/// Folds columns the session answered into the catalog completion reads, under the
+/// table object that owns them -- or one made up for it when the sidebar never loaded
+/// that table.
+pub fn absorb_completion_columns(
+    model: &mut Model,
+    target: &dexo_driver_api::QualifiedName,
+    columns: &[String],
+) {
+    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    if columns.is_empty() {
+        return;
+    }
+    let owner = model
+        .catalog_objects
+        .iter()
+        .find(|object| {
+            matches!(
+                object.kind,
+                ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+            ) && object
+                .qualified_name
+                .object()
+                .eq_ignore_ascii_case(target.object())
+                && target.schema().is_none_or(|schema| {
+                    object
+                        .qualified_name
+                        .schema()
+                        .is_some_and(|own| own.eq_ignore_ascii_case(schema))
+                })
+        })
+        .map(|object| (object.id.clone(), object.qualified_name.clone()));
+    let mut objects = Vec::new();
+    let (parent, name) = match owner {
+        Some(found) => found,
+        None => {
+            let id = ObjectId::new(format!("completion:{}", target.display_unquoted()));
+            objects.push(CatalogObject::new(
+                id.clone(),
+                ObjectKind::Table,
+                target.clone(),
+                None,
+            ));
+            (id, target.clone())
+        }
+    };
+    for column in columns {
+        objects.push(CatalogObject::new(
+            ObjectId::new(format!("{}/completion-column:{column}", parent.as_ref())),
+            ObjectKind::Column,
+            QualifiedName::new(
+                None::<String>,
+                name.schema().map(str::to_string),
+                format!("{}.{column}", name.object()),
+            ),
+            Some(parent.clone()),
+        ));
+    }
+    model.absorb_catalog(&objects);
 }
 
 /// Asks the snapshot for more names when the objects in memory did not fill the list.
 /// The in-memory catalog only holds what has been expanded in the sidebar, so on a large
-/// database the table you want is usually not in it yet. Never for columns: those are
-/// answered from memory or not at all.
+/// database the table you want is usually not in it yet. Never for columns:
+/// `request_columns` asks the session for those.
 fn request_more_objects(model: &mut Model, context: &dexo_sql::CursorContext, found: usize) {
     model.editor.completion_request = None;
     let names = matches!(
@@ -281,17 +561,30 @@ fn request_more_objects(model: &mut Model, context: &dexo_sql::CursorContext, fo
 /// Turns a pending search into an effect. Separate from the analysis because only
 /// `update` can emit effects.
 pub fn take_completion_effects(model: &mut Model) -> Vec<crate::Effect> {
-    let Some((document, revision, query)) = model.editor.completion_request.take() else {
-        return Vec::new();
-    };
-    vec![crate::Effect::SearchCompletionObjects {
-        connection_id: model.connection.name.clone(),
-        database_name: crate::update::catalog_database(model),
-        document,
-        revision,
-        query,
-        limit: dexo_sql::rank::CAP,
-    }]
+    let mut effects = Vec::new();
+    if let Some(session) = model.active_session {
+        let generation = model.session_generation;
+        effects.extend(
+            std::mem::take(&mut model.editor.columns_pending)
+                .into_iter()
+                .map(|target| crate::Effect::LoadCompletionColumns {
+                    session,
+                    generation,
+                    target,
+                }),
+        );
+    }
+    if let Some((document, revision, query)) = model.editor.completion_request.take() {
+        effects.push(crate::Effect::SearchCompletionObjects {
+            connection_id: model.connection.name.clone(),
+            database_name: crate::update::catalog_database(model),
+            document,
+            revision,
+            query,
+            limit: dexo_sql::rank::CAP,
+        });
+    }
+    effects
 }
 
 /// Folds names that arrived from the snapshot into the open popup. They are late by
@@ -302,7 +595,7 @@ pub fn merge_completion_objects(
     revision: u64,
     objects: Vec<dexo_driver_api::CatalogObject>,
 ) {
-    if !model.editor.completion_open {
+    if !awaiting_answer(model) {
         return;
     }
     let current = model.active_document();
@@ -343,8 +636,12 @@ pub fn merge_completion_objects(
         model.editor.completion_selected,
         model.editor.completion_offset,
         model.editor.completions.len(),
-        8,
+        COMPLETION_ROWS,
     );
+    if !model.editor.completion_open {
+        model.editor.completion_open = true;
+        model.editor.completion_replace = context.replace.clone();
+    }
 }
 
 fn suggest_live(model: &mut Model) {
@@ -358,16 +655,39 @@ fn is_sensitive_name(name: &str) -> bool {
     lower.contains("password") || lower.contains("secret") || lower.contains("token")
 }
 
+/// Formats the selection, or the whole document without one, as one edit: it undoes
+/// in one step and the document stays the same file on the same connection. It used to
+/// replace the document with a new untitled one.
 pub fn apply_format(model: &mut Model) {
-    let sql = model.active_document().text();
-    match format_sql(&sql, editor_dialect(model)) {
-        Ok(formatted) => {
-            model.editor.format_preview = Some(formatted.clone());
-            model.set_sql(&formatted);
-            refresh_intelligence(model, false);
-        }
-        Err(error) => model.messages.error(error.to_string()),
+    let doc = model.active_document();
+    let text = doc.text();
+    let selection = doc.selection();
+    let range = selection.clone().unwrap_or(0..text.chars().count());
+    let source: String = text.chars().skip(range.start).take(range.len()).collect();
+    if source.trim().is_empty() {
+        return;
     }
+    let formatted = match format_sql(&source, editor_dialect(model)) {
+        Ok(formatted) => formatted,
+        Err(error) => {
+            model.messages.error(error.to_string());
+            return;
+        }
+    };
+    if formatted == source {
+        return;
+    }
+    end_typing(model);
+    model.editor.snippet_stops.clear();
+    let doc = model.active_document_mut();
+    if doc.sql.replace_chars(range.clone(), &formatted).is_err() {
+        return;
+    }
+    // A formatted selection stays selected; otherwise the cursor lands after the text,
+    // as in dbx.
+    doc.anchor = selection.map(|_| range.start);
+    let _ = doc.sql.set_cursor(range.start + formatted.chars().count());
+    refresh_intelligence(model, false);
 }
 
 pub fn insert_active_snippet(model: &mut Model) {
@@ -420,7 +740,6 @@ fn select_snippet_stop(model: &mut Model) {
         Some(stop.start)
     };
     let _ = doc.sql.set_cursor(stop.end);
-    reveal_cursor(doc);
 }
 
 /// Moves to the next hole, or leaves the snippet when there are none left. Returns
@@ -456,11 +775,26 @@ pub fn accept_completion(model: &mut Model) {
         _ => dialect.quote_if_needed(&item.label),
     };
     let range = model.editor.completion_replace.clone();
+    // A function comes with its parentheses and the cursor between them, unless they
+    // are already there.
+    let call = item.kind == dexo_sql::CompletionKind::Function && {
+        let sql = model.active_document().text();
+        !sql[range.end.min(sql.len())..].starts_with('(')
+    };
+    let text = if call { format!("{text}()") } else { text };
     replace_range(model, range, &text);
+    if call {
+        let doc = model.active_document_mut();
+        let inside = doc.sql.cursor().saturating_sub(1);
+        let _ = doc.sql.set_cursor(inside);
+    }
     model.editor.completion_open = false;
     model.editor.completions.clear();
     refresh_intelligence(model, false);
 }
+
+/// Rows the completion popup shows at once.
+pub const COMPLETION_ROWS: usize = 8;
 
 pub fn move_completion(model: &mut Model, delta: i32) {
     if model.editor.completions.is_empty() {
@@ -473,7 +807,7 @@ pub fn move_completion(model: &mut Model, delta: i32) {
         model.editor.completion_selected,
         model.editor.completion_offset,
         model.editor.completions.len(),
-        8,
+        COMPLETION_ROWS,
     );
 }
 
@@ -489,7 +823,6 @@ fn replace_range(model: &mut Model, range: std::ops::Range<usize>, text: &str) {
     }
     doc.anchor = None;
     let _ = doc.sql.replace_bytes(range, text);
-    reveal_cursor(doc);
 }
 
 pub fn submit_parameters(model: &mut Model) {
@@ -521,9 +854,24 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    // Sideways keys mean "not this": they close the popup even when the cursor has
+    // nowhere to go, like Right at the end of the text.
+    let sideways = matches!(
+        key.code,
+        KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
+    ) || (matches!(key.code, KeyCode::Up | KeyCode::Down)
+        && !key.modifiers.is_empty());
+    if sideways {
+        close_completion(model);
+    }
     match key.code {
         KeyCode::Char(ch) if !ctrl => {
+            let end = word_end(model);
             insert_text(model, &ch.to_string());
+            if !(ch.is_alphanumeric() || matches!(ch, '_' | '$' | '.')) {
+                capitalize_keyword(model, end);
+            }
             suggest_live(model);
             true
         }
@@ -532,30 +880,51 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             true
         }
         KeyCode::Enter => {
+            let end = word_end(model);
             insert_newline(model);
+            capitalize_keyword(model, end);
             true
         }
         KeyCode::Tab if model.editor.completion_open => {
             accept_completion(model);
             true
         }
-        KeyCode::Up if model.editor.completion_open => {
+        // Only bare arrows walk the list; Shift+Up still extends the selection.
+        KeyCode::Up if model.editor.completion_open && key.modifiers.is_empty() => {
             move_completion(model, -1);
             true
         }
-        KeyCode::Down if model.editor.completion_open => {
+        KeyCode::Down if model.editor.completion_open && key.modifiers.is_empty() => {
             move_completion(model, 1);
+            true
+        }
+        KeyCode::PageUp if model.editor.completion_open => {
+            move_completion(model, -(COMPLETION_ROWS as i32));
+            true
+        }
+        KeyCode::PageDown if model.editor.completion_open => {
+            move_completion(model, COMPLETION_ROWS as i32);
             true
         }
         KeyCode::Esc if model.editor.completion_open => {
             model.editor.completion_open = false;
             true
         }
+        KeyCode::PageUp => {
+            page(model, -1, shift);
+            true
+        }
+        KeyCode::PageDown => {
+            page(model, 1, shift);
+            true
+        }
         KeyCode::Tab => {
             // Tab has three owners here, in this order: the open popup takes it, then an
             // active snippet, and only then does it indent.
             if !move_snippet_stop(model, 1) {
+                let end = word_end(model);
                 insert_text(model, "    ");
+                capitalize_keyword(model, end);
             }
             true
         }
@@ -563,13 +932,20 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             move_snippet_stop(model, -1);
             true
         }
+        // Ctrl (Alt on macOS) takes the word Ctrl+Left would cross. Terminals without the
+        // extended keyboard protocol send Ctrl+Backspace as ^H, which arrives as Ctrl+H.
         KeyCode::Backspace => {
-            backspace(model);
+            backspace(model, ctrl || alt);
+            suggest_live(model);
+            true
+        }
+        KeyCode::Char('h') if ctrl => {
+            backspace(model, true);
             suggest_live(model);
             true
         }
         KeyCode::Delete => {
-            delete(model);
+            delete(model, ctrl || alt);
             true
         }
         KeyCode::Left => {
@@ -674,8 +1050,55 @@ fn insert_text(model: &mut Model, text: &str) {
     } else {
         doc.sql.insert(doc.sql.cursor(), text)
     };
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
+}
+
+/// Where a word being finished by the next key ends, in characters -- the cursor, unless
+/// that key replaces a selection.
+fn word_end(model: &Model) -> Option<usize> {
+    let doc = model.active_document();
+    doc.selection().is_none().then(|| doc.cursor())
+}
+
+/// Writes the reserved word that ends at `end` in capitals, once a key has finished it:
+/// `select ` becomes `SELECT `. Left as typed inside a string or a comment, after a dot
+/// (`t.order` is a column), as part of a `:param` or `$1`, and in quotes. Same length,
+/// so the cursor and every position the editor holds stay where they are.
+fn capitalize_keyword(model: &mut Model, end: Option<usize>) {
+    let Some(end) = end else {
+        return;
+    };
+    let dialect = editor_dialect(model);
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let byte_end = text
+        .char_indices()
+        .nth(end)
+        .map_or(text.len(), |(at, _)| at);
+    let start = text[..byte_end]
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| !(ch.is_ascii_alphanumeric() || *ch == '_'))
+        .map_or(0, |(at, ch)| at + ch.len_utf8());
+    let word = &text[start..byte_end];
+    if word.is_empty()
+        || !dexo_sql::is_reserved(word)
+        || word.bytes().all(|byte| !byte.is_ascii_lowercase())
+    {
+        return;
+    }
+    let before = text[..start].chars().next_back();
+    if before.is_some_and(|ch| ch.is_alphanumeric() || "._$:@\"`'".contains(ch))
+        || dexo_sql::suppressed_at(&text, byte_end, dialect)
+    {
+        return;
+    }
+    let upper = word.to_ascii_uppercase();
+    let from = end - word.len();
+    let cursor = doc.sql.cursor();
+    if doc.sql.replace_chars(from..end, &upper).is_ok() {
+        let _ = doc.sql.set_cursor(cursor);
+    }
 }
 
 fn insert_newline(model: &mut Model) {
@@ -683,10 +1106,9 @@ fn insert_newline(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.insert(doc.sql.cursor(), &format!("\n{indent}"));
-    reveal_cursor(doc);
 }
 
-fn backspace(model: &mut Model) {
+fn backspace(model: &mut Model, word: bool) {
     let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
@@ -695,15 +1117,19 @@ fn backspace(model: &mut Model) {
         let _ = doc.sql.delete(range);
     } else {
         let cursor = doc.sql.cursor();
-        if cursor > 0 {
-            let _ = doc.sql.delete(cursor - 1..cursor);
+        let start = if word {
+            word_jump(&doc.sql.text(), cursor, -1)
+        } else {
+            cursor.saturating_sub(1)
+        };
+        if start < cursor {
+            let _ = doc.sql.delete(start..cursor);
         }
     }
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
 }
 
-fn delete(model: &mut Model) {
+fn delete(model: &mut Model, word: bool) {
     let mark = edit_mark(model);
     end_typing(model);
     let doc = model.active_document_mut();
@@ -712,27 +1138,73 @@ fn delete(model: &mut Model) {
         let _ = doc.sql.delete(range);
     } else {
         let cursor = doc.sql.cursor();
-        let len = doc.sql.text().chars().count();
-        if cursor < len {
-            let _ = doc.sql.delete(cursor..cursor + 1);
+        let text = doc.sql.text();
+        let end = if word {
+            word_jump(&text, cursor, 1)
+        } else {
+            (cursor + 1).min(text.chars().count())
+        };
+        if cursor < end {
+            let _ = doc.sql.delete(cursor..end);
         }
     }
-    reveal_cursor(doc);
     shift_snippet_stops(model, mark);
+}
+
+/// What Ctrl+C and Ctrl+X take: the selection, or the whole line under the cursor with
+/// its newline when nothing is selected -- the VS Code rule, so a bare Ctrl+C on a line
+/// still copies it.
+fn clipboard_range(doc: &EditorDocument) -> Option<std::ops::Range<usize>> {
+    if let Some(range) = doc.selection() {
+        return (!range.is_empty()).then_some(range);
+    }
+    let text = doc.sql.text();
+    let (start, end) = line_bounds(&text, doc.sql.cursor());
+    let end = (end + 1).min(text.chars().count());
+    (start < end).then_some(start..end)
+}
+
+pub fn copy(model: &Model) -> Option<String> {
+    let doc = model.active_document();
+    let range = clipboard_range(doc)?;
+    Some(
+        doc.sql
+            .text()
+            .chars()
+            .skip(range.start)
+            .take(range.len())
+            .collect(),
+    )
+}
+
+pub fn cut(model: &mut Model) -> Option<String> {
+    let mark = edit_mark(model);
+    end_typing(model);
+    let doc = model.active_document_mut();
+    let range = clipboard_range(doc)?;
+    let text = doc
+        .sql
+        .text()
+        .chars()
+        .skip(range.start)
+        .take(range.len())
+        .collect();
+    doc.anchor = None;
+    let _ = doc.sql.delete(range);
+    shift_snippet_stops(model, mark);
+    Some(text)
 }
 
 pub fn undo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.undo();
-    reveal_cursor(doc);
 }
 
 pub fn redo(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let _ = doc.sql.redo();
-    reveal_cursor(doc);
 }
 
 pub fn select_all(model: &mut Model) {
@@ -757,7 +1229,6 @@ fn move_chars(model: &mut Model, delta: i32, shift: bool, word: bool) {
         cursor = (cursor + 1).min(len);
     }
     apply_move(doc, cursor, shift);
-    reveal_cursor(doc);
 }
 
 fn move_line_edge(model: &mut Model, home: bool, shift: bool) {
@@ -766,7 +1237,6 @@ fn move_line_edge(model: &mut Model, home: bool, shift: bool) {
     let text = doc.sql.text();
     let (line_start, line_end) = line_bounds(&text, doc.sql.cursor());
     apply_move(doc, if home { line_start } else { line_end }, shift);
-    reveal_cursor(doc);
 }
 
 fn move_vertical(model: &mut Model, delta: i32, shift: bool) {
@@ -774,14 +1244,23 @@ fn move_vertical(model: &mut Model, delta: i32, shift: bool) {
     let doc = model.active_document_mut();
     let text = doc.sql.text();
     let (line, col) = line_col(&text, doc.sql.cursor());
-    let next_line = if delta < 0 {
-        line.saturating_sub(1)
-    } else {
-        line + 1
-    };
+    let next_line = line.saturating_add_signed(delta as isize);
     let cursor = cursor_at(&text, next_line, col);
     apply_move(doc, cursor, shift);
-    reveal_cursor(doc);
+}
+
+/// PageUp and PageDown: the view and the cursor move a screenful together, so the
+/// cursor keeps its row on screen. They did nothing outside the completion popup.
+fn page(model: &mut Model, direction: i32, shift: bool) {
+    let rows = text_area(model).map_or(1, |(rows, _)| rows);
+    let doc = model.active_document_mut();
+    let lines = doc.sql.text().matches('\n').count() + 1;
+    doc.viewport_line = if direction < 0 {
+        doc.viewport_line.saturating_sub(rows)
+    } else {
+        (doc.viewport_line + rows).min(lines.saturating_sub(rows))
+    };
+    move_vertical(model, direction * rows as i32, shift);
 }
 
 fn apply_move(doc: &mut EditorDocument, cursor: usize, shift: bool) {
@@ -800,7 +1279,6 @@ pub(crate) fn extend_selection_to(model: &mut Model, cursor: usize) {
     end_typing(model);
     let doc = model.active_document_mut();
     apply_move(doc, cursor, true);
-    reveal_cursor(doc);
 }
 
 pub(crate) fn end_typing(model: &mut Model) {
@@ -999,21 +1477,4 @@ pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> crate::widgets:
         FooterKey::Pass => {}
     }
     outcome
-}
-
-pub fn reveal_cursor(doc: &mut EditorDocument) {
-    let text = doc.sql.text();
-    let (line, col) = line_col(&text, doc.sql.cursor());
-    if line < doc.viewport_line {
-        doc.viewport_line = line;
-    }
-    if line >= doc.viewport_line + 12 {
-        doc.viewport_line = line.saturating_sub(11);
-    }
-    if col < doc.viewport_column {
-        doc.viewport_column = col;
-    }
-    if col >= doc.viewport_column + 80 {
-        doc.viewport_column = col.saturating_sub(79);
-    }
 }

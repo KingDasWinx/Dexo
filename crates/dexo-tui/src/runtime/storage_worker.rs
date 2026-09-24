@@ -130,6 +130,9 @@ pub enum StorageCommand {
     Shutdown,
 }
 
+/// Cheap to clone: every clone feeds the same thread. The thread stops on `shutdown`,
+/// or by itself once the last clone is gone and the channel closes -- which is why
+/// there is no `Drop` here: a clone ending must not stop the thread for the rest.
 #[derive(Clone)]
 pub struct StorageWorker {
     tx: std::sync::mpsc::Sender<StorageCommand>,
@@ -553,12 +556,6 @@ impl StorageWorker {
     }
 }
 
-impl Drop for StorageWorker {
-    fn drop(&mut self) {
-        self.shutdown();
-    }
-}
-
 fn list_recent_sql_files(db: &Database, project_id: &str) -> anyhow::Result<Vec<PathBuf>> {
     Ok(RecentItemsRepository::new(db.connection())
         .list(project_id)?
@@ -700,4 +697,27 @@ fn unix_stamp() -> String {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs().to_string())
         .unwrap_or_else(|_| "0".into())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::StorageWorker;
+
+    /// The worker is cloned into background tasks (catalog search for completion). A
+    /// clone going out of scope used to send Shutdown, which killed the one storage
+    /// thread for every handle: recovery, saves, history, and layout then failed with
+    /// "sending on a closed channel" on every checkpoint.
+    #[tokio::test]
+    async fn dropping_a_clone_leaves_the_worker_running() {
+        let dir = tempfile::tempdir().unwrap();
+        let worker = StorageWorker::start(dir.path().join("dexo.db")).unwrap();
+
+        drop(worker.clone());
+
+        assert!(
+            worker.list_snippets().await.is_ok(),
+            "a dropped clone stopped the storage thread"
+        );
+        worker.shutdown();
+    }
 }

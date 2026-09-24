@@ -292,8 +292,10 @@ fn overlay_click_does_not_fall_through_to_explorer() {
     assert!(model.settings.open);
 }
 
+/// The popup is not modal. A click away from it used to be swallowed, so the only way
+/// out was Esc; now it dismisses the popup and still lands where it was aimed.
 #[test]
-fn completion_popup_blocks_workbench_clicks() {
+fn a_click_away_from_the_completion_popup_dismisses_it_and_lands() {
     let mut model = Model::default();
     model.focus = dexo_tui::model::Focus::Editor;
     model.editor.completion_open = true;
@@ -310,7 +312,8 @@ fn completion_popup_blocks_workbench_clicks() {
         ),
     );
 
-    assert_eq!(model.focus, dexo_tui::model::Focus::Editor);
+    assert!(!model.editor.completion_open);
+    assert_eq!(model.focus, dexo_tui::model::Focus::Explorer);
 }
 
 #[test]

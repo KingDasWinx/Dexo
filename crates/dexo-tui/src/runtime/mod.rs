@@ -215,9 +215,6 @@ impl WorkbenchRuntime {
             crate::Effect::ReleaseSavepoint { session, name } => {
                 self.release_savepoint(session, name).await
             }
-            crate::Effect::EnsureConnectionSql { connection_id } => {
-                self.ensure_connection_sql(connection_id).await
-            }
             crate::Effect::LoadDocument(request) => self.load_document(request).await,
             crate::Effect::SaveDocument(request) => self.save_document(request).await,
             crate::Effect::TouchRecentSqlFile { project_id, path } => {
@@ -536,19 +533,75 @@ impl WorkbenchRuntime {
                 connection_id,
                 database_name,
                 session,
+                generation,
                 include_system,
             } => {
+                // Spawned: the walk visits every object in the database, and awaiting it
+                // here froze the screen for as long as that took.
                 if let Some(active) = self.sessions.get(session)
                     && let Ok(paths) = AppPaths::discover()
                 {
-                    catalog_manager::capture_snapshot(
+                    tokio::spawn(catalog_manager::capture_snapshot(
                         Arc::clone(&active.session),
                         connection_id,
                         database_name,
                         include_system,
                         paths.database,
-                    )
-                    .await;
+                        generation,
+                        self.action_tx.clone(),
+                    ));
+                }
+            }
+            crate::Effect::LoadCompletionCatalog {
+                connection_id,
+                database_name,
+                generation,
+            } => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let objects = AppPaths::discover()
+                        .ok()
+                        .and_then(|paths| Database::open(&paths.database).ok())
+                        .and_then(|db| {
+                            dexo_storage::CatalogCache::new(db.connection())
+                                .load_latest(&connection_id, &database_name)
+                                .ok()
+                        })
+                        .unwrap_or_default();
+                    if !objects.is_empty() {
+                        let _ = action_tx.blocking_send(Action::CompletionCatalogLoaded {
+                            generation,
+                            objects,
+                            complete: false,
+                        });
+                    }
+                });
+            }
+            crate::Effect::LoadCompletionColumns {
+                session,
+                generation,
+                target,
+            } => {
+                if let Some(active) = self.sessions.get(session) {
+                    let session = Arc::clone(&active.session);
+                    let action_tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        let Some(data) = session.data() else {
+                            return;
+                        };
+                        let columns = data
+                            .table_columns(&target)
+                            .await
+                            .map(|columns| columns.into_iter().map(|column| column.name).collect())
+                            .unwrap_or_default();
+                        let _ = action_tx
+                            .send(Action::CompletionColumnsLoaded {
+                                generation,
+                                target,
+                                columns,
+                            })
+                            .await;
+                    });
                 }
             }
             crate::Effect::LoadOfflineCatalog {
@@ -862,25 +915,26 @@ impl WorkbenchRuntime {
     }
 
     async fn delete_profile(&mut self, profile: ConnectionProfile, delete_secrets: bool) {
-        if delete_secrets {
-            match self.secrets.delete(profile.secret_ref.as_str()) {
-                Ok(()) => {}
-                Err(SecretError::Unavailable) | Err(SecretError::Internal) => {
+        // A keychain that will not let go of the password is no reason to keep a
+        // connection the user asked to delete; they are told what was left behind.
+        let password_left = delete_secrets
+            && matches!(
+                self.secrets.delete(profile.secret_ref.as_str()),
+                Err(SecretError::Unavailable) | Err(SecretError::Internal)
+            );
+        match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
+            Ok(()) => {
+                let name = profile.name.clone();
+                self.emit(Action::ProfileDeleted { name }).await;
+                if password_left {
                     self.emit(Action::ConnectionFormError {
                         message: format!(
-                            "keychain delete failed for {}; choose keep secrets to remove the profile only",
+                            "deleted {}, but its saved password could not be removed from the keychain",
                             profile.name
                         ),
                     })
                     .await;
-                    return;
                 }
-            }
-        }
-        match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
-            Ok(()) => {
-                self.emit(Action::ProfileDeleted { name: profile.name })
-                    .await;
             }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }
@@ -1108,46 +1162,6 @@ impl WorkbenchRuntime {
                 self.emit(Action::OperationFailed {
                     key: OperationKey::new(OperationId::new(), "", request.document, 0),
                     message: error.to_string(),
-                })
-                .await;
-            }
-        }
-    }
-
-    async fn ensure_connection_sql(&self, connection_id: String) {
-        let result = tokio::task::spawn_blocking({
-            let connection_id = connection_id.clone();
-            move || -> Result<_, String> {
-                let paths = AppPaths::discover().map_err(|error| error.to_string())?;
-                let dir =
-                    dexo_storage::sql_files::ensure_connection_sql_dir(&paths, &connection_id)
-                        .map_err(|error| error.to_string())?;
-                let console = dexo_storage::sql_files::ensure_console_sql(&dir)
-                    .map_err(|error| error.to_string())?;
-                let files = dexo_storage::sql_files::list_sql_files(&dir)
-                    .map_err(|error| error.to_string())?;
-                let content =
-                    std::fs::read_to_string(&console).map_err(|error| error.to_string())?;
-                Ok((files, console, content))
-            }
-        })
-        .await
-        .map_err(|error| error.to_string());
-
-        match result {
-            Ok(Ok((files, console, content))) => {
-                self.emit(Action::ConnectionSqlReady {
-                    connection_id,
-                    files,
-                    console,
-                    content,
-                })
-                .await;
-            }
-            Ok(Err(message)) | Err(message) => {
-                self.emit(Action::OperationFailed {
-                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
-                    message,
                 })
                 .await;
             }

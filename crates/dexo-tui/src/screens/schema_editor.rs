@@ -342,10 +342,12 @@ impl SchemaEditor {
         let mut lines = vec![format!("schema {}", kind_label(self.kind))];
         for (index, field) in self.fields.iter().enumerate() {
             let marker = if index == self.focus { ">" } else { " " };
-            let value = if field.secret && !field.value.is_empty() {
-                "***"
+            // One mark per character typed, so a slip of the finger shows; the characters
+            // themselves never reach the screen.
+            let value = if field.secret {
+                "*".repeat(field.value.chars().count())
             } else {
-                field.value.as_str()
+                field.value.clone()
             };
             lines.push(format!("{marker} {}: {value}", field.label));
         }

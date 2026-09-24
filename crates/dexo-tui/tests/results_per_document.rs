@@ -101,7 +101,7 @@ fn a_select_elsewhere_leaves_the_table_tab_alone() {
         restrictions: vec![],
     });
     model.explorer.select(ObjectId::new("table:orders"));
-    update(&mut model, Action::ExplorerExpand);
+    update(&mut model, Action::OpenObjectData);
     let table_tab = model.active_document;
     assert!(model.documents[table_tab].kind.is_table());
     deliver_results(&mut model, "orders_rows");

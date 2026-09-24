@@ -384,6 +384,12 @@ fn replace_roots_requests_snapshot_capture() {
             .iter()
             .any(|effect| matches!(effect, dexo_tui::Effect::CaptureCatalogSnapshot { .. }))
     );
+    // Completion reads the previous capture while this one walks the database.
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadCompletionCatalog { .. }))
+    );
 }
 
 #[test]

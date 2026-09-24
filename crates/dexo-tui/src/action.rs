@@ -26,12 +26,6 @@ pub enum Action {
         read_only: bool,
         driver: String,
     },
-    ConnectionSqlReady {
-        connection_id: String,
-        files: Vec<PathBuf>,
-        console: PathBuf,
-        content: String,
-    },
     OpenConnectionForm,
     ConnectionFormError {
         message: String,
@@ -67,6 +61,9 @@ pub enum Action {
     Paste(String),
     /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
     PasteFromClipboard,
+    /// The selection, or the line under the cursor when nothing is selected.
+    EditorCopy,
+    EditorCut,
     /// The answer to the unsaved-changes prompt.
     ResolveClose(crate::model::CloseChoice),
     DuplicateConnection,
@@ -157,6 +154,19 @@ pub enum Action {
         document: String,
         revision: u64,
         objects: Vec<dexo_driver_api::CatalogObject>,
+    },
+    /// A whole catalog for completion. `complete` when it is the walk just captured from
+    /// the live database, which replaces what was held; otherwise it is the snapshot on
+    /// disk, older than anything the sidebar loaded since, so it only fills gaps.
+    CompletionCatalogLoaded {
+        generation: u64,
+        objects: Vec<dexo_driver_api::CatalogObject>,
+        complete: bool,
+    },
+    CompletionColumnsLoaded {
+        generation: u64,
+        target: dexo_driver_api::QualifiedName,
+        columns: Vec<String>,
     },
     CatalogLoaded {
         operation: crate::runtime::OperationId,
@@ -687,9 +697,6 @@ pub enum Effect {
         session: SessionId,
         name: String,
     },
-    EnsureConnectionSql {
-        connection_id: String,
-    },
     LoadDocument(DocumentIoRequest),
     SaveDocument(DocumentIoRequest),
     TouchRecentSqlFile {
@@ -848,7 +855,23 @@ pub enum Effect {
         connection_id: String,
         database_name: String,
         session: SessionId,
+        generation: u64,
         include_system: bool,
+    },
+    /// The last captured snapshot, for completion: the sidebar only loads what is
+    /// expanded, so without this a table's columns were on offer only once its node had
+    /// been opened.
+    LoadCompletionCatalog {
+        connection_id: String,
+        database_name: String,
+        generation: u64,
+    },
+    /// The columns of a table the statement names and completion knows nothing of yet,
+    /// asked of the live session.
+    LoadCompletionColumns {
+        session: SessionId,
+        generation: u64,
+        target: dexo_driver_api::QualifiedName,
     },
     LoadOfflineCatalog {
         connection_id: String,

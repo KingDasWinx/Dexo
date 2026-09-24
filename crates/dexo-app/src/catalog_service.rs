@@ -117,6 +117,9 @@ pub struct SnapshotCatalog {
     /// Foreign keys by the qualified name of the table that declares them. Both drivers
     /// already attach them to `ObjectKind::Constraint`; nothing read them until now.
     foreign_keys: HashMap<String, Vec<ForeignKey>>,
+    /// Tables, views and materialized views by lowercased name, as positions in
+    /// `objects`: a statement's tables are looked up on every character typed.
+    tables_by_name: HashMap<String, Vec<usize>>,
 }
 
 impl SnapshotCatalog {
@@ -154,10 +157,39 @@ impl SnapshotCatalog {
                 .push(key);
         }
         drop(by_id);
+        let mut tables_by_name: HashMap<String, Vec<usize>> = HashMap::new();
+        for (index, object) in objects.iter().enumerate() {
+            if is_table(object) {
+                tables_by_name
+                    .entry(object.qualified_name.object().to_ascii_lowercase())
+                    .or_default()
+                    .push(index);
+            }
+        }
         Self {
             objects,
             columns,
             foreign_keys,
+            tables_by_name,
+        }
+    }
+
+    fn table_info(&self, object: &CatalogObject) -> TableInfo {
+        TableInfo {
+            qualified: object.qualified_name.display_unquoted(),
+            schema: object.qualified_name.schema().unwrap_or("").to_string(),
+            name: object.qualified_name.object().to_string(),
+            favorite: object
+                .attributes
+                .get("favorite")
+                .and_then(|value| value.as_bool())
+                .unwrap_or(false),
+            recency: object
+                .attributes
+                .get("recency")
+                .and_then(|value| value.as_u64())
+                .unwrap_or(0),
+            columns: self.columns.get(&object.id).cloned().unwrap_or_default(),
         }
     }
 
@@ -170,32 +202,25 @@ impl Catalog for SnapshotCatalog {
     fn tables(&self) -> Vec<TableInfo> {
         self.objects
             .iter()
-            .filter(|object| {
-                matches!(
-                    object.kind,
-                    ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
-                )
-            })
-            .map(|object| {
-                let columns = self.columns.get(&object.id).cloned().unwrap_or_default();
-                TableInfo {
-                    qualified: object.qualified_name.display_unquoted(),
-                    schema: object.qualified_name.schema().unwrap_or("").to_string(),
-                    name: object.qualified_name.object().to_string(),
-                    favorite: object
-                        .attributes
-                        .get("favorite")
-                        .and_then(|value| value.as_bool())
-                        .unwrap_or(false),
-                    recency: object
-                        .attributes
-                        .get("recency")
-                        .and_then(|value| value.as_u64())
-                        .unwrap_or(0),
-                    columns,
-                }
-            })
+            .filter(|object| is_table(object))
+            .map(|object| self.table_info(object))
             .collect()
+    }
+
+    fn table(&self, schema: Option<&str>, name: &str) -> Option<TableInfo> {
+        let candidates = self.tables_by_name.get(&name.to_ascii_lowercase())?;
+        let found = candidates
+            .iter()
+            .map(|&index| &self.objects[index])
+            .find(|object| {
+                schema.is_none_or(|schema| {
+                    object
+                        .qualified_name
+                        .schema()
+                        .is_some_and(|own| own.eq_ignore_ascii_case(schema))
+                })
+            })?;
+        Some(self.table_info(found))
     }
 
     fn foreign_keys(&self, qualified: &str) -> Vec<ForeignKey> {
@@ -215,6 +240,13 @@ impl Catalog for SnapshotCatalog {
             })
             .collect()
     }
+}
+
+fn is_table(object: &CatalogObject) -> bool {
+    matches!(
+        object.kind,
+        ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+    )
 }
 
 /// The foreign key a constraint object carries, if it is one. Both drivers write the

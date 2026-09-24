@@ -1535,6 +1535,9 @@ pub struct Model {
     /// needs both, so they are kept here as well.
     pub catalog_objects: Vec<dexo_driver_api::CatalogObject>,
     pub catalog_revision: u64,
+    /// The connection `catalog_objects` came from. Switching connections used to leave
+    /// the previous database's tables and columns on offer.
+    pub catalog_connection: String,
     pub inspector: ObjectInspector,
     pub data: DataScreen,
     pub schema_editor: SchemaEditor,
@@ -1648,6 +1651,7 @@ impl Default for Model {
             explorer: ExplorerState::default(),
             catalog_objects: Vec::new(),
             catalog_revision: 0,
+            catalog_connection: String::new(),
             inspector: ObjectInspector::default(),
             data: DataScreen::default(),
             schema_editor: SchemaEditor::default(),
@@ -1968,15 +1972,26 @@ impl Model {
         if objects.is_empty() {
             return;
         }
+        if self.catalog_connection != self.connection.name {
+            self.catalog_objects.clear();
+            self.catalog_connection = self.connection.name.clone();
+        }
         self.catalog_revision = self.catalog_revision.wrapping_add(1);
+        // Indexed once per page: a whole snapshot arrives at once, and finding each
+        // object by scanning the ones already held was quadratic in the database size.
+        let mut at: std::collections::HashMap<dexo_driver_api::ObjectId, usize> = self
+            .catalog_objects
+            .iter()
+            .enumerate()
+            .map(|(index, object)| (object.id.clone(), index))
+            .collect();
         for object in objects {
-            match self
-                .catalog_objects
-                .iter_mut()
-                .find(|existing| existing.id == object.id)
-            {
-                Some(existing) => *existing = object.clone(),
-                None => self.catalog_objects.push(object.clone()),
+            match at.get(&object.id) {
+                Some(&index) => self.catalog_objects[index] = object.clone(),
+                None => {
+                    at.insert(object.id.clone(), self.catalog_objects.len());
+                    self.catalog_objects.push(object.clone());
+                }
             }
         }
     }

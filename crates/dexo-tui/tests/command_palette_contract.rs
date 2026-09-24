@@ -134,6 +134,8 @@ const COMMAND_IDS: &[&str] = &[
     "editor.undo",
     "editor.redo",
     "editor.select_all",
+    "editor.copy",
+    "editor.cut",
     "editor.paste",
     "editor.accept_completion",
     "editor.snippet",
@@ -215,8 +217,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 140);
-    assert_eq!(actual.len(), 140, "duplicate command id");
+    assert_eq!(specs.len(), 142);
+    assert_eq!(actual.len(), 142, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -225,7 +227,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 88);
+    assert_eq!(visible.len(), 90);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a

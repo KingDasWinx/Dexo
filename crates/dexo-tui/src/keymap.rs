@@ -327,7 +327,8 @@ pub fn parse_key(spec: &str) -> Result<KeySpec, String> {
         "space" => KeyCode::Char(' '),
         "pageup" => KeyCode::PageUp,
         "pagedown" => KeyCode::PageDown,
-        other if other.starts_with('f') && other.len() <= 3 => {
+        // `f1`..`f12`; a bare `f` is the letter.
+        other if other.starts_with('f') && (2..=3).contains(&other.len()) => {
             let n: u8 = other[1..]
                 .parse()
                 .map_err(|_| format!("unknown key `{spec}`"))?;
@@ -373,9 +374,11 @@ fn key_label(key: &KeySpec) -> String {
     if key.modifiers.contains(KeyModifiers::ALT) {
         out.push_str("alt+");
     }
-    if key.modifiers.contains(KeyModifiers::SHIFT)
-        && !matches!(key.code, KeyCode::Char(c) if !c.is_ascii_alphabetic())
-    {
+    // A terminal without the extended keyboard protocol sends Alt+Shift+F as Alt and a
+    // capital F, with no Shift of its own: the capital is the Shift.
+    let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
+        || matches!(key.code, KeyCode::Char(c) if c.is_ascii_uppercase());
+    if shifted && !matches!(key.code, KeyCode::Char(c) if !c.is_ascii_alphabetic()) {
         out.push_str("shift+");
     }
     out.push_str(&match key.code {
@@ -433,6 +436,7 @@ profile = "default"
 "shift+d" = "connection.close_session"
 "c" = "explorer.copy_name"
 "a" = "explorer.actions"
+"o" = "explorer.data"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "up" = "explorer.up"
@@ -447,11 +451,14 @@ profile = "default"
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
+"alt+shift+f" = "editor.format"
 "ctrl+shift+i" = "editor.format"
 "ctrl+z" = "editor.undo"
 "ctrl+y" = "editor.redo"
 "ctrl+a" = "editor.select_all"
 "ctrl+v" = "editor.paste"
+"ctrl+c" = "editor.copy"
+"ctrl+x" = "editor.cut"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 [results]
@@ -521,11 +528,14 @@ profile = "vim"
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
+"alt+shift+f" = "editor.format"
 "ctrl+shift+i" = "editor.format"
 "ctrl+z" = "editor.undo"
 "ctrl+y" = "editor.redo"
 "ctrl+a" = "editor.select_all"
 "ctrl+v" = "editor.paste"
+"ctrl+c" = "editor.copy"
+"ctrl+x" = "editor.cut"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 [explorer]
@@ -535,6 +545,7 @@ profile = "vim"
 "shift+d" = "connection.close_session"
 "c" = "explorer.copy_name"
 "a" = "explorer.actions"
+"o" = "explorer.data"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "?" = "help.open"
@@ -602,11 +613,13 @@ profile = "emacs"
 "ctrl+enter" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
+"alt+shift+f" = "editor.format"
 "ctrl+shift+i" = "editor.format"
 "ctrl+z" = "editor.undo"
 "ctrl+y" = "editor.redo"
 "ctrl+a" = "editor.select_all"
 "ctrl+v" = "editor.paste"
+"alt+w" = "editor.copy"
 "alt+up" = "layout.results_grow"
 "alt+down" = "layout.results_shrink"
 [explorer]
@@ -616,6 +629,7 @@ profile = "emacs"
 "shift+d" = "connection.close_session"
 "c" = "explorer.copy_name"
 "a" = "explorer.actions"
+"o" = "explorer.data"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "?" = "help.open"
@@ -724,7 +738,7 @@ mod tests {
                 );
             }
 
-            for chord in ["f5", "f8", "ctrl+c"] {
+            for chord in ["f5", "f8"] {
                 assert_eq!(
                     keymap
                         .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
@@ -734,7 +748,42 @@ mod tests {
                     keymap.name
                 );
             }
+            // Ctrl+C copies now; what must never come back is Ctrl+C running a query.
+            let ctrl_c = keymap
+                .resolve(&parse_chord("ctrl+c").unwrap(), KeyContext::Editor)
+                .unwrap();
+            assert!(
+                !ctrl_c.is_some_and(|command| command.starts_with("query.")),
+                "ctrl+c runs {ctrl_c:?} in profile {}",
+                keymap.name
+            );
         }
+    }
+
+    /// Emacs keeps Ctrl+C as the prefix of Ctrl+C Ctrl+C, so it copies with its own
+    /// Alt+W; the other profiles take the usual Ctrl+C and Ctrl+X.
+    #[test]
+    fn every_profile_can_copy_from_the_editor() {
+        for (keymap, chord) in [
+            (Keymap::default_profile(), "ctrl+c"),
+            (Keymap::vim_profile(), "ctrl+c"),
+            (Keymap::emacs_profile(), "alt+w"),
+        ] {
+            assert_eq!(
+                keymap
+                    .resolve(&parse_chord(chord).unwrap(), KeyContext::Editor)
+                    .unwrap(),
+                Some("editor.copy"),
+                "profile {}",
+                keymap.name
+            );
+        }
+        assert_eq!(
+            Keymap::default_profile()
+                .resolve(&parse_chord("ctrl+x").unwrap(), KeyContext::Editor)
+                .unwrap(),
+            Some("editor.cut")
+        );
     }
 
     #[test]

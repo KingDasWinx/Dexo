@@ -15,29 +15,189 @@ pub struct StatementSpan {
     pub understood: bool,
 }
 
+/// Splits a buffer into statements. A `;` always ends one; so does a line that starts
+/// with a statement keyword (SELECT, INSERT, WITH, ...) outside parentheses, unless the
+/// text before it is still expecting it -- `UNION`, `AS`, `INSERT INTO t (...)`,
+/// `WITH x AS (...)`. Without that second rule a statement missing its `;` swallowed
+/// the next one: Ctrl+Enter sent both, and completion offered the neighbour's columns.
 pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
+    let bytes = sql.as_bytes();
     let mut spans = Vec::new();
     let mut start = skip_ws(sql, 0);
     let mut i = start;
-    let bytes = sql.as_bytes();
+    let mut scan = Scan::default();
     while i < bytes.len() {
-        i = skip_atom(sql, i);
-        if i >= bytes.len() {
-            break;
-        }
-        if bytes[i] == b';' {
-            if start < i {
-                spans.push(classify_span(sql, start..i));
+        match bytes[i] {
+            b';' => {
+                if start < i {
+                    spans.push(classify_span(sql, start..i));
+                }
+                i += 1;
+                start = skip_ws(sql, i);
+                i = start;
+                scan = Scan::default();
             }
-            i += 1;
-            start = skip_ws(sql, i);
-            i = start;
+            b' ' | b'\t' | b'\r' | b'\n' => {
+                let next = skip_ws(sql, i);
+                if sql[i..next].contains('\n')
+                    && let Some(word) = take_ident(&sql[next..])
+                    && scan.starts_new(word)
+                {
+                    spans.push(classify_span(sql, start..trim_end(sql, start, i)));
+                    start = next;
+                    scan = Scan::default();
+                }
+                i = next;
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => i = skip_line_comment(sql, i),
+            b'/' if bytes.get(i + 1) == Some(&b'*') => i = skip_comment(sql, i).unwrap_or(i + 2),
+            b'(' => {
+                scan.depth += 1;
+                scan.last = Last::Open;
+                i += 1;
+            }
+            b')' => {
+                scan.depth = scan.depth.saturating_sub(1);
+                scan.last = Last::Close;
+                i += 1;
+            }
+            b',' => {
+                scan.last = Last::Comma;
+                i += 1;
+            }
+            b'=' => {
+                scan.last = Last::Operator;
+                i += 1;
+            }
+            byte if byte.is_ascii_alphabetic() || byte == b'_' => {
+                let word = take_ident(&sql[i..]).unwrap_or("");
+                scan.word(word);
+                i += word.len().max(1);
+            }
+            _ => {
+                scan.last = Last::Other;
+                i = skip_atom(sql, i).max(i + 1);
+            }
         }
     }
     if start < bytes.len() && !sql[start..].trim().is_empty() {
         spans.push(classify_span(sql, start..bytes.len()));
     }
     spans
+}
+
+/// Words that start a statement when they open a line.
+const STARTERS: &[&str] = &[
+    "SELECT", "INSERT", "UPDATE", "DELETE", "WITH", "CREATE", "ALTER", "DROP", "TRUNCATE", "MERGE",
+    "EXPLAIN", "SHOW", "CALL", "GRANT", "REVOKE",
+];
+
+/// Words after which a statement keyword on the next line still belongs to the same
+/// statement: `UNION\nSELECT`, `AS\nSELECT`, `THEN\nUPDATE`, `FOR\nUPDATE`.
+const CONTINUATIONS: &[&str] = &[
+    "AS",
+    "UNION",
+    "INTERSECT",
+    "EXCEPT",
+    "MINUS",
+    "ALL",
+    "DISTINCT",
+    "THEN",
+    "ELSE",
+    "DO",
+    "INSTEAD",
+    "ALSO",
+    "FOR",
+    "ON",
+    "KEY",
+    "OR",
+    "AFTER",
+    "BEFORE",
+    "OF",
+    "EXPLAIN",
+    "ANALYZE",
+    "VERBOSE",
+    "GRANT",
+    "REVOKE",
+    "IN",
+    "EXISTS",
+    "NOT",
+    "ANY",
+    "SOME",
+    "RETURNS",
+];
+
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum Last {
+    #[default]
+    None,
+    Word,
+    Open,
+    Close,
+    Comma,
+    Operator,
+    Other,
+}
+
+/// What the scan knows about the statement it is inside.
+#[derive(Default)]
+struct Scan {
+    first: Option<String>,
+    depth: u32,
+    last: Last,
+    last_word: String,
+    /// An INSERT whose rows have not started: a SELECT or WITH on the next line is its
+    /// source, not a new statement.
+    insert_awaits_rows: bool,
+    /// A WITH at the top level: after its `)` the main query follows on its own line.
+    cte: bool,
+}
+
+impl Scan {
+    fn word(&mut self, word: &str) {
+        let upper = word.to_ascii_uppercase();
+        if self.first.is_none() {
+            self.insert_awaits_rows = matches!(upper.as_str(), "INSERT" | "REPLACE");
+            self.first = Some(upper.clone());
+        } else if self.depth == 0
+            && self.insert_awaits_rows
+            && matches!(
+                upper.as_str(),
+                "SELECT" | "VALUES" | "VALUE" | "SET" | "DEFAULT"
+            )
+        {
+            self.insert_awaits_rows = false;
+        }
+        if self.depth == 0 && upper == "WITH" {
+            self.cte = true;
+        }
+        self.last = Last::Word;
+        self.last_word = upper;
+    }
+
+    fn starts_new(&self, word: &str) -> bool {
+        let upper = word.to_ascii_uppercase();
+        if self.first.is_none() || self.depth > 0 || !STARTERS.contains(&upper.as_str()) {
+            return false;
+        }
+        match self.last {
+            Last::Comma | Last::Open | Last::Operator => return false,
+            Last::Word if CONTINUATIONS.contains(&self.last_word.as_str()) => return false,
+            _ => {}
+        }
+        if self.insert_awaits_rows && matches!(upper.as_str(), "SELECT" | "WITH") {
+            return false;
+        }
+        !(self.cte && self.last == Last::Close)
+    }
+}
+
+fn skip_line_comment(sql: &str, i: usize) -> usize {
+    sql[i..].find('\n').map_or(sql.len(), |offset| i + offset)
+}
+
+fn trim_end(sql: &str, start: usize, end: usize) -> usize {
+    start + sql[start..end].trim_end().len()
 }
 
 pub fn statement_at(sql: &str, byte_index: usize) -> Option<StatementSpan> {
@@ -297,6 +457,26 @@ fn skip_balanced_paren(sql: &str, start: usize) -> Option<usize> {
     None
 }
 
+/// The buffer cut at each statement's start, so every piece holds one statement with
+/// the `;` and comments that follow it -- nothing in the buffer is left unparsed.
+pub(crate) fn segments(sql: &str, statements: &[StatementSpan]) -> Vec<Range<usize>> {
+    let mut cuts: Vec<usize> = statements
+        .iter()
+        .skip(1)
+        .map(|statement| statement.byte_range.start)
+        .collect();
+    cuts.push(sql.len());
+    let mut start = 0;
+    cuts.into_iter()
+        .map(|end| {
+            let segment = start..end;
+            start = end;
+            segment
+        })
+        .filter(|segment| !segment.is_empty())
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::{StatementEffect, split_statements, statement_at};
@@ -330,6 +510,67 @@ mod tests {
     #[test]
     fn cursor_past_the_document_is_invalid() {
         assert!(statement_at("select 1;", 100).is_none());
+    }
+
+    fn texts(sql: &str) -> Vec<&str> {
+        split_statements(sql)
+            .into_iter()
+            .map(|span| &sql[span.byte_range])
+            .collect()
+    }
+
+    /// A statement missing its `;` used to swallow the next one, so Ctrl+Enter sent
+    /// both and completion saw the neighbour's tables.
+    #[test]
+    fn a_statement_keyword_opening_a_line_starts_a_new_statement() {
+        assert_eq!(
+            texts("select * from\nselect id, name from orders where id = 1;"),
+            ["select * from", "select id, name from orders where id = 1"]
+        );
+        assert_eq!(
+            texts("select id from orders where\n\nselect name from customers;"),
+            ["select id from orders where", "select name from customers"]
+        );
+        assert_eq!(
+            texts("select id, name from orders where id = 1\nselect * from"),
+            ["select id, name from orders where id = 1", "select * from"]
+        );
+        assert_eq!(
+            texts("select * from customers -- all\nupdate orders set paid = true"),
+            ["select * from customers", "update orders set paid = true"]
+        );
+        let sql = "select * from\nselect id from orders;";
+        let span = statement_at(sql, sql.len() - 3).unwrap();
+        assert_eq!(&sql[span.byte_range], "select id from orders");
+    }
+
+    /// Multi-line statements whose later lines open with a statement keyword that
+    /// still belongs to them.
+    #[test]
+    fn statements_that_continue_across_lines_stay_whole() {
+        let whole = [
+            "insert into archive\nselect * from orders",
+            "insert into archive (id, total)\nselect id, total from orders",
+            "insert into t (a)\nwith x as (select 1)\nselect * from x",
+            "with recent as (\n  select * from orders\n)\nselect * from recent",
+            "with a as (select 1),\nb as (select 2)\nselect * from a, b",
+            "create view v as\nselect * from orders",
+            "create table t as\nselect * from orders",
+            "select 1\nunion all\nselect 2",
+            "select 1 union\nselect 2",
+            "explain analyze\nselect * from orders",
+            "insert into t values (1)\non duplicate key\nupdate total = 1",
+            "merge into t using s on t.id = s.id\nwhen matched then\nupdate set total = s.total",
+            "create trigger audit after\ninsert on orders for each row execute function log()",
+            "create policy p on orders for\nselect using (true)",
+            "select *\nfrom orders\nwhere id in (\n  select order_id from items\n)",
+            "select id,\n  (select max(total) from orders) as top\nfrom customers",
+            "grant\nselect on orders to reader",
+            "select * from orders for\nupdate",
+        ];
+        for sql in whole {
+            assert_eq!(texts(sql), [sql], "split: {sql:?}");
+        }
     }
 
     #[test]
