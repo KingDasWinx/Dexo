@@ -3,7 +3,7 @@ use std::time::Duration;
 use dexo_driver_api::{
     CatalogObject, ExplainPlan, ExplainRequest, QueryEvent, QueryRequest, Session, TransactionMode,
 };
-use dexo_sql::{GuardRejection, StatementEffect, inspect_read, split_statements};
+use dexo_sql::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
 use futures_util::StreamExt;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
@@ -92,21 +92,50 @@ impl McpService {
             .collect())
     }
 
-    pub fn authorize_write_sql(&self, sql: &str) -> Result<(), AppError> {
-        let spans = split_statements(sql);
-        if spans.len() != 1 || !spans[0].understood {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "statement effect is not understood",
-            ));
+    pub fn data_write_targets(
+        &self,
+        connection: &McpConnection,
+        sql: &str,
+    ) -> Result<Vec<ObjectRef>, AppError> {
+        let inspection = inspect_data_write(sql, connection.dialect).map_err(guard_error)?;
+        self.authorize_relations(connection, &inspection.relations)
+    }
+
+    pub fn schema_write_targets(
+        &self,
+        connection: &McpConnection,
+        sql: &str,
+    ) -> Result<Vec<ObjectRef>, AppError> {
+        let inspection = inspect_schema_write(sql, connection.dialect).map_err(guard_error)?;
+        self.authorize_relations(connection, &inspection.relations)
+    }
+
+    /// Runs one authorized INSERT/UPDATE/DELETE to completion. The old adapter dropped
+    /// the stream unread, so a constraint violation was reported as "sql applied".
+    pub async fn execute_write(
+        &self,
+        session: &dyn Session,
+        connection: &McpConnection,
+        sql: &str,
+    ) -> Result<u64, AppError> {
+        self.data_write_targets(connection, sql)?;
+        let mut request = QueryRequest::write(sql);
+        request.timeout = Duration::from_secs(self.profile.limits.timeout_secs);
+        let mut stream = session.execute(request).await.map_err(map_driver_error)?;
+        let mut affected = 0;
+        while let Some(event) = stream.next().await {
+            match event.map_err(map_driver_error)? {
+                QueryEvent::ResultSetFinished {
+                    rows_affected: Some(rows),
+                    ..
+                }
+                | QueryEvent::Finished {
+                    rows_affected: Some(rows),
+                } => affected = rows,
+                _ => {}
+            }
         }
-        if spans[0].effect != StatementEffect::DataWrite {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "statement is outside grant capability",
-            ));
-        }
-        Ok(())
+        Ok(affected)
     }
 
     pub fn policy(&self) -> ObjectPolicy {

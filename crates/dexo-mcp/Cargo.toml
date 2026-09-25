@@ -10,6 +10,7 @@ repository.workspace = true
 anyhow.workspace = true
 dexo-app = { path = "../dexo-app" }
 dexo-driver-api = { path = "../dexo-driver-api" }
+dexo-sql = { path = "../dexo-sql" }
 rmcp.workspace = true
 schemars.workspace = true
 serde.workspace = true
@@ -22,7 +23,6 @@ uuid.workspace = true
 
 [dev-dependencies]
 dexo-test-support = { path = "../dexo-test-support" }
-dexo-sql = { path = "../dexo-sql" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 async-trait.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }

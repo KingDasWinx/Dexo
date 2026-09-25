@@ -8,12 +8,8 @@ use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect, payl
 use dexo_app::mcp::selector::ObjectRef;
 use dexo_app::mcp::{McpConnection, McpService};
 use dexo_app::query_service::map_driver_error;
-use dexo_app::schema::apply::{ApplyRequest, apply_change};
-use dexo_app::schema::change::drop_table;
-use dexo_app::schema::security::production_policy;
 use dexo_driver_api::{
-    AdminAction, DbValue, DdlOutcome, DdlPlan, Mutation, ObjectKind, QueryRequest, SchemaChange,
-    Session,
+    AdminAction, DbValue, DdlOutcome, DdlPlan, Mutation, Session, classify_raw_sql,
 };
 use serde_json::{Map, Value};
 
@@ -63,6 +59,14 @@ pub async fn call_write_tool(
             "no connection is open for this profile",
         ));
     };
+    if !service.profile.tool_allowed(name) {
+        return Err(AppError::new(ErrorCategory::McpPolicy, "not found"));
+    }
+    connection.accepts_writes()?;
+    let sql = arguments
+        .get("sql")
+        .and_then(Value::as_str)
+        .unwrap_or_default();
     let value = Value::Object(arguments.clone());
     let operation_id = arguments
         .get("operation_id")
@@ -91,11 +95,20 @@ pub async fn call_write_tool(
         );
         return Ok(replayed.result);
     }
+    let targets = match name {
+        "data_execute_sql" => service.data_write_targets(connection, sql)?,
+        "schema_apply_ddl" => service.schema_write_targets(connection, sql)?,
+        _ => vec![object],
+    };
     let profile_policy = service.policy();
     let grants = ledger.active_grants(&service.profile.name, now);
     let grant = grants
         .iter()
-        .find(|grant| grant.authorizes(name, &connection.name, &object, &profile_policy, now))
+        .find(|grant| {
+            targets.iter().all(|target| {
+                grant.authorizes(name, &connection.name, target, &profile_policy, now)
+            })
+        })
         .cloned()
         .ok_or_else(|| {
             audit(
@@ -162,7 +175,7 @@ pub async fn call_write_tool(
         )?;
         return Ok(result);
     }
-    let outcome = execute(service, name, &value, session, || {
+    let outcome = execute(service, name, &value, session, connection, || {
         ledger.is_revoked(grant.id)
     })
     .await;
@@ -243,6 +256,7 @@ async fn execute(
     name: &str,
     value: &Value,
     session: &dyn Session,
+    connection: &McpConnection,
     cancelled: impl Fn() -> bool,
 ) -> Result<(SideEffect, String), AppError> {
     match name {
@@ -254,18 +268,14 @@ async fn execute(
             apply_mutations(session, &mutations).await
         }
         "data_execute_sql" => {
-            let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
-            service.authorize_write_sql(sql)?;
             if cancelled() {
                 return Ok((SideEffect::RolledBack, "rolled_back".into()));
             }
-            let _ = session
-                .execute(QueryRequest::write(sql))
-                .await
-                .map_err(map_driver_error)?;
-            Ok((SideEffect::Committed, "sql applied".into()))
+            let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
+            let affected = service.execute_write(session, connection, sql).await?;
+            Ok((SideEffect::Committed, format!("{affected} rows affected")))
         }
-        "schema_apply_ddl" => apply_ddl(value, session, cancelled()).await,
+        "schema_apply_ddl" => apply_ddl(value, session, connection, cancelled()).await,
         "admin_cancel_query" | "admin_terminate_session" => {
             if cancelled() {
                 return Ok((SideEffect::RolledBack, "rolled_back".into()));
@@ -343,9 +353,14 @@ async fn apply_mutations(
     Ok((SideEffect::Committed, "applied".into()))
 }
 
+/// Raw DDL from a client cannot be turned into a structured `SchemaChange`, so the risk
+/// comes from the driver-api classifier and the typed confirmation is required from the
+/// client, never filled in from the target it already sent. MySQL commits DDL implicitly;
+/// that is a property of the connection, not something the client gets to claim.
 async fn apply_ddl(
     value: &Value,
     session: &dyn Session,
+    connection: &McpConnection,
     cancelled: bool,
 ) -> Result<(SideEffect, String), AppError> {
     let target = value
@@ -353,35 +368,26 @@ async fn apply_ddl(
         .and_then(Value::as_str)
         .unwrap_or_default();
     let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
-    let implicit = value
-        .get("implicit_commit")
-        .and_then(Value::as_bool)
-        .unwrap_or_else(|| sql.to_ascii_uppercase().contains("DROP "));
-    let change = if sql.trim_start().to_ascii_uppercase().starts_with("DROP") {
-        drop_table(target)
-    } else {
-        SchemaChange::DropObject {
-            target: parse_qualified(target),
-            kind: ObjectKind::Table,
-        }
-    };
+    let risk = classify_raw_sql(sql);
+    if (risk.destructive || risk.data_loss)
+        && value.get("confirm_target").and_then(Value::as_str) != Some(target)
+    {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("type {target} as confirm_target to confirm"),
+        ));
+    }
+    if cancelled {
+        return Ok((SideEffect::RolledBack, "rolled_back".into()));
+    }
     let mut plan = DdlPlan::default();
-    plan.push(sql, implicit);
-    let executor = session
+    plan.push(sql, connection.dialect == dexo_sql::Dialect::Mysql);
+    let outcome = session
         .ddl()
-        .ok_or_else(|| AppError::new(ErrorCategory::Capability, "ddl unavailable"))?;
-    let confirm = value.get("confirm_target").and_then(Value::as_str);
-    let outcome = apply_change(
-        executor,
-        ApplyRequest {
-            change: &change,
-            plan: &plan,
-            policy: &production_policy(),
-            typed_confirmation: confirm.or(Some(target)),
-            cancelled: cancelled && !implicit,
-        },
-    )
-    .await?;
+        .ok_or_else(|| AppError::new(ErrorCategory::Capability, "ddl unavailable"))?
+        .apply_ddl(&plan)
+        .await
+        .map_err(map_driver_error)?;
     Ok(map_ddl_outcome(outcome))
 }
 
@@ -536,6 +542,30 @@ mod tests {
             environment: dexo_app::Environment::Local,
             read_only: false,
         }
+    }
+
+    fn service_with(allow: &str) -> McpService {
+        let mut profile = McpProfile::new("assistant");
+        profile.selectors = vec![SelectorRule::parse(Effect::Allow, allow).unwrap()];
+        McpService::new(profile, Vec::new())
+    }
+
+    fn grant_on(
+        profile: &McpProfile,
+        capability: GrantCapability,
+        tool: &str,
+        selector: &str,
+    ) -> Grant {
+        Grant::new(
+            profile,
+            "local",
+            capability,
+            vec![tool.into()],
+            vec![SelectorRule::parse(Effect::Allow, selector).unwrap()],
+            0,
+            DEFAULT_TTL_SECS,
+        )
+        .unwrap()
     }
 
     async fn call_on(
@@ -811,6 +841,155 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert!(error.to_string().contains("outside grant capability"));
+        assert!(
+            error.to_string().contains("not allowed for this tool"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn mysql_ddl_commit_is_not_claimed_reversed() {
+        let service = service_with("db.*");
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant_on(
+                &service.profile,
+                GrantCapability::Ddl,
+                "schema_apply_ddl",
+                "db.items",
+            ))
+            .unwrap();
+        let session = FakeSession::default();
+        let mysql = McpConnection {
+            dialect: dexo_sql::Dialect::Mysql,
+            default_schema: None,
+            ..connection("local")
+        };
+        let result = call_write_tool(
+            &service,
+            &ledger,
+            Some((&mysql, &session as &dyn dexo_driver_api::Session)),
+            "s",
+            "schema_apply_ddl",
+            json!({
+                "operation_id":"op-mysql",
+                "target":"db.items",
+                "sql":"DROP TABLE items",
+                "confirm_target":"db.items"
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+            0,
+        )
+        .await
+        .unwrap();
+        assert!(
+            result.contains("Committed") && !result.contains("RolledBack"),
+            "{result}"
+        );
+        assert!(session.log().contains(&"ddl DROP TABLE items".to_string()));
+    }
+
+    #[tokio::test]
+    async fn destructive_ddl_needs_the_target_typed_by_the_client() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::Ddl,
+                "schema_apply_ddl",
+                "db.public.items",
+            ))
+            .unwrap();
+        let error = call(
+            &ledger,
+            "schema_apply_ddl",
+            json!({"operation_id":"op-d","target":"db.public.items","sql":"DROP TABLE items"}),
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("type db.public.items"),
+            "{error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn sql_writes_must_stay_inside_the_grant() {
+        let mut profile = profile();
+        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
+        profile.tool_rules.push(dexo_app::mcp::profile::ToolRule {
+            tool: "data_execute_sql".into(),
+            allowed: true,
+        });
+        let service = McpService::new(profile.clone(), Vec::new());
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant_on(
+                &profile,
+                GrantCapability::DataWrite,
+                "data_execute_sql",
+                "db.public.items",
+            ))
+            .unwrap();
+        let session = FakeSession::default();
+        let error = call_write_tool(
+            &service,
+            &ledger,
+            Some((
+                &connection("local"),
+                &session as &dyn dexo_driver_api::Session,
+            )),
+            "s",
+            "data_execute_sql",
+            json!({
+                "operation_id":"op-sub",
+                "target":"db.public.items",
+                "sql":"update items set x = 1 where id in (select id from orders)"
+            })
+            .as_object()
+            .cloned()
+            .unwrap(),
+            0,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "not found");
+        assert!(session.log().is_empty());
+    }
+
+    #[tokio::test]
+    async fn production_connections_refuse_writes_and_keep_the_grant() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_insert",
+                "db.public.items",
+            ))
+            .unwrap();
+        let production = McpConnection {
+            environment: dexo_app::Environment::Production,
+            ..connection("local")
+        };
+        let error = call_write_tool(
+            &service(),
+            &ledger,
+            Some((
+                &production,
+                &FakeSession::default() as &dyn dexo_driver_api::Session,
+            )),
+            "s",
+            "data_insert",
+            json!({"operation_id":"op-p","target":"db.public.items","values":{"id":1}})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            0,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("production"));
+        assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
     }
 }

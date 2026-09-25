@@ -72,6 +72,24 @@ impl McpConnection {
         }
     }
 
+    /// MCP never writes to production (MCP-015) or to a connection whose own policy keeps
+    /// it read-only (SEC-011); a grant cannot override either.
+    pub fn accepts_writes(&self) -> Result<(), AppError> {
+        if self.environment == Environment::Production {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "writes to production connections are not available over MCP",
+            ));
+        }
+        if self.read_only {
+            return Err(AppError::new(
+                ErrorCategory::Permission,
+                "connection is read-only",
+            ));
+        }
+        Ok(())
+    }
+
     pub fn qualified_name(&self, reference: &ObjectRef) -> QualifiedName {
         let path = &reference.path;
         match (self.dialect, path.as_slice()) {
