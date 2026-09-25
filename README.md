@@ -14,7 +14,7 @@
 Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
 
 <div align="center">
-  <img src="assets/entrance.gif" width="640" alt="Dexo's animated entrance">
+  <img src="assets/demo.gif" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
   <br><br>
   <img src="assets/screenshots/workbench.webp" alt="The Dexo workbench: catalog tree, SQL editor with syntax highlighting, and a results grid">
 </div>
