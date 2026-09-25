@@ -2,6 +2,7 @@ use std::time::Instant;
 
 use dexo_app::mcp::selector::ObjectRef;
 use dexo_app::mcp::{Decision, McpService};
+use dexo_app::schema_diff::{SchemaDifference, plan_migration, render_unquoted};
 use dexo_app::{AppError, CatalogService, ErrorCategory, SearchService, map_driver_error};
 use dexo_driver_api::{
     CatalogListOptions, CatalogObject, CatalogReader, ObjectId, ObjectKind, Session,
@@ -15,7 +16,9 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{app_error, hidden};
 use crate::render::{RowsPage, rows_result, text_result};
 use crate::router::{ConnectionSlot, SessionLease};
-use crate::schema::{CatalogListInput, CatalogSearchInput, DataReadInput, ObjectInput, SqlInput};
+use crate::schema::{
+    CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ObjectInput, SqlInput,
+};
 use crate::server::DexoMcpServer;
 
 impl DexoMcpServer {
@@ -448,5 +451,45 @@ impl DexoMcpServer {
                 })
             });
         finish(&mut lease, outcome)
+    }
+
+    /// Differences between two saved schema snapshots, limited to objects this profile may see. Read-only: nothing is applied.
+    #[tool(annotations(read_only_hint = true))]
+    async fn schema_diff(&self, Parameters(input): Parameters<DiffInput>) -> CallToolResult {
+        let backend = self.inner.router.backend();
+        let load = |name: &str| {
+            backend
+                .schema_snapshot(name)
+                .and_then(|snapshot| snapshot.ok_or_else(hidden))
+        };
+        let (from, to) = match (load(&input.from_snapshot), load(&input.to_snapshot)) {
+            (Ok(from), Ok(to)) => (from, to),
+            (Err(error), _) | (_, Err(error)) => return app_error(&error),
+        };
+        let (changes, _, _) = plan_migration(&from, &to, &[], render_unquoted);
+        let service = &self.inner.service;
+        let rows = changes
+            .iter()
+            .filter(|change| match change {
+                SchemaDifference::Added(object) | SchemaDifference::Removed(object) => {
+                    service.visible(object)
+                }
+                SchemaDifference::Changed { before, after } => {
+                    service.visible(before) && service.visible(after)
+                }
+            })
+            .map(|change| {
+                let kind = match change {
+                    SchemaDifference::Added(_) => "added",
+                    SchemaDifference::Removed(_) => "removed",
+                    SchemaDifference::Changed { .. } => "changed",
+                };
+                vec![kind.to_string(), change.object_name()]
+            })
+            .collect();
+        rows_result(&RowsPage::new(
+            ["change", "object"].map(String::from).to_vec(),
+            rows,
+        ))
     }
 }

@@ -123,3 +123,11 @@ pub struct DataReadInput {
     /// Rows per page (default 100, capped by the profile's max_rows).
     pub limit: Option<u32>,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DiffInput {
+    /// Name of the older snapshot, saved with `dexo schema snapshot --connection C --name N`.
+    pub from_snapshot: String,
+    /// Name of the newer snapshot.
+    pub to_snapshot: String,
+}

@@ -313,6 +313,7 @@ pub const READ_TOOLS: &[&str] = &[
     "query_validate",
     "query_explain",
     "query_execute_read",
+    "schema_diff",
 ];
 
 const RAW_SQL_TOOLS: &[&str] = &["query_validate", "query_explain", "query_execute_read"];

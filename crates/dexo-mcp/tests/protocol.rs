@@ -214,3 +214,46 @@ async fn data_read_pages_and_says_where_to_continue() {
     let hidden = client.call("data_read", json!({"table": "secrets"})).await;
     assert_eq!(text(&hidden), "Error [NOT_FOUND]: not found");
 }
+
+#[tokio::test]
+async fn schema_diff_hides_denied_objects() {
+    use dexo_app::schema_diff::SchemaSnapshot;
+    let table = |name: &str| {
+        dexo_driver_api::CatalogObject::new(
+            dexo_driver_api::ObjectId::new(name),
+            dexo_driver_api::ObjectKind::Table,
+            dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), name),
+            None,
+        )
+    };
+    let snapshot =
+        |objects| SchemaSnapshot::capture("postgres", "16", "2026-09-23T00:00:00Z", "db", objects);
+    let mut backend = FakeBackend::with_session("local", users());
+    backend
+        .snapshots
+        .insert("before".into(), snapshot(vec![table("users")]));
+    backend.snapshots.insert(
+        "after".into(),
+        snapshot(vec![table("users"), table("orders"), table("secrets")]),
+    );
+    let (mut client, _, _) = client_with(backend).await;
+    let diff = client
+        .call(
+            "schema_diff",
+            json!({"from_snapshot": "before", "to_snapshot": "after"}),
+        )
+        .await;
+    assert!(
+        text(&diff).contains("| added | db.public.orders |"),
+        "{}",
+        text(&diff)
+    );
+    assert!(!text(&diff).contains("secrets"));
+    let missing = client
+        .call(
+            "schema_diff",
+            json!({"from_snapshot": "nope", "to_snapshot": "after"}),
+        )
+        .await;
+    assert_eq!(text(&missing), "Error [NOT_FOUND]: not found");
+}
