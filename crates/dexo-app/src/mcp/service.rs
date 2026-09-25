@@ -314,7 +314,11 @@ pub const READ_TOOLS: &[&str] = &[
     "query_explain",
     "query_execute_read",
     "schema_diff",
+    "admin_list_sessions",
 ];
+
+/// Read tools that show other people's activity; listed only with an explicit allow rule.
+const OPT_IN_TOOLS: &[&str] = &["admin_list_sessions"];
 
 const RAW_SQL_TOOLS: &[&str] = &["query_validate", "query_explain", "query_execute_read"];
 
@@ -323,7 +327,16 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
         .iter()
         .copied()
         .filter(|name| profile.query_mode == QueryMode::RawReadSql || !RAW_SQL_TOOLS.contains(name))
-        .filter(|name| profile.tool_allowed(name))
+        .filter(|name| {
+            if OPT_IN_TOOLS.contains(name) {
+                profile
+                    .tool_rules
+                    .iter()
+                    .any(|rule| rule.tool == *name && rule.allowed)
+            } else {
+                profile.tool_allowed(name)
+            }
+        })
         .collect()
 }
 
@@ -333,6 +346,7 @@ pub fn known_tools() -> Vec<&'static str> {
     let mut probe = McpProfile::new("probe");
     probe.query_mode = QueryMode::RawReadSql;
     let mut tools = advertised_tools(&probe);
+    tools.extend(OPT_IN_TOOLS);
     tools.extend(crate::mcp::grant::WRITE_TOOLS);
     tools
 }

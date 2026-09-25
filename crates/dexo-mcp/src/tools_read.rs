@@ -17,7 +17,8 @@ use crate::error::{app_error, hidden};
 use crate::render::{RowsPage, rows_result, text_result};
 use crate::router::{ConnectionSlot, SessionLease};
 use crate::schema::{
-    CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ObjectInput, SqlInput,
+    AdminListInput, CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ObjectInput,
+    SqlInput,
 };
 use crate::server::DexoMcpServer;
 
@@ -214,6 +215,41 @@ async fn relationships(
         ["relation", "kind", "name"].map(String::from).to_vec(),
         rows,
     )))
+}
+
+async fn sessions(session: &dyn Session) -> Result<CallToolResult, AppError> {
+    let admin = session.admin().ok_or_else(|| {
+        AppError::new(
+            ErrorCategory::Capability,
+            "administration is unavailable on this connection",
+        )
+    })?;
+    let list = admin.list_sessions().await.map_err(map_driver_error)?;
+    let rows = list
+        .items
+        .into_iter()
+        .map(|item| {
+            vec![
+                item.id,
+                item.user.unwrap_or_default(),
+                item.database.unwrap_or_default(),
+                item.state,
+                item.duration_ms
+                    .map(|ms| ms.to_string())
+                    .unwrap_or_default(),
+            ]
+        })
+        .collect();
+    let mut page = RowsPage::new(
+        ["session_id", "user", "database", "state", "duration_ms"]
+            .map(String::from)
+            .to_vec(),
+        rows,
+    );
+    page.title = list
+        .restriction
+        .map(|reason| format!("Partial list: {reason}"));
+    Ok(rows_result(&page))
 }
 
 #[tool_router(router = read_tools, vis = "pub(crate)")]
@@ -491,5 +527,19 @@ impl DexoMcpServer {
             ["change", "object"].map(String::from).to_vec(),
             rows,
         ))
+    }
+
+    /// Server sessions: id, user, database, state and duration. Query text is not returned. Listed only when the profile allows it explicitly.
+    #[tool(annotations(read_only_hint = true))]
+    async fn admin_list_sessions(
+        &self,
+        Parameters(input): Parameters<AdminListInput>,
+    ) -> CallToolResult {
+        let mut lease = match self.open(input.connection.as_deref()).await {
+            Ok(lease) => lease,
+            Err(result) => return result,
+        };
+        let outcome = sessions(lease.session()).await;
+        finish(&mut lease, outcome)
     }
 }

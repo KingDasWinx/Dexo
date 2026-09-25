@@ -257,3 +257,37 @@ async fn schema_diff_hides_denied_objects() {
         .await;
     assert_eq!(text(&missing), "Error [NOT_FOUND]: not found");
 }
+
+#[tokio::test]
+async fn admin_reads_need_an_explicit_rule() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    assert!(
+        !client
+            .tool_names()
+            .await
+            .contains(&"admin_list_sessions".to_string())
+    );
+    let hidden = client.call("admin_list_sessions", json!({})).await;
+    assert_eq!(text(&hidden), "Error [NOT_FOUND]: not found");
+
+    let mut allowed = profile();
+    allowed.tool_rules.push(dexo_app::mcp::ToolRule {
+        tool: "admin_list_sessions".into(),
+        allowed: true,
+    });
+    let mut client = Client::start(
+        allowed,
+        vec![connection("local")],
+        Arc::new(FakeBackend::with_session("local", users())),
+        Arc::new(MemoryGrantLedger::default()),
+    )
+    .await;
+    assert!(
+        client
+            .tool_names()
+            .await
+            .contains(&"admin_list_sessions".to_string())
+    );
+    let unsupported = client.call("admin_list_sessions", json!({})).await;
+    assert!(text(&unsupported).starts_with("Error [UNSUPPORTED]"));
+}

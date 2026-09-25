@@ -131,3 +131,9 @@ pub struct DiffInput {
     /// Name of the newer snapshot.
     pub to_snapshot: String,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct AdminListInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+}
