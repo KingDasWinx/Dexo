@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use dexo_driver_api::{
-    CatalogObject, ExplainPlan, ExplainRequest, ObjectKind, QueryEvent, QueryRequest, Session,
-    TransactionMode,
+    CatalogObject, DataRequest, ExplainPlan, ExplainRequest, ObjectKind, Page, QueryEvent,
+    QueryRequest, Session, TransactionMode,
 };
 use dexo_sql::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
 use futures_util::StreamExt;
@@ -26,6 +26,7 @@ pub struct ReadResult {
     pub rows: Vec<Vec<String>>,
     pub truncated: bool,
     pub bytes: u64,
+    pub next_offset: Option<u64>,
 }
 
 pub struct McpService {
@@ -223,6 +224,67 @@ impl McpService {
         Ok(result)
     }
 
+    /// One page of a table through the driver's typed paging, the same path the grid
+    /// uses. `next_offset` is set when there is more to read or a limit cut the page.
+    pub async fn read_page(
+        &self,
+        session: &dyn Session,
+        connection: &McpConnection,
+        target: &ObjectRef,
+        offset: u64,
+        limit: Option<u32>,
+        cancel: &CancellationToken,
+    ) -> Result<ReadResult, AppError> {
+        if self.policy().decide(target) != Decision::Allow {
+            return Err(hidden());
+        }
+        let data = session.data().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot page table data",
+            )
+        })?;
+        let cap = u32::try_from(self.profile.limits.max_rows)
+            .unwrap_or(Page::MAX_LIMIT)
+            .min(Page::MAX_LIMIT);
+        let page =
+            Page::new(offset, limit.unwrap_or(100).clamp(1, cap)).map_err(map_driver_error)?;
+        let request = DataRequest {
+            object: connection.qualified_name(target),
+            columns: Vec::new(),
+            filter: None,
+            sort: Vec::new(),
+            page,
+        };
+        let fetched = tokio::select! {
+            () = cancel.cancelled() => {
+                return Err(AppError::new(ErrorCategory::Cancelled, "cancelled by the client"));
+            }
+            fetched = data.fetch(request) => fetched.map_err(map_driver_error)?,
+        };
+        let mut result = ReadResult {
+            columns: fetched
+                .columns
+                .into_iter()
+                .map(|column| column.name)
+                .collect(),
+            ..ReadResult::default()
+        };
+        for row in fetched.rows {
+            let cells: Vec<String> = row.iter().map(display_value).collect();
+            let size: u64 = cells.iter().map(|cell| cell.len() as u64).sum();
+            if result.bytes + size > self.profile.limits.max_bytes {
+                result.truncated = true;
+                break;
+            }
+            result.bytes += size;
+            result.rows.push(cells);
+        }
+        result.next_offset =
+            (fetched.has_more || result.truncated).then(|| offset + result.rows.len() as u64);
+        Ok(result)
+    }
+
     pub async fn explain(
         &self,
         session: &dyn Session,
@@ -247,6 +309,7 @@ pub const READ_TOOLS: &[&str] = &[
     "object_describe",
     "object_get_ddl",
     "object_relationships",
+    "data_read",
     "query_validate",
     "query_explain",
     "query_execute_read",

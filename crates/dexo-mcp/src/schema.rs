@@ -111,3 +111,15 @@ pub struct ObjectInput {
     /// Qualified name such as `public.orders` or `db.public.orders`; a bare name uses the connection's default database and schema.
     pub name: String,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct DataReadInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// Table or view to read, qualified like object_describe.
+    pub table: String,
+    /// Row offset of the page (default 0); use the `next_offset` of the previous page.
+    pub offset: Option<u64>,
+    /// Rows per page (default 100, capped by the profile's max_rows).
+    pub limit: Option<u32>,
+}

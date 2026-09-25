@@ -189,3 +189,28 @@ async fn a_denied_table_is_invisible_to_every_catalog_tool() {
         text(&described)
     );
 }
+
+#[tokio::test]
+async fn data_read_pages_and_says_where_to_continue() {
+    let rows = (1..=5).map(|id| vec![DbValue::I64(id)]).collect();
+    let (mut client, _, _) = client_with(FakeBackend::with_session(
+        "local",
+        FakeSession::with_rows(&["id"], rows),
+    ))
+    .await;
+    let first = client
+        .call("data_read", json!({"table": "users", "limit": 2}))
+        .await;
+    assert_eq!(first["structuredContent"]["rows"], json!([["1"], ["2"]]));
+    assert_eq!(first["structuredContent"]["next_offset"], json!(2));
+    let last = client
+        .call(
+            "data_read",
+            json!({"table": "users", "offset": 4, "limit": 2}),
+        )
+        .await;
+    assert_eq!(last["structuredContent"]["rows"], json!([["5"]]));
+    assert_eq!(last["structuredContent"]["next_offset"], json!(null));
+    let hidden = client.call("data_read", json!({"table": "secrets"})).await;
+    assert_eq!(text(&hidden), "Error [NOT_FOUND]: not found");
+}

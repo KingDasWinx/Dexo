@@ -15,7 +15,7 @@ use tokio_util::sync::CancellationToken;
 use crate::error::{app_error, hidden};
 use crate::render::{RowsPage, rows_result, text_result};
 use crate::router::{ConnectionSlot, SessionLease};
-use crate::schema::{CatalogListInput, CatalogSearchInput, ObjectInput, SqlInput};
+use crate::schema::{CatalogListInput, CatalogSearchInput, DataReadInput, ObjectInput, SqlInput};
 use crate::server::DexoMcpServer;
 
 impl DexoMcpServer {
@@ -408,6 +408,45 @@ impl DexoMcpServer {
         };
         let target = lease.meta.qualify(&ObjectRef::parse(&input.name).path);
         let outcome = relationships(&self.inner.service, lease.session(), &target).await;
+        finish(&mut lease, outcome)
+    }
+
+    /// One page of a table or view, without writing SQL. Works in structured-only profiles. Follow `next_offset` for the next page.
+    #[tool(annotations(read_only_hint = true))]
+    async fn data_read(
+        &self,
+        Parameters(input): Parameters<DataReadInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        let mut lease = match self.open(input.connection.as_deref()).await {
+            Ok(lease) => lease,
+            Err(result) => return result,
+        };
+        let target = lease.meta.qualify(&ObjectRef::parse(&input.table).path);
+        let started = Instant::now();
+        let outcome = self
+            .inner
+            .service
+            .read_page(
+                lease.session(),
+                lease.meta,
+                &target,
+                input.offset.unwrap_or(0),
+                input.limit,
+                &cancel,
+            )
+            .await
+            .map(|result| {
+                rows_result(&RowsPage {
+                    columns: result.columns,
+                    rows: result.rows,
+                    truncated: result.truncated,
+                    bytes: result.bytes,
+                    elapsed: started.elapsed(),
+                    next_offset: result.next_offset,
+                    title: None,
+                })
+            });
         finish(&mut lease, outcome)
     }
 }
