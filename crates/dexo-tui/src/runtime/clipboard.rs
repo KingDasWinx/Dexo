@@ -128,4 +128,30 @@ mod tests {
             .expect("read back");
         assert_eq!(text, "dexo-clipboard-smoke-2");
     }
+
+    /// Reading back through the process's own handle proved nothing on Wayland: arboard
+    /// wrote to XWayland, which does not pass a windowless client's selection on, so
+    /// every copy reported success and reached no other program.
+    #[test]
+    fn a_copy_reaches_other_programs_on_wayland() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return;
+        }
+        let Ok(probe) = std::process::Command::new("wl-paste")
+            .arg("--version")
+            .output()
+        else {
+            return;
+        };
+        if !probe.status.success() {
+            return;
+        }
+        let marker = format!("dexo-wayland-{}", std::process::id());
+        copy_text(marker.clone()).expect("copy");
+        let pasted = std::process::Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()
+            .expect("wl-paste");
+        assert_eq!(String::from_utf8_lossy(&pasted.stdout), marker);
+    }
 }

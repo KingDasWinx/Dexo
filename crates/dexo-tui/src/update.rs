@@ -888,6 +888,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ClipboardWritten { text } => {
+            // Said out loud: a copy that went nowhere used to look exactly like one that
+            // worked.
+            let lines = text.lines().count().max(1);
+            model.messages.info(if lines == 1 {
+                "copied to clipboard".into()
+            } else {
+                format!("copied {lines} lines to clipboard")
+            });
             model.explorer.copied = Some(text.clone());
             model.data.clipboard = text;
             Vec::new()
