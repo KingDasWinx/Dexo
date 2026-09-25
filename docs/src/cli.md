@@ -10,6 +10,9 @@ dexo connections list
 dexo query --connection NAME --sql "select 1" --format jsonl --non-interactive
 dexo schema diff
 dexo mcp serve --profile assistant
+dexo mcp profile set --name assistant --connection local --query-mode raw-read
+dexo mcp allow --profile assistant --selector 'app.public.secrets' --deny --remove
+dexo mcp config print --profile assistant --client claude-code
 dexo doctor --json
 ```
 
