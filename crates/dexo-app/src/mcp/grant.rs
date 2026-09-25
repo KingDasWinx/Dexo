@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::McpProfile;
-use crate::mcp::selector::{ObjectRef, SelectorRule};
+use crate::mcp::selector::{ObjectRef, Segment, Selector, SelectorRule};
 
 pub const WRITE_TOOLS: &[&str] = &[
     "data_insert",
@@ -174,18 +174,16 @@ pub fn parse_ttl(spec: &str) -> Result<i64, AppError> {
         .map_err(|_| AppError::new(ErrorCategory::Configuration, "invalid ttl"))
 }
 
-fn sample_object(selector: &crate::mcp::selector::Selector) -> ObjectRef {
-    fn part(seg: Option<&crate::mcp::selector::Segment>) -> String {
-        match seg {
-            Some(crate::mcp::selector::Segment::Exact(name)) => name.clone(),
-            _ => "probe".into(),
-        }
-    }
+fn sample_object(selector: &Selector) -> ObjectRef {
     ObjectRef {
-        catalog: Some(part(selector.catalog.as_ref())),
-        schema: Some(part(selector.schema.as_ref())),
-        name: part(selector.object.as_ref()),
-        column: selector.column.as_ref().map(|seg| part(Some(seg))),
+        path: selector
+            .segments
+            .iter()
+            .map(|segment| match segment {
+                Segment::Exact(name) => name.clone(),
+                Segment::Star => "probe".into(),
+            })
+            .collect(),
     }
 }
 

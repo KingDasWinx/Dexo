@@ -1237,7 +1237,7 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
             let mut profile = load_profile(&repo, &name)?;
             println!("scopes:");
             for rule in &profile.selectors {
-                println!("  {:?}", rule.effect);
+                println!("  {rule}");
             }
             println!("tools: {}", advertised_tools(&profile).join(", "));
             if !confirm {
@@ -1286,7 +1286,7 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
         profile.limits.max_concurrency
     );
     for rule in &profile.selectors {
-        println!("selector {:?}", rule.effect);
+        println!("selector {rule}");
     }
     println!("tools: {}", advertised_tools(&profile).join(", "));
     Ok(())

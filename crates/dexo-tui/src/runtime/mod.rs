@@ -1556,11 +1556,7 @@ impl WorkbenchRuntime {
         let profiles = profiles
             .into_iter()
             .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
-                scopes: profile
-                    .selectors
-                    .iter()
-                    .map(|rule| format!("{rule:?}"))
-                    .collect(),
+                scopes: profile.selectors.iter().map(ToString::to_string).collect(),
                 tools: profile
                     .tool_rules
                     .iter()
@@ -1704,7 +1700,7 @@ fn grant_lines(
                 grant
                     .selectors
                     .iter()
-                    .map(|rule| format!("{rule:?}"))
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join(" ")
             ),

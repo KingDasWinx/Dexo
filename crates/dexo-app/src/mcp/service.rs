@@ -23,8 +23,7 @@ impl McpService {
         let objects = objects
             .into_iter()
             .filter(|object| {
-                policy.decide(&ObjectRef::parse(&object.qualified_name.display_unquoted()))
-                    == Decision::Allow
+                policy.decide(&ObjectRef::from_catalog_object(object)) == Decision::Allow
             })
             .collect();
         Self { profile, objects }
@@ -82,7 +81,7 @@ impl McpService {
     }
 
     pub fn authorize_read_sql(&self, sql: &str) -> Result<(), AppError> {
-        if self.profile.query_mode != QueryMode::RawReadSql || self.profile.column_isolation() {
+        if self.profile.query_mode != QueryMode::RawReadSql {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
                 "raw SQL is not enabled for this profile",
@@ -199,7 +198,7 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
         "query_explain",
         "schema_diff",
     ];
-    if profile.query_mode == QueryMode::RawReadSql && !profile.column_isolation() {
+    if profile.query_mode == QueryMode::RawReadSql {
         tools.push("query_execute_read");
     }
     tools
