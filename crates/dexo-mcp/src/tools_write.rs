@@ -1,5 +1,4 @@
-use dexo_app::catalog_service::parse_qualified;
-use dexo_app::data::{ChangeSet, ColumnDef, RowIdentity, TableMeta, mutations_for};
+use dexo_app::data::{ChangeSet, RowIdentity, TableMeta, mutations_for};
 use dexo_app::error::{AppError, ErrorCategory};
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::grant::WRITE_TOOLS;
@@ -364,7 +363,7 @@ async fn execute(
 ) -> Result<(SideEffect, String), AppError> {
     match name {
         "data_insert" | "data_update" | "data_delete" => {
-            let mutations = data_mutations(name, value)?;
+            let mutations = data_mutations(name, value, session, connection).await?;
             if cancelled() {
                 return Ok((SideEffect::RolledBack, "rolled_back".into()));
             }
@@ -389,55 +388,63 @@ async fn execute(
     }
 }
 
-fn data_mutations(name: &str, value: &Value) -> Result<Vec<Mutation>, AppError> {
+/// Builds the mutations from the table's real primary or unique key, never from the
+/// order the client happened to list its columns in.
+async fn data_mutations(
+    name: &str,
+    value: &Value,
+    session: &dyn Session,
+    connection: &McpConnection,
+) -> Result<Vec<Mutation>, AppError> {
     let target = value
         .get("target")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let table = parse_qualified(target);
+    let table = connection.qualified_name(&connection.qualify(&ObjectRef::parse(target).path));
+    let data = session
+        .data()
+        .ok_or_else(|| AppError::new(ErrorCategory::Capability, "data writer unavailable"))?;
+    let meta = TableMeta::from_keys(data.table_columns(&table).await.map_err(map_driver_error)?);
+    let key = RowIdentity::from_table(&meta).ok_or_else(|| {
+        AppError::new(
+            ErrorCategory::Capability,
+            format!("{target} has no primary key or unique identity; it cannot be edited over MCP"),
+        )
+    })?;
     let values = object_pairs(value.get("values"));
     let identity = object_pairs(value.get("identity"));
-    let columns: Vec<ColumnDef> = if values.is_empty() {
-        identity
-            .iter()
-            .map(|(name, _)| ColumnDef {
-                name: name.clone(),
-                primary_key: true,
-                unique: true,
-                nullable: false,
-            })
-            .collect()
-    } else {
-        values
-            .iter()
-            .enumerate()
-            .map(|(index, (name, _))| ColumnDef {
-                name: name.clone(),
-                primary_key: index == 0,
-                unique: index == 0,
-                nullable: false,
-            })
-            .collect()
-    };
-    let meta = TableMeta { columns };
     let mut changes = ChangeSet::for_table(&meta);
     match name {
         "data_insert" => changes.insert(values),
-        "data_update" => {
+        "data_update" | "data_delete" => {
+            let mut supplied: Vec<&str> =
+                identity.iter().map(|(column, _)| column.as_str()).collect();
+            let mut expected: Vec<&str> = key.iter().map(String::as_str).collect();
+            supplied.sort_unstable();
+            expected.sort_unstable();
+            if supplied != expected {
+                return Err(AppError::new(
+                    ErrorCategory::Configuration,
+                    format!(
+                        "identity must name exactly the key columns: {}",
+                        key.join(", ")
+                    ),
+                ));
+            }
             let row = RowIdentity {
-                columns: identity.iter().map(|(name, _)| name.clone()).collect(),
+                columns: identity.iter().map(|(column, _)| column.clone()).collect(),
                 values: identity.iter().map(|(_, value)| value.clone()).collect(),
             };
-            changes.update(row, identity.clone(), values);
-        }
-        "data_delete" => {
-            let row = RowIdentity {
-                columns: identity.iter().map(|(name, _)| name.clone()).collect(),
-                values: identity.iter().map(|(_, value)| value.clone()).collect(),
-            };
-            changes.delete(row, identity);
+            if name == "data_update" {
+                changes.update(row, identity.clone(), values);
+            } else {
+                changes.delete(row, identity);
+            }
         }
         _ => {}
+    }
+    if let Some(error) = changes.errors().first() {
+        return Err(AppError::new(ErrorCategory::Configuration, error.clone()));
     }
     mutations_for(table, &changes)
         .map_err(|error| AppError::new(ErrorCategory::Configuration, error.to_string()))
@@ -1085,5 +1092,57 @@ mod tests {
         .unwrap_err();
         assert!(error.to_string().contains("production"));
         assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+    }
+
+    fn keyed() -> FakeSession {
+        FakeSession::default().with_keys(vec![dexo_driver_api::ColumnKeyInfo {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+        }])
+    }
+
+    #[tokio::test]
+    async fn updates_must_name_the_real_key() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_update",
+                "db.public.items",
+            ))
+            .unwrap();
+        let session = keyed();
+        let wrong = call_on(
+            &ledger,
+            &session,
+            "local",
+            "data_update",
+            json!({"operation_id":"op-u1","target":"db.public.items","identity":{"name":"x"},"values":{"name":"y"}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(wrong.to_string().contains("key columns: id"), "{wrong}");
+        assert!(!session.log().iter().any(|entry| entry.starts_with("apply")));
+    }
+
+    #[tokio::test]
+    async fn keyless_tables_are_not_editable() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_insert",
+                "db.public.items",
+            ))
+            .unwrap();
+        let error = call(
+            &ledger,
+            "data_insert",
+            json!({"operation_id":"op-k","target":"db.public.items","values":{"name":"x"}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("no primary key"), "{error}");
     }
 }

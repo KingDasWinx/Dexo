@@ -801,17 +801,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             columns,
         } => {
             if generation == model.session_generation {
-                model.data.table = dexo_app::data::TableMeta {
-                    columns: columns
-                        .into_iter()
-                        .map(|column| dexo_app::data::ColumnDef {
-                            name: column.name,
-                            primary_key: column.primary_key,
-                            unique: column.unique,
-                            nullable: true,
-                        })
-                        .collect(),
-                };
+                model.data.table = dexo_app::data::TableMeta::from_keys(columns);
                 model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
                 model.data.row_changes.clear();
             }

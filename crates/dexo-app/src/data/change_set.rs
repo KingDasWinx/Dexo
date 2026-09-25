@@ -1,4 +1,4 @@
-use dexo_driver_api::{ColumnId, DbValue};
+use dexo_driver_api::{ColumnId, ColumnKeyInfo, DbValue};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct EditableRow {
@@ -27,6 +27,24 @@ pub struct ColumnDef {
 #[derive(Clone, Debug, PartialEq)]
 pub struct TableMeta {
     pub columns: Vec<ColumnDef>,
+}
+
+impl TableMeta {
+    /// Editing metadata from the driver's key report. The TUI grid and MCP writes both
+    /// build it here, so they agree on which columns identify a row (META-001).
+    pub fn from_keys(keys: Vec<ColumnKeyInfo>) -> Self {
+        Self {
+            columns: keys
+                .into_iter()
+                .map(|key| ColumnDef {
+                    name: key.name,
+                    primary_key: key.primary_key,
+                    unique: key.unique,
+                    nullable: true,
+                })
+                .collect(),
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
