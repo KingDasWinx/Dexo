@@ -1,12 +1,12 @@
 use dexo_app::catalog_service::parse_qualified;
 use dexo_app::data::{ChangeSet, ColumnDef, RowIdentity, TableMeta, mutations_for};
 use dexo_app::error::{AppError, ErrorCategory};
-use dexo_app::mcp::McpService;
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::grant::WRITE_TOOLS;
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect, payload_hash};
 use dexo_app::mcp::selector::ObjectRef;
+use dexo_app::mcp::{McpConnection, McpService};
 use dexo_app::query_service::map_driver_error;
 use dexo_app::schema::apply::{ApplyRequest, apply_change};
 use dexo_app::schema::change::drop_table;
@@ -36,7 +36,7 @@ pub fn is_grant_management(name: &str) -> bool {
 pub async fn call_write_tool(
     service: &McpService,
     ledger: &dyn GrantLedger,
-    session: Option<&dyn Session>,
+    target: Option<(&McpConnection, &dyn Session)>,
     session_id: &str,
     name: &str,
     arguments: Map<String, Value>,
@@ -57,16 +57,22 @@ pub async fn call_write_tool(
         );
         return Err(AppError::new(ErrorCategory::McpPolicy, "not found"));
     }
+    let Some((connection, session)) = target else {
+        return Err(AppError::new(
+            ErrorCategory::Capability,
+            "no connection is open for this profile",
+        ));
+    };
     let value = Value::Object(arguments.clone());
     let operation_id = arguments
         .get("operation_id")
         .and_then(Value::as_str)
         .ok_or_else(|| AppError::new(ErrorCategory::Configuration, "operation_id is required"))?;
-    let target = arguments
+    let target_name = arguments
         .get("target")
         .and_then(Value::as_str)
         .unwrap_or_default();
-    let object = ObjectRef::parse(target);
+    let object = connection.qualify(&ObjectRef::parse(target_name).path);
     if let Some(existing) = ledger.lookup_operation(&service.profile.name, session_id, operation_id)
     {
         let replayed =
@@ -76,7 +82,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target,
+            target_name,
             "replay",
             None,
             &replayed.result,
@@ -85,10 +91,11 @@ pub async fn call_write_tool(
         );
         return Ok(replayed.result);
     }
+    let profile_policy = service.policy();
     let grants = ledger.active_grants(&service.profile.name, now);
     let grant = grants
         .iter()
-        .find(|grant| grant.authorizes(name, &object, now))
+        .find(|grant| grant.authorizes(name, &connection.name, &object, &profile_policy, now))
         .cloned()
         .ok_or_else(|| {
             audit(
@@ -96,7 +103,7 @@ pub async fn call_write_tool(
                 service,
                 name,
                 Some(operation_id),
-                target,
+                target_name,
                 "deny",
                 None,
                 "not found",
@@ -122,7 +129,7 @@ pub async fn call_write_tool(
             service,
             name,
             Some(operation_id),
-            target,
+            target_name,
             "replay",
             Some(&grant.id.to_string()),
             &reserved.result,
@@ -181,7 +188,7 @@ pub async fn call_write_tool(
         service,
         name,
         Some(operation_id),
-        target,
+        target_name,
         "allow",
         Some(&grant.id.to_string()),
         &result,
@@ -235,7 +242,7 @@ async fn execute(
     service: &McpService,
     name: &str,
     value: &Value,
-    session: Option<&dyn Session>,
+    session: &dyn Session,
     cancelled: impl Fn() -> bool,
 ) -> Result<(SideEffect, String), AppError> {
     match name {
@@ -252,9 +259,6 @@ async fn execute(
             if cancelled() {
                 return Ok((SideEffect::RolledBack, "rolled_back".into()));
             }
-            let Some(session) = session else {
-                return Ok((SideEffect::Unknown, "session required".into()));
-            };
             let _ = session
                 .execute(QueryRequest::write(sql))
                 .await
@@ -327,12 +331,9 @@ fn data_mutations(name: &str, value: &Value) -> Result<Vec<Mutation>, AppError> 
 }
 
 async fn apply_mutations(
-    session: Option<&dyn Session>,
+    session: &dyn Session,
     mutations: &[Mutation],
 ) -> Result<(SideEffect, String), AppError> {
-    let Some(session) = session else {
-        return Ok((SideEffect::Unknown, "session required".into()));
-    };
     session
         .data()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "data writer unavailable"))?
@@ -344,7 +345,7 @@ async fn apply_mutations(
 
 async fn apply_ddl(
     value: &Value,
-    session: Option<&dyn Session>,
+    session: &dyn Session,
     cancelled: bool,
 ) -> Result<(SideEffect, String), AppError> {
     let target = value
@@ -366,19 +367,6 @@ async fn apply_ddl(
     };
     let mut plan = DdlPlan::default();
     plan.push(sql, implicit);
-    let Some(session) = session else {
-        if cancelled && !implicit {
-            return Ok((SideEffect::RolledBack, "rolled_back".into()));
-        }
-        return Ok((
-            if implicit {
-                SideEffect::Committed
-            } else {
-                SideEffect::Unknown
-            },
-            "session required".into(),
-        ));
-    };
     let executor = session
         .ddl()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "ddl unavailable"))?;
@@ -412,7 +400,7 @@ fn map_ddl_outcome(outcome: DdlOutcome) -> (SideEffect, String) {
 async fn apply_admin(
     name: &str,
     value: &Value,
-    session: Option<&dyn Session>,
+    session: &dyn Session,
 ) -> Result<(SideEffect, String), AppError> {
     let session_id = value
         .get("session_id")
@@ -444,9 +432,6 @@ async fn apply_admin(
             format!("type {session_id} to confirm"),
         ));
     }
-    let Some(session) = session else {
-        return Ok((SideEffect::Unknown, "session required".into()));
-    };
     let outcome = session
         .admin()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "admin unavailable"))?
@@ -496,6 +481,7 @@ pub fn now_secs() -> i64 {
 #[cfg(test)]
 mod tests {
     use super::{call_write_tool, is_grant_management, write_tool_names};
+    use dexo_app::mcp::McpConnection;
     use dexo_app::mcp::McpService;
     use dexo_app::mcp::audit::{SECRET_SENTINEL, contains_secret};
     use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
@@ -503,6 +489,7 @@ mod tests {
     use dexo_app::mcp::profile::McpProfile;
     use dexo_app::mcp::selector::{Effect, SelectorRule};
     use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    use dexo_test_support::FakeSession;
     use serde_json::json;
 
     fn profile() -> McpProfile {
@@ -539,21 +526,156 @@ mod tests {
         .unwrap()
     }
 
-    async fn call(
+    fn connection(name: &str) -> McpConnection {
+        McpConnection {
+            name: name.into(),
+            driver: "postgres".into(),
+            dialect: dexo_sql::Dialect::Postgres,
+            database: Some("db".into()),
+            default_schema: Some("public".into()),
+            environment: dexo_app::Environment::Local,
+            read_only: false,
+        }
+    }
+
+    async fn call_on(
         ledger: &MemoryGrantLedger,
+        session: &FakeSession,
+        connection_name: &str,
         tool: &str,
         payload: serde_json::Value,
     ) -> Result<String, dexo_app::AppError> {
+        let connection = connection(connection_name);
         call_write_tool(
             &service(),
             ledger,
-            None,
+            Some((&connection, session as &dyn dexo_driver_api::Session)),
             "s",
             tool,
             payload.as_object().cloned().unwrap(),
             0,
         )
         .await
+    }
+
+    async fn call(
+        ledger: &MemoryGrantLedger,
+        tool: &str,
+        payload: serde_json::Value,
+    ) -> Result<String, dexo_app::AppError> {
+        call_on(ledger, &FakeSession::default(), "local", tool, payload).await
+    }
+
+    #[tokio::test]
+    async fn same_operation_and_payload_executes_once() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_insert",
+                "db.public.items",
+            ))
+            .unwrap();
+        let session = FakeSession::default().with_keys(vec![dexo_driver_api::ColumnKeyInfo {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+        }]);
+        let payload = json!({"operation_id":"op-1","target":"db.public.items","values":{"id":7}});
+        let first = call_on(&ledger, &session, "local", "data_insert", payload.clone())
+            .await
+            .unwrap();
+        let replay = call_on(&ledger, &session, "local", "data_insert", payload)
+            .await
+            .unwrap();
+        assert_eq!(first, replay);
+        assert!(first.contains("Committed"), "{first}");
+        assert_eq!(
+            session
+                .log()
+                .iter()
+                .filter(|entry| entry.starts_with("apply"))
+                .count(),
+            1
+        );
+        let conflict = call(
+            &ledger,
+            "data_insert",
+            json!({"operation_id":"op-1","target":"db.public.items","values":{"id":8}}),
+        )
+        .await
+        .unwrap_err();
+        assert!(conflict.to_string().contains("different payload"));
+    }
+
+    #[tokio::test]
+    async fn writes_without_an_open_connection_fail_before_the_grant_is_spent() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_insert",
+                "db.public.items",
+            ))
+            .unwrap();
+        let error = call_write_tool(
+            &service(),
+            &ledger,
+            None,
+            "s",
+            "data_insert",
+            json!({"operation_id":"op-x","target":"db.public.items","values":{"id":1}})
+                .as_object()
+                .cloned()
+                .unwrap(),
+            0,
+        )
+        .await
+        .unwrap_err();
+        assert!(error.to_string().contains("no connection"));
+        assert_eq!(ledger.active_grants("assistant", 0).len(), 1);
+    }
+
+    #[tokio::test]
+    async fn a_grant_cannot_reach_what_the_profile_denies() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_insert",
+                "db.public.*",
+            ))
+            .unwrap();
+        let error = call(
+            &ledger,
+            "data_insert",
+            json!({"operation_id":"op-s","target":"db.public.secrets","values":{"id":1}}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "not found");
+    }
+
+    #[tokio::test]
+    async fn a_grant_is_bound_to_its_connection() {
+        let ledger = MemoryGrantLedger::default();
+        ledger
+            .insert_grant(grant(
+                GrantCapability::DataWrite,
+                "data_insert",
+                "db.public.items",
+            ))
+            .unwrap();
+        let error = call_on(
+            &ledger,
+            &FakeSession::default(),
+            "other",
+            "data_insert",
+            json!({"operation_id":"op-c","target":"db.public.items","values":{"id":1}}),
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(error.to_string(), "not found");
     }
 
     #[test]
@@ -600,35 +722,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn same_operation_and_payload_executes_once() {
-        let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::DataWrite,
-                "data_insert",
-                "db.public.items",
-            ))
-            .unwrap();
-        let payload = json!({
-            "operation_id":"op-1",
-            "target":"db.public.items",
-            "values":{"id":7}
-        });
-        let first = call(&ledger, "data_insert", payload.clone()).await.unwrap();
-        let replay = call(&ledger, "data_insert", payload).await.unwrap();
-        assert_eq!(first, replay);
-        assert!(first.contains("Unknown"));
-        let conflict = call(
-            &ledger,
-            "data_insert",
-            json!({"operation_id":"op-1","target":"db.public.items","values":{"id":8}}),
-        )
-        .await
-        .unwrap_err();
-        assert!(conflict.to_string().contains("different payload"));
-    }
-
-    #[tokio::test]
     async fn revoke_before_dispatch_hides_grant() {
         let ledger = MemoryGrantLedger::default();
         let grant = grant(GrantCapability::DataWrite, "data_insert", "db.public.items");
@@ -643,33 +736,6 @@ mod tests {
         .await
         .unwrap_err();
         assert!(error.to_string().contains("not found"));
-    }
-
-    #[tokio::test]
-    async fn mysql_ddl_commit_is_not_claimed_reversed() {
-        let ledger = MemoryGrantLedger::default();
-        ledger
-            .insert_grant(grant(
-                GrantCapability::Ddl,
-                "schema_apply_ddl",
-                "db.public.items",
-            ))
-            .unwrap();
-        let result = call(
-            &ledger,
-            "schema_apply_ddl",
-            json!({
-                "operation_id":"op-mysql",
-                "target":"db.public.items",
-                "sql":"DROP TABLE items",
-                "implicit_commit":true,
-                "confirm_target":"db.public.items"
-            }),
-        )
-        .await
-        .unwrap();
-        assert!(result.contains("Committed"));
-        assert!(!result.contains("RolledBack"));
     }
 
     #[tokio::test]
@@ -725,10 +791,12 @@ mod tests {
         let ledger = MemoryGrantLedger::default();
         ledger.insert_grant(grant).unwrap();
         let service = McpService::new(profile, Vec::new());
+        let connection = connection("local");
+        let session = FakeSession::default();
         let error = call_write_tool(
             &service,
             &ledger,
-            None,
+            Some((&connection, &session as &dyn dexo_driver_api::Session)),
             "s",
             "data_execute_sql",
             json!({

@@ -1807,6 +1807,7 @@ dependencies = [
  "dexo-app",
  "dexo-driver-api",
  "dexo-sql",
+ "dexo-test-support",
  "rmcp",
  "schemars 1.2.2",
  "serde",

@@ -130,7 +130,9 @@ impl ServerHandler for DexoMcpServer {
             match tools_write::call_write_tool(
                 &self.service,
                 ledger.as_ref(),
-                self.target.as_ref().map(|(_, session)| session.as_ref()),
+                self.target
+                    .as_ref()
+                    .map(|(connection, session)| (connection, session.as_ref())),
                 &self.session_id,
                 &request.name,
                 arguments,

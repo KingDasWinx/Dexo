@@ -21,6 +21,7 @@ tracing-subscriber.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+dexo-test-support = { path = "../dexo-test-support" }
 dexo-sql = { path = "../dexo-sql" }
 tokio = { workspace = true, features = ["macros", "rt-multi-thread", "io-util"] }
 async-trait.workspace = true

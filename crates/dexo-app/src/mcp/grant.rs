@@ -149,11 +149,25 @@ impl Grant {
         self.remaining_uses > 0 && self.expires_at > now && !self.revoked
     }
 
-    pub fn authorizes(&self, tool: &str, target: &ObjectRef, now: i64) -> bool {
+    /// A grant narrows the profile; it can never widen it. The profile's deny rules still
+    /// apply inside the grant's scope, and a grant issued for one connection is useless
+    /// on another. Admin actions target a server session, not an object, so an admin
+    /// grant is bounded by its connection alone.
+    pub fn authorizes(
+        &self,
+        tool: &str,
+        connection: &str,
+        target: &ObjectRef,
+        profile: &ObjectPolicy,
+        now: i64,
+    ) -> bool {
         self.active(now)
+            && self.connection == connection
             && self.tools.iter().any(|name| name == tool)
             && self.capability.allows_tool(tool)
-            && ObjectPolicy::new(self.selectors.clone()).decide(target) == Decision::Allow
+            && (self.capability == GrantCapability::Admin
+                || (ObjectPolicy::new(self.selectors.clone()).decide(target) == Decision::Allow
+                    && profile.decide(target) == Decision::Allow))
     }
 }
 
@@ -190,6 +204,7 @@ fn sample_object(selector: &Selector) -> ObjectRef {
 #[cfg(test)]
 mod tests {
     use super::{DEFAULT_TTL_SECS, Grant, GrantCapability, MAX_TTL_SECS, parse_ttl};
+    use crate::mcp::policy::ObjectPolicy;
     use crate::mcp::profile::{McpProfile, ToolRule};
     use crate::mcp::selector::{Effect, ObjectRef, SelectorRule};
 
@@ -284,10 +299,18 @@ mod tests {
         .unwrap();
         assert_eq!(grant.remaining_uses, 1);
         let target = ObjectRef::parse("db.public.items");
-        assert!(grant.authorizes("data_insert", &target, 10));
-        assert!(!grant.authorizes("schema_apply_ddl", &target, 10));
-        assert!(!grant.authorizes("data_insert", &ObjectRef::parse("db.public.secrets"), 10));
-        assert!(!grant.authorizes("data_insert", &target, grant.expires_at));
+        let policy = ObjectPolicy::new(profile().selectors);
+        assert!(grant.authorizes("data_insert", "local", &target, &policy, 10));
+        assert!(!grant.authorizes("schema_apply_ddl", "local", &target, &policy, 10));
+        assert!(!grant.authorizes(
+            "data_insert",
+            "local",
+            &ObjectRef::parse("db.public.secrets"),
+            &policy,
+            10
+        ));
+        assert!(!grant.authorizes("data_insert", "local", &target, &policy, grant.expires_at));
+        assert!(!grant.authorizes("data_insert", "other", &target, &policy, 10));
     }
 
     #[test]
