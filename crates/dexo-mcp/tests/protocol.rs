@@ -291,3 +291,31 @@ async fn admin_reads_need_an_explicit_rule() {
     let unsupported = client.call("admin_list_sessions", json!({})).await;
     assert!(text(&unsupported).starts_with("Error [UNSUPPORTED]"));
 }
+
+#[tokio::test]
+async fn every_call_is_audited_without_its_sql() {
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    client.call("grant_create", json!({})).await;
+    let events = ledger.audits();
+    let read = events
+        .iter()
+        .find(|event| event.request == "tools/call query_execute_read")
+        .expect("the read is audited");
+    assert_eq!(read.decision, "allow");
+    assert_eq!(read.status, "ok");
+    assert_eq!(read.rows, 1);
+    assert!(
+        read.sql
+            .as_deref()
+            .is_some_and(|hash| !hash.contains("select"))
+    );
+    let denied = events
+        .iter()
+        .find(|event| event.request == "tools/call grant_create")
+        .expect("the denied call is audited");
+    assert_eq!(denied.decision, "deny");
+    assert_eq!(denied.status, "NOT_FOUND");
+}

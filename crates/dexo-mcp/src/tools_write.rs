@@ -336,7 +336,7 @@ fn audit(
     ledger.record_audit(
         AuditEvent {
             timestamp: now,
-            request: format!("tools/call {tool}"),
+            request: format!("grant {tool}"),
             operation_id: operation_id.map(str::to_string),
             profile: service.profile.name.clone(),
             client: "mcp".into(),

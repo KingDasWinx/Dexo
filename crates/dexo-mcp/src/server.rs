@@ -1,6 +1,7 @@
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
+use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::ledger::GrantLedger;
 use dexo_app::mcp::{McpConnection, McpService, advertised_tools};
 use rmcp::ErrorData as McpError;
@@ -9,11 +10,12 @@ use rmcp::handler::server::router::tool::ToolRouter;
 use rmcp::handler::server::tool::ToolCallContext;
 use rmcp::model::{
     CallToolRequestParams, CallToolResponse, GetPromptRequestParams, GetPromptResponse,
-    GetPromptResult, Implementation, ListPromptsResult, ListResourceTemplatesResult,
+    GetPromptResult, Implementation, JsonObject, ListPromptsResult, ListResourceTemplatesResult,
     ListResourcesResult, ListToolsResult, PaginatedRequestParams, ReadResourceRequestParams,
     ReadResourceResponse, ReadResourceResult, ResourceContents, ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer};
+use serde_json::Value;
 use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
@@ -52,6 +54,8 @@ impl DexoMcpServer {
     ) -> Self {
         let concurrency = service.profile.limits.max_concurrency as usize;
         let connect_timeout = Duration::from_secs(service.profile.limits.timeout_secs);
+        let retention = i64::from(service.profile.audit_retention_days).saturating_mul(86_400);
+        ledger.prune_audits(now_secs().saturating_sub(retention));
         Self {
             inner: Arc::new(Inner {
                 router: McpConnectionRouter::new(connections, backend, connect_timeout),
@@ -64,6 +68,68 @@ impl DexoMcpServer {
             }),
             tool_router: Self::read_tools() + Self::write_tools(),
         }
+    }
+
+    fn audit(
+        &self,
+        tool: &str,
+        arguments: &JsonObject,
+        request_id: &str,
+        decision: &str,
+        response: Option<&CallToolResponse>,
+        started: Instant,
+    ) {
+        let result = match response {
+            Some(CallToolResponse::Complete(result)) => Some(result),
+            _ => None,
+        };
+        let data = result.and_then(|result| result.structured_content.as_ref());
+        let count = |key: &str| {
+            data.and_then(|data| data.get(key))
+                .and_then(Value::as_u64)
+                .unwrap_or(0)
+        };
+        let status = match result {
+            Some(result) if result.is_error == Some(true) => result
+                .content
+                .first()
+                .and_then(|block| block.as_text())
+                .and_then(|text| text.text.strip_prefix("Error ["))
+                .and_then(|rest| rest.split_once(']'))
+                .map_or("error", |(code, _)| code)
+                .to_string(),
+            Some(_) => "ok".to_string(),
+            None => "incomplete".to_string(),
+        };
+        let field = |key: &str| arguments.get(key).and_then(Value::as_str);
+        let target = [
+            field("connection"),
+            field("target").or(field("table")).or(field("name")),
+        ]
+        .into_iter()
+        .flatten()
+        .collect::<Vec<_>>()
+        .join(":");
+        self.inner.ledger.record_audit(
+            AuditEvent {
+                timestamp: now_secs(),
+                request: format!("tools/call {tool}"),
+                operation_id: field("operation_id")
+                    .map(str::to_string)
+                    .or_else(|| Some(format!("rpc:{request_id}"))),
+                profile: self.inner.service.profile.name.clone(),
+                client: "mcp".into(),
+                target,
+                decision: decision.into(),
+                grant_id: None,
+                duration_ms: started.elapsed().as_millis() as u64,
+                rows: count("row_count"),
+                bytes: count("bytes"),
+                status,
+                sql: None,
+            }
+            .sanitize(SqlAuditMode::Hash, field("sql")),
+        );
     }
 
     /// Stops the `list_changed` poller; `serve_io` cancels it when the client goes away.
@@ -129,23 +195,44 @@ impl ServerHandler for DexoMcpServer {
         request: CallToolRequestParams,
         context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        if !self
-            .visible_tools()
-            .iter()
-            .any(|name| name == request.name.as_ref())
-        {
-            return Ok(tool_error("NOT_FOUND", HIDDEN).into());
+        let tool = request.name.to_string();
+        let arguments = request.arguments.clone().unwrap_or_default();
+        let request_id = serde_json::to_string(&context.id).unwrap_or_default();
+        let started = Instant::now();
+        if !self.visible_tools().contains(&tool) {
+            let denied: CallToolResponse = tool_error("NOT_FOUND", HIDDEN).into();
+            self.audit(
+                &tool,
+                &arguments,
+                &request_id,
+                "deny",
+                Some(&denied),
+                started,
+            );
+            return Ok(denied);
         }
         let Ok(_permit) = self.inner.calls.try_acquire() else {
-            return Ok(tool_error(
+            let busy: CallToolResponse = tool_error(
                 "BUSY",
                 "too many calls in flight for this profile; retry shortly",
             )
-            .into());
+            .into();
+            self.audit(&tool, &arguments, &request_id, "deny", Some(&busy), started);
+            return Ok(busy);
         };
-        self.tool_router
+        let response = self
+            .tool_router
             .call(ToolCallContext::new(self, request, context))
-            .await
+            .await;
+        self.audit(
+            &tool,
+            &arguments,
+            &request_id,
+            "allow",
+            response.as_ref().ok(),
+            started,
+        );
+        response
     }
 
     async fn list_resources(

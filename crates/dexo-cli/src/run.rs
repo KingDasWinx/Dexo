@@ -1546,7 +1546,6 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let _db = Database::open(&paths.database)?;
     let ledger = SqliteGrantLedger::open(&paths.database)?;
-    ledger.prune_audits(now_minus_retention(30));
     for event in ledger.audits() {
         if profile.is_some_and(|name| event.profile != name) {
             continue;
@@ -1559,12 +1558,4 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
         println!("{line}");
     }
     Ok(())
-}
-
-fn now_minus_retention(days: i64) -> i64 {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map(|d| d.as_secs() as i64)
-        .unwrap_or(0);
-    now.saturating_sub(days.saturating_mul(86400))
 }
