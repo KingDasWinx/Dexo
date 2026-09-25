@@ -8,5 +8,8 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
+dexo-driver-api = { path = "../dexo-driver-api" }
+futures-util = "0.3"
 testcontainers-modules = { version = "0.15", features = ["mysql", "postgres"] }
 tokio.workspace = true

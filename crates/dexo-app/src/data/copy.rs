@@ -33,7 +33,7 @@ pub fn copy_selection(
     match format {
         CopyFormat::Value => Ok(rows
             .iter()
-            .map(|row| row.iter().map(display).collect::<Vec<_>>().join("\t"))
+            .map(|row| row.iter().map(display_value).collect::<Vec<_>>().join("\t"))
             .collect::<Vec<_>>()
             .join("\n")),
         CopyFormat::Text => Ok(delimited(columns, rows, ' ')),
@@ -50,7 +50,7 @@ fn cell(value: &DbValue) -> Result<String, String> {
         DbValue::Bytes(bytes) if is_truncated_marker(bytes) => {
             Err("refusing to copy truncated bytes as complete".into())
         }
-        _ => Ok(display(value)),
+        _ => Ok(display_value(value)),
     }
 }
 
@@ -58,7 +58,7 @@ fn is_truncated_marker(bytes: &[u8]) -> bool {
     bytes.starts_with(b"\0TRUNC")
 }
 
-fn display(value: &DbValue) -> String {
+pub fn display_value(value: &DbValue) -> String {
     match value {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(v) => v.to_string(),
@@ -88,7 +88,7 @@ fn delimited(columns: &[String], rows: &[Vec<DbValue>], sep: char) -> String {
             .map(|value| match value {
                 DbValue::Null => "\\N".into(),
                 DbValue::Text(text) if text.is_empty() => String::new(),
-                other => display(other),
+                other => display_value(other),
             })
             .collect();
         out.push_str(&cells.join(&sep.to_string()));
@@ -121,7 +121,7 @@ fn json_value(value: &DbValue) -> serde_json::Value {
         DbValue::Json(v) => {
             serde_json::from_str(v).unwrap_or_else(|_| serde_json::Value::String(v.clone()))
         }
-        DbValue::Bytes(v) => serde_json::Value::String(display(&DbValue::Bytes(v.clone()))),
+        DbValue::Bytes(v) => serde_json::Value::String(display_value(&DbValue::Bytes(v.clone()))),
         DbValue::Native { text, .. } => serde_json::Value::String(text.clone()),
     }
 }
@@ -137,7 +137,7 @@ fn markdown(columns: &[String], rows: &[Vec<DbValue>]) -> String {
             .join(" | ")
     ));
     for row in rows {
-        let cells: Vec<String> = row.iter().map(display).collect();
+        let cells: Vec<String> = row.iter().map(display_value).collect();
         out.push_str(&format!("| {} |\n", cells.join(" | ")));
     }
     out

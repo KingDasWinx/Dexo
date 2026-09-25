@@ -513,18 +513,13 @@ fn run_inspect(
             )
         })?;
     let cache = CatalogCache::new(db.connection());
-    let database_name = profile
-        .config
-        .get("database")
-        .or_else(|| profile.config.get("dbname"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("default");
+    let database_name = catalog_database_name(&profile);
     if refresh {
         let objects =
             tokio::runtime::Runtime::new()?.block_on(refresh_catalog(&registry, &profile))?;
-        cache.replace_snapshot(&profile.id.0.to_string(), database_name, &objects)?;
+        cache.replace_snapshot(&profile.id.0.to_string(), &database_name, &objects)?;
     }
-    let cached = cache.load_latest(&profile.id.0.to_string(), database_name)?;
+    let cached = cache.load_latest(&profile.id.0.to_string(), &database_name)?;
     let use_snapshot = snapshot.as_deref() == Some("latest")
         || (!cached.is_empty() && object.is_none() && search.is_some());
     let payload = if grants {
@@ -626,14 +621,9 @@ fn run_schema_snapshot(
             )
         })?;
     let cache = CatalogCache::new(db.connection());
-    let database_name = profile
-        .config
-        .get("database")
-        .or_else(|| profile.config.get("dbname"))
-        .and_then(|value| value.as_str())
-        .unwrap_or("default");
+    let database_name = catalog_database_name(&profile);
     let objects = {
-        let cached = cache.load_latest(&profile.id.0.to_string(), database_name)?;
+        let cached = cache.load_latest(&profile.id.0.to_string(), &database_name)?;
         if cached.is_empty() {
             tokio::runtime::Runtime::new()?.block_on(refresh_catalog(&registry, &profile))?
         } else {
@@ -774,6 +764,16 @@ async fn inspect_grants(
         .await
         .map_err(map_driver_error)?;
     serde_json::to_value(grants).map_err(anyhow::Error::from)
+}
+
+pub(crate) fn catalog_database_name(profile: &dexo_app::ConnectionProfile) -> String {
+    profile
+        .config
+        .get("database")
+        .or_else(|| profile.config.get("dbname"))
+        .and_then(|value| value.as_str())
+        .unwrap_or("default")
+        .to_string()
 }
 
 async fn refresh_catalog(
@@ -1358,33 +1358,32 @@ async fn mcp_serve(registry: DriverRegistry, name: String) -> anyhow::Result<()>
     if !profile.enabled {
         anyhow::bail!("profile '{name}' is disabled");
     }
-    let mut objects = CatalogCache::new(db.connection()).load_latest_any()?;
-    if objects.is_empty() {
-        for connection in &profile.connections {
-            if let Some(conn) =
-                ConnectionRepository::new(db.connection()).get_by_name(connection)?
-            {
-                objects = CatalogCache::new(db.connection())
-                    .load_latest(&conn.id.0.to_string(), "")
-                    .unwrap_or_default();
-            }
+    let target = match profile.connections.first() {
+        None => None,
+        Some(name) => {
+            let saved = ConnectionRepository::new(db.connection())
+                .get_by_name(name)?
+                .ok_or_else(|| anyhow::anyhow!("profile names unknown connection '{name}'"))?;
+            Some(saved)
         }
-    }
+    };
+    let objects = match &target {
+        Some(saved) => CatalogCache::new(db.connection())
+            .load_latest(&saved.id.0.to_string(), &catalog_database_name(saved))?,
+        None => Vec::new(),
+    };
     let service = McpService::new(profile, objects);
-    let session = if let Some(connection) = service.profile.connections.first() {
-        match ConnectionRepository::new(db.connection()).get_by_name(connection)? {
-            Some(conn) => connect_session(&registry, &conn)
-                .await
-                .ok()
-                .map(std::sync::Arc::from),
-            None => None,
+    let target = match target {
+        Some(saved) => {
+            let connection = dexo_app::mcp::McpConnection::from_profile(&saved)?;
+            let session = connect_session(&registry, &saved).await?;
+            Some((connection, std::sync::Arc::from(session)))
         }
-    } else {
-        None
+        None => None,
     };
     dexo_mcp::serve_with_ledger(
         service,
-        session,
+        target,
         Some(std::sync::Arc::new(SqliteGrantLedger::open(
             &paths.database,
         )?)),

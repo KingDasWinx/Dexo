@@ -1,10 +1,10 @@
 use std::sync::Arc;
 
-use dexo_app::mcp::{McpService, advertised_tools};
+use dexo_app::mcp::{McpConnection, McpService, advertised_tools};
 use rmcp::model::{CallToolResult, ContentBlock, JsonObject, Tool};
 use serde_json::{Map, Value};
 
-use crate::schema::{DiffInput, ExplainInput, ObjectInput, QueryInput, SearchInput};
+use crate::schema::{ObjectInput, QueryInput, SearchInput};
 
 pub fn list_tools(service: &McpService) -> Vec<Tool> {
     advertised_tools(&service.profile)
@@ -15,6 +15,7 @@ pub fn list_tools(service: &McpService) -> Vec<Tool> {
 
 pub fn call_tool(
     service: &McpService,
+    connection: Option<&McpConnection>,
     name: &str,
     arguments: Map<String, Value>,
 ) -> CallToolResult {
@@ -22,46 +23,46 @@ pub fn call_tool(
         return CallToolResult::error(vec![ContentBlock::text(crate::error::hidden_error())]);
     }
     let value = Value::Object(arguments);
-    let text = match name {
+    let outcome: Result<String, String> = match name {
         "catalog_search" => serde_json::from_value::<SearchInput>(value)
-            .map(|input| serde_json::to_string(&service.search(&input.query)).unwrap_or_default())
-            .unwrap_or_else(|error| error.to_string()),
+            .map_err(|error| error.to_string())
+            .map(|input| serde_json::to_string(&service.search(&input.query)).unwrap_or_default()),
         "object_describe" => serde_json::from_value::<ObjectInput>(value)
-            .ok()
-            .and_then(|input| service.describe(&input.id).ok())
-            .map(|object| serde_json::to_string(&object).unwrap_or_default())
-            .unwrap_or_else(|| crate::error::hidden_error().into()),
-        "object_get_ddl" => serde_json::from_value::<ObjectInput>(value)
-            .ok()
-            .and_then(|input| service.ddl(&input.id).ok())
-            .unwrap_or_else(|| crate::error::hidden_error().into()),
-        "object_relationships" => serde_json::from_value::<ObjectInput>(value)
-            .ok()
-            .and_then(|input| service.relationships(&input.id).ok())
-            .map(|items| serde_json::to_string(&items).unwrap_or_default())
-            .unwrap_or_else(|| crate::error::hidden_error().into()),
-        "query_validate" => serde_json::from_value::<QueryInput>(value)
-            .ok()
-            .and_then(|input| service.validate_sql(&input.sql).ok().map(|_| "ok".into()))
-            .unwrap_or_else(|| "statement rejected".into()),
-        "query_explain" => serde_json::from_value::<ExplainInput>(value)
-            .map(|input| format!("explain estimated: {}", input.sql))
-            .unwrap_or_else(|error| error.to_string()),
-        "schema_diff" => serde_json::from_value::<DiffInput>(value)
-            .map(|input| format!("diff {} -> {}", input.from, input.to))
-            .unwrap_or_else(|error| error.to_string()),
-        "query_execute_read" => serde_json::from_value::<QueryInput>(value)
-            .ok()
+            .map_err(|error| error.to_string())
             .and_then(|input| {
                 service
-                    .validate_sql(&input.sql)
-                    .ok()
-                    .map(|_| "queued".into())
+                    .describe(&input.id)
+                    .map_err(|error| error.to_string())
             })
-            .unwrap_or_else(|| "statement rejected".into()),
-        _ => crate::error::hidden_error().into(),
+            .map(|object| serde_json::to_string(&object).unwrap_or_default()),
+        "object_get_ddl" => serde_json::from_value::<ObjectInput>(value)
+            .map_err(|error| error.to_string())
+            .and_then(|input| service.ddl(&input.id).map_err(|error| error.to_string())),
+        "object_relationships" => serde_json::from_value::<ObjectInput>(value)
+            .map_err(|error| error.to_string())
+            .and_then(|input| {
+                service
+                    .relationships(&input.id)
+                    .map_err(|error| error.to_string())
+            })
+            .map(|items| serde_json::to_string(&items).unwrap_or_default()),
+        "query_validate" => match connection {
+            None => Err("no connection is configured for this profile".into()),
+            Some(connection) => serde_json::from_value::<QueryInput>(value)
+                .map_err(|error| error.to_string())
+                .and_then(|input| {
+                    service
+                        .validate_sql(connection, &input.sql)
+                        .map(|()| "ok".to_string())
+                        .map_err(|error| error.to_string())
+                }),
+        },
+        _ => Err(crate::error::hidden_error().into()),
     };
-    CallToolResult::success(vec![ContentBlock::text(text)])
+    match outcome {
+        Ok(text) => CallToolResult::success(vec![ContentBlock::text(text)]),
+        Err(text) => CallToolResult::error(vec![ContentBlock::text(text)]),
+    }
 }
 
 pub(crate) fn input_schema() -> Arc<JsonObject> {

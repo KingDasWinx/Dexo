@@ -1,9 +1,17 @@
-use dexo_driver_api::{CatalogObject, ExplainPlan, ExplainRequest, QueryRequest, Session};
-use dexo_sql::{StatementEffect, split_statements};
+use std::time::Duration;
+
+use dexo_driver_api::{
+    CatalogObject, ExplainPlan, ExplainRequest, QueryEvent, QueryRequest, Session, TransactionMode,
+};
+use dexo_sql::{GuardRejection, StatementEffect, inspect_read, split_statements};
 use futures_util::StreamExt;
+use serde::Serialize;
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
+use crate::data::display_value;
 use crate::error::{AppError, ErrorCategory};
+use crate::mcp::connection::McpConnection;
 use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::{McpProfile, QueryMode};
 use crate::mcp::selector::ObjectRef;
@@ -11,6 +19,15 @@ use crate::query_service::map_driver_error;
 use crate::search_service::SearchService;
 
 const HIDDEN: &str = "not found";
+
+/// Rows as the user would see them in the grid, with the limits that cut them short.
+#[derive(Clone, Debug, Default, PartialEq, Serialize)]
+pub struct ReadResult {
+    pub columns: Vec<String>,
+    pub rows: Vec<Vec<String>>,
+    pub truncated: bool,
+    pub bytes: u64,
+}
 
 pub struct McpService {
     pub profile: McpProfile,
@@ -75,44 +92,6 @@ impl McpService {
             .collect())
     }
 
-    pub fn validate_sql(&self, sql: &str) -> Result<(), AppError> {
-        self.authorize_read_sql(sql)?;
-        Ok(())
-    }
-
-    pub fn authorize_read_sql(&self, sql: &str) -> Result<(), AppError> {
-        if self.profile.query_mode != QueryMode::RawReadSql {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "raw SQL is not enabled for this profile",
-            ));
-        }
-        let spans = split_statements(sql);
-        if spans.len() != 1 {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "query_execute_read requires one statement",
-            ));
-        }
-        let span = &spans[0];
-        if !span.understood || span.effect != StatementEffect::ReadOnly {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "statement is not an understood read",
-            ));
-        }
-        let policy = ObjectPolicy::new(self.profile.selectors.clone());
-        for object in &self.objects {
-            let _ = object;
-        }
-        if let Some(name) = referenced_name(sql)
-            && policy.decide(&ObjectRef::parse(&name)) != Decision::Allow
-        {
-            return Err(hidden());
-        }
-        Ok(())
-    }
-
     pub fn authorize_write_sql(&self, sql: &str) -> Result<(), AppError> {
         let spans = split_statements(sql);
         if spans.len() != 1 || !spans[0].understood {
@@ -130,47 +109,133 @@ impl McpService {
         Ok(())
     }
 
+    pub fn policy(&self) -> ObjectPolicy {
+        ObjectPolicy::new(self.profile.selectors.clone())
+    }
+
+    pub fn validate_sql(&self, connection: &McpConnection, sql: &str) -> Result<(), AppError> {
+        self.authorize_read_sql(connection, sql)
+    }
+
+    pub fn authorize_read_sql(
+        &self,
+        connection: &McpConnection,
+        sql: &str,
+    ) -> Result<(), AppError> {
+        if self.profile.query_mode != QueryMode::RawReadSql {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "raw SQL is not enabled for this profile",
+            ));
+        }
+        let inspection = inspect_read(sql, connection.dialect).map_err(guard_error)?;
+        self.authorize_relations(connection, &inspection.relations)
+            .map(|_| ())
+    }
+
+    /// Every relation a statement names must be allowed after completing it the way the
+    /// server would; one denied or unknown name hides the whole statement.
+    pub fn authorize_relations(
+        &self,
+        connection: &McpConnection,
+        relations: &[Vec<String>],
+    ) -> Result<Vec<ObjectRef>, AppError> {
+        let policy = self.policy();
+        let targets: Vec<ObjectRef> = relations
+            .iter()
+            .map(|path| connection.qualify(path))
+            .collect();
+        if targets
+            .iter()
+            .all(|target| policy.decide(target) == Decision::Allow)
+        {
+            Ok(targets)
+        } else {
+            Err(hidden())
+        }
+    }
+
+    /// Runs one authorized read inside `BEGIN READ ONLY … ROLLBACK`. The parse above keeps
+    /// out what it can recognise; the transaction is what stops a function that writes.
     pub async fn execute_read(
         &self,
         session: &dyn Session,
+        connection: &McpConnection,
         sql: &str,
-    ) -> Result<serde_json::Value, AppError> {
-        self.authorize_read_sql(sql)?;
-        let mut request = QueryRequest::read(sql, self.profile.limits.max_rows);
-        request.timeout = std::time::Duration::from_secs(self.profile.limits.timeout_secs);
+        cancel: &CancellationToken,
+    ) -> Result<ReadResult, AppError> {
+        self.authorize_read_sql(connection, sql)?;
+        let transactions = session.transactions().ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Capability,
+                "this connection cannot open a read-only transaction",
+            )
+        })?;
+        transactions
+            .begin(TransactionMode::ReadOnly)
+            .await
+            .map_err(map_driver_error)?;
+        let outcome = self.collect_rows(session, sql, cancel).await;
+        let rolled_back = transactions.rollback().await.map_err(map_driver_error);
+        let result = outcome?;
+        rolled_back?;
+        Ok(result)
+    }
+
+    async fn collect_rows(
+        &self,
+        session: &dyn Session,
+        sql: &str,
+        cancel: &CancellationToken,
+    ) -> Result<ReadResult, AppError> {
+        let limits = &self.profile.limits;
+        let mut request = QueryRequest::read(sql, limits.max_rows.saturating_add(1));
+        request.timeout = Duration::from_secs(limits.timeout_secs);
+        let query = request.id;
         let mut stream = session.execute(request).await.map_err(map_driver_error)?;
-        let mut rows = Vec::new();
-        let mut bytes = 0_u64;
-        while let Some(event) = stream.next().await {
-            let event = event.map_err(map_driver_error)?;
-            if let dexo_driver_api::QueryEvent::Rows(batch) = event {
-                for row in batch.rows {
-                    bytes = bytes.saturating_add(row.len() as u64 * 8);
-                    if bytes > self.profile.limits.max_bytes
-                        || rows.len() as u64 >= self.profile.limits.max_rows
-                    {
-                        break;
-                    }
-                    rows.push(format!("{row:?}"));
+        let mut result = ReadResult::default();
+        while !result.truncated {
+            let event = tokio::select! {
+                () = cancel.cancelled() => {
+                    let _ = session.cancel(query).await;
+                    return Err(AppError::new(ErrorCategory::Cancelled, "cancelled by the client"));
                 }
+                event = stream.next() => event,
+            };
+            let Some(event) = event else {
+                break;
+            };
+            match event.map_err(map_driver_error)? {
+                QueryEvent::Columns(columns) if result.columns.is_empty() => {
+                    result.columns = columns.into_iter().map(|column| column.name).collect();
+                }
+                QueryEvent::Rows(batch) => {
+                    for row in batch.rows {
+                        let cells: Vec<String> = row.iter().map(display_value).collect();
+                        let size: u64 = cells.iter().map(|cell| cell.len() as u64).sum();
+                        if result.rows.len() as u64 >= limits.max_rows
+                            || result.bytes + size > limits.max_bytes
+                        {
+                            result.truncated = true;
+                            break;
+                        }
+                        result.bytes += size;
+                        result.rows.push(cells);
+                    }
+                }
+                _ => {}
             }
         }
-        Ok(serde_json::json!({ "rows": rows, "bytes": bytes }))
+        Ok(result)
     }
 
     pub async fn explain(
         &self,
         session: &dyn Session,
+        connection: &McpConnection,
         sql: &str,
-        analyze: bool,
     ) -> Result<ExplainPlan, AppError> {
-        self.authorize_read_sql(sql)?;
-        if analyze {
-            return Err(AppError::new(
-                ErrorCategory::McpPolicy,
-                "EXPLAIN ANALYZE is not available on a read-only MCP profile",
-            ));
-        }
+        self.authorize_read_sql(connection, sql)?;
         session
             .explain()
             .ok_or_else(|| AppError::new(ErrorCategory::Capability, "explain is unavailable"))?
@@ -196,7 +261,6 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
         "object_relationships",
         "query_validate",
         "query_explain",
-        "schema_diff",
     ];
     if profile.query_mode == QueryMode::RawReadSql {
         tools.push("query_execute_read");
@@ -211,26 +275,25 @@ pub fn new_result_uri() -> String {
     format!("dexo://result/{}", Uuid::new_v4())
 }
 
-fn referenced_name(sql: &str) -> Option<String> {
-    let upper = sql.to_ascii_uppercase();
-    let from = upper.find(" FROM ")?;
-    let rest = sql[from + 6..].trim_start();
-    let name = rest
-        .split(|ch: char| ch.is_whitespace() || ch == ';' || ch == ',')
-        .next()?;
-    Some(name.trim_matches('"').trim_matches('`').to_string())
-}
-
 fn hidden() -> AppError {
     AppError::new(ErrorCategory::McpPolicy, HIDDEN)
 }
 
+fn guard_error(rejection: GuardRejection) -> AppError {
+    AppError::new(ErrorCategory::McpPolicy, rejection.to_string())
+}
+
 #[cfg(test)]
 mod tests {
+    use super::McpConnection;
     use super::McpService;
+    use crate::error::ErrorCategory;
     use crate::mcp::profile::{McpProfile, QueryMode};
     use crate::mcp::selector::{Effect, SelectorRule};
+    use dexo_driver_api::DbValue;
     use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    use dexo_test_support::FakeSession;
+    use tokio_util::sync::CancellationToken;
 
     fn table(name: &str) -> CatalogObject {
         CatalogObject::new(
@@ -261,21 +324,119 @@ mod tests {
         assert!(service.describe("missing").unwrap_err().to_string() == "not found");
     }
 
-    #[test]
-    fn mutating_and_unknown_sql_are_rejected() {
+    fn raw_service(max_rows: u64, max_bytes: u64) -> McpService {
         let mut profile = McpProfile::new("assistant");
         profile.query_mode = QueryMode::RawReadSql;
-        profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-        let service = McpService::new(profile, vec![table("users")]);
-        assert!(
-            service
-                .validate_sql("WITH x AS (SELECT 1) DELETE FROM users")
-                .is_err()
+        profile.limits.max_rows = max_rows;
+        profile.limits.max_bytes = max_bytes;
+        profile.selectors = vec![
+            SelectorRule::parse(Effect::Allow, "db.public.*").unwrap(),
+            SelectorRule::parse(Effect::Deny, "db.public.secrets").unwrap(),
+        ];
+        McpService::new(profile, Vec::new())
+    }
+
+    fn pg() -> McpConnection {
+        McpConnection {
+            name: "local".into(),
+            driver: "postgres".into(),
+            dialect: dexo_sql::Dialect::Postgres,
+            database: Some("db".into()),
+            default_schema: Some("public".into()),
+            environment: crate::connection_policy::Environment::Local,
+            read_only: false,
+        }
+    }
+
+    #[test]
+    fn denied_tables_cannot_ride_along_in_a_join() {
+        let service = raw_service(10, 1024);
+        assert!(service.validate_sql(&pg(), "select * from users").is_ok());
+        for sql in [
+            "select * from users u join secrets s on true",
+            "select * from users, secrets",
+            "select * from\nsecrets",
+            "select (select 1 from db.public.secrets) from users",
+            "WITH x AS (SELECT 1) DELETE FROM users",
+            "select * into leaked from users",
+        ] {
+            assert!(service.validate_sql(&pg(), sql).is_err(), "{sql}");
+        }
+    }
+
+    #[tokio::test]
+    async fn reads_run_in_a_read_only_transaction_that_is_rolled_back() {
+        let session = FakeSession::with_rows(&["id"], vec![vec![DbValue::I64(1)]]);
+        let result = raw_service(10, 1024)
+            .execute_read(
+                &session,
+                &pg(),
+                "select id from users",
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(result.columns, ["id"]);
+        assert_eq!(result.rows, vec![vec!["1".to_string()]]);
+        assert_eq!(
+            session.log(),
+            ["begin ReadOnly", "execute select id from users", "rollback"]
         );
-        assert!(
-            service.validate_sql("SELECT mystery() FROM users").is_ok()
-                || service.validate_sql("SELECT 1").is_ok()
+    }
+
+    #[tokio::test]
+    async fn rows_past_the_limits_are_cut_and_flagged() {
+        let rows = vec![
+            vec![DbValue::Text("ab".into())],
+            vec![DbValue::Text("cd".into())],
+            vec![DbValue::Text("ef".into())],
+        ];
+        let by_rows = raw_service(2, 1024)
+            .execute_read(
+                &FakeSession::with_rows(&["v"], rows.clone()),
+                &pg(),
+                "select v from users",
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_rows.rows.len(), 2);
+        assert!(by_rows.truncated);
+        let by_bytes = raw_service(10, 3)
+            .execute_read(
+                &FakeSession::with_rows(&["v"], rows),
+                &pg(),
+                "select v from users",
+                &CancellationToken::new(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(by_bytes.rows.len(), 1);
+        assert!(by_bytes.truncated);
+    }
+
+    #[tokio::test]
+    async fn a_cancelled_read_cancels_the_query_and_rolls_back() {
+        let session = FakeSession::hanging();
+        let cancel = CancellationToken::new();
+        let trigger = cancel.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            trigger.cancel();
+        });
+        let error = raw_service(10, 1024)
+            .execute_read(&session, &pg(), "select id from users", &cancel)
+            .await
+            .unwrap_err();
+        assert_eq!(error.category(), ErrorCategory::Cancelled);
+        assert_eq!(
+            session.log(),
+            [
+                "begin ReadOnly",
+                "execute select id from users",
+                "cancel",
+                "rollback"
+            ]
         );
-        assert!(service.validate_sql("SELECT 1 FROM secrets").is_err());
     }
 }

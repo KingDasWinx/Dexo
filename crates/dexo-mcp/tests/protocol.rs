@@ -56,26 +56,24 @@ fn expired_result_is_generic_not_found() {
 #[test]
 fn mutating_sql_is_rejected_before_data() {
     let service = service();
-    let result = call_tool(
-        &service,
-        "query_execute_read",
-        json!({"sql": "WITH x AS (SELECT 1) DELETE FROM users"})
-            .as_object()
-            .cloned()
-            .unwrap(),
-    );
-    let text = format!("{result:?}");
-    assert!(text.contains("statement rejected") || text.contains("is_error: Some(true)"));
-    let denied = call_tool(
-        &service,
-        "query_execute_read",
-        json!({"sql": "SELECT 1 FROM secrets"})
-            .as_object()
-            .cloned()
-            .unwrap(),
-    );
-    let denied_text = format!("{denied:?}");
-    assert!(denied_text.contains("not found") || denied_text.contains("statement rejected"));
+    let connection = dexo_app::mcp::McpConnection {
+        name: "local".into(),
+        driver: "postgres".into(),
+        dialect: dexo_sql::Dialect::Postgres,
+        database: Some("db".into()),
+        default_schema: Some("public".into()),
+        environment: dexo_app::Environment::Local,
+        read_only: false,
+    };
+    for sql in ["DELETE FROM users", "SELECT 1 FROM secrets"] {
+        let result = call_tool(
+            &service,
+            Some(&connection),
+            "query_validate",
+            json!({ "sql": sql }).as_object().cloned().unwrap(),
+        );
+        assert_eq!(result.is_error, Some(true), "{sql}");
+    }
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]

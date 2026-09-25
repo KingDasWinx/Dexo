@@ -1685,6 +1685,7 @@ dependencies = [
  "dexo-driver-postgres",
  "dexo-mcp",
  "dexo-secrets",
+ "dexo-sql",
  "dexo-storage",
  "dexo-test-support",
  "dexo-tui",
@@ -1694,6 +1695,7 @@ dependencies = [
  "serde_json",
  "tempfile",
  "tokio",
+ "tokio-util",
  "tracing-appender",
  "tracing-subscriber",
  "uuid",
@@ -1709,6 +1711,7 @@ dependencies = [
  "dexo-runtime",
  "dexo-secrets",
  "dexo-sql",
+ "dexo-test-support",
  "encoding_rs",
  "futures-util",
  "image",
@@ -1720,6 +1723,7 @@ dependencies = [
  "tempfile",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-util",
  "toml",
  "uuid",
 ]
@@ -1802,6 +1806,7 @@ dependencies = [
  "async-trait",
  "dexo-app",
  "dexo-driver-api",
+ "dexo-sql",
  "rmcp",
  "schemars 1.2.2",
  "serde",
@@ -1868,6 +1873,9 @@ name = "dexo-test-support"
 version = "1.4.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "dexo-driver-api",
+ "futures-util",
  "testcontainers-modules",
  "tokio",
 ]

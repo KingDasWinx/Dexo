@@ -1,4 +1,4 @@
-use dexo_app::mcp::McpService;
+use dexo_app::mcp::{McpConnection, McpService};
 use rmcp::ServiceExt;
 use tracing_subscriber::EnvFilter;
 
@@ -12,26 +12,15 @@ pub fn init_mcp_tracing() {
         .try_init();
 }
 
-pub async fn serve_profile(service: McpService) -> anyhow::Result<()> {
-    serve_with_session(service, None).await
-}
-
-pub async fn serve_with_session(
-    service: McpService,
-    session: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
-) -> anyhow::Result<()> {
-    serve_with_ledger(service, session, None).await
-}
-
 pub async fn serve_with_ledger(
     service: McpService,
-    session: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
+    target: Option<(McpConnection, std::sync::Arc<dyn dexo_driver_api::Session>)>,
     ledger: Option<std::sync::Arc<dyn dexo_app::mcp::GrantLedger>>,
 ) -> anyhow::Result<()> {
     init_mcp_tracing();
     let mut server = DexoMcpServer::new(service);
-    if let Some(session) = session {
-        server = server.with_session(session);
+    if let Some((connection, session)) = target {
+        server = server.with_session(connection, session);
     }
     if let Some(ledger) = ledger {
         server = server.with_ledger(ledger);

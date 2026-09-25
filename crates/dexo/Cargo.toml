@@ -22,6 +22,8 @@ tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 
 [dev-dependencies]
+tokio-util.workspace = true
+dexo-sql = { path = "../dexo-sql" }
 assert_cmd = "2.2.0"
 dexo-app = { path = "../dexo-app" }
 dexo-secrets = { path = "../dexo-secrets" }

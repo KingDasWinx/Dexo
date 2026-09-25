@@ -1,18 +1,18 @@
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use dexo_app::mcp::McpService;
 use dexo_app::mcp::grant::WRITE_TOOLS;
 use dexo_app::mcp::ledger::GrantLedger;
+use dexo_app::mcp::{McpConnection, McpService, advertised_tools};
 use dexo_driver_api::Session;
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::model::{
-    CallToolRequestParams, CallToolResponse, CallToolResult, CancelledNotificationParam,
-    ContentBlock, GetPromptRequestParams, GetPromptResponse, GetPromptResult, Implementation,
-    ListPromptsResult, ListResourceTemplatesResult, ListResourcesResult, ListToolsResult,
-    PaginatedRequestParams, ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult,
-    ResourceContents, ServerCapabilities, ServerInfo,
+    CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, GetPromptRequestParams,
+    GetPromptResponse, GetPromptResult, Implementation, ListPromptsResult,
+    ListResourceTemplatesResult, ListResourcesResult, ListToolsResult, PaginatedRequestParams,
+    ReadResourceRequestParams, ReadResourceResponse, ReadResourceResult, ResourceContents,
+    ServerCapabilities, ServerInfo,
 };
 use rmcp::service::{NotificationContext, RequestContext, RoleServer};
 use tokio_util::sync::CancellationToken;
@@ -26,8 +26,9 @@ use crate::tools_write;
 pub struct DexoMcpServer {
     pub service: Arc<McpService>,
     store: Arc<Mutex<ResultStore>>,
-    cancel: CancellationToken,
-    session: Option<Arc<dyn Session>>,
+    stop: CancellationToken,
+    target: Option<(McpConnection, Arc<dyn Session>)>,
+    session_lock: Arc<tokio::sync::Mutex<()>>,
     ledger: Option<Arc<dyn GrantLedger>>,
     session_id: String,
     last_revision: Arc<Mutex<u64>>,
@@ -39,16 +40,17 @@ impl DexoMcpServer {
         Self {
             service: Arc::new(service),
             store: Arc::new(Mutex::new(ResultStore::new(profile))),
-            cancel: CancellationToken::new(),
-            session: None,
+            stop: CancellationToken::new(),
+            target: None,
+            session_lock: Arc::new(tokio::sync::Mutex::new(())),
             ledger: None,
             session_id: uuid::Uuid::new_v4().to_string(),
             last_revision: Arc::new(Mutex::new(0)),
         }
     }
 
-    pub fn with_session(mut self, session: Arc<dyn Session>) -> Self {
-        self.session = Some(session);
+    pub fn with_session(mut self, connection: McpConnection, session: Arc<dyn Session>) -> Self {
+        self.target = Some((connection, session));
         self
     }
 
@@ -61,10 +63,6 @@ impl DexoMcpServer {
         Arc::clone(&self.store)
     }
 
-    pub fn cancelled(&self) -> bool {
-        self.cancel.is_cancelled()
-    }
-
     pub fn clear_results(&self) {
         self.store.lock().expect("result store").clear();
     }
@@ -73,7 +71,7 @@ impl DexoMcpServer {
 impl Drop for DexoMcpServer {
     fn drop(&mut self) {
         self.clear_results();
-        self.cancel.cancel();
+        self.stop.cancel();
     }
 }
 
@@ -116,23 +114,23 @@ impl ServerHandler for DexoMcpServer {
     async fn call_tool(
         &self,
         request: CallToolRequestParams,
-        _context: RequestContext<RoleServer>,
+        context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, McpError> {
-        if self.cancel.is_cancelled() {
-            return Ok(CallToolResult::error(vec![ContentBlock::text("cancelled")]).into());
-        }
         let arguments = request.arguments.unwrap_or_default();
-        if WRITE_TOOLS
+        let is_write = WRITE_TOOLS
             .iter()
-            .any(|name| *name == request.name.as_ref())
-        {
+            .any(|name| *name == request.name.as_ref());
+        if !is_write && !advertised_tools(&self.service.profile).contains(&request.name.as_ref()) {
+            return Ok(CallToolResult::error(vec![ContentBlock::text(hidden_error())]).into());
+        }
+        if is_write {
             let Some(ledger) = &self.ledger else {
                 return Ok(CallToolResult::error(vec![ContentBlock::text(hidden_error())]).into());
             };
             match tools_write::call_write_tool(
                 &self.service,
                 ledger.as_ref(),
-                self.session.as_deref(),
+                self.target.as_ref().map(|(_, session)| session.as_ref()),
                 &self.session_id,
                 &request.name,
                 arguments,
@@ -151,12 +149,18 @@ impl ServerHandler for DexoMcpServer {
             }
         }
         if request.name == "query_execute_read" {
-            return execute_read_tool(self, arguments).await;
+            return execute_read_tool(self, arguments, context.ct.clone()).await;
         }
         if request.name == "query_explain" {
             return explain_tool(self, arguments).await;
         }
-        Ok(tools_read::call_tool(&self.service, &request.name, arguments).into())
+        Ok(tools_read::call_tool(
+            &self.service,
+            self.target.as_ref().map(|(connection, _)| connection),
+            &request.name,
+            arguments,
+        )
+        .into())
     }
 
     async fn list_resources(
@@ -222,7 +226,7 @@ impl ServerHandler for DexoMcpServer {
             return;
         };
         let last_revision = Arc::clone(&self.last_revision);
-        let cancel = self.cancel.clone();
+        let cancel = self.stop.clone();
         let peer = context.peer.clone();
         tokio::spawn(async move {
             loop {
@@ -246,48 +250,30 @@ impl ServerHandler for DexoMcpServer {
             }
         });
     }
-
-    async fn on_cancelled(
-        &self,
-        _notification: CancelledNotificationParam,
-        _context: NotificationContext<RoleServer>,
-    ) {
-        self.cancel.cancel();
-        self.clear_results();
-    }
 }
 
 async fn execute_read_tool(
     server: &DexoMcpServer,
     arguments: serde_json::Map<String, serde_json::Value>,
+    cancel: CancellationToken,
 ) -> Result<CallToolResponse, McpError> {
     let sql = arguments
         .get("sql")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if let Err(error) = server.service.validate_sql(sql) {
-        return Ok(CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into());
-    }
-    let Some(session) = &server.session else {
-        let uri = dexo_app::mcp::new_result_uri();
-        let body = serde_json::json!({ "status": "authorized", "sql": sql }).to_string();
-        server.store.lock().expect("result store").insert(
-            uri.clone(),
-            body,
-            Duration::from_secs(60),
-        );
-        return Ok(CallToolResult::success(vec![ContentBlock::text(uri)]).into());
+    let Some((connection, session)) = &server.target else {
+        return Ok(no_connection().into());
     };
-    match server.service.execute_read(session.as_ref(), sql).await {
-        Ok(value) => {
-            let uri = dexo_app::mcp::new_result_uri();
-            server.store.lock().expect("result store").insert(
-                uri.clone(),
-                value.to_string(),
-                Duration::from_secs(60),
-            );
-            Ok(CallToolResult::success(vec![ContentBlock::text(uri)]).into())
-        }
+    let _serialized = server.session_lock.lock().await;
+    match server
+        .service
+        .execute_read(session.as_ref(), connection, sql, &cancel)
+        .await
+    {
+        Ok(result) => Ok(CallToolResult::success(vec![ContentBlock::text(
+            serde_json::to_string(&result).unwrap_or_default(),
+        )])
+        .into()),
         Err(error) => Ok(CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into()),
     }
 }
@@ -300,20 +286,25 @@ async fn explain_tool(
         .get("sql")
         .and_then(serde_json::Value::as_str)
         .unwrap_or_default();
-    if let Err(error) = server.service.validate_sql(sql) {
-        return Ok(CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into());
-    }
-    let Some(session) = &server.session else {
-        return Ok(CallToolResult::success(vec![ContentBlock::text(format!(
-            "explain estimated: {sql}"
-        ))])
-        .into());
+    let Some((connection, session)) = &server.target else {
+        return Ok(no_connection().into());
     };
-    match server.service.explain(session.as_ref(), sql, false).await {
+    let _serialized = server.session_lock.lock().await;
+    match server
+        .service
+        .explain(session.as_ref(), connection, sql)
+        .await
+    {
         Ok(plan) => Ok(CallToolResult::success(vec![ContentBlock::text(
             serde_json::to_string(&plan).unwrap_or_else(|_| hidden_error().into()),
         )])
         .into()),
         Err(error) => Ok(CallToolResult::error(vec![ContentBlock::text(error.to_string())]).into()),
     }
+}
+
+fn no_connection() -> CallToolResult {
+    CallToolResult::error(vec![ContentBlock::text(
+        "no connection is configured for this profile",
+    )])
 }

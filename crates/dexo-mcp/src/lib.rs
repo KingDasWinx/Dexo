@@ -13,7 +13,4 @@ pub mod tools_write;
 
 pub use error::hidden_error;
 pub use server::DexoMcpServer;
-pub use stdio::{
-    init_mcp_tracing, serve_io, serve_io_with_ledger, serve_profile, serve_with_ledger,
-    serve_with_session,
-};
+pub use stdio::{init_mcp_tracing, serve_io, serve_io_with_ledger, serve_with_ledger};
