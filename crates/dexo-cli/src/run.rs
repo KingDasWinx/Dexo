@@ -9,8 +9,8 @@ use crate::args::{
 };
 use crate::presenter;
 use dexo_app::mcp::{
-    Effect, Grant, GrantCapability, GrantLedger, McpProfile, McpService, SelectorRule,
-    advertised_tools,
+    Effect, Grant, GrantCapability, GrantLedger, McpConnection, McpProfile, McpService, QueryMode,
+    SelectorRule, ToolRule, advertised_tools, known_tools,
 };
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
 use dexo_app::search_service::SearchService;
@@ -1197,7 +1197,8 @@ fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> 
             profile,
             selector,
             deny,
-        } => mcp_allow(&profile, &selector, deny)?,
+            remove,
+        } => mcp_allow(&profile, &selector, deny, remove)?,
         McpCommand::Policy { profile } => mcp_policy(&profile)?,
         McpCommand::Doctor { profile, json } => mcp_doctor(profile.as_deref(), json)?,
         McpCommand::Config { command } => match command {
@@ -1253,21 +1254,88 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
             repo.save(&profile)?;
             println!("disabled {name}");
         }
+        McpProfileCommand::Set {
+            name,
+            connections,
+            clear_connections,
+            query_mode,
+            max_rows,
+            max_bytes,
+            timeout_secs,
+            max_concurrency,
+            allow_tools,
+            deny_tools,
+        } => {
+            let mut profile = load_profile(&repo, &name)?;
+            if clear_connections {
+                profile.connections.clear();
+            }
+            let saved = ConnectionRepository::new(db.connection());
+            for connection in connections {
+                let found = saved
+                    .get_by_name(&connection)?
+                    .ok_or_else(|| anyhow::anyhow!("unknown connection '{connection}'"))?;
+                McpConnection::from_profile(&found)?;
+                if !profile.connections.contains(&connection) {
+                    profile.connections.push(connection);
+                }
+            }
+            if let Some(mode) = query_mode {
+                profile.query_mode = if mode == "raw-read" {
+                    QueryMode::RawReadSql
+                } else {
+                    QueryMode::StructuredOnly
+                };
+            }
+            if let Some(value) = max_rows {
+                profile.limits.max_rows = value;
+            }
+            if let Some(value) = max_bytes {
+                profile.limits.max_bytes = value;
+            }
+            if let Some(value) = timeout_secs {
+                profile.limits.timeout_secs = value;
+            }
+            if let Some(value) = max_concurrency {
+                profile.limits.max_concurrency = value;
+            }
+            let known = known_tools();
+            for (tools, allowed) in [(allow_tools, true), (deny_tools, false)] {
+                for tool in tools {
+                    anyhow::ensure!(known.contains(&tool.as_str()), "unknown MCP tool '{tool}'");
+                    profile.tool_rules.retain(|rule| rule.tool != tool);
+                    profile.tool_rules.push(ToolRule { tool, allowed });
+                }
+            }
+            repo.save(&profile)?;
+            mcp_policy(&name)?;
+        }
     }
     Ok(())
 }
 
-fn mcp_allow(name: &str, selector: &str, deny: bool) -> anyhow::Result<()> {
+fn mcp_allow(name: &str, selector: &str, deny: bool, remove: bool) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let repo = McpProfileRepository::new(db.connection());
     let mut profile = load_profile(&repo, name)?;
     let effect = if deny { Effect::Deny } else { Effect::Allow };
-    profile
-        .selectors
-        .push(SelectorRule::parse(effect, selector)?);
+    let rule = SelectorRule::parse(effect, selector)?;
+    if remove {
+        let before = profile.selectors.len();
+        profile.selectors.retain(|existing| existing != &rule);
+        anyhow::ensure!(
+            profile.selectors.len() < before,
+            "profile '{name}' has no rule '{rule}'"
+        );
+        println!("removed {rule}");
+    } else {
+        if !profile.selectors.contains(&rule) {
+            profile.selectors.push(rule.clone());
+        }
+        println!("{rule}");
+    }
     repo.save(&profile)?;
-    println!("{} {selector}", if deny { "deny" } else { "allow" });
     Ok(())
 }
 
@@ -1276,17 +1344,30 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
     let db = Database::open(&paths.database)?;
     let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
     println!(
-        "name={} enabled={} access=read_only query_mode={:?} max_rows={} max_bytes={} timeout_secs={} max_concurrency={}",
+        "name={} enabled={} access=read_only query_mode={:?} max_rows={} max_bytes={} timeout_secs={} max_concurrency={} audit_retention_days={}",
         profile.name,
         profile.enabled,
         profile.query_mode,
         profile.limits.max_rows,
         profile.limits.max_bytes,
         profile.limits.timeout_secs,
-        profile.limits.max_concurrency
+        profile.limits.max_concurrency,
+        profile.audit_retention_days
     );
+    if profile.connections.is_empty() {
+        println!(
+            "connections: none (dexo mcp profile set --name {} --connection <name>)",
+            profile.name
+        );
+    } else {
+        println!("connections: {}", profile.connections.join(", "));
+    }
     for rule in &profile.selectors {
         println!("selector {rule}");
+    }
+    for rule in &profile.tool_rules {
+        let effect = if rule.allowed { "allow" } else { "deny" };
+        println!("tool {effect} {}", rule.tool);
     }
     println!("tools: {}", advertised_tools(&profile).join(", "));
     Ok(())
@@ -1330,15 +1411,18 @@ fn mcp_config_print(name: &str, client: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     load_profile(&McpProfileRepository::new(db.connection()), name)?;
-    let snippet = match client.unwrap_or("cursor") {
-        "claude" => format!(
-            "{{\n  \"mcpServers\": {{\n    \"dexo\": {{\n      \"command\": \"dexo\",\n      \"args\": [\"mcp\", \"serve\", \"--profile\", \"{name}\"]\n    }}\n  }}\n}}"
+    let exe = std::env::current_exe()?.display().to_string();
+    match client.unwrap_or("json") {
+        "claude-code" => println!("claude mcp add dexo -- {exe} mcp serve --profile {name}"),
+        _ => println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "mcpServers": {
+                    "dexo": { "command": exe, "args": ["mcp", "serve", "--profile", name] }
+                }
+            }))?
         ),
-        _ => format!(
-            "{{\n  \"mcpServers\": {{\n    \"dexo\": {{\n      \"command\": \"dexo\",\n      \"args\": [\"mcp\", \"serve\", \"--profile\", \"{name}\"]\n    }}\n  }}\n}}"
-        ),
-    };
-    println!("{snippet}");
+    }
     Ok(())
 }
 
@@ -1420,6 +1504,10 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             {
                 anyhow::bail!("connection is not allowed for this profile");
             }
+            let saved = ConnectionRepository::new(db.connection())
+                .get_by_name(&connection)?
+                .ok_or_else(|| anyhow::anyhow!("unknown connection '{connection}'"))?;
+            McpConnection::from_profile(&saved)?.accepts_writes()?;
             let ttl = dexo_app::mcp::parse_ttl(&expires)?;
             let grant = Grant::new(
                 &loaded,

@@ -300,6 +300,16 @@ pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
         .collect()
 }
 
+/// Every tool name a profile rule may mention, so a typo is refused instead of silently
+/// matching nothing.
+pub fn known_tools() -> Vec<&'static str> {
+    let mut probe = McpProfile::new("probe");
+    probe.query_mode = QueryMode::RawReadSql;
+    let mut tools = advertised_tools(&probe);
+    tools.extend(crate::mcp::grant::WRITE_TOOLS);
+    tools
+}
+
 pub fn new_result_uri() -> String {
     format!("dexo://result/{}", Uuid::new_v4())
 }
