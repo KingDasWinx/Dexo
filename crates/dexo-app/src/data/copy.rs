@@ -2,6 +2,9 @@ use dexo_driver_api::DbValue;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum CopyFormat {
+    /// The values alone: no header, a tab between cells, one row per line. A single
+    /// cell copies as exactly its value.
+    Value,
     Text,
     Csv,
     Tsv,
@@ -28,6 +31,11 @@ pub fn copy_selection(
         }
     }
     match format {
+        CopyFormat::Value => Ok(rows
+            .iter()
+            .map(|row| row.iter().map(display).collect::<Vec<_>>().join("\t"))
+            .collect::<Vec<_>>()
+            .join("\n")),
         CopyFormat::Text => Ok(delimited(columns, rows, ' ')),
         CopyFormat::Csv => Ok(delimited(columns, rows, ',')),
         CopyFormat::Tsv => Ok(delimited(columns, rows, '\t')),
@@ -184,6 +192,29 @@ fn hex(bytes: &[u8]) -> String {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn value_copies_cells_without_a_header() {
+        use super::{CopyFormat, SqlDialect, copy_selection};
+        use dexo_driver_api::DbValue;
+        let one = copy_selection(
+            &["n".into()],
+            &[vec![DbValue::I64(2)]],
+            CopyFormat::Value,
+            SqlDialect::Postgres,
+        );
+        assert_eq!(one.unwrap(), "2");
+        let many = copy_selection(
+            &["a".into(), "b".into()],
+            &[
+                vec![DbValue::I64(1), DbValue::Text("x".into())],
+                vec![DbValue::Null, DbValue::Text("y".into())],
+            ],
+            CopyFormat::Value,
+            SqlDialect::Postgres,
+        );
+        assert_eq!(many.unwrap(), "1\tx\nNULL\ty");
+    }
+
     use super::{CopyFormat, SqlDialect, copy_selection};
     use dexo_driver_api::DbValue;
 

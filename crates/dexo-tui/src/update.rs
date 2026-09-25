@@ -4172,11 +4172,13 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
     };
     model.results_menu.open = false;
     match *id {
+        // The value itself: it copied as a one-column table, header and trailing
+        // newline included, so pasting `2` gave `n` and `2` on two lines.
         "copy-cell" => {
             if let Some((row, col)) = model.results.selection() {
                 model.results.select_cell(row, col);
             }
-            copy_grid(model, dexo_app::data::CopyFormat::Text)
+            copy_grid(model, dexo_app::data::CopyFormat::Value)
         }
         other => {
             if other.starts_with("data.copy") && model.results.picked_rows.is_empty() {
