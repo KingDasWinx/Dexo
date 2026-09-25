@@ -1,259 +1,122 @@
-use std::time::Duration;
+mod common;
 
-use dexo_app::mcp::{Effect, McpProfile, McpService, QueryMode, SelectorRule};
-use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
-use dexo_mcp::resources::{ResultStore, list_resources, read_resource};
-use dexo_mcp::tools_read::call_tool;
+use std::sync::Arc;
+use std::sync::atomic::Ordering;
+
+use common::{Client, FakeBackend, connection, is_error, profile, text};
+use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
+use dexo_app::mcp::{Effect, GrantLedger, MemoryGrantLedger, SelectorRule};
+use dexo_driver_api::DbValue;
+use dexo_test_support::FakeSession;
 use serde_json::json;
 
-fn table(name: &str) -> CatalogObject {
-    CatalogObject::new(
-        ObjectId::new(name),
-        ObjectKind::Table,
-        QualifiedName::new(Some("db"), Some("public"), name),
-        None,
+fn users() -> FakeSession {
+    FakeSession::with_rows(&["id"], vec![vec![DbValue::I64(1)]])
+}
+
+async fn client_with(backend: FakeBackend) -> (Client, Arc<FakeBackend>, Arc<MemoryGrantLedger>) {
+    let backend = Arc::new(backend);
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let client = Client::start(
+        profile(),
+        vec![connection("local")],
+        Arc::clone(&backend),
+        Arc::clone(&ledger),
     )
+    .await;
+    (client, backend, ledger)
 }
 
-fn service() -> McpService {
-    let mut profile = McpProfile::new("assistant");
-    profile.query_mode = QueryMode::RawReadSql;
-    profile.selectors = vec![
-        SelectorRule::parse(Effect::Allow, "db.public.*").unwrap(),
-        SelectorRule::parse(Effect::Deny, "db.public.secrets").unwrap(),
-    ];
-    McpService::new(profile, vec![table("users"), table("secrets")])
-}
-
-#[test]
-fn denied_targets_are_absent_from_resource_list() {
-    let service = service();
-    let store = ResultStore::new("assistant");
-    let listed = list_resources(&service, &store);
-    let blob = listed
+#[tokio::test]
+async fn tools_are_typed_and_described() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    let tools = client.tools().await;
+    let read = tools
         .iter()
-        .map(|resource| format!("{} {}", resource.uri, resource.name))
-        .collect::<Vec<_>>()
-        .join("\n");
-    assert!(blob.contains("users"));
-    assert!(!blob.contains("secrets"));
-    assert!(read_resource(&service, &store, "dexo://object/secrets").is_err());
-}
-
-#[test]
-fn expired_result_is_generic_not_found() {
-    let mut store = ResultStore::new("assistant");
-    store.insert(
-        "dexo://result/expired".into(),
-        "secret-rows".into(),
-        Duration::from_millis(1),
-    );
-    std::thread::sleep(Duration::from_millis(5));
-    let error = store.get("dexo://result/expired").unwrap_err();
-    assert_eq!(error, "not found");
-}
-
-#[test]
-fn mutating_sql_is_rejected_before_data() {
-    let service = service();
-    let connection = dexo_app::mcp::McpConnection {
-        name: "local".into(),
-        driver: "postgres".into(),
-        dialect: dexo_sql::Dialect::Postgres,
-        database: Some("db".into()),
-        default_schema: Some("public".into()),
-        environment: dexo_app::Environment::Local,
-        read_only: false,
-    };
-    for sql in ["DELETE FROM users", "SELECT 1 FROM secrets"] {
-        let result = call_tool(
-            &service,
-            Some(&connection),
-            "query_validate",
-            json!({ "sql": sql }).as_object().cloned().unwrap(),
+        .find(|tool| tool["name"] == "query_execute_read")
+        .expect("a raw-read profile lists query_execute_read");
+    assert_eq!(read["inputSchema"]["required"], json!(["sql"]));
+    assert_eq!(read["annotations"]["readOnlyHint"], json!(true));
+    for tool in &tools {
+        let description = tool["description"].as_str().unwrap_or_default();
+        assert!(
+            description.len() > 20,
+            "{} needs a real description",
+            tool["name"]
         );
-        assert_eq!(result.is_error, Some(true), "{sql}");
     }
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn initialize_stdout_is_jsonrpc() {
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let mut profile = McpProfile::new("conformance-fixture");
-    profile.enabled = true;
-    profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-    let service = McpService::new(profile, vec![table("users"), table("secrets")]);
-    let (client, server_io) = tokio::io::duplex(64 * 1024);
-    let (server_read, server_write) = tokio::io::split(server_io);
-    let (client_read, mut client_write) = tokio::io::split(client);
-    let handle =
-        tokio::spawn(async move { dexo_mcp::serve_io(service, server_read, server_write).await });
-    let init = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {},
-            "clientInfo": {"name": "test", "version": "0.0.1"}
-        }
-    });
-    let initialized = serde_json::json!({
-        "jsonrpc": "2.0",
-        "method": "notifications/initialized"
-    });
-    client_write
-        .write_all(format!("{init}\n{initialized}\n").as_bytes())
-        .await
-        .unwrap();
-    client_write.flush().await.unwrap();
-    let mut lines = BufReader::new(client_read).lines();
-    let line = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
-        .await
-        .expect("timeout waiting for initialize result")
-        .unwrap()
-        .expect("line");
-    let value: serde_json::Value = serde_json::from_str(&line).expect("json-rpc");
-    assert_eq!(value["jsonrpc"], "2.0");
-    assert!(value.get("result").is_some() || value.get("error").is_some());
-    let ping = serde_json::json!({"jsonrpc":"2.0","id":2,"method":"ping"});
-    let tools = serde_json::json!({"jsonrpc":"2.0","id":3,"method":"tools/list"});
-    client_write
-        .write_all(format!("{ping}\n{tools}\n").as_bytes())
-        .await
-        .unwrap();
-    let ping_line = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
-        .await
-        .expect("timeout ping")
-        .unwrap()
-        .expect("ping line");
-    let ping_value: serde_json::Value = serde_json::from_str(&ping_line).unwrap();
-    assert_eq!(ping_value["jsonrpc"], "2.0");
-    drop(client_write);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+#[tokio::test]
+async fn a_read_returns_a_table_with_its_columns() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    let result = client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    assert!(!is_error(&result), "{result}");
+    assert!(text(&result).starts_with("| id |"), "{}", text(&result));
+    assert_eq!(result["structuredContent"]["rows"], json!([["1"]]));
 }
 
-#[test]
-fn disconnect_clears_result_pages() {
-    let server = dexo_mcp::DexoMcpServer::new(service());
-    let store = server.store();
-    store.lock().unwrap().insert(
-        "dexo://result/x".into(),
-        "rows".into(),
-        std::time::Duration::from_secs(60),
+#[tokio::test]
+async fn a_failed_connect_is_retried_on_the_next_call() {
+    let backend = FakeBackend::with_session("local", users());
+    backend.fail_next_connect.store(true, Ordering::SeqCst);
+    let (mut client, backend, _) = client_with(backend).await;
+    let first = client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    assert!(
+        text(&first).starts_with("Error [CONNECTION_FAILED]"),
+        "{first}"
     );
-    assert!(store.lock().unwrap().get("dexo://result/x").is_ok());
-    drop(server);
-    assert_eq!(
-        store.lock().unwrap().get("dexo://result/x").unwrap_err(),
-        "not found"
-    );
+    let second = client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    assert!(!is_error(&second), "{second}");
+    assert_eq!(*backend.connects.lock().unwrap(), ["local", "local"]);
 }
 
-#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
-async fn grant_publishes_tool_then_revoke_removes_it() {
-    use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
-    use dexo_app::mcp::ledger::{GrantLedger, MemoryGrantLedger};
-    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
-
-    let mut profile = McpProfile::new("assistant");
-    profile.enabled = true;
-    profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
-    let service = McpService::new(profile.clone(), vec![table("users")]);
-    let ledger = std::sync::Arc::new(MemoryGrantLedger::default());
-    let (client, server_io) = tokio::io::duplex(64 * 1024);
-    let (server_read, server_write) = tokio::io::split(server_io);
-    let (client_read, mut client_write) = tokio::io::split(client);
-    let server_ledger = std::sync::Arc::clone(&ledger);
-    let handle = tokio::spawn(async move {
-        dexo_mcp::serve_io_with_ledger(service, server_read, server_write, Some(server_ledger))
+#[tokio::test]
+async fn a_grant_publishes_its_tool_and_revoking_removes_it() {
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    assert!(
+        !client
+            .tool_names()
             .await
-    });
-    let init = serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": 1,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": "2025-11-25",
-            "capabilities": {"tools": {"listChanged": true}},
-            "clientInfo": {"name": "test", "version": "0.0.1"}
-        }
-    });
-    let initialized = serde_json::json!({"jsonrpc":"2.0","method":"notifications/initialized"});
-    client_write
-        .write_all(format!("{init}\n{initialized}\n").as_bytes())
-        .await
-        .unwrap();
-    let mut lines = BufReader::new(client_read).lines();
-    let _init = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    let now = dexo_mcp::tools_write::now_secs();
+            .contains(&"data_insert".to_string())
+    );
     let grant = Grant::new(
-        &profile,
+        &profile(),
         "local",
         GrantCapability::DataWrite,
         vec!["data_insert".into()],
         vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
-        now,
+        dexo_mcp::tools_write::now_secs(),
         DEFAULT_TTL_SECS,
     )
     .unwrap();
-    let grant_id = grant.id;
+    let id = grant.id;
     ledger.insert_grant(grant).unwrap();
-    let mut saw_change = false;
-    for _ in 0..20 {
-        let line = tokio::time::timeout(std::time::Duration::from_secs(1), lines.next_line())
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
             .await
-            .ok()
-            .and_then(Result::ok)
-            .flatten();
-        let Some(line) = line else { continue };
-        if line.contains("tools/list_changed") {
-            saw_change = true;
-            break;
-        }
-    }
-    assert!(saw_change, "expected tools/list_changed after grant");
-    client_write
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":2,\"method\":\"tools/list\"}\n")
-        .await
-        .unwrap();
-    let listed = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(listed.contains("data_insert"));
-    assert!(!listed.contains("grant_create"));
-    ledger.revoke(grant_id).unwrap();
-    let mut saw_revoke = false;
-    for _ in 0..20 {
-        let line = tokio::time::timeout(std::time::Duration::from_secs(1), lines.next_line())
+    );
+    let names = client.tool_names().await;
+    assert!(names.contains(&"data_insert".to_string()));
+    assert!(!names.iter().any(|name| name.starts_with("grant_")));
+    ledger.revoke(id).unwrap();
+    client.notifications.clear();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
             .await
-            .ok()
-            .and_then(Result::ok)
-            .flatten();
-        let Some(line) = line else { continue };
-        if line.contains("tools/list_changed") {
-            saw_revoke = true;
-            break;
-        }
-    }
-    assert!(saw_revoke, "expected tools/list_changed after revoke");
-    client_write
-        .write_all(b"{\"jsonrpc\":\"2.0\",\"id\":3,\"method\":\"tools/list\"}\n")
-        .await
-        .unwrap();
-    let listed = tokio::time::timeout(std::time::Duration::from_secs(5), lines.next_line())
-        .await
-        .unwrap()
-        .unwrap()
-        .unwrap();
-    assert!(!listed.contains("data_insert"));
-    drop(client_write);
-    let _ = tokio::time::timeout(std::time::Duration::from_secs(2), handle).await;
+    );
+    assert!(
+        !client
+            .tool_names()
+            .await
+            .contains(&"data_insert".to_string())
+    );
 }

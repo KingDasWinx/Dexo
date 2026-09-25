@@ -776,7 +776,7 @@ pub(crate) fn catalog_database_name(profile: &dexo_app::ConnectionProfile) -> St
         .to_string()
 }
 
-async fn refresh_catalog(
+pub(crate) async fn refresh_catalog(
     registry: &DriverRegistry,
     profile: &dexo_app::ConnectionProfile,
 ) -> anyhow::Result<Vec<CatalogObject>> {
@@ -810,7 +810,7 @@ async fn collect_snapshot(
     Ok(objects)
 }
 
-async fn connect_session(
+pub(crate) async fn connect_session(
     registry: &DriverRegistry,
     profile: &dexo_app::ConnectionProfile,
 ) -> anyhow::Result<Box<dyn dexo_driver_api::Session>> {
@@ -1442,37 +1442,26 @@ async fn mcp_serve(registry: DriverRegistry, name: String) -> anyhow::Result<()>
     if !profile.enabled {
         anyhow::bail!("profile '{name}' is disabled");
     }
-    let target = match profile.connections.first() {
-        None => None,
-        Some(name) => {
-            let saved = ConnectionRepository::new(db.connection())
-                .get_by_name(name)?
-                .ok_or_else(|| anyhow::anyhow!("profile names unknown connection '{name}'"))?;
-            Some(saved)
-        }
-    };
-    let objects = match &target {
-        Some(saved) => CatalogCache::new(db.connection())
-            .load_latest(&saved.id.0.to_string(), &catalog_database_name(saved))?,
-        None => Vec::new(),
-    };
-    let service = McpService::new(profile, objects);
-    let target = match target {
-        Some(saved) => {
-            let connection = dexo_app::mcp::McpConnection::from_profile(&saved)?;
-            let session = connect_session(&registry, &saved).await?;
-            Some((connection, std::sync::Arc::from(session)))
-        }
-        None => None,
-    };
-    dexo_mcp::serve_with_ledger(
-        service,
-        target,
-        Some(std::sync::Arc::new(SqliteGrantLedger::open(
-            &paths.database,
-        )?)),
-    )
-    .await
+    if profile.connections.is_empty() {
+        anyhow::bail!(
+            "profile '{name}' has no connections; run `dexo mcp profile set --name {name} --connection <connection>`"
+        );
+    }
+    let saved = ConnectionRepository::new(db.connection());
+    let mut connections = Vec::new();
+    for connection in &profile.connections {
+        let found = saved.get_by_name(connection)?.ok_or_else(|| {
+            anyhow::anyhow!("profile '{name}' names unknown connection '{connection}'")
+        })?;
+        connections.push(McpConnection::from_profile(&found)?);
+    }
+    drop(db);
+    let backend = std::sync::Arc::new(crate::mcp_backend::CliMcpBackend::new(
+        registry,
+        paths.database.clone(),
+    ));
+    let ledger = std::sync::Arc::new(SqliteGrantLedger::open(&paths.database)?);
+    dexo_mcp::serve_stdio(McpService::new(profile), connections, backend, ledger).await
 }
 
 fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {

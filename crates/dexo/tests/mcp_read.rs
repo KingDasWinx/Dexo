@@ -75,7 +75,7 @@ async fn mcp_reads_cannot_write_on_postgres_or_mysql() {
     )
     .await;
 
-    let service = McpService::new(read_profile(), Vec::new());
+    let service = McpService::new(read_profile());
     let cancel = CancellationToken::new();
     for (session, dialect) in [(&*pg, Dialect::Postgres), (&*mysql, Dialect::Mysql)] {
         let connection = connection(dialect);

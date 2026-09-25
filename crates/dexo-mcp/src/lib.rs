@@ -1,8 +1,7 @@
-pub mod audit;
-pub mod cancellation;
+pub mod backend;
 pub mod error;
-pub mod limits;
 pub mod prompts;
+pub mod render;
 pub mod resources;
 pub mod router;
 pub mod schema;
@@ -11,6 +10,7 @@ pub mod stdio;
 pub mod tools_read;
 pub mod tools_write;
 
+pub use backend::McpBackend;
 pub use error::hidden_error;
-pub use server::DexoMcpServer;
-pub use stdio::{init_mcp_tracing, serve_io, serve_io_with_ledger, serve_with_ledger};
+pub use server::{DexoMcpServer, TOOL_SCHEMA_VERSION};
+pub use stdio::{init_mcp_tracing, serve_io, serve_stdio};

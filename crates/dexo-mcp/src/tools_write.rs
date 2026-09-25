@@ -11,7 +11,110 @@ use dexo_app::query_service::map_driver_error;
 use dexo_driver_api::{
     AdminAction, DbValue, DdlOutcome, DdlPlan, Mutation, Session, classify_raw_sql,
 };
+use rmcp::handler::server::wrapper::Parameters;
+use rmcp::model::CallToolResult;
+use rmcp::{tool, tool_router};
+use serde::Serialize;
+use serde_json::json;
 use serde_json::{Map, Value};
+
+use crate::render::text_result;
+use crate::schema::{
+    AdminActionInput, DataDeleteInput, DataInsertInput, DataSqlInput, DataUpdateInput, DdlInput,
+};
+use crate::server::DexoMcpServer;
+use crate::tools_read::finish;
+
+impl DexoMcpServer {
+    async fn write(
+        &self,
+        name: &str,
+        connection: Option<String>,
+        input: &impl Serialize,
+    ) -> CallToolResult {
+        let arguments = serde_json::to_value(input)
+            .ok()
+            .and_then(|value| value.as_object().cloned())
+            .unwrap_or_default();
+        let mut lease = match self.open(connection.as_deref()).await {
+            Ok(lease) => lease,
+            Err(result) => return result,
+        };
+        let outcome = call_write_tool(
+            &self.inner.service,
+            self.inner.ledger.as_ref(),
+            Some((lease.meta, lease.session())),
+            &self.inner.session_id,
+            name,
+            arguments,
+            now_secs(),
+        )
+        .await
+        .map(|text| text_result(text.clone(), json!({ "outcome": text })));
+        finish(&mut lease, outcome)
+    }
+}
+
+#[tool_router(router = write_tools, vis = "pub(crate)")]
+impl DexoMcpServer {
+    /// Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.
+    #[tool(annotations(read_only_hint = false, destructive_hint = false))]
+    async fn data_insert(&self, Parameters(input): Parameters<DataInsertInput>) -> CallToolResult {
+        self.write("data_insert", input.connection.clone(), &input)
+            .await
+    }
+
+    /// Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
+    #[tool(annotations(read_only_hint = false, destructive_hint = true))]
+    async fn data_update(&self, Parameters(input): Parameters<DataUpdateInput>) -> CallToolResult {
+        self.write("data_update", input.connection.clone(), &input)
+            .await
+    }
+
+    /// Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
+    #[tool(annotations(read_only_hint = false, destructive_hint = true))]
+    async fn data_delete(&self, Parameters(input): Parameters<DataDeleteInput>) -> CallToolResult {
+        self.write("data_delete", input.connection.clone(), &input)
+            .await
+    }
+
+    /// Run one INSERT, UPDATE or DELETE. Every table it touches must be inside the grant; needs the profile rule `--allow-tool data_execute_sql`.
+    #[tool(annotations(read_only_hint = false, destructive_hint = true))]
+    async fn data_execute_sql(
+        &self,
+        Parameters(input): Parameters<DataSqlInput>,
+    ) -> CallToolResult {
+        self.write("data_execute_sql", input.connection.clone(), &input)
+            .await
+    }
+
+    /// Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
+    #[tool(annotations(read_only_hint = false, destructive_hint = true))]
+    async fn schema_apply_ddl(&self, Parameters(input): Parameters<DdlInput>) -> CallToolResult {
+        self.write("schema_apply_ddl", input.connection.clone(), &input)
+            .await
+    }
+
+    /// Cancel the running query of one server session. Needs an admin grant for this connection.
+    #[tool(annotations(read_only_hint = false, destructive_hint = false))]
+    async fn admin_cancel_query(
+        &self,
+        Parameters(input): Parameters<AdminActionInput>,
+    ) -> CallToolResult {
+        self.write("admin_cancel_query", input.connection.clone(), &input)
+            .await
+    }
+
+    /// Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.
+    #[tool(annotations(read_only_hint = false, destructive_hint = true))]
+    async fn admin_terminate_session(
+        &self,
+        Parameters(input): Parameters<AdminActionInput>,
+    ) -> CallToolResult {
+        self.write("admin_terminate_session", input.connection.clone(), &input)
+            .await
+    }
+}
 
 pub fn write_tool_names(ledger: &dyn GrantLedger, profile: &str, now: i64) -> Vec<String> {
     let mut tools = Vec::new();
@@ -494,7 +597,6 @@ mod tests {
     use dexo_app::mcp::ledger::{GrantLedger, MemoryGrantLedger};
     use dexo_app::mcp::profile::McpProfile;
     use dexo_app::mcp::selector::{Effect, SelectorRule};
-    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
     use dexo_test_support::FakeSession;
     use serde_json::json;
 
@@ -508,15 +610,7 @@ mod tests {
     }
 
     fn service() -> McpService {
-        McpService::new(
-            profile(),
-            vec![CatalogObject::new(
-                ObjectId::new("items"),
-                ObjectKind::Table,
-                QualifiedName::new(Some("db"), Some("public"), "items"),
-                None,
-            )],
-        )
+        McpService::new(profile())
     }
 
     fn grant(capability: GrantCapability, tool: &str, selector: &str) -> Grant {
@@ -547,7 +641,7 @@ mod tests {
     fn service_with(allow: &str) -> McpService {
         let mut profile = McpProfile::new("assistant");
         profile.selectors = vec![SelectorRule::parse(Effect::Allow, allow).unwrap()];
-        McpService::new(profile, Vec::new())
+        McpService::new(profile)
     }
 
     fn grant_on(
@@ -820,7 +914,7 @@ mod tests {
         .unwrap();
         let ledger = MemoryGrantLedger::default();
         ledger.insert_grant(grant).unwrap();
-        let service = McpService::new(profile, Vec::new());
+        let service = McpService::new(profile);
         let connection = connection("local");
         let session = FakeSession::default();
         let error = call_write_tool(
@@ -922,7 +1016,7 @@ mod tests {
             tool: "data_execute_sql".into(),
             allowed: true,
         });
-        let service = McpService::new(profile.clone(), Vec::new());
+        let service = McpService::new(profile.clone());
         let ledger = MemoryGrantLedger::default();
         ledger
             .insert_grant(grant_on(

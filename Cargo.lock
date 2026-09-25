@@ -1733,6 +1733,7 @@ name = "dexo-cli"
 version = "1.4.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "clap",
  "dexo-app",
  "dexo-driver-api",
@@ -1815,7 +1816,6 @@ dependencies = [
  "serde_json",
  "tokio",
  "tokio-util",
- "tracing",
  "tracing-subscriber",
  "uuid",
 ]

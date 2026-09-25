@@ -1,13 +1,12 @@
 use std::time::Duration;
 
 use dexo_driver_api::{
-    CatalogObject, ExplainPlan, ExplainRequest, QueryEvent, QueryRequest, Session, TransactionMode,
+    ExplainPlan, ExplainRequest, QueryEvent, QueryRequest, Session, TransactionMode,
 };
 use dexo_sql::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
 use futures_util::StreamExt;
 use serde::Serialize;
 use tokio_util::sync::CancellationToken;
-use uuid::Uuid;
 
 use crate::data::display_value;
 use crate::error::{AppError, ErrorCategory};
@@ -16,7 +15,6 @@ use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::{McpProfile, QueryMode};
 use crate::mcp::selector::ObjectRef;
 use crate::query_service::map_driver_error;
-use crate::search_service::SearchService;
 
 const HIDDEN: &str = "not found";
 
@@ -31,65 +29,22 @@ pub struct ReadResult {
 
 pub struct McpService {
     pub profile: McpProfile,
-    objects: Vec<CatalogObject>,
 }
 
 impl McpService {
-    pub fn new(profile: McpProfile, objects: Vec<CatalogObject>) -> Self {
-        let policy = ObjectPolicy::new(profile.selectors.clone());
-        let objects = objects
-            .into_iter()
-            .filter(|object| {
-                policy.decide(&ObjectRef::from_catalog_object(object)) == Decision::Allow
-            })
-            .collect();
-        Self { profile, objects }
+    pub fn new(profile: McpProfile) -> Self {
+        Self { profile }
     }
 
     pub fn capabilities(&self) -> serde_json::Value {
         serde_json::json!({
             "name": self.profile.name,
             "enabled": self.profile.enabled,
-            "persistent_access": "read_only",
+            "persistent_access": format!("{:?}", self.profile.persistent_access),
             "query_mode": format!("{:?}", self.profile.query_mode),
             "limits": self.profile.limits,
             "tools": advertised_tools(&self.profile),
         })
-    }
-
-    pub fn search(&self, query: &str) -> Vec<CatalogObject> {
-        if query.trim().is_empty() {
-            return self.objects.clone();
-        }
-        SearchService::from_objects(self.objects.clone())
-            .search(query)
-            .into_iter()
-            .map(|hit| hit.object)
-            .collect()
-    }
-
-    pub fn describe(&self, id_or_name: &str) -> Result<CatalogObject, AppError> {
-        self.find(id_or_name).cloned().ok_or_else(hidden)
-    }
-
-    pub fn ddl(&self, id_or_name: &str) -> Result<String, AppError> {
-        let object = self.describe(id_or_name)?;
-        Ok(object
-            .attributes
-            .get("ddl")
-            .and_then(|value| value.as_str())
-            .map(str::to_string)
-            .unwrap_or_else(|| format!("-- {}", object.qualified_name.display_unquoted())))
-    }
-
-    pub fn relationships(&self, id_or_name: &str) -> Result<Vec<CatalogObject>, AppError> {
-        let object = self.describe(id_or_name)?;
-        Ok(self
-            .objects
-            .iter()
-            .filter(|other| other.parent.as_ref() == Some(&object.id) || other.id == object.id)
-            .cloned()
-            .collect())
     }
 
     pub fn data_write_targets(
@@ -272,30 +227,23 @@ impl McpService {
             .await
             .map_err(map_driver_error)
     }
-
-    fn find(&self, id_or_name: &str) -> Option<&CatalogObject> {
-        self.objects.iter().find(|object| {
-            object.id.as_str() == id_or_name
-                || object.qualified_name.display_unquoted() == id_or_name
-                || object.qualified_name.object() == id_or_name
-        })
-    }
 }
 
+/// Read tools that exist. Tasks 8–12 add their names here as they land.
+pub const READ_TOOLS: &[&str] = &[
+    "list_connections",
+    "query_validate",
+    "query_explain",
+    "query_execute_read",
+];
+
+const RAW_SQL_TOOLS: &[&str] = &["query_validate", "query_explain", "query_execute_read"];
+
 pub fn advertised_tools(profile: &McpProfile) -> Vec<&'static str> {
-    let mut tools = vec![
-        "catalog_search",
-        "object_describe",
-        "object_get_ddl",
-        "object_relationships",
-        "query_validate",
-        "query_explain",
-    ];
-    if profile.query_mode == QueryMode::RawReadSql {
-        tools.push("query_execute_read");
-    }
-    tools
-        .into_iter()
+    READ_TOOLS
+        .iter()
+        .copied()
+        .filter(|name| profile.query_mode == QueryMode::RawReadSql || !RAW_SQL_TOOLS.contains(name))
         .filter(|name| profile.tool_allowed(name))
         .collect()
 }
@@ -308,10 +256,6 @@ pub fn known_tools() -> Vec<&'static str> {
     let mut tools = advertised_tools(&probe);
     tools.extend(crate::mcp::grant::WRITE_TOOLS);
     tools
-}
-
-pub fn new_result_uri() -> String {
-    format!("dexo://result/{}", Uuid::new_v4())
 }
 
 fn hidden() -> AppError {
@@ -330,38 +274,8 @@ mod tests {
     use crate::mcp::profile::{McpProfile, QueryMode};
     use crate::mcp::selector::{Effect, SelectorRule};
     use dexo_driver_api::DbValue;
-    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
     use dexo_test_support::FakeSession;
     use tokio_util::sync::CancellationToken;
-
-    fn table(name: &str) -> CatalogObject {
-        CatalogObject::new(
-            ObjectId::new(name),
-            ObjectKind::Table,
-            QualifiedName::new(Some("db"), Some("public"), name),
-            None,
-        )
-    }
-
-    #[test]
-    fn denied_objects_are_absent_from_search_and_describe() {
-        let mut profile = McpProfile::new("assistant");
-        profile.selectors = vec![
-            SelectorRule::parse(Effect::Allow, "db.public.*").unwrap(),
-            SelectorRule::parse(Effect::Deny, "db.public.secrets").unwrap(),
-        ];
-        let service = McpService::new(profile, vec![table("users"), table("secrets")]);
-        assert_eq!(service.search("").len(), 1);
-        assert!(service.describe("db.public.secrets").is_err());
-        assert_eq!(
-            service
-                .describe("db.public.secrets")
-                .unwrap_err()
-                .to_string(),
-            "not found"
-        );
-        assert!(service.describe("missing").unwrap_err().to_string() == "not found");
-    }
 
     fn raw_service(max_rows: u64, max_bytes: u64) -> McpService {
         let mut profile = McpProfile::new("assistant");
@@ -372,7 +286,7 @@ mod tests {
             SelectorRule::parse(Effect::Allow, "db.public.*").unwrap(),
             SelectorRule::parse(Effect::Deny, "db.public.secrets").unwrap(),
         ];
-        McpService::new(profile, Vec::new())
+        McpService::new(profile)
     }
 
     fn pg() -> McpConnection {
