@@ -13,6 +13,7 @@ pub mod parse;
 pub mod rank;
 pub mod snippet;
 pub mod statement;
+pub mod statement_guard;
 
 pub use completion::{
     Catalog, CompletionItem, CompletionKind, FakeCatalog, ForeignKey, complete, complete_with,
@@ -33,3 +34,6 @@ pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
 pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
 pub use statement::{StatementEffect, StatementSpan, split_statements, statement_at};
+pub use statement_guard::{
+    GuardRejection, Inspection, inspect_data_write, inspect_read, inspect_schema_write,
+};
