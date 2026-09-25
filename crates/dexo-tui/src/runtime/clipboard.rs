@@ -109,12 +109,19 @@ mod tests {
         assert!(slot.is_some());
     }
 
+    /// The tests below share the one system clipboard; run in parallel, each could read
+    /// the other's text back.
+    static SYSTEM_CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn os_clipboard_survives_immediate_reuse() {
         // Exercises the real Linux/X11 ownership path when a display is present.
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return;
         }
+        let _turn = SYSTEM_CLIPBOARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         copy_text("dexo-clipboard-smoke-1".into()).expect("first copy");
         copy_text("dexo-clipboard-smoke-2".into()).expect("second copy");
         // Read back through the still-alive shared handle (process-exit Drop is separate).
@@ -146,6 +153,9 @@ mod tests {
         if !probe.status.success() {
             return;
         }
+        let _turn = SYSTEM_CLIPBOARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         let marker = format!("dexo-wayland-{}", std::process::id());
         copy_text(marker.clone()).expect("copy");
         let pasted = std::process::Command::new("wl-paste")
