@@ -357,3 +357,264 @@ async fn resources_and_prompts_do_not_leak_policy_or_sql() {
         .await;
     assert!(unknown.get("error").is_some());
 }
+
+/// MCP-020 / QUALITY-015: any change to a tool's name, schema or annotations shows up
+/// here. Review it with `cargo insta review`, bump TOOL_SCHEMA_VERSION and rename the
+/// snapshot to match.
+#[tokio::test]
+async fn tool_contract_is_versioned() {
+    assert_eq!(
+        dexo_mcp::TOOL_SCHEMA_VERSION,
+        2,
+        "rename the snapshot below with the new version"
+    );
+    let mut everything = profile();
+    for tool in ["admin_list_sessions", "data_execute_sql"] {
+        everything.tool_rules.push(dexo_app::mcp::ToolRule {
+            tool: tool.into(),
+            allowed: true,
+        });
+    }
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let now = dexo_mcp::tools_write::now_secs();
+    for (capability, tools) in [
+        (
+            GrantCapability::DataWrite,
+            vec![
+                "data_insert",
+                "data_update",
+                "data_delete",
+                "data_execute_sql",
+            ],
+        ),
+        (GrantCapability::Ddl, vec!["schema_apply_ddl"]),
+        (
+            GrantCapability::Admin,
+            vec!["admin_cancel_query", "admin_terminate_session"],
+        ),
+    ] {
+        ledger
+            .insert_grant(
+                Grant::new(
+                    &everything,
+                    "local",
+                    capability,
+                    tools.into_iter().map(String::from).collect(),
+                    vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                    now,
+                    DEFAULT_TTL_SECS,
+                )
+                .unwrap(),
+            )
+            .unwrap();
+    }
+    let mut client = Client::start(
+        everything,
+        vec![connection("local")],
+        Arc::new(FakeBackend::with_session("local", users())),
+        ledger,
+    )
+    .await;
+    insta::assert_json_snapshot!("tools_v2", client.tools().await);
+}
+
+/// MCP-002 / MCP-003: a structured-only profile exposes no raw SQL, no write and no
+/// grant tool, and calling one anyway reads as "not found".
+#[tokio::test]
+async fn a_structured_profile_exposes_no_raw_sql_or_writes() {
+    let mut structured = profile();
+    structured.query_mode = dexo_app::mcp::QueryMode::StructuredOnly;
+    let mut client = Client::start(
+        structured,
+        vec![connection("local")],
+        Arc::new(FakeBackend::with_session("local", users())),
+        Arc::new(MemoryGrantLedger::default()),
+    )
+    .await;
+    let names = client.tool_names().await;
+    for hidden in [
+        "query_execute_read",
+        "query_explain",
+        "data_insert",
+        "grant_create",
+    ] {
+        assert!(!names.contains(&hidden.to_string()), "{hidden}");
+        let result = client.call(hidden, json!({"sql": "select 1"})).await;
+        assert_eq!(text(&result), "Error [NOT_FOUND]: not found", "{hidden}");
+    }
+    assert!(names.contains(&"data_read".to_string()));
+}
+
+/// QUALITY-019: every bypass found in the 2026-09-23 review, over the protocol. None of
+/// them may reach the session.
+#[tokio::test]
+async fn review_bypasses_never_reach_the_database() {
+    let session = users();
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", session.clone())).await;
+    for sql in [
+        "select count(*) from users u join secrets s on true",
+        "select count(*) from users, secrets",
+        "select count(*) from\nsecrets",
+        "select * into leaked from users",
+        "select * from users for update",
+        "select pg_terminate_backend(1) from users",
+        "explain analyze delete from users",
+        "with x as (delete from users returning *) select * from x",
+        "select query_to_xml('select * from secrets', true, true, '')",
+        "select 1; select 2",
+    ] {
+        let result = client.call("query_execute_read", json!({"sql": sql})).await;
+        assert!(is_error(&result), "{sql} was accepted: {result}");
+    }
+    assert!(
+        !session
+            .log()
+            .iter()
+            .any(|entry| entry.starts_with("execute")),
+        "{:?}",
+        session.log()
+    );
+}
+
+/// MCP-014: a cancel names one request and stops only that one. `data_read` needs the
+/// same connection lock the hanging read holds, so it only answers if the cancelled
+/// request really let go.
+#[tokio::test]
+async fn a_cancel_notification_only_stops_its_own_request() {
+    let session = FakeSession::hanging();
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", session.clone())).await;
+    let hanging = client
+        .send_request(
+            "tools/call",
+            json!({"name": "query_execute_read", "arguments": {"sql": "select id from users"}}),
+        )
+        .await;
+    client
+        .notify(
+            "notifications/cancelled",
+            json!({"requestId": hanging, "reason": "test"}),
+        )
+        .await;
+    let next = client.call("data_read", json!({"table": "users"})).await;
+    assert!(!is_error(&next), "{next}");
+    assert!(
+        session.log().contains(&"rollback".to_string()),
+        "{:?}",
+        session.log()
+    );
+    let listed = client.call("list_connections", json!({})).await;
+    assert!(!is_error(&listed), "{listed}");
+}
+
+/// MCP-019: with two connections the name is required, and each call reaches its own.
+#[tokio::test]
+async fn several_connections_need_an_explicit_name() {
+    let sales = users();
+    let reports = users();
+    let mut backend = FakeBackend::with_session("sales", sales.clone());
+    backend.sessions.insert("reports".into(), reports.clone());
+    let mut two = profile();
+    two.connections = vec!["sales".into(), "reports".into()];
+    let mut client = Client::start(
+        two,
+        vec![connection("sales"), connection("reports")],
+        Arc::new(backend),
+        Arc::new(MemoryGrantLedger::default()),
+    )
+    .await;
+    let ambiguous = client
+        .call("query_execute_read", json!({"sql": "select id from users"}))
+        .await;
+    assert!(text(&ambiguous).contains("list_connections"), "{ambiguous}");
+    let routed = client
+        .call(
+            "query_execute_read",
+            json!({"connection": "reports", "sql": "select id from users"}),
+        )
+        .await;
+    assert!(!is_error(&routed), "{routed}");
+    assert!(sales.log().is_empty());
+    assert!(
+        reports
+            .log()
+            .iter()
+            .any(|entry| entry.starts_with("execute"))
+    );
+    let unknown = client
+        .call(
+            "query_execute_read",
+            json!({"connection": "prod", "sql": "select 1"}),
+        )
+        .await;
+    assert_eq!(text(&unknown), "Error [NOT_FOUND]: not found");
+}
+
+/// MCP-015: production connections never accept an MCP write, grant or not.
+#[tokio::test]
+async fn production_connections_refuse_writes_over_the_protocol() {
+    let mut production = connection("local");
+    production.environment = dexo_app::Environment::Production;
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    ledger
+        .insert_grant(
+            Grant::new(
+                &profile(),
+                "local",
+                GrantCapability::DataWrite,
+                vec!["data_insert".into()],
+                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                dexo_mcp::tools_write::now_secs(),
+                DEFAULT_TTL_SECS,
+            )
+            .unwrap(),
+        )
+        .unwrap();
+    let mut client = Client::start(
+        profile(),
+        vec![production],
+        Arc::new(FakeBackend::with_session("local", users())),
+        Arc::clone(&ledger),
+    )
+    .await;
+    let refused = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-prod", "target": "users", "values": {"id": 1}}),
+        )
+        .await;
+    assert!(
+        text(&refused).starts_with("Error [POLICY_DENIED]"),
+        "{refused}"
+    );
+    assert_eq!(
+        ledger
+            .active_grants("assistant", dexo_mcp::tools_write::now_secs())
+            .len(),
+        1
+    );
+}
+
+/// MCP-016: every listed tool rejects a call without its required arguments, as a
+/// protocol error or a tool error, never as a silent default.
+#[tokio::test]
+async fn missing_required_arguments_are_rejected() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    for tool in client.tools().await {
+        let required = tool["inputSchema"]["required"]
+            .as_array()
+            .cloned()
+            .unwrap_or_default();
+        if required.is_empty() {
+            continue;
+        }
+        let name = tool["name"].as_str().unwrap_or_default().to_string();
+        let response = client
+            .request("tools/call", json!({"name": name, "arguments": {}}))
+            .await;
+        let rejected = response.get("error").is_some() || is_error(&response["result"]);
+        assert!(
+            rejected,
+            "{name} accepted a call without {required:?}: {response}"
+        );
+    }
+}
