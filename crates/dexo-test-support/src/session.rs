@@ -1,9 +1,10 @@
 use std::sync::{Arc, Mutex};
 
 use dexo_driver_api::{
-    CapabilityState, ColumnKeyInfo, ColumnMeta, DataMutator, DataPage, DataRequest, DbValue,
-    DdlExecutor, DdlOutcome, DdlPlan, DriverError, Mutation, QualifiedName, QueryEvent, QueryId,
-    QueryRequest, QueryStream, RemoteValueRef, RowBatch, SchemaChange, Session, TransactionControl,
+    CapabilityState, CatalogList, CatalogListOptions, CatalogObject, CatalogReader, ColumnKeyInfo,
+    ColumnMeta, DataMutator, DataPage, DataRequest, DbValue, DdlExecutor, DdlOutcome, DdlPlan,
+    DriverError, Mutation, ObjectDdl, ObjectId, QualifiedName, QueryEvent, QueryId, QueryRequest,
+    QueryStream, RemoteValueRef, RowBatch, SchemaChange, Session, TransactionControl,
     TransactionMode, TransactionState,
 };
 
@@ -15,6 +16,7 @@ pub struct FakeSession {
     columns: Vec<String>,
     rows: Vec<Vec<DbValue>>,
     keys: Vec<ColumnKeyInfo>,
+    catalog: Vec<CatalogObject>,
     hang: bool,
 }
 
@@ -37,6 +39,11 @@ impl FakeSession {
 
     pub fn with_keys(mut self, keys: Vec<ColumnKeyInfo>) -> Self {
         self.keys = keys;
+        self
+    }
+
+    pub fn with_catalog(mut self, catalog: Vec<CatalogObject>) -> Self {
+        self.catalog = catalog;
         self
     }
 
@@ -100,6 +107,10 @@ impl Session for FakeSession {
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
         Ok(())
+    }
+
+    fn catalog(&self) -> Option<&dyn CatalogReader> {
+        Some(self)
     }
 
     fn transactions(&self) -> Option<&dyn TransactionControl> {
@@ -210,5 +221,43 @@ impl DdlExecutor for FakeSession {
             self.record(format!("ddl {}", statement.sql));
         }
         Ok(DdlOutcome::Committed)
+    }
+}
+
+#[async_trait::async_trait]
+impl CatalogReader for FakeSession {
+    async fn list_children(
+        &self,
+        parent: Option<&ObjectId>,
+        _options: &CatalogListOptions,
+    ) -> Result<CatalogList, DriverError> {
+        Ok(CatalogList {
+            objects: self
+                .catalog
+                .iter()
+                .filter(|object| object.parent.as_ref() == parent)
+                .cloned()
+                .collect(),
+            restrictions: Vec::new(),
+        })
+    }
+
+    async fn object(&self, id: &ObjectId) -> Result<Option<CatalogObject>, DriverError> {
+        Ok(self.catalog.iter().find(|object| &object.id == id).cloned())
+    }
+
+    async fn ddl(&self, id: &ObjectId) -> Result<ObjectDdl, DriverError> {
+        Ok(ObjectDdl {
+            object_id: id.clone(),
+            sql: format!("-- ddl of {}", id.as_str()),
+        })
+    }
+
+    async fn dependencies(&self, _id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
+        Ok(Vec::new())
+    }
+
+    async fn dependents(&self, _id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
+        Ok(Vec::new())
     }
 }

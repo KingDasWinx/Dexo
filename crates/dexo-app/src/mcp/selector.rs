@@ -82,6 +82,15 @@ impl Selector {
                 .all(|(segment, part)| segment.matches(part))
     }
 
+    /// True when the selector could match something at or below `container`; for
+    /// example `db.public.*` reaches `db` and `db.public`.
+    pub fn reaches(&self, container: &ObjectRef) -> bool {
+        self.segments
+            .iter()
+            .zip(&container.path)
+            .all(|(segment, part)| segment.matches(part))
+    }
+
     pub fn specificity(&self) -> usize {
         self.segments
             .iter()

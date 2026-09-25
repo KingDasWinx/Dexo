@@ -120,3 +120,72 @@ async fn a_grant_publishes_its_tool_and_revoking_removes_it() {
             .contains(&"data_insert".to_string())
     );
 }
+
+fn catalog() -> Vec<dexo_driver_api::CatalogObject> {
+    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    let node = |id: &str, kind, name: QualifiedName, parent: Option<&str>| {
+        CatalogObject::new(ObjectId::new(id), kind, name, parent.map(ObjectId::new))
+    };
+    let public = |object: &str| QualifiedName::new(Some("db"), Some("public"), object);
+    vec![
+        node(
+            "db",
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("db"), None::<String>, "db"),
+            None,
+        ),
+        node("public", ObjectKind::Schema, public("public"), Some("db")),
+        node("users", ObjectKind::Table, public("users"), Some("public")),
+        node(
+            "secrets",
+            ObjectKind::Table,
+            public("secrets"),
+            Some("public"),
+        ),
+        node(
+            "secrets.email",
+            ObjectKind::Column,
+            public("secrets.email"),
+            Some("secrets"),
+        ),
+        node(
+            "users.id",
+            ObjectKind::Column,
+            public("users.id"),
+            Some("users"),
+        )
+        .with_attribute("type", json!("int4")),
+    ]
+}
+
+#[tokio::test]
+async fn a_denied_table_is_invisible_to_every_catalog_tool() {
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(catalog()));
+    backend.catalog = catalog();
+    let (mut client, _, _) = client_with(backend).await;
+    let listed = client
+        .call("catalog_list", json!({"parent_id": "public"}))
+        .await;
+    assert!(text(&listed).contains("db.public.users"));
+    assert!(!text(&listed).contains("secrets"), "{}", text(&listed));
+    let columns = client
+        .call("catalog_list", json!({"parent_id": "secrets"}))
+        .await;
+    assert!(!text(&columns).contains("email"));
+    let search = client
+        .call("catalog_search", json!({"query": "secr"}))
+        .await;
+    assert!(!text(&search).contains("secrets"));
+    for tool in ["object_describe", "object_get_ddl", "object_relationships"] {
+        let hidden = client.call(tool, json!({"name": "secrets"})).await;
+        assert_eq!(text(&hidden), "Error [NOT_FOUND]: not found", "{tool}");
+    }
+    let described = client
+        .call("object_describe", json!({"name": "users"}))
+        .await;
+    assert!(
+        text(&described).contains("| id | int4 |"),
+        "{}",
+        text(&described)
+    );
+}

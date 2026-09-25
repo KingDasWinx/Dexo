@@ -85,3 +85,29 @@ pub struct AdminActionInput {
     /// Required to terminate a session: repeat `session_id` exactly to confirm.
     pub confirm_target: Option<String>,
 }
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CatalogListInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// `id` of the node whose children to list, from an earlier catalog_list or catalog_search; omit for the roots.
+    pub parent_id: Option<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct CatalogSearchInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// Part of a table, view or column name.
+    pub query: String,
+    /// At most this many hits (default 50, at most 200).
+    pub limit: Option<u32>,
+}
+
+#[derive(Debug, Deserialize, Serialize, JsonSchema)]
+pub struct ObjectInput {
+    /// Connection name from `list_connections`; optional when the profile has exactly one.
+    pub connection: Option<String>,
+    /// Qualified name such as `public.orders` or `db.public.orders`; a bare name uses the connection's default database and schema.
+    pub name: String,
+}

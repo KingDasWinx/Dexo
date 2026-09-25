@@ -1,7 +1,8 @@
 use std::time::Duration;
 
 use dexo_driver_api::{
-    ExplainPlan, ExplainRequest, QueryEvent, QueryRequest, Session, TransactionMode,
+    CatalogObject, ExplainPlan, ExplainRequest, ObjectKind, QueryEvent, QueryRequest, Session,
+    TransactionMode,
 };
 use dexo_sql::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
 use futures_util::StreamExt;
@@ -91,6 +92,15 @@ impl McpService {
             }
         }
         Ok(affected)
+    }
+
+    pub fn visible(&self, object: &CatalogObject) -> bool {
+        let reference = ObjectRef::from_catalog_object(object);
+        let policy = self.policy();
+        match &object.kind {
+            ObjectKind::Catalog | ObjectKind::Schema => policy.reveals(&reference),
+            _ => policy.decide(&reference) == Decision::Allow,
+        }
     }
 
     pub fn policy(&self) -> ObjectPolicy {
@@ -232,6 +242,11 @@ impl McpService {
 /// Read tools that exist. Tasks 8–12 add their names here as they land.
 pub const READ_TOOLS: &[&str] = &[
     "list_connections",
+    "catalog_list",
+    "catalog_search",
+    "object_describe",
+    "object_get_ddl",
+    "object_relationships",
     "query_validate",
     "query_explain",
     "query_execute_read",
@@ -299,6 +314,31 @@ mod tests {
             environment: crate::connection_policy::Environment::Local,
             read_only: false,
         }
+    }
+
+    #[test]
+    fn denied_tables_and_their_columns_are_invisible_but_their_schema_is_not() {
+        use dexo_driver_api::ObjectKind::{Column, Schema, Table};
+        use dexo_driver_api::{CatalogObject, ObjectId, QualifiedName};
+        let service = raw_service(10, 1024);
+        let object = |kind, name: &str| {
+            CatalogObject::new(
+                ObjectId::new(name),
+                kind,
+                QualifiedName::new(Some("db"), Some("public"), name),
+                None,
+            )
+        };
+        assert!(service.visible(&object(Schema, "public")));
+        assert!(service.visible(&object(Table, "users")));
+        assert!(!service.visible(&object(Table, "secrets")));
+        assert!(!service.visible(&object(Column, "secrets.email")));
+        assert!(!service.visible(&CatalogObject::new(
+            ObjectId::new("other"),
+            Schema,
+            QualifiedName::new(Some("db"), Some("other"), "other"),
+            None,
+        )));
     }
 
     #[test]
