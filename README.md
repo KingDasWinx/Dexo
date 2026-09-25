@@ -15,8 +15,6 @@ Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a term
 
 <div align="center">
   <img src="assets/demo.gif" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
-  <br><br>
-  <img src="assets/screenshots/workbench.webp" alt="The Dexo workbench: catalog tree, SQL editor with syntax highlighting, and a results grid">
 </div>
 
 ## Features
