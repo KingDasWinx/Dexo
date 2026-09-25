@@ -278,9 +278,7 @@ impl ServerHandler for DexoMcpServer {
         _request: Option<PaginatedRequestParams>,
         _context: RequestContext<RoleServer>,
     ) -> Result<ListPromptsResult, McpError> {
-        Ok(ListPromptsResult::with_all_items(prompts::list_prompts(
-            &self.inner.service,
-        )))
+        Ok(ListPromptsResult::with_all_items(prompts::list_prompts()))
     }
 
     async fn get_prompt(

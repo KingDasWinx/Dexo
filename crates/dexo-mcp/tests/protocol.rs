@@ -319,3 +319,41 @@ async fn every_call_is_audited_without_its_sql() {
     assert_eq!(denied.decision, "deny");
     assert_eq!(denied.status, "NOT_FOUND");
 }
+
+#[tokio::test]
+async fn resources_and_prompts_do_not_leak_policy_or_sql() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    let listed = client.request("resources/list", json!({})).await;
+    assert_eq!(
+        listed["result"]["resources"].as_array().map(Vec::len),
+        Some(1)
+    );
+    let capabilities = client
+        .request(
+            "resources/read",
+            json!({"uri": "dexo://profile/capabilities"}),
+        )
+        .await;
+    let body = capabilities["result"]["contents"][0]["text"]
+        .as_str()
+        .unwrap_or_default()
+        .to_string();
+    assert!(body.contains("query_execute_read"));
+    assert!(
+        !body.contains("secrets"),
+        "the allowlist is not published: {body}"
+    );
+    for name in ["explore_schema", "review_migration", "analyze_plan"] {
+        let prompt = client.request("prompts/get", json!({"name": name})).await;
+        let text = prompt["result"]["messages"][0]["content"]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_lowercase();
+        assert!(!text.is_empty(), "{name}");
+        assert!(!text.contains("select "), "{name}");
+    }
+    let unknown = client
+        .request("resources/read", json!({"uri": "dexo://object/secrets"}))
+        .await;
+    assert!(unknown.get("error").is_some());
+}
