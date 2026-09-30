@@ -2856,12 +2856,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             }
         }
         Some(HitTarget::Editor) => {
-            let doc = model.active_document_mut();
-            if delta < 0 {
-                doc.viewport_line = doc.viewport_line.saturating_sub(1);
-            } else {
-                doc.viewport_line = doc.viewport_line.saturating_add(1);
-            }
+            crate::screens::editor::scroll_view(model, delta.signum());
             Vec::new()
         }
         _ => match model.effective_focus() {
@@ -2883,12 +2878,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             Focus::DocumentTabs => update(model, Action::MoveDocumentTabCursor(delta)),
             Focus::Console => Vec::new(),
             Focus::Editor | Focus::Palette => {
-                let doc = model.active_document_mut();
-                if delta < 0 {
-                    doc.viewport_line = doc.viewport_line.saturating_sub(1);
-                } else {
-                    doc.viewport_line = doc.viewport_line.saturating_add(1);
-                }
+                crate::screens::editor::scroll_view(model, delta.signum());
                 Vec::new()
             }
         },

@@ -964,6 +964,15 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             move_line_edge(model, false, shift);
             true
         }
+        // Ctrl+Up and Ctrl+Down move the view and leave the cursor, as in VS Code.
+        KeyCode::Up if ctrl && !shift => {
+            scroll_view(model, -1);
+            true
+        }
+        KeyCode::Down if ctrl && !shift => {
+            scroll_view(model, 1);
+            true
+        }
         KeyCode::Up => {
             move_vertical(model, -1, shift);
             true
@@ -1261,6 +1270,18 @@ fn page(model: &mut Model, direction: i32, shift: bool) {
         (doc.viewport_line + rows).min(lines.saturating_sub(rows))
     };
     move_vertical(model, direction * rows as i32, shift);
+}
+
+/// Moves the view a line without the cursor, for the wheel and Ctrl+Up/Down. It stops with
+/// the last line at the top, so turning back moves at once instead of first unwinding
+/// every line scrolled past the end.
+pub(crate) fn scroll_view(model: &mut Model, delta: i32) {
+    let doc = model.active_document_mut();
+    let last = doc.sql.text().matches('\n').count();
+    doc.viewport_line = doc
+        .viewport_line
+        .saturating_add_signed(delta as isize)
+        .min(last);
 }
 
 fn apply_move(doc: &mut EditorDocument, cursor: usize, shift: bool) {

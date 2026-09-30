@@ -82,6 +82,18 @@ fn ctrl_arrows_stop_at_line_edges_and_keep_accented_words_whole() {
 }
 
 #[test]
+fn ctrl_up_and_down_scroll_the_view_and_leave_the_cursor() {
+    let mut model = editor_with("a\nb\nc", 0);
+    for _ in 0..5 {
+        press(&mut model, KeyCode::Down, KeyModifiers::CONTROL);
+    }
+    assert_eq!(model.active_document().viewport_line, 2);
+    press(&mut model, KeyCode::Up, KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().viewport_line, 1);
+    assert_eq!(model.active_document().cursor(), 0);
+}
+
+#[test]
 fn a_word_delete_is_one_undo_step_and_a_selection_goes_first() {
     let mut model = editor_with("select name from orders", 23);
     press(&mut model, KeyCode::Backspace, KeyModifiers::CONTROL);
