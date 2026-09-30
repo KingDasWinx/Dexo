@@ -1118,7 +1118,7 @@ fn backspace(model: &mut Model, word: bool) {
     } else {
         let cursor = doc.sql.cursor();
         let start = if word {
-            word_jump(&doc.sql.text(), cursor, -1)
+            word_delete_start(&doc.sql.text(), cursor)
         } else {
             cursor.saturating_sub(1)
         };
@@ -1140,7 +1140,7 @@ fn delete(model: &mut Model, word: bool) {
         let cursor = doc.sql.cursor();
         let text = doc.sql.text();
         let end = if word {
-            word_jump(&text, cursor, 1)
+            word_delete_end(&text, cursor)
         } else {
             (cursor + 1).min(text.chars().count())
         };
@@ -1330,6 +1330,87 @@ fn word_jump(text: &str, cursor: usize, delta: i32) -> usize {
         }
         i
     }
+}
+
+/// Letters (accented ones too), digits and `_` are one kind of run; anything else that is
+/// not a space is the other, so `products.name` takes three presses, not one.
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn is_blank(ch: char) -> bool {
+    ch == ' ' || ch == '\t'
+}
+
+/// Where Ctrl+Backspace deletes back to, the way VS Code does it. At the start of a line
+/// it takes only the line break. Two or more blanks before the cursor go on their own, so
+/// clearing indentation or a gap never eats the word before it. Otherwise it takes the
+/// blank, then one run of word characters or one run of punctuation, and never crosses
+/// into the line above. It used to skip every non-word character, newlines included, so
+/// one press in an empty line could delete the end of the statement above it.
+fn word_delete_start(text: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    if cursor == 0 {
+        return 0;
+    }
+    if chars[cursor - 1] == '\n' {
+        return cursor - 1;
+    }
+    let line_start = chars[..cursor]
+        .iter()
+        .rposition(|ch| *ch == '\n')
+        .map_or(0, |index| index + 1);
+    let mut start = cursor;
+    while start > line_start && is_blank(chars[start - 1]) {
+        start -= 1;
+    }
+    if cursor - start >= 2 || start == line_start {
+        return start;
+    }
+    let word = is_word_char(chars[start - 1]);
+    while start > line_start
+        && !is_blank(chars[start - 1])
+        && is_word_char(chars[start - 1]) == word
+    {
+        start -= 1;
+    }
+    start
+}
+
+/// Ctrl+Delete, the counterpart of [`word_delete_start`]: at the end of a line it takes
+/// only the line break, and two or more blanks go on their own. Otherwise it takes one run
+/// and the blanks after it -- what Ctrl+Right crosses -- without leaving the line.
+fn word_delete_end(text: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let cursor = cursor.min(len);
+    let blank_end = |from: usize| {
+        let mut end = from;
+        while end < len && is_blank(chars[end]) {
+            end += 1;
+        }
+        end
+    };
+    if cursor == len {
+        return len;
+    }
+    if chars[cursor] == '\n' {
+        return cursor + 1;
+    }
+    let mut end = blank_end(cursor);
+    if end - cursor >= 2 || end == len || chars[end] == '\n' {
+        return end;
+    }
+    let word = is_word_char(chars[end]);
+    while end < len
+        && !is_blank(chars[end])
+        && chars[end] != '\n'
+        && is_word_char(chars[end]) == word
+    {
+        end += 1;
+    }
+    blank_end(end)
 }
 
 fn line_bounds(text: &str, cursor: usize) -> (usize, usize) {
