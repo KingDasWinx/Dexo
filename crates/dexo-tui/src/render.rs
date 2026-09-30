@@ -822,6 +822,7 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     let inner_h = popup.height.saturating_sub(2) as usize;
     let max_scroll = lines.len().saturating_sub(inner_h.max(1));
+    hits.set_scroll_limit(crate::mouse::ScrollArea::Help, max_scroll);
     let scroll = (model.help.scroll as usize).min(max_scroll) as u16;
     frame.render_widget(
         Paragraph::new(lines.join("\n"))
@@ -1793,10 +1794,15 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
     lines.push(String::new());
     lines.push("  up/down scroll  esc close".into());
+    let max_scroll = lines
+        .len()
+        .saturating_sub((popup.height.saturating_sub(2) as usize).max(1));
+    hits.set_scroll_limit(crate::mouse::ScrollArea::Inspector, max_scroll);
+    let scroll = (model.inspector.scroll as usize).min(max_scroll) as u16;
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines.join("\n"))
-            .scroll((model.inspector.scroll, 0))
+            .scroll((scroll, 0))
             .block(overlay_block(model, title)),
         popup,
     );

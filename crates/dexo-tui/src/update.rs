@@ -1524,7 +1524,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ResultsUp => {
             match model.results.view {
                 crate::model::ResultsView::Explain => {
-                    model.results.explain_scroll = model.results.explain_scroll.saturating_sub(1);
+                    model.results.explain_scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Explain,
+                        model.results.explain_scroll,
+                        -1,
+                    );
                 }
                 crate::model::ResultsView::Messages => {
                     model.results.messages_scroll = model.results.messages_scroll.saturating_sub(1);
@@ -1536,7 +1540,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ResultsDown => {
             match model.results.view {
                 crate::model::ResultsView::Explain => {
-                    model.results.explain_scroll = model.results.explain_scroll.saturating_add(1);
+                    model.results.explain_scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Explain,
+                        model.results.explain_scroll,
+                        1,
+                    );
                 }
                 crate::model::ResultsView::Messages => {
                     // Bounded by the log itself; it is the one list here that only grows.
@@ -2673,9 +2681,15 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
     }
     if overlay == Some(OverlayKind::Help) {
         if delta < 0 {
-            model.help.scroll = model.help.scroll.saturating_sub(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, -1);
         } else {
-            model.help.scroll = model.help.scroll.saturating_add(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, 1);
         }
         return Vec::new();
     }
@@ -2952,11 +2966,19 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Up => {
-                model.inspector.scroll = model.inspector.scroll.saturating_sub(1);
+                model.inspector.scroll = model.hits.scroll(
+                    crate::mouse::ScrollArea::Inspector,
+                    model.inspector.scroll,
+                    -1,
+                );
                 Vec::new()
             }
             KeyCode::Down => {
-                model.inspector.scroll = model.inspector.scroll.saturating_add(1);
+                model.inspector.scroll = model.hits.scroll(
+                    crate::mouse::ScrollArea::Inspector,
+                    model.inspector.scroll,
+                    1,
+                );
                 Vec::new()
             }
             _ => Vec::new(),
@@ -4022,11 +4044,17 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Up | KeyCode::PageUp => {
-            model.help.scroll = model.help.scroll.saturating_sub(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, -1);
             Vec::new()
         }
         KeyCode::Down | KeyCode::PageDown => {
-            model.help.scroll = model.help.scroll.saturating_add(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, 1);
             Vec::new()
         }
         KeyCode::Backspace => {
