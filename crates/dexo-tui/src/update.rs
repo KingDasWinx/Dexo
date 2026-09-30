@@ -7037,14 +7037,17 @@ fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePi
     };
     model.file_picker.open_browser_with_recents(recents);
     if mode == crate::screens::file_picker::FilePickerMode::Save {
-        let preset = model
-            .active_document()
+        // The picker only opens for a document that has never been saved, so the file
+        // name alone left the field empty every time; the tab's name is the one to offer.
+        let document = model.active_document();
+        let preset = document
             .path
             .as_ref()
             .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned());
-        if let Some(name) = preset {
-            model.file_picker.name.set_text(name);
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| document.title.clone());
+        if !preset.trim().is_empty() {
+            model.file_picker.name.set_text(preset);
         }
     }
 }
