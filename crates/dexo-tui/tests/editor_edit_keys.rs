@@ -56,6 +56,24 @@ fn ctrl_delete_deletes_the_word_ahead() {
     assert_eq!(model.active_document().text(), "select from orders");
 }
 
+/// Ctrl+Left/Right stop at a line's edges and at an empty line instead of running on to
+/// the next word, cross a lone `.` with its word, and keep `ç` inside its word.
+#[test]
+fn ctrl_arrows_stop_at_line_edges_and_keep_accented_words_whole() {
+    let text = "select p.preço\n\n    from produtos";
+    let walk = |code: KeyCode, from: usize, presses: usize| {
+        let mut model = editor_with(text, from);
+        (0..presses)
+            .map(|_| {
+                press(&mut model, code, KeyModifiers::CONTROL);
+                model.active_document().cursor()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(walk(KeyCode::Right, 0, 7), [6, 8, 14, 15, 24, 33, 33]);
+    assert_eq!(walk(KeyCode::Left, 33, 8), [25, 20, 16, 15, 9, 7, 0, 0]);
+}
+
 #[test]
 fn a_word_delete_is_one_undo_step_and_a_selection_goes_first() {
     let mut model = editor_with("select name from orders", 23);

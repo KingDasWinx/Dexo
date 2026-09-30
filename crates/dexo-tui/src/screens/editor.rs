@@ -1303,33 +1303,86 @@ fn current_line_indent(model: &Model) -> String {
         .collect()
 }
 
+/// Ctrl+Left and Ctrl+Right, the way VS Code moves: Left to the start of the run before
+/// the cursor, Right to the end of the run after it. Neither leaves the line except from
+/// its edge, and then across one line break, so the end of a line and an empty line are
+/// stops. A lone separator glued to a word goes with it, so `p.name` is one press. It used
+/// to skip every non-word character, blank lines included, and took `ç` for punctuation.
 fn word_jump(text: &str, cursor: usize, delta: i32) -> usize {
     // ponytail: O(n) char scan per keystroke; switch to rope line/char APIs if files get huge.
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
-    let mut i = cursor.min(len);
-    let is_word = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+    let mut at = cursor.min(len);
+    let lone_separator = |run: &std::ops::Range<usize>| {
+        run.len() == 1
+            && !is_word_char(chars[run.start])
+            && chars.get(run.end).is_some_and(|ch| is_word_char(*ch))
+    };
     if delta < 0 {
-        if i == 0 {
-            return 0;
+        if at > 0 && chars[at - 1] == '\n' {
+            at -= 1;
         }
-        i -= 1;
-        while i > 0 && !is_word(chars[i]) {
-            i -= 1;
+        let line_start = chars[..at]
+            .iter()
+            .rposition(|ch| *ch == '\n')
+            .map_or(0, |index| index + 1);
+        let mut run = run_before(&chars, line_start, at);
+        if let Some(lone) = run.clone().filter(|run| lone_separator(run)) {
+            run = run_before(&chars, line_start, lone.start);
         }
-        while i > 0 && is_word(chars[i - 1]) {
-            i -= 1;
-        }
-        i
+        run.map_or(line_start, |run| run.start)
     } else {
-        while i < len && is_word(chars[i]) {
-            i += 1;
+        if at < len && chars[at] == '\n' {
+            at += 1;
         }
-        while i < len && !is_word(chars[i]) {
-            i += 1;
+        let line_end = chars[at..]
+            .iter()
+            .position(|ch| *ch == '\n')
+            .map_or(len, |index| at + index);
+        let mut run = run_after(&chars, at, line_end);
+        if let Some(lone) = run.clone().filter(|run| lone_separator(run)) {
+            run = run_after(&chars, lone.end, line_end);
         }
-        i
+        run.map_or(line_end, |run| run.end)
     }
+}
+
+/// The nearest run of word characters, or of punctuation, before `at` and after
+/// `line_start`, blanks between skipped.
+fn run_before(chars: &[char], line_start: usize, at: usize) -> Option<std::ops::Range<usize>> {
+    let mut end = at;
+    while end > line_start && is_blank(chars[end - 1]) {
+        end -= 1;
+    }
+    if end == line_start {
+        return None;
+    }
+    let word = is_word_char(chars[end - 1]);
+    let mut start = end - 1;
+    while start > line_start
+        && !is_blank(chars[start - 1])
+        && is_word_char(chars[start - 1]) == word
+    {
+        start -= 1;
+    }
+    Some(start..end)
+}
+
+/// [`run_before`] the other way: the nearest run after `at` and before `line_end`.
+fn run_after(chars: &[char], at: usize, line_end: usize) -> Option<std::ops::Range<usize>> {
+    let mut start = at;
+    while start < line_end && is_blank(chars[start]) {
+        start += 1;
+    }
+    if start == line_end {
+        return None;
+    }
+    let word = is_word_char(chars[start]);
+    let mut end = start + 1;
+    while end < line_end && !is_blank(chars[end]) && is_word_char(chars[end]) == word {
+        end += 1;
+    }
+    Some(start..end)
 }
 
 /// Letters (accented ones too), digits and `_` are one kind of run; anything else that is
