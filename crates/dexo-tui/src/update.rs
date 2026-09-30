@@ -215,10 +215,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::ScriptFinished { .. } => {
+        Action::ScriptFinished { key } => {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
+            // A run that went through answers with rows, so a pane left on Messages by the
+            // previous error comes back to them.
+            if operation_matches(model, &key) {
+                model.results.view = crate::model::ResultsView::Grid;
+            }
             persist_history_effect(model)
         }
         Action::QueryFailed {
@@ -234,6 +239,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 tab.status = crate::model::OperationStatus::Failed;
             }
             model.messages.error_with(message, details);
+            // The grid of a failed statement is empty; the reason is in Messages, so the
+            // pane goes there and puts the new entry at the top.
+            if operation_matches(model, &key) {
+                model.results.view = crate::model::ResultsView::Messages;
+                model.results.messages_scroll =
+                    u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
+            }
             Vec::new()
         }
         Action::CheckpointTick => checkpoint_session(model),
