@@ -13,6 +13,19 @@ pub fn copy_text(text: String) -> Result<(), String> {
     copy_with_adapter(text, os_adapter)
 }
 
+/// Asks the terminal to put the text on the system clipboard (OSC 52). It reaches places
+/// arboard does not: over SSH, inside tmux, where arboard fell back to XWayland, and after
+/// Dexo exits on Wayland, where arboard's copy dies with the process. Terminals that do
+/// not know the sequence ignore it.
+pub fn copy_via_terminal(text: &str) -> std::io::Result<()> {
+    use base64::Engine;
+    use std::io::Write;
+    let payload = base64::engine::general_purpose::STANDARD.encode(text);
+    let mut out = std::io::stdout().lock();
+    write!(out, "\x1b]52;c;{payload}\x07")?;
+    out.flush()
+}
+
 fn os_adapter(text: String) -> Result<(), String> {
     let slot = shared_clipboard();
     let mut guard = slot.lock().map_err(|e| e.to_string())?;

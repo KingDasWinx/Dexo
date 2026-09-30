@@ -525,10 +525,18 @@ impl WorkbenchRuntime {
                 Ok(_) => {}
                 Err(message) => self.emit(Action::ClipboardFailed { message }).await,
             },
-            crate::Effect::CopyToClipboard { text } => match clipboard::copy_text(text.clone()) {
-                Ok(()) => self.emit(Action::ClipboardWritten { text }).await,
-                Err(message) => self.emit(Action::ClipboardFailed { message }).await,
-            },
+            // Both paths, always: arboard can report success and still reach no other
+            // program (XWayland, tmux, SSH), and the terminal cannot report at all.
+            crate::Effect::CopyToClipboard { text } => {
+                let terminal = clipboard::copy_via_terminal(&text);
+                match clipboard::copy_text(text.clone()) {
+                    Ok(()) => self.emit(Action::ClipboardWritten { text }).await,
+                    Err(_) if terminal.is_ok() => {
+                        self.emit(Action::ClipboardWritten { text }).await
+                    }
+                    Err(message) => self.emit(Action::ClipboardFailed { message }).await,
+                }
+            }
             crate::Effect::CaptureCatalogSnapshot {
                 connection_id,
                 database_name,
