@@ -1,18 +1,32 @@
 use dexo_driver_api::{DriverError, DriverErrorCategory};
 
+/// Server errors keep the server's own message, its error number and its SQLSTATE, as
+/// `1146 (42S02)`. Every failure used to read "mysql query failed", with the real text
+/// cut to 32 characters and filed as the code.
 pub fn map_error(error: mysql_async::Error) -> DriverError {
+    if let mysql_async::Error::Server(server) = &error {
+        if server.code == 1317 {
+            return DriverError::new(DriverErrorCategory::Cancelled, "query cancelled");
+        }
+        let category = if is_permission(&error) {
+            DriverErrorCategory::Permission
+        } else {
+            DriverErrorCategory::Syntax
+        };
+        return DriverError::new(category, server.message.clone())
+            .with_native_code(format!("{} ({})", server.code, server.state));
+    }
     let message = error.to_string();
-    if message.to_ascii_lowercase().contains("kill")
-        || message.to_ascii_lowercase().contains("interrupted")
-        || message.to_ascii_lowercase().contains("1317")
-    {
+    let lower = message.to_ascii_lowercase();
+    if lower.contains("kill") || lower.contains("interrupted") {
         return DriverError::new(DriverErrorCategory::Cancelled, "query cancelled");
     }
-    if is_permission(&error) {
-        return DriverError::new(DriverErrorCategory::Permission, "mysql permission denied");
-    }
-    DriverError::new(DriverErrorCategory::Internal, "mysql query failed")
-        .with_native_code(message.chars().take(32).collect::<String>())
+    let category = match &error {
+        mysql_async::Error::Io(_) => DriverErrorCategory::Network,
+        _ if is_permission(&error) => DriverErrorCategory::Permission,
+        _ => DriverErrorCategory::Internal,
+    };
+    DriverError::new(category, message)
 }
 
 pub fn is_permission(error: &mysql_async::Error) -> bool {
