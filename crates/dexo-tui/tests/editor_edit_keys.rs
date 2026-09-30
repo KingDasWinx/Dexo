@@ -56,6 +56,13 @@ fn ctrl_delete_deletes_the_word_ahead() {
     assert_eq!(model.active_document().text(), "select from orders");
 }
 
+#[test]
+fn ctrl_delete_takes_blanks_on_one_side_of_the_word() {
+    let mut model = editor_with("foo bar baz", 3);
+    press(&mut model, KeyCode::Delete, KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().text(), "foo baz");
+}
+
 /// Ctrl+Left/Right stop at a line's edges and at an empty line instead of running on to
 /// the next word, cross a lone `.` with its word, and keep `ç` inside its word.
 #[test]

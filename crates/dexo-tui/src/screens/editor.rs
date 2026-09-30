@@ -1433,7 +1433,8 @@ fn word_delete_start(text: &str, cursor: usize) -> usize {
 
 /// Ctrl+Delete, the counterpart of [`word_delete_start`]: at the end of a line it takes
 /// only the line break, and two or more blanks go on their own. Otherwise it takes one run
-/// and the blanks after it -- what Ctrl+Right crosses -- without leaving the line.
+/// and the blanks on one side of it, never both, so the words either side are not glued
+/// together: `select |name from` loses `name `, `foo| bar baz` loses ` bar`.
 fn word_delete_end(text: &str, cursor: usize) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
@@ -1451,11 +1452,12 @@ fn word_delete_end(text: &str, cursor: usize) -> usize {
     if chars[cursor] == '\n' {
         return cursor + 1;
     }
-    let mut end = blank_end(cursor);
-    if end - cursor >= 2 || end == len || chars[end] == '\n' {
-        return end;
+    let start = blank_end(cursor);
+    if start - cursor >= 2 || start == len || chars[start] == '\n' {
+        return start;
     }
-    let word = is_word_char(chars[end]);
+    let word = is_word_char(chars[start]);
+    let mut end = start;
     while end < len
         && !is_blank(chars[end])
         && chars[end] != '\n'
@@ -1463,7 +1465,7 @@ fn word_delete_end(text: &str, cursor: usize) -> usize {
     {
         end += 1;
     }
-    blank_end(end)
+    if start == cursor { blank_end(end) } else { end }
 }
 
 fn line_bounds(text: &str, cursor: usize) -> (usize, usize) {
