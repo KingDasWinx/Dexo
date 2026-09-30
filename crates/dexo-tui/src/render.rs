@@ -1071,14 +1071,8 @@ fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let form = &model.data.insert_form;
     let area = frame.area();
-    let popup = centered(area, 60, (form.fields.len() as u16 + 4).max(6));
-    let mut lines = Vec::new();
-    for (index, field) in form.fields.iter().enumerate() {
-        let marker = if index == form.focus { ">" } else { " " };
-        lines.push(format!("{marker} {}: {}", field.label, field.value));
-    }
-    lines.push(String::new());
-    lines.push("Enter submit  Esc cancel".into());
+    let lines = form.lines();
+    let popup = centered(area, 60, (lines.len() as u16 + 2).max(6));
     paint_popup(
         frame,
         model,
@@ -1087,6 +1081,13 @@ fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |index, line, rect| {
+        if index < form.fields.len() {
+            hits.register(HitTarget::FormField(index), rect);
+        } else if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Insert");
+        }
+    });
 }
 
 fn render_review(

@@ -1889,6 +1889,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::TransactionPrompt) => mouse_transaction(model, hit),
         Some(OverlayKind::DocumentNamePrompt) => mouse_document_name(model, hit),
         Some(OverlayKind::DataQueryPrompt) => mouse_data_query(model, hit),
+        Some(OverlayKind::InsertRow) => mouse_insert_row(model, hit),
         Some(OverlayKind::ConnectionForm) => mouse_connection_form(model, hit),
         Some(OverlayKind::Settings) => mouse_settings(model, hit),
         Some(OverlayKind::Recovery) => mouse_recovery(model, hit),
@@ -1986,6 +1987,18 @@ fn mouse_transaction(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             model.transaction_prompt.error = None;
             Vec::new()
         }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_insert_row(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(index)) => {
+            model.data.insert_form.focus = index;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => update(model, Action::SubmitInsertRow),
+        Some(HitTarget::FooterCancel) => update(model, Action::CancelInsertRow),
         _ => Vec::new(),
     }
 }
@@ -3129,49 +3142,33 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.data.insert_form.open {
-        return match key.code {
-            KeyCode::Esc => update(model, Action::CancelInsertRow),
-            KeyCode::Enter => update(model, Action::SubmitInsertRow),
-            KeyCode::Up => {
-                model.data.insert_form.focus = model
-                    .data
-                    .insert_form
-                    .focus
-                    .checked_sub(1)
-                    .unwrap_or(model.data.insert_form.fields.len().saturating_sub(1));
-                Vec::new()
+        use crate::widgets::form::FooterFocus;
+        let footer = model.data.insert_form.footer_focus();
+        let form = &mut model.data.insert_form;
+        match key.code {
+            KeyCode::Esc => return update(model, Action::CancelInsertRow),
+            KeyCode::Enter if footer == FooterFocus::Cancel => {
+                return update(model, Action::CancelInsertRow);
             }
-            KeyCode::Down | KeyCode::Tab => {
-                model.data.insert_form.focus =
-                    (model.data.insert_form.focus + 1) % model.data.insert_form.fields.len().max(1);
-                Vec::new()
-            }
+            KeyCode::Enter => return update(model, Action::SubmitInsertRow),
+            KeyCode::Down | KeyCode::Tab => form.focus_next(),
+            KeyCode::Up | KeyCode::BackTab => form.focus_prev(),
+            KeyCode::Left | KeyCode::Right if footer != FooterFocus::Input => form.toggle_button(),
             KeyCode::Backspace => {
-                if let Some(field) = model
-                    .data
-                    .insert_form
-                    .fields
-                    .get_mut(model.data.insert_form.focus)
-                {
+                if let Some(field) = form.focused_field_mut() {
                     field.value.pop();
                 }
-                Vec::new()
             }
             KeyCode::Char(ch)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                if let Some(field) = model
-                    .data
-                    .insert_form
-                    .fields
-                    .get_mut(model.data.insert_form.focus)
-                {
+                if let Some(field) = form.focused_field_mut() {
                     field.value.push(ch);
                 }
-                Vec::new()
             }
-            _ => Vec::new(),
-        };
+            _ => {}
+        }
+        return Vec::new();
     }
     if model.data.review.is_some() {
         return match key.code {

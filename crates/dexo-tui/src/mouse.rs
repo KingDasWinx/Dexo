@@ -98,6 +98,7 @@ pub enum OverlayKind {
     ValueViewer,
     ObjectOverlay,
     SchemaForm,
+    InsertRow,
     Connections,
     Projects,
     ConfigTransfer,
@@ -194,6 +195,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.settings.open, OverlayKind::Settings),
         (model.connection_form.open, OverlayKind::ConnectionForm),
         (model.data.query_prompt.open, OverlayKind::DataQueryPrompt),
+        (model.data.insert_form.open, OverlayKind::InsertRow),
         (
             model.transaction_prompt.open,
             OverlayKind::TransactionPrompt,
