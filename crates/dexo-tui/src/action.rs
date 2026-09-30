@@ -114,6 +114,14 @@ pub enum Action {
     ScriptFinished {
         key: crate::runtime::OperationKey,
     },
+    /// A statement of an SQL script failed. Distinct from `OperationFailed` so only SQL
+    /// errors move the output pane to Messages.
+    QueryFailed {
+        key: crate::runtime::OperationKey,
+        index: usize,
+        message: String,
+        details: Vec<String>,
+    },
     CheckpointTick,
     OnboardingTick,
     TransactionChanged {

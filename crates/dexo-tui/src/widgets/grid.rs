@@ -289,24 +289,31 @@ fn message_lines(model: &Model) -> Vec<Line<'static>> {
             model.theme.style(Role::Muted, model.capabilities),
         ))];
     }
-    model
-        .messages
-        .iter()
-        .map(|entry| {
-            let role = match entry.severity {
-                Severity::Info => Role::Muted,
-                Severity::Warn => Role::Warning,
-                Severity::Error => Role::Error,
-            };
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<5} ", entry.severity.label()),
-                    model.theme.style(role, model.capabilities),
-                ),
-                Span::raw(entry.message.clone()),
-            ])
-        })
-        .collect()
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let mut lines = Vec::new();
+    for entry in model.messages.iter() {
+        let role = match entry.severity {
+            Severity::Info => Role::Muted,
+            Severity::Warn => Role::Warning,
+            Severity::Error => Role::Error,
+        };
+        let stamp = format!("[{}] ", entry.at);
+        let indent = " ".repeat(stamp.chars().count() + 6);
+        lines.push(Line::from(vec![
+            Span::styled(stamp, muted),
+            Span::styled(
+                format!("{:<5} ", entry.severity.label()),
+                model.theme.style(role, model.capabilities),
+            ),
+            Span::raw(entry.message.clone()),
+        ]));
+        // Under the message and aligned with it, dimmer, so the eye lands on the message
+        // first and the SQLSTATE, caret, DETAIL and HINT read as its footnotes.
+        for detail in &entry.details {
+            lines.push(Line::from(Span::styled(format!("{indent}{detail}"), muted)));
+        }
+    }
+    lines
 }
 
 #[cfg(test)]

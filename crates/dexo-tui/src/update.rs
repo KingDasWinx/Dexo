@@ -221,6 +221,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_operation = None;
             persist_history_effect(model)
         }
+        Action::QueryFailed {
+            key,
+            index,
+            message,
+            details,
+        } => {
+            model.active_task = None;
+            model.active_query = None;
+            model.active_operation = None;
+            if let Some(tab) = result_tab_mut(model, &key, index) {
+                tab.status = crate::model::OperationStatus::Failed;
+            }
+            model.messages.error_with(message, details);
+            Vec::new()
+        }
         Action::CheckpointTick => checkpoint_session(model),
         Action::OnboardingTick => {
             if model.onboarding.open && model.onboarding.logo_frames.len() > 1 {
@@ -1513,11 +1528,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 }
                 crate::model::ResultsView::Messages => {
                     // Bounded by the log itself; it is the one list here that only grows.
+                    // An entry can span several rows, so the bound counts rows, not entries.
                     model.results.messages_scroll = model
                         .results
                         .messages_scroll
                         .saturating_add(1)
-                        .min(model.messages.len().saturating_sub(1) as u16);
+                        .min(model.messages.line_count().saturating_sub(1) as u16);
                 }
                 crate::model::ResultsView::Grid => model.results.move_cursor_row(1, false),
             }
@@ -5118,7 +5134,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
     if model.documents[index].console_log.is_empty() {
         model.documents[index]
             .console_log
-            .push(format!("[{}] Connected", format_clock()));
+            .push(format!("[{}] Connected", crate::model::clock()));
     }
     match crate::runtime::data_manager::table_request(
         target.clone(),
@@ -5131,7 +5147,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
         Ok(request) => {
             model.documents[index].console_log.push(format!(
                 "[{}] {}> SELECT * FROM {} LIMIT {}",
-                format_clock(),
+                crate::model::clock(),
                 target.display_unquoted(),
                 target.display_unquoted(),
                 model.data.page_limit
@@ -5175,18 +5191,9 @@ fn log_rows_retrieved(model: &mut Model, row_count: usize) {
     };
     document.console_log.push(format!(
         "[{}] {row_count} rows retrieved starting from {} in {elapsed_ms} ms",
-        format_clock(),
+        crate::model::clock(),
         offset + 1
     ));
-}
-
-fn format_clock() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
-    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
