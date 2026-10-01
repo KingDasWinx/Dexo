@@ -149,6 +149,23 @@ impl<B: TerminalControl> TerminalGuard<B> {
         Ok(())
     }
 
+    /// Hands the terminal to another program -- the external editor -- as `restore`
+    /// would, but the guard stays usable: `resume` takes it back.
+    pub fn suspend(&mut self) -> Suspended {
+        let suspended = Suspended { mouse: self.mouse };
+        self.restore();
+        suspended
+    }
+
+    /// Back to the alternate screen, raw mode and the keyboard protocol after `suspend`.
+    /// The caret and background colours are offered again by the next frame.
+    pub fn resume(&mut self, suspended: Suspended) -> Result<(), TuiError> {
+        self.backend.enter()?;
+        self.restored = false;
+        self.enable_raw()?;
+        self.set_mouse(suspended.mouse)
+    }
+
     pub fn restore(&mut self) {
         if self.restored {
             return;
@@ -181,6 +198,11 @@ impl<B: TerminalControl> TerminalGuard<B> {
         let _ = self.backend.show_cursor();
         self.restored = true;
     }
+}
+
+/// What `TerminalGuard::suspend` turned off and `resume` turns back on.
+pub struct Suspended {
+    mouse: bool,
 }
 
 pub fn install_panic_hook() {

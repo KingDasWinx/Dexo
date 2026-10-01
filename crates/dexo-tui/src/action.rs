@@ -434,6 +434,13 @@ pub enum Action {
     FormatSql,
     EditorUndo,
     EditorToggleComment,
+    /// Opens the document in `$VISUAL`, `$EDITOR` or the platform's editor.
+    EditExternally,
+    /// The external editor exited. `text` is what it saved, when it exited cleanly.
+    ExternalEditFinished {
+        document: String,
+        text: Result<String, String>,
+    },
     EditorDuplicateLine,
     EditorMoveLine {
         up: bool,

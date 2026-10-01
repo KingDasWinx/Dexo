@@ -1380,6 +1380,42 @@ pub fn move_lines(model: &mut Model, up: bool) {
     }
 }
 
+/// Puts `text` in place of the document's, as one undo step, keeping the cursor's place
+/// as far as the new text allows. Nothing happens to a document that is gone.
+pub fn replace_document(model: &mut Model, document: &str, text: &str) {
+    let Some(index) = model.documents.iter().position(|doc| doc.id == document) else {
+        return;
+    };
+    let doc = &mut model.documents[index];
+    let current = doc.sql.text();
+    // Editors end a file with a line break; one the document never had is theirs.
+    let text = if current.ends_with('\n') {
+        text
+    } else {
+        text.strip_suffix("\r\n")
+            .or_else(|| text.strip_suffix('\n'))
+            .unwrap_or(text)
+    };
+    if current == text {
+        return;
+    }
+    if doc.typing {
+        doc.sql.end_group();
+        doc.typing = false;
+    }
+    let cursor = doc.sql.cursor();
+    let len = doc.sql.text().chars().count();
+    doc.anchor = None;
+    doc.sql.begin_group();
+    let _ = doc.sql.replace_chars(0..len, text);
+    doc.sql.end_group();
+    let _ = doc.sql.set_cursor(cursor.min(text.chars().count()));
+    if index == model.active_document {
+        refresh_intelligence(model, false);
+        follow_cursor(model);
+    }
+}
+
 pub fn select_all(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();

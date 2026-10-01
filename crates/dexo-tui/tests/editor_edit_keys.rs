@@ -176,3 +176,29 @@ fn line_edits_comment_duplicate_and_move_in_one_undo_step() {
         "select ação\n  from t\n  from t\nwhere x"
     );
 }
+
+/// What the external editor saved replaces the document as one undo step, without the
+/// line break editors add at the end; a failed edit leaves it alone.
+#[test]
+fn an_external_edit_is_one_undo_step() {
+    let mut model = editor_with("select 1;", 9);
+    let document = model.active_document().id.clone();
+    update(
+        &mut model,
+        Action::ExternalEditFinished {
+            document: document.clone(),
+            text: Err("vi exited with 1".into()),
+        },
+    );
+    assert_eq!(model.active_document().text(), "select 1;");
+    update(
+        &mut model,
+        Action::ExternalEditFinished {
+            document,
+            text: Ok("-- ação\nselect 1;\n".into()),
+        },
+    );
+    assert_eq!(model.active_document().text(), "-- ação\nselect 1;");
+    press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().text(), "select 1;");
+}

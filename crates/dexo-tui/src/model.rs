@@ -1593,6 +1593,12 @@ impl EditorDocument {
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ExternalEdit {
+    pub document: String,
+    pub text: String,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct PendingDocumentClose {
     pub document: String,
     pub revision: u64,
@@ -1682,6 +1688,9 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// A document waiting to be opened in `$VISUAL` or `$EDITOR`. The event loop owns
+    /// the terminal, so it takes this between frames.
+    pub external_edit: Option<ExternalEdit>,
     /// Keys arrive through the kitty keyboard protocol. Without it Ctrl+Backspace is sent
     /// as ^H, the same byte as Ctrl+H.
     pub keys_disambiguated: bool,
@@ -1803,6 +1812,7 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            external_edit: None,
             keys_disambiguated: false,
             find: crate::screens::find::FindState::default(),
         }

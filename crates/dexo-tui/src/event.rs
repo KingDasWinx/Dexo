@@ -173,6 +173,28 @@ async fn run_loop(
                 }
             }
         }
+        if let Some(request) = model.external_edit.take() {
+            // The child reads the keyboard while it runs: the stream has to stop reading
+            // it first, or the two take turns at the keys.
+            drop(events);
+            let text = edit_externally(guard, &request.text).await;
+            events = EventStream::new();
+            // The alternate screen comes back empty, and ratatui still thinks the last
+            // frame is on it: a blank frame makes the next one draw every cell. Not
+            // `Terminal::clear`, which asks the terminal where the cursor is and fails
+            // the whole session when no answer comes.
+            terminal.draw(|frame| frame.render_widget(ratatui::widgets::Clear, frame.area()))?;
+            let effects = crate::update::update(
+                &mut model,
+                Action::ExternalEditFinished {
+                    document: request.document,
+                    text,
+                },
+            );
+            if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+                return Ok(());
+            }
+        }
         guard.set_mouse(model.mouse)?;
         // The theme can change under the user (mode, accent), so this is offered every
         // frame and the guard only forwards a change.
@@ -180,6 +202,56 @@ async fn run_loop(
         guard.set_background_color(model.theme.background_rgb(model.capabilities))?;
     }
     Ok(())
+}
+
+/// Writes `text` to a temp file, runs `$VISUAL`, `$EDITOR` or the platform's editor on
+/// it with the terminal handed over, and reads back what was saved. A non-zero exit, or
+/// a file that cannot be read back, leaves the document as it was.
+async fn edit_externally(
+    guard: &mut TerminalGuard<CrosstermTerminal>,
+    text: &str,
+) -> Result<String, String> {
+    let file = tempfile::Builder::new()
+        .prefix("dexo-")
+        .suffix(".sql")
+        .tempfile()
+        .map_err(|error| format!("could not create a file for the editor: {error}"))?;
+    std::fs::write(file.path(), text)
+        .map_err(|error| format!("could not write a file for the editor: {error}"))?;
+    let editor = ["VISUAL", "EDITOR"]
+        .iter()
+        .filter_map(|name| std::env::var(name).ok())
+        .find(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
+    let suspended = guard.suspend();
+    // Through the shell, so `code --wait` and other editors with arguments work; the
+    // path goes as an argument, never spliced into the command.
+    let status = if cfg!(windows) {
+        tokio::process::Command::new("cmd")
+            .arg("/C")
+            .arg(format!("{editor} \"{}\"", file.path().display()))
+            .status()
+            .await
+    } else {
+        tokio::process::Command::new("sh")
+            .arg("-c")
+            .arg(format!("{editor} \"$1\""))
+            .arg("sh")
+            .arg(file.path())
+            .status()
+            .await
+    };
+    guard
+        .resume(suspended)
+        .map_err(|error| format!("could not take the terminal back: {error}"))?;
+    match status {
+        Ok(status) if status.success() => std::fs::read_to_string(file.path())
+            .map_err(|error| format!("could not read what the editor saved: {error}")),
+        Ok(status) => Err(format!(
+            "{editor} exited with {status}; the document is unchanged"
+        )),
+        Err(error) => Err(format!("could not start {editor}: {error}")),
+    }
 }
 
 async fn dispatch_effects(

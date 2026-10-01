@@ -1073,6 +1073,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenFind { replace: true }),
         },
         CommandSpec {
+            id: "editor.external",
+            title: "Edit in External Editor",
+            keywords: &["vim", "nvim", "emacs", "$EDITOR", "visual"],
+            shortcut: Some("Ctrl+E"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditExternally),
+        },
+        CommandSpec {
             id: "editor.toggle_comment",
             title: "Toggle Line Comment",
             keywords: &["comment", "uncomment", "--"],

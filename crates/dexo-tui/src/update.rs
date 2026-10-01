@@ -1447,6 +1447,29 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         {
             Vec::new()
         }
+        Action::EditExternally => {
+            let doc = model.active_document();
+            if doc.kind.is_table() || doc.kind.is_placeholder() {
+                model
+                    .messages
+                    .warn("Only a SQL document opens in an external editor.".into());
+            } else {
+                crate::screens::editor::end_typing(model);
+                let doc = model.active_document();
+                model.external_edit = Some(crate::model::ExternalEdit {
+                    document: doc.id.clone(),
+                    text: doc.text(),
+                });
+            }
+            Vec::new()
+        }
+        Action::ExternalEditFinished { document, text } => {
+            match text {
+                Ok(text) => crate::screens::editor::replace_document(model, &document, &text),
+                Err(message) => model.messages.error(message),
+            }
+            Vec::new()
+        }
         Action::EditorToggleComment => {
             crate::screens::editor::toggle_comment(model);
             Vec::new()
