@@ -1,5 +1,6 @@
 use std::env;
 
+use testcontainers_modules::mariadb::Mariadb;
 use testcontainers_modules::mysql::Mysql;
 use testcontainers_modules::postgres::Postgres;
 use testcontainers_modules::testcontainers::ContainerAsync;
@@ -15,6 +16,9 @@ pub const TEST_DATABASE: &str = "dexo";
 pub struct DatabasePair {
     _postgres: Option<ContainerAsync<Postgres>>,
     _mysql: Option<ContainerAsync<Mysql>>,
+    /// Started in MySQL's place when `DEXO_IT_IMAGE` names a MariaDB image, so the
+    /// MySQL driver's suites run against MariaDB unchanged.
+    _mariadb: Option<ContainerAsync<Mariadb>>,
     postgres_url: String,
     mysql_url: String,
     postgres_endpoint: String,
@@ -44,7 +48,14 @@ fn mysql_tag() -> String {
 fn skip_postgres() -> bool {
     env::var("DEXO_IT_IMAGE")
         .ok()
-        .is_some_and(|image| image.starts_with("mysql:"))
+        .is_some_and(|image| image.starts_with("mysql:") || image.starts_with("mariadb:"))
+}
+
+/// The MariaDB tag when `DEXO_IT_IMAGE` names a MariaDB image.
+fn mariadb_tag() -> Option<String> {
+    env::var("DEXO_IT_IMAGE")
+        .ok()
+        .and_then(|image| image.strip_prefix("mariadb:").map(str::to_string))
 }
 
 fn skip_mysql() -> bool {
@@ -68,7 +79,20 @@ impl DatabasePair {
                     .await?,
             )
         };
-        let mysql = if skip_mysql() {
+        let mariadb = match mariadb_tag() {
+            Some(tag) if !skip_mysql() => Some(
+                Mariadb::default()
+                    .with_tag(tag)
+                    .with_env_var("MARIADB_USER", TEST_USER)
+                    .with_env_var("MARIADB_PASSWORD", TEST_PASSWORD)
+                    .with_env_var("MARIADB_DATABASE", TEST_DATABASE)
+                    .with_env_var("MARIADB_ROOT_PASSWORD", TEST_PASSWORD)
+                    .start()
+                    .await?,
+            ),
+            _ => None,
+        };
+        let mysql = if skip_mysql() || mariadb.is_some() {
             None
         } else {
             Some(
@@ -96,12 +120,17 @@ impl DatabasePair {
             let host = mysql.get_host().await?;
             let port = mysql.get_host_port_ipv4(3306).await?;
             (format_url("mysql", &host, port), format!("{host}:{port}"))
+        } else if let Some(mariadb) = mariadb.as_ref() {
+            let host = mariadb.get_host().await?;
+            let port = mariadb.get_host_port_ipv4(3306).await?;
+            (format_url("mysql", &host, port), format!("{host}:{port}"))
         } else {
             (String::new(), String::new())
         };
         Ok(Self {
             _postgres: postgres,
             _mysql: mysql,
+            _mariadb: mariadb,
             postgres_url,
             mysql_url,
             postgres_endpoint,

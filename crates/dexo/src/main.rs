@@ -4,7 +4,7 @@ use clap::Parser;
 use dexo_app::DriverRegistry;
 use dexo_cli::args::Args;
 use dexo_cli::run::run_dispatch;
-use dexo_driver_mysql::MysqlFactory;
+use dexo_driver_mysql::{MariadbFactory, MysqlFactory};
 use dexo_driver_postgres::PostgresFactory;
 
 fn main() -> anyhow::Result<()> {
@@ -12,6 +12,7 @@ fn main() -> anyhow::Result<()> {
     let mut registry = DriverRegistry::new();
     registry.register(Arc::new(PostgresFactory));
     registry.register(Arc::new(MysqlFactory));
+    registry.register(Arc::new(MariadbFactory));
     let tui_registry = registry.clone();
     run_dispatch(Args::parse(), registry, move || {
         Ok(dexo_tui::run(tui_registry)?)

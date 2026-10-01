@@ -332,8 +332,14 @@ impl MysqlSession {
             }),
         }
 
+        // MariaDB keeps roles as users flagged `is_role`; it has no role_edges.
+        let roles_sql = if self.is_mariadb() {
+            "SELECT User FROM mysql.user WHERE is_role = 'Y'"
+        } else {
+            "SELECT from_user FROM mysql.role_edges"
+        };
         match self
-            .try_exec_rows::<mysql_async::Row>("SELECT from_user FROM mysql.role_edges", ())
+            .try_exec_rows::<mysql_async::Row>(roles_sql, ())
             .await?
         {
             Ok(roles) => {
@@ -689,6 +695,35 @@ impl MysqlSession {
         schema: &str,
         name: &str,
     ) -> Result<(), DriverError> {
+        if self.is_mariadb() {
+            // MariaDB has no VIEW_TABLE_USAGE; its stored definition names every table
+            // as `schema`.`table`, so the definition is read instead.
+            let rows = self
+                .require_rows(
+                    "SELECT VIEW_DEFINITION FROM information_schema.VIEWS
+                     WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                    (schema.to_string(), name.to_string()),
+                )
+                .await?;
+            let definition = rows
+                .first()
+                .map(|row| cell_string(row, 0))
+                .unwrap_or_default();
+            for (table_schema, table_name) in qualified_names(&definition) {
+                let exists = self
+                    .require_rows(
+                        "SELECT 1 FROM information_schema.TABLES
+                         WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
+                        (table_schema.clone(), table_name.clone()),
+                    )
+                    .await?;
+                if !exists.is_empty() {
+                    let id = self.relation_id(&table_schema, &table_name).await?;
+                    push_unique(ids, id);
+                }
+            }
+            return Ok(());
+        }
         let rows = self
             .require_rows(
                 "SELECT DISTINCT TABLE_SCHEMA, TABLE_NAME
@@ -712,14 +747,26 @@ impl MysqlSession {
         schema: &str,
         name: &str,
     ) -> Result<(), DriverError> {
-        let rows = self
-            .require_rows(
+        let rows = if self.is_mariadb() {
+            // No VIEW_TABLE_USAGE on MariaDB: a view depends on the table its stored
+            // definition names as `schema`.`table`.
+            let needle = format!("`{schema}`.`{name}`");
+            let pattern = format!("%{}%", like_escape(&needle));
+            self.require_rows(
+                "SELECT TABLE_SCHEMA, TABLE_NAME FROM information_schema.VIEWS
+                 WHERE VIEW_DEFINITION LIKE ? ESCAPE '!'",
+                (pattern,),
+            )
+            .await?
+        } else {
+            self.require_rows(
                 "SELECT DISTINCT VIEW_SCHEMA, VIEW_NAME
                  FROM information_schema.VIEW_TABLE_USAGE
                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?",
                 (schema.to_string(), name.to_string()),
             )
-            .await?;
+            .await?
+        };
         for row in rows {
             let view_schema = cell_string(&row, 0);
             let view_name = cell_string(&row, 1);
@@ -828,4 +875,34 @@ fn push_unique(ids: &mut Vec<ObjectId>, id: ObjectId) {
     if !ids.iter().any(|existing| existing == &id) {
         ids.push(id);
     }
+}
+
+/// The `schema`.`table` pairs a MariaDB view definition names, in order, once each. A
+/// column reference `schema`.`table`.`column` names its table the same way.
+fn qualified_names(definition: &str) -> Vec<(String, String)> {
+    let mut names: Vec<(String, String)> = Vec::new();
+    let mut rest = definition;
+    while let Some(start) = rest.find('`') {
+        let after = &rest[start + 1..];
+        let Some(end) = after.find('`') else { break };
+        let first = &after[..end];
+        let tail = &after[end + 1..];
+        if let Some(next) = tail.strip_prefix(".`")
+            && let Some(close) = next.find('`')
+        {
+            let pair = (first.to_string(), next[..close].to_string());
+            if !names.contains(&pair) {
+                names.push(pair);
+            }
+        }
+        rest = tail;
+    }
+    names
+}
+
+/// `text` for a LIKE pattern escaped with `!`.
+fn like_escape(text: &str) -> String {
+    text.replace('!', "!!")
+        .replace('%', "!%")
+        .replace('_', "!_")
 }

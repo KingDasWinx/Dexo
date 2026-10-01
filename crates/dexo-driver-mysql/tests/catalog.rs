@@ -31,7 +31,7 @@ async fn connect_seeded() -> Fixture {
         "SET GLOBAL log_bin_trust_function_creators = 1",
         "CREATE TABLE orders (
             id INT PRIMARY KEY AUTO_INCREMENT,
-            note VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_0900_ai_ci
+            note VARCHAR(16) CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci
         ) ENGINE=InnoDB
         PARTITION BY RANGE (id) (
             PARTITION p0 VALUES LESS THAN (1000),

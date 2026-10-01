@@ -304,7 +304,8 @@ async fn run_native(
         // ponytail: recording double records Restore/Backup without touching path.
         return Ok(());
     };
-    let driver = access.driver.as_deref().unwrap_or_default();
+    let driver =
+        dexo_driver_api::DriverDescriptor::family(access.driver.as_deref().unwrap_or_default());
     let kind = match (mode, driver) {
         (TransferMode::Backup, "postgres") => NativeToolKind::PgDump,
         (TransferMode::Restore, "postgres") => NativeToolKind::PgRestore,

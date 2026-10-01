@@ -6,6 +6,7 @@ use dexo_driver_api::{
     DriverErrorCategory, RouteRequest, Session, TlsMode, TlsRequest, TransportRequest,
 };
 use dexo_transport::{ProxyConfig, SshAuth, SshTunnelRequest, TransportLease};
+use mysql_async::prelude::Queryable;
 use mysql_async::{Conn, OptsBuilder, SslOpts};
 use secrecy::ExposeSecret;
 use tokio::sync::Mutex;
@@ -46,15 +47,41 @@ impl ConnectionFactory for MysqlFactory {
             builder = builder.ssl_opts(Some(ssl_opts(tls, &original_host, routed)?));
         }
         let opts = mysql_async::Opts::from(builder);
-        let conn = Conn::new(opts.clone()).await.map_err(map_error)?;
+        let mut conn = Conn::new(opts.clone()).await.map_err(map_error)?;
         let conn_id = conn.id();
-        Ok(Box::new(MysqlSession::new(
-            Arc::new(Mutex::new(conn)),
-            opts,
-            conn_id,
-            Arc::new(AtomicU64::new(1)),
-            lease,
-        )))
+        // MariaDB answers the MySQL handshake; its version string is how it says so.
+        let version: Option<String> = conn
+            .query_first("SELECT VERSION()")
+            .await
+            .map_err(map_error)?;
+        let mariadb =
+            version.is_some_and(|version| version.to_ascii_lowercase().contains("mariadb"));
+        Ok(Box::new(
+            MysqlSession::new(
+                Arc::new(Mutex::new(conn)),
+                opts,
+                conn_id,
+                Arc::new(AtomicU64::new(1)),
+                lease,
+            )
+            .with_mariadb(mariadb),
+        ))
+    }
+}
+
+/// MariaDB through the MySQL driver: the same protocol and catalog, its own name in the
+/// connection form. The session finds out which server it reached on its own, so a
+/// MariaDB profile saved as `mysql` behaves the same.
+pub struct MariadbFactory;
+
+#[async_trait::async_trait]
+impl ConnectionFactory for MariadbFactory {
+    fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
+        dexo_driver_api::DriverDescriptor::mariadb()
+    }
+
+    async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {
+        MysqlFactory.connect(request).await
     }
 }
 

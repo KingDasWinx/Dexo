@@ -25,6 +25,8 @@ pub struct MysqlSession {
     opts: Opts,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
     tx_state: std::sync::Mutex<TransactionState>,
+    /// MariaDB speaks the protocol and the catalog, not every EXPLAIN form.
+    mariadb: bool,
     _lease: Option<dexo_transport::TransportLease>,
 }
 
@@ -45,8 +47,18 @@ impl MysqlSession {
             opts,
             capabilities: capabilities(),
             tx_state: std::sync::Mutex::new(TransactionState::Idle),
+            mariadb: false,
             _lease: lease,
         }
+    }
+
+    pub(crate) fn with_mariadb(mut self, mariadb: bool) -> Self {
+        self.mariadb = mariadb;
+        self
+    }
+
+    pub(crate) fn is_mariadb(&self) -> bool {
+        self.mariadb
     }
 
     pub fn bump_generation(&self) {
@@ -273,6 +285,11 @@ async fn emit_mysql_sets<P>(
     let mut last_affected = None;
     loop {
         if result.is_empty() {
+            // MariaDB hands a prepared write back as an empty result straight away; the
+            // count is still on it, and leaving here first lost it.
+            if index == 0 {
+                last_affected = Some(result.affected_rows());
+            }
             break;
         }
         if tx

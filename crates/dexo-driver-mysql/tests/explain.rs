@@ -37,11 +37,7 @@ fn json_and_tree_goldens_and_unavailable_metrics() {
 #[test]
 fn capability_fallback_prefers_json_then_tree() {
     use dexo_driver_mysql::{MysqlExplainCaps, NativeExplainFormat, select_format};
-    let full = MysqlExplainCaps {
-        json: true,
-        tree: true,
-        tree_analyze: true,
-    };
+    let full = MysqlExplainCaps::mysql();
     assert_eq!(
         select_format(false, full).unwrap(),
         NativeExplainFormat::Json
@@ -49,6 +45,16 @@ fn capability_fallback_prefers_json_then_tree() {
     assert_eq!(
         select_format(true, full).unwrap(),
         NativeExplainFormat::Tree
+    );
+    // MariaDB has no FORMAT=TREE; its EXPLAIN ANALYZE is ANALYZE FORMAT=JSON.
+    let mariadb = MysqlExplainCaps::mariadb();
+    assert_eq!(
+        select_format(true, mariadb).unwrap(),
+        NativeExplainFormat::Json
+    );
+    assert!(
+        dexo_driver_mysql::wrap_explain("select 1", NativeExplainFormat::Json, true)
+            .starts_with("ANALYZE FORMAT=JSON")
     );
 }
 

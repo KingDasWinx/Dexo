@@ -169,6 +169,7 @@ fn normalize_driver(driver: &str) -> Result<String, AppError> {
     match driver.trim().to_ascii_lowercase().as_str() {
         "postgres" | "postgresql" => Ok("postgres".into()),
         "mysql" => Ok("mysql".into()),
+        "mariadb" => Ok("mariadb".into()),
         "" => Err(AppError::new(
             ErrorCategory::Configuration,
             "driver is required",

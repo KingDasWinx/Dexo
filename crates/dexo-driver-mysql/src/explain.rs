@@ -18,6 +18,29 @@ pub struct MysqlExplainCaps {
     pub json: bool,
     pub tree: bool,
     pub tree_analyze: bool,
+    /// MariaDB's `ANALYZE FORMAT=JSON`, its form of EXPLAIN ANALYZE.
+    pub json_analyze: bool,
+}
+
+impl MysqlExplainCaps {
+    pub fn mysql() -> Self {
+        Self {
+            json: true,
+            tree: true,
+            tree_analyze: true,
+            json_analyze: false,
+        }
+    }
+
+    /// MariaDB has no FORMAT=TREE, plain or analyzed.
+    pub fn mariadb() -> Self {
+        Self {
+            json: true,
+            tree: false,
+            tree_analyze: false,
+            json_analyze: true,
+        }
+    }
 }
 
 pub fn select_format(
@@ -27,6 +50,9 @@ pub fn select_format(
     if analyze {
         if caps.tree_analyze {
             return Ok(NativeExplainFormat::Tree);
+        }
+        if caps.json_analyze {
+            return Ok(NativeExplainFormat::Json);
         }
         return Err(DriverError::unsupported(
             "EXPLAIN ANALYZE FORMAT=TREE is unavailable on this server version",
@@ -46,7 +72,8 @@ pub fn select_format(
 pub fn wrap_explain(sql: &str, format: NativeExplainFormat, analyze: bool) -> String {
     let inner = sql.trim().trim_end_matches(';');
     match (format, analyze) {
-        (NativeExplainFormat::Json, _) => format!("EXPLAIN FORMAT=JSON {inner}"),
+        (NativeExplainFormat::Json, false) => format!("EXPLAIN FORMAT=JSON {inner}"),
+        (NativeExplainFormat::Json, true) => format!("ANALYZE FORMAT=JSON {inner}"),
         (NativeExplainFormat::Tree, true) => format!("EXPLAIN ANALYZE FORMAT=TREE {inner}"),
         (NativeExplainFormat::Tree, false) => format!("EXPLAIN FORMAT=TREE {inner}"),
     }
@@ -60,9 +87,13 @@ pub fn parse_json(raw: &str) -> Result<ExplainPlan, DriverError> {
         )
     })?;
     let root = parse_value(&value);
+    // MariaDB's ANALYZE reports the whole run on the query block.
+    let execution_ms = value
+        .pointer("/query_block/r_total_time_ms")
+        .and_then(json_f64);
     Ok(ExplainPlan {
         planning_ms: None,
-        execution_ms: None,
+        execution_ms,
         root,
         raw: raw.to_string(),
     })
@@ -171,10 +202,32 @@ fn parse_table(value: &serde_json::Value) -> PlanNode {
             width: None,
             time_ms: None,
         },
-        actual: PlanMetrics::default(),
-        loops: None,
+        actual: analyzed_metrics(value),
+        loops: value
+            .get("r_loops")
+            .and_then(json_f64)
+            .map(|loops| loops as u64),
         children: Vec::new(),
         native: value.clone(),
+    }
+}
+
+/// What MariaDB's `ANALYZE FORMAT=JSON` measured on a table: `r_rows` per loop, and the
+/// time split into reading the table and the rest. MySQL's JSON has none of these.
+fn analyzed_metrics(value: &serde_json::Value) -> PlanMetrics {
+    let time = value.get("r_total_time_ms").and_then(json_f64).or_else(|| {
+        let table = value.get("r_table_time_ms").and_then(json_f64);
+        let other = value.get("r_other_time_ms").and_then(json_f64);
+        match (table, other) {
+            (None, None) => None,
+            (table, other) => Some(table.unwrap_or(0.0) + other.unwrap_or(0.0)),
+        }
+    });
+    PlanMetrics {
+        cost: None,
+        rows: value.get("r_rows").and_then(json_f64),
+        width: None,
+        time_ms: time,
     }
 }
 
@@ -307,10 +360,10 @@ fn extract_actual_time(text: &str) -> Option<f64> {
 #[async_trait::async_trait]
 impl ExplainProvider for MysqlSession {
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
-        let caps = MysqlExplainCaps {
-            json: true,
-            tree: true,
-            tree_analyze: true,
+        let caps = if self.is_mariadb() {
+            MysqlExplainCaps::mariadb()
+        } else {
+            MysqlExplainCaps::mysql()
         };
         let format = select_format(request.analyze, caps)?;
         let sql = wrap_explain(&request.sql, format, request.analyze);
@@ -323,12 +376,15 @@ impl ExplainProvider for MysqlSession {
                     "MySQL can only EXPLAIN ANALYZE SELECT, TABLE and multi-table UPDATE or DELETE statements; use the estimated plan for this one",
                 ));
             }
-            return parse_tree(&raw);
+            return match format {
+                NativeExplainFormat::Json => parse_json(&raw),
+                NativeExplainFormat::Tree => parse_tree(&raw),
+            };
         }
         let raw = self.fetch_explain_text(&sql).await;
         let raw = match raw {
             Ok(raw) => raw,
-            Err(error) if format == NativeExplainFormat::Json && !request.analyze => {
+            Err(error) if format == NativeExplainFormat::Json && !request.analyze && caps.tree => {
                 let fallback = wrap_explain(&request.sql, NativeExplainFormat::Tree, false);
                 self.fetch_explain_text(&fallback)
                     .await
@@ -394,11 +450,7 @@ mod tests {
 
     #[test]
     fn prefers_json_and_uses_tree_for_analyze() {
-        let caps = MysqlExplainCaps {
-            json: true,
-            tree: true,
-            tree_analyze: true,
-        };
+        let caps = MysqlExplainCaps::mysql();
         assert_eq!(
             select_format(false, caps).unwrap(),
             NativeExplainFormat::Json
@@ -411,6 +463,7 @@ mod tests {
             json: false,
             tree: true,
             tree_analyze: false,
+            json_analyze: false,
         };
         assert_eq!(
             select_format(false, no_json).unwrap(),

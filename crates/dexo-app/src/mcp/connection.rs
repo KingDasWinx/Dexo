@@ -22,7 +22,7 @@ pub struct McpConnection {
 
 impl McpConnection {
     pub fn from_profile(profile: &ConnectionProfile) -> Result<Self, AppError> {
-        let dialect = match profile.driver.as_str() {
+        let dialect = match dexo_driver_api::DriverDescriptor::family(&profile.driver) {
             "postgres" => Dialect::Postgres,
             "mysql" => Dialect::Mysql,
             other => {

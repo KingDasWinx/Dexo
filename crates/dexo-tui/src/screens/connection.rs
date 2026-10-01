@@ -372,10 +372,11 @@ fn is_basic(label: &str) -> bool {
     BASIC_FIELDS.contains(&label)
 }
 
-fn drivers() -> [&'static str; 2] {
+fn drivers() -> [&'static str; 3] {
     [
         DriverDescriptor::postgres().id,
         DriverDescriptor::mysql().id,
+        DriverDescriptor::mariadb().id,
     ]
 }
 
@@ -713,6 +714,16 @@ mod tests {
         let dump = form.lines().join("\n");
         assert!(dump.contains("< MySQL >"));
         assert!(dump.contains("left/right"));
+        form.cycle_driver(1);
+        assert_eq!(
+            form.fields
+                .iter()
+                .find(|field| field.label == "driver")
+                .unwrap()
+                .value,
+            "mariadb"
+        );
+        assert!(form.lines().join("\n").contains("< MariaDB >"));
         form.cycle_driver(1);
         assert_eq!(
             form.fields

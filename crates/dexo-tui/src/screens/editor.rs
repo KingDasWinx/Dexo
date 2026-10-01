@@ -177,7 +177,7 @@ impl Default for EditorState {
 }
 
 pub(crate) fn editor_dialect(model: &Model) -> Dialect {
-    if model.connection.driver == "mysql" {
+    if dexo_driver_api::DriverDescriptor::family(&model.connection.driver) == "mysql" {
         Dialect::Mysql
     } else {
         Dialect::Postgres

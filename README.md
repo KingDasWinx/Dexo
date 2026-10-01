@@ -150,8 +150,9 @@ Profiles start disabled and read-only. Write tools require a temporary grant cre
 | --- | --- |
 | PostgreSQL | 14.18, 16.9, 17.5 |
 | MySQL | 8.0.42, 8.4.5, 9.3.0 |
+| MariaDB | 10.11, 11.4 |
 
-Other server versions may work, but Dexo reports them as unverified. MySQL 5.7 is end-of-life. MariaDB and other PostgreSQL derivatives are not supported until they have a dedicated driver and test matrix.
+Other server versions may work but are not tested. MySQL 5.7 is end-of-life. PostgreSQL derivatives are not supported until they have a dedicated driver and test matrix.
 
 Dexo is tested on Linux, macOS, and Windows in CI. Each driver runs its integration suite against the database versions above.
 

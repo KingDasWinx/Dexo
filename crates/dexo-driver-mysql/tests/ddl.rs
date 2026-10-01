@@ -119,7 +119,7 @@ async fn mysql_ddl_round_trip_matches_introspected_shape() {
                     partition: None,
                     engine: Some("InnoDB".into()),
                     charset: Some("utf8mb4".into()),
-                    collation: Some("utf8mb4_0900_ai_ci".into()),
+                    collation: Some("utf8mb4_unicode_ci".into()),
                 },
             }
         )
