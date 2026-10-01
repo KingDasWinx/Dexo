@@ -35,7 +35,7 @@ fn goldens_cover_scan_join_sort_aggregate_parallel() {
     assert_eq!(sort.root.children[0].kind, "Seq Scan");
 
     let aggregate = parse_fixture("aggregate");
-    assert_eq!(aggregate.root.kind, "Aggregate");
+    assert_eq!(aggregate.root.kind, "HashAggregate");
     assert_eq!(aggregate.root.estimates.rows, Some(10.0));
     assert_eq!(aggregate.root.actual.rows, Some(10.0));
 

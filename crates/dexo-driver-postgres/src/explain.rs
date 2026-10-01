@@ -43,25 +43,15 @@ pub fn parse_value(value: &serde_json::Value, raw: &str) -> Result<ExplainPlan, 
 }
 
 fn parse_node(value: &serde_json::Value) -> PlanNode {
-    let kind = value
-        .get("Node Type")
-        .and_then(serde_json::Value::as_str)
-        .unwrap_or("Unknown")
-        .to_string();
-    let relation = value
-        .get("Relation Name")
-        .or_else(|| value.get("Index Name"))
-        .or_else(|| value.get("CTE Name"))
-        .and_then(serde_json::Value::as_str)
-        .map(str::to_string);
     let children = value
         .get("Plans")
         .and_then(serde_json::Value::as_array)
         .map(|plans| plans.iter().map(parse_node).collect())
         .unwrap_or_default();
     PlanNode {
-        kind,
-        relation,
+        kind: node_kind(value),
+        relation: node_relation(value),
+        detail: node_detail(value),
         estimates: PlanMetrics {
             cost: number(value, "Total Cost"),
             rows: number(value, "Plan Rows"),
@@ -78,6 +68,81 @@ fn parse_node(value: &serde_json::Value) -> PlanNode {
         children,
         native: value.clone(),
     }
+}
+
+/// The node's name as psql prints it. The JSON spreads it over several keys: an
+/// `Aggregate` with `Strategy: Hashed` is a HashAggregate, a `Hash Join` with
+/// `Join Type: Left` a Hash Left Join, a `ModifyTable` with `Operation: Update` an Update.
+fn node_kind(value: &serde_json::Value) -> String {
+    let node = text(value, "Node Type").unwrap_or("Unknown");
+    let join = text(value, "Join Type").filter(|join| *join != "Inner");
+    match (node, join) {
+        ("Aggregate", _) => match text(value, "Strategy") {
+            Some("Hashed") => "HashAggregate",
+            Some("Sorted") => "GroupAggregate",
+            Some("Mixed") => "MixedAggregate",
+            _ => "Aggregate",
+        }
+        .to_string(),
+        ("Hash Join" | "Merge Join", Some(join)) => {
+            format!("{} {join} Join", node.trim_end_matches(" Join"))
+        }
+        ("Nested Loop", Some(join)) => format!("Nested Loop {join} Join"),
+        ("ModifyTable", _) => text(value, "Operation").unwrap_or(node).to_string(),
+        _ => node.to_string(),
+    }
+}
+
+/// What the node reads, with its alias when the query gave it one (`customers c`). An
+/// index scan names its table here and its index in the detail; a bitmap index scan has
+/// only the index.
+fn node_relation(value: &serde_json::Value) -> Option<String> {
+    let relation = text(value, "Relation Name")
+        .or_else(|| text(value, "CTE Name"))
+        .or_else(|| text(value, "Function Name"))
+        .or_else(|| text(value, "Index Name"))?;
+    match text(value, "Alias") {
+        Some(alias) if alias != relation => Some(format!("{relation} {alias}")),
+        _ => Some(relation.to_string()),
+    }
+}
+
+fn node_detail(value: &serde_json::Value) -> Option<String> {
+    let mut parts = Vec::new();
+    if value.get("Relation Name").is_some()
+        && let Some(index) = text(value, "Index Name")
+    {
+        parts.push(format!("using {index}"));
+    }
+    for (key, word) in [
+        ("Hash Cond", "on"),
+        ("Merge Cond", "on"),
+        ("Index Cond", "cond"),
+        ("Recheck Cond", "recheck"),
+        ("Join Filter", "filter"),
+        ("Filter", "filter"),
+    ] {
+        if let Some(condition) = text(value, key) {
+            parts.push(format!("{word} {condition}"));
+        }
+    }
+    for key in ["Sort Key", "Group Key"] {
+        if let Some(keys) = value.get(key).and_then(serde_json::Value::as_array) {
+            let keys: Vec<&str> = keys.iter().filter_map(serde_json::Value::as_str).collect();
+            if !keys.is_empty() {
+                parts.push(format!("by {}", keys.join(", ")));
+            }
+        }
+    }
+    if let Some(removed) = number(value, "Rows Removed by Filter").filter(|removed| *removed > 0.0)
+    {
+        parts.push(format!("{removed} removed by filter"));
+    }
+    (!parts.is_empty()).then(|| parts.join(" · "))
+}
+
+fn text<'a>(value: &'a serde_json::Value, key: &str) -> Option<&'a str> {
+    value.get(key).and_then(serde_json::Value::as_str)
 }
 
 fn number(value: &serde_json::Value, key: &str) -> Option<f64> {

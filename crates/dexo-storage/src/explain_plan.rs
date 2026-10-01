@@ -110,6 +110,7 @@ mod tests {
                 root: PlanNode {
                     kind: "Result".into(),
                     relation: None,
+                    detail: None,
                     estimates: PlanMetrics::default(),
                     actual: PlanMetrics::default(),
                     loops: None,

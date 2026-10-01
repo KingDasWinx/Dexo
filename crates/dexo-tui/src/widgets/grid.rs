@@ -51,11 +51,16 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     );
     match model.results.view {
         ResultsView::Explain => {
-            let plan = model.results.explain.lines();
+            let styles = crate::screens::explain::ExplainStyles {
+                muted: model.theme.style(Role::Muted, model.capabilities),
+                warning: model.theme.style(Role::Warning, model.capabilities),
+                unicode: model.capabilities.unicode,
+            };
+            let plan = model.results.explain.lines(body.width, &styles);
             let max_scroll = plan.len().saturating_sub((body.height as usize).max(1));
             hits.set_scroll_limit(crate::mouse::ScrollArea::Explain, max_scroll);
             let scroll = (model.results.explain_scroll as usize).min(max_scroll) as u16;
-            frame.render_widget(Paragraph::new(plan.join("\n")).scroll((scroll, 0)), body);
+            frame.render_widget(Paragraph::new(plan).scroll((scroll, 0)), body);
         }
         ResultsView::Messages => {
             frame.render_widget(

@@ -84,6 +84,7 @@ fn parse_block(value: &serde_json::Value) -> PlanNode {
         return PlanNode {
             kind: "Nested loop".into(),
             relation: None,
+            detail: None,
             estimates: cost_metrics(value),
             actual: PlanMetrics::default(),
             loops: None,
@@ -109,6 +110,7 @@ fn parse_block(value: &serde_json::Value) -> PlanNode {
         return PlanNode {
             kind: kind.into(),
             relation: None,
+            detail: None,
             estimates: cost_metrics(value),
             actual: PlanMetrics::default(),
             loops: None,
@@ -119,6 +121,7 @@ fn parse_block(value: &serde_json::Value) -> PlanNode {
     PlanNode {
         kind: "Query block".into(),
         relation: None,
+        detail: None,
         estimates: cost_metrics(value),
         actual: PlanMetrics::default(),
         loops: None,
@@ -139,12 +142,23 @@ fn parse_table(value: &serde_json::Value) -> PlanNode {
         "ref" | "eq_ref" | "const" | "system" => "Index lookup",
         other => other,
     };
+    let mut detail = Vec::new();
+    if let Some(key) = value.get("key").and_then(serde_json::Value::as_str) {
+        detail.push(format!("using {key}"));
+    }
+    if let Some(condition) = value
+        .get("attached_condition")
+        .and_then(serde_json::Value::as_str)
+    {
+        detail.push(format!("filter {condition}"));
+    }
     PlanNode {
         kind: kind.into(),
         relation: value
             .get("table_name")
             .and_then(serde_json::Value::as_str)
             .map(str::to_string),
+        detail: (!detail.is_empty()).then(|| detail.join(" · ")),
         estimates: PlanMetrics {
             cost: value
                 .pointer("/cost_info/prefix_cost")
@@ -217,10 +231,7 @@ fn build_tree(lines: &[(usize, &str)], index: usize, indent: usize) -> (PlanNode
 
 fn parse_tree_node(text: &str) -> PlanNode {
     let (kind_rel, rest) = text.split_once("  (").unwrap_or((text, ""));
-    let (kind, relation) = kind_rel
-        .split_once(" on ")
-        .map(|(kind, rel)| (kind.trim().to_string(), Some(rel.trim().to_string())))
-        .unwrap_or_else(|| (kind_rel.trim().to_string(), None));
+    let (kind, relation, detail) = split_tree_label(kind_rel);
     // `(cost=… rows=…) (actual time=… rows=… loops=…)`, either group optional. A node
     // with no estimate starts straight at `actual`, and reading `rows=` from the whole
     // text used to file its actual rows as the estimate.
@@ -244,12 +255,32 @@ fn parse_tree_node(text: &str) -> PlanNode {
     PlanNode {
         kind,
         relation,
+        detail,
         estimates,
         actual,
         loops,
         children: Vec::new(),
         native: serde_json::Value::String(text.to_string()),
     }
+}
+
+/// `Filter: (c.id <= 10)`, `Index lookup on o using customer_id (customer_id=c.id)`:
+/// the node, the table it reads, and the rest -- key, index, condition -- as detail. The
+/// colon form goes first, since a condition may itself contain " on ".
+fn split_tree_label(label: &str) -> (String, Option<String>, Option<String>) {
+    let label = label.trim();
+    if let Some((kind, detail)) = label.split_once(": ") {
+        return (kind.to_string(), None, Some(detail.trim().to_string()));
+    }
+    let Some((kind, target)) = label.split_once(" on ") else {
+        return (label.to_string(), None, None);
+    };
+    let (relation, detail) = target
+        .trim()
+        .split_once(' ')
+        .map(|(relation, detail)| (relation, Some(detail.trim().to_string())))
+        .unwrap_or((target.trim(), None));
+    (kind.trim().to_string(), Some(relation.to_string()), detail)
 }
 
 fn extract_number(text: &str, key: &str) -> Option<f64> {

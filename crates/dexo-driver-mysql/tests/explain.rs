@@ -19,13 +19,15 @@ fn json_and_tree_goldens_and_unavailable_metrics() {
     assert_eq!(join.root.children[1].kind, "Index lookup");
 
     let tree = parse_explain_tree(include_str!("fixtures/explain/tree.txt")).unwrap();
-    assert_eq!(tree.root.kind, "Sort: items.name");
+    assert_eq!(tree.root.kind, "Sort");
+    assert_eq!(tree.root.detail.as_deref(), Some("items.name"));
     assert_eq!(tree.root.children[0].kind, "Table scan");
     assert_eq!(tree.root.children[0].relation.as_deref(), Some("items"));
     assert!(tree.root.actual.time_ms.is_none());
 
     let analyzed = parse_explain_tree(include_str!("fixtures/explain/tree_analyze.txt")).unwrap();
-    assert_eq!(analyzed.root.kind, "Aggregate: count(0)");
+    assert_eq!(analyzed.root.kind, "Aggregate");
+    assert_eq!(analyzed.root.detail.as_deref(), Some("count(0)"));
     assert_eq!(analyzed.root.actual.rows, Some(10.0));
     assert_eq!(analyzed.root.loops, Some(1));
     assert!(analyzed.root.actual.time_ms.is_some());

@@ -22,10 +22,10 @@ demo  local  public
 │                          │└──────────────────────────────────────────────────────────────────────┘
 │                          │┌  Results (0)─────────────────────────────────────────────────────────┐
 │                          ││ Grid [Explain] Messages  │ Table                                     │
-│                          ││explain captured_at=1710000000 paused=false analyze=true              │
-│                          ││pathkindrelationcostrows_estrows_acttime_msloopsheuristic             │
-│                          ││0Seq Scanitems22.51010000.181actual rows >> estimate (heuristic)      │
-│                          ││raw_bytes=59                                                          │
+│                          ││Analyzed · 0.21 ms execution · 0.04 ms planning                       │
+│                          ││                              self     time  rows est  rows act  loops│
+│                          ││Seq Scan on items  rows …  0.18 ms  0.18 ms        10      1000      1│
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

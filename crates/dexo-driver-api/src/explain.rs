@@ -14,6 +14,10 @@ pub struct PlanMetrics {
 pub struct PlanNode {
     pub kind: String,
     pub relation: Option<String>,
+    /// What the node does its work by -- its condition, sort or group key, the index it
+    /// uses -- in the server's own words. Plans saved before it existed have none.
+    #[serde(default)]
+    pub detail: Option<String>,
     pub estimates: PlanMetrics,
     pub actual: PlanMetrics,
     pub loops: Option<u64>,
