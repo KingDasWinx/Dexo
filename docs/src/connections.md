@@ -15,3 +15,5 @@ Each connection has an environment: local, development, staging or production. A
 - On a read-only connection, the editor refuses any statement that is not a read and sends nothing. `SET`, transaction commands and anything Dexo cannot parse count as writes.
 - On production, any write asks for the connection's name, typed exactly, before it runs.
 - Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.
+
+A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL sessions with `SET SESSION TRANSACTION READ ONLY`.

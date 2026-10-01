@@ -34,6 +34,11 @@ impl ConnectionFactory for MysqlFactory {
             .user(Some(request.username))
             .pass(Some(request.secret.expose_secret().to_string()))
             .db_name(request.database);
+        if request.read_only {
+            // `init` runs on every connection these options open, the cancel connection
+            // and reconnects included, so the server refuses the write, not only Dexo.
+            builder = builder.init(vec!["SET SESSION TRANSACTION READ ONLY"]);
+        }
         let routed = !matches!(transport.route, RouteRequest::Direct);
         if let Some(tls) = &transport.tls
             && tls.mode != TlsMode::Disable

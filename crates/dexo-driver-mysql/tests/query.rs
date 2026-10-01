@@ -271,3 +271,48 @@ async fn drain(mut stream: dexo_driver_api::QueryStream) {
         event.unwrap();
     }
 }
+
+async fn write_fails(session: &dyn Session, sql: &str) -> bool {
+    match session.execute(QueryRequest::write(sql)).await {
+        Err(_) => true,
+        Ok(mut stream) => {
+            let mut failed = false;
+            while let Some(event) = stream.next().await {
+                failed |= event.is_err();
+            }
+            failed
+        }
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_read_only_session_refuses_writes_on_the_server() {
+    let pair = DatabasePair::start().await.unwrap();
+    let request = |read_only| {
+        ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            read_only,
+        )
+    };
+    let writer = MysqlFactory.connect(request(false)).await.unwrap();
+    assert!(
+        !write_fails(
+            &*writer,
+            "create table if not exists ro_probe (id int primary key)"
+        )
+        .await
+    );
+    let reader = MysqlFactory.connect(request(true)).await.unwrap();
+    assert!(write_fails(&*reader, "insert into ro_probe values (1)").await);
+    assert!(write_fails(&*reader, "delete from ro_probe").await);
+    assert!(write_fails(&*reader, "create table ro_probe_2 (id int)").await);
+    let mut stream = reader
+        .execute(QueryRequest::read("select count(*) from ro_probe", 1))
+        .await
+        .unwrap();
+    first_value(&mut stream).await;
+}
