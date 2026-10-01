@@ -90,7 +90,7 @@ impl ExplainScreen {
     pub fn lines(&self, width: u16, styles: &ExplainStyles) -> Vec<Line<'static>> {
         let Some(plan) = &self.plan else {
             return vec![Line::styled(
-                "No plan yet. Explain Plan or Explain Analyze shows the plan of the statement under the cursor.",
+                "No plan yet. F7 explains the statement under the cursor; Shift+F7 runs it with ANALYZE.",
                 styles.muted,
             )];
         };
