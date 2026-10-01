@@ -17,3 +17,5 @@ Each connection has an environment: local, development, staging or production. A
 - Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.
 
 A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL sessions with `SET SESSION TRANSACTION READ ONLY`.
+
+A statement Dexo cannot read counts as a write: production asks for the name, and elsewhere it asks before running, like a destructive statement. Maintenance it knows -- `VACUUM`, `ANALYZE`, `REINDEX`, `CLUSTER`, `REFRESH MATERIALIZED VIEW`, `CHECKPOINT`, `OPTIMIZE` -- asks only on production.

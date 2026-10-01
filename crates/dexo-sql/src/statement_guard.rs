@@ -195,11 +195,12 @@ pub fn is_read(sql: &str, dialect: Dialect) -> bool {
         Ok(_) => true,
         // Parsed as exactly one statement, and EXPLAIN ANALYZE was already refused.
         Err(GuardRejection::WrongKind) => shows || keyword.as_deref() == Some("EXPLAIN"),
-        // A SHOW sqlparser cannot read is taken at its word only when nothing follows
-        // it: the splitter ignores MySQL backslash escapes, so `SHOW ... 'o\'%';
-        // DELETE ...` used to arrive here as one span and pass as a read.
+        // A SHOW, or a `TABLE t` (which sqlparser does not parse), is taken at its word
+        // only when nothing follows it: the splitter ignores MySQL backslash escapes,
+        // so `SHOW ... 'o\'%'; DELETE ...` used to arrive here as one span.
         Err(GuardRejection::Unparsed(_)) => {
-            shows && !sql.trim().trim_end_matches(';').contains(';')
+            (shows || keyword.as_deref() == Some("TABLE"))
+                && !sql.trim().trim_end_matches(';').contains(';')
         }
         Err(_) => false,
     }
@@ -211,6 +212,13 @@ pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
     match keyword_in(sql, dialect).as_deref() {
         Some("DROP") => return Some(Destructive::Drop),
         Some("TRUNCATE") => return Some(Destructive::Truncate),
+        // Maintenance sqlparser cannot parse: still a write, so production asks for
+        // the name, but it destroys nothing and used to prompt as unreadable.
+        Some(
+            "REFRESH" | "CLUSTER" | "REINDEX" | "CHECKPOINT" | "VACUUM" | "ANALYZE" | "OPTIMIZE",
+        ) => {
+            return None;
+        }
         _ => {}
     }
     let Ok(statement) = parse_one(sql, dialect) else {
@@ -720,5 +728,25 @@ mod tests {
             "# count them\nselect count(*) from orders",
             Dialect::Mysql
         ));
+    }
+
+    /// `TABLE t` is a read. Maintenance Dexo cannot parse still counts as a write, so
+    /// production asks for the name, but it destroys nothing, so elsewhere it runs.
+    #[test]
+    fn table_reads_and_maintenance_is_not_destructive() {
+        assert!(is_read("TABLE items", Dialect::Postgres));
+        for sql in [
+            "refresh materialized view sales",
+            "cluster items",
+            "reindex table items",
+            "checkpoint",
+            "vacuum items",
+            "analyze items",
+        ] {
+            assert!(!is_read(sql, Dialect::Postgres), "{sql}");
+            assert_eq!(destructive(sql, Dialect::Postgres), None, "{sql}");
+        }
+        assert_eq!(destructive("optimize table items", Dialect::Mysql), None);
+        assert_eq!(destructive("analyze table items", Dialect::Mysql), None);
     }
 }
