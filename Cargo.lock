@@ -1673,7 +1673,7 @@ dependencies = [
 
 [[package]]
 name = "dexo"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "assert_cmd",
@@ -1703,7 +1703,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-app"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "csv",
@@ -1730,7 +1730,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-cli"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1750,7 +1750,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-api"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "dexo-driver-postgres",
@@ -1764,7 +1764,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-mysql"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "dexo-app",
@@ -1780,7 +1780,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-driver-postgres"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "async-trait",
  "bytes",
@@ -1802,7 +1802,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-mcp"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1823,7 +1823,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-runtime"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "tokio",
  "tokio-util",
@@ -1832,7 +1832,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-secrets"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "keyring",
  "secrecy",
@@ -1841,7 +1841,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-sql"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "dexo-driver-api",
  "proptest",
@@ -1857,7 +1857,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-storage"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "dexo-app",
@@ -1873,7 +1873,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-test-support"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1885,7 +1885,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-transport"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "rand 0.10.2",
  "rcgen",
@@ -1903,7 +1903,7 @@ dependencies = [
 
 [[package]]
 name = "dexo-tui"
-version = "1.4.0"
+version = "1.4.1"
 dependencies = [
  "anyhow",
  "arboard",

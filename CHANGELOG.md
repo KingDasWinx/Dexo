@@ -1,5 +1,44 @@
 # Changelog
 
+## 1.4.1
+
+### Features
+
+- Ctrl+Up/Down scroll the view; the wheel stops at the last line
+- Results follow the outcome (Messages on error, Grid on success)
+- Log failed statements with SQLSTATE, caret, DETAIL and HINT
+- Audit every tool call with timing, size and a hashed statement
+- Opt-in admin session list, separate from admin actions
+- Compare saved schema snapshots
+- Page table data without raw SQL
+- Live catalog tools behind the allowlist
+- Typed tools on a per-connection router
+- Configure MCP profiles without editing SQLite
+
+### Fixes
+
+- Ctrl+Delete no longer glues the words around it
+- Ctrl+Left/Right move by word like VS Code
+- Save file offers the document's name
+- Ctrl+Backspace/Delete handle blanks and line breaks
+- Help, inspect and explain stop scrolling at the end
+- New row dialog walks to Insert/Cancel with the arrows
+- Copies also go through the terminal (OSC 52)
+- Keep the server's SQLSTATE, detail, hint and position
+- Prompts point at real tools; drop dead adapter code
+- Row writes use the table's real keys
+- Writes refuse production, stay inside the grant and need typed confirmation
+- Grants cannot widen the profile or leave their connection
+- Read inside a read-only transaction and cancel only the request asked
+- Match selectors against the object's real path
+- Parse MCP statements instead of reading the first keyword
+- Copy cell copies the value alone
+- Copying reaches other programs on Wayland
+
+### Other changes
+
+- Update README.md
+
 ## 1.4.0
 
 ### Features
