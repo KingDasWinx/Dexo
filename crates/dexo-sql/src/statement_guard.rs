@@ -190,12 +190,17 @@ impl Destructive {
 /// does anything sqlparser cannot parse.
 pub fn is_read(sql: &str, dialect: Dialect) -> bool {
     let keyword = first_keyword(sql);
-    if matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC")) {
-        return true;
-    }
+    let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"));
     match inspect_read(sql, dialect) {
         Ok(_) => true,
-        Err(GuardRejection::WrongKind) => keyword.as_deref() == Some("EXPLAIN"),
+        // Parsed as exactly one statement, and EXPLAIN ANALYZE was already refused.
+        Err(GuardRejection::WrongKind) => shows || keyword.as_deref() == Some("EXPLAIN"),
+        // A SHOW sqlparser cannot read is taken at its word only when nothing follows
+        // it: the splitter ignores MySQL backslash escapes, so `SHOW ... 'o\'%';
+        // DELETE ...` used to arrive here as one span and pass as a read.
+        Err(GuardRejection::Unparsed(_)) => {
+            shows && !sql.trim().trim_end_matches(';').contains(';')
+        }
         Err(_) => false,
     }
 }
@@ -681,5 +686,20 @@ mod tests {
             mysql("# empty it\nTRUNCATE TABLE customers_old"),
             Some(Destructive::Truncate)
         );
+    }
+
+    /// SHOW and DESCRIBE are reads, but not when the span carries a second statement:
+    /// the splitter ignores MySQL backslash escapes, so this reaches the guard whole.
+    #[test]
+    fn a_show_that_carries_a_second_statement_is_not_a_read() {
+        assert!(!is_read(
+            "SHOW TABLES LIKE 'o\\'%'; DELETE FROM orders",
+            Dialect::Mysql
+        ));
+        assert!(!is_read(
+            "show tables; delete from orders",
+            Dialect::Postgres
+        ));
+        assert!(is_read("SHOW TABLES LIKE 'o\\'%'", Dialect::Mysql));
     }
 }
