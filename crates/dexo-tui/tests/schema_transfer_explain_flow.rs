@@ -415,3 +415,30 @@ fn a_read_only_connection_refuses_import_and_restore() {
         );
     }
 }
+
+/// An SQL export writes the connection's dialect: a SQLite blob as `X'..'`, which
+/// SQLite reads back as a blob, not Postgres's `'\x..'`, which it reads as text.
+#[tokio::test]
+async fn an_sql_export_speaks_the_connections_dialect() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("rows.sql");
+    let mut manager = dexo_tui::runtime::transfer_manager::TransferManager::default();
+    manager
+        .run_with(
+            dexo_tui::action::TransferRequest::Export {
+                operation: dexo_tui::runtime::OperationId::new(),
+                path: path.clone(),
+                format: dexo_app::transfer::TransferFormat::Sql,
+                columns: vec!["data".into()],
+                rows: std::sync::Arc::new(vec![vec![dexo_driver_api::DbValue::Bytes(vec![
+                    0xca, 0xfe,
+                ])]]),
+                dialect: dexo_app::data::SqlDialect::Sqlite,
+            },
+            None,
+        )
+        .await
+        .unwrap();
+    let written = std::fs::read_to_string(&path).unwrap();
+    assert!(written.contains("X'cafe'"), "{written}");
+}

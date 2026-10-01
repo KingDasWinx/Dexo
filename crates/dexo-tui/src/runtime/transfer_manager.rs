@@ -60,7 +60,17 @@ impl TransferManager {
                 format,
                 columns,
                 rows,
-            } => run_export(self, operation, path, format, columns, rows, runtime).await,
+                dialect,
+            } => {
+                let options = FormatOptions {
+                    dialect,
+                    ..FormatOptions::default()
+                };
+                run_export(
+                    self, operation, path, format, &options, columns, rows, runtime,
+                )
+                .await
+            }
             TransferRequest::Import {
                 operation,
                 path,
@@ -101,16 +111,19 @@ impl TransferManager {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn run_export(
     manager: &mut TransferManager,
     operation: OperationId,
     path: PathBuf,
     format: dexo_app::transfer::TransferFormat,
+    options: &FormatOptions,
     columns: Vec<String>,
     rows: Arc<Vec<Vec<DbValue>>>,
     runtime: Option<&RuntimeAccess>,
 ) -> Result<(), String> {
     let cancel = Arc::new(AtomicBool::new(false));
+    let options = options.clone();
     manager
         .running
         .insert(operation, RunningTransfer::Cooperative(Arc::clone(&cancel)));
@@ -120,7 +133,7 @@ async fn run_export(
         export_rows(
             &path,
             format,
-            &FormatOptions::default(),
+            &options,
             &columns,
             rows.iter().cloned(),
             cancel_for_worker.as_ref(),

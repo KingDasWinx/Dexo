@@ -6917,6 +6917,7 @@ fn build_transfer_request(
                     .map(|column| column.name.clone())
                     .collect(),
                 rows: model.results.rows_snapshot(),
+                dialect: model.data.dialect,
             })
         }
         TransferMode::Import => {

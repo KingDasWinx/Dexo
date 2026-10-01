@@ -617,6 +617,8 @@ pub enum TransferRequest {
         format: dexo_app::transfer::TransferFormat,
         columns: Vec<String>,
         rows: Arc<Vec<Vec<DbValue>>>,
+        /// How an SQL export quotes names and writes values: the connection's.
+        dialect: dexo_app::data::SqlDialect,
     },
     Import {
         operation: OperationId,
