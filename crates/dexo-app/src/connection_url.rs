@@ -33,6 +33,8 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| invalid("expected scheme://, such as postgres://user@host/db"))?;
+    // A fragment is for the client that wrote the URL; it names nothing here.
+    let rest = rest.split_once('#').map_or(rest, |(rest, _)| rest);
     let driver = match scheme.to_ascii_lowercase().as_str() {
         "postgres" | "postgresql" => "postgres",
         "mysql" => "mysql",
@@ -47,6 +49,7 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
         other => return Err(invalid(&format!("unknown scheme {other}"))),
     };
     let (main, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
     let (authority, database) = main.split_once('/').unwrap_or((main, ""));
     let (userinfo, hostport) = match authority.rsplit_once('@') {
         Some((userinfo, hostport)) => (Some(userinfo), hostport),
@@ -75,10 +78,12 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
         decode(database).map_err(|_| invalid("the database is not valid percent-encoding"))?;
     let (host, port) =
         split_host_port(hostport).ok_or_else(|| invalid("the port is not a number"))?;
-    let host = if host.is_empty() {
-        "localhost".to_string()
-    } else {
-        host
+    // `%2Fvar%2Frun%2Fpostgresql` is a socket directory; `?host=` says the same.
+    let host = decode(&host).map_err(|_| invalid("the host is not valid percent-encoding"))?;
+    let host = match parameters.host {
+        Some(host) => host,
+        None if host.is_empty() => "localhost".to_string(),
+        None => host,
     };
     let mut config = serde_json::json!({
         "host": host,
@@ -88,8 +93,12 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
     if let Some(port) = port {
         config["port"] = serde_json::json!(port);
     }
-    if let Some(mode) = tls_mode(query) {
-        config["tls"] = serde_json::json!({ "mode": mode });
+    if parameters.tls.is_some() || !parameters.tls_files.is_empty() {
+        let mut tls = serde_json::json!({ "mode": parameters.tls.unwrap_or("verify_full") });
+        for (key, path) in parameters.tls_files {
+            tls[key] = serde_json::json!(path);
+        }
+        config["tls"] = tls;
     }
     let name = if database.is_empty() {
         format!("{user}@{host}")
@@ -102,14 +111,19 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
     })
 }
 
-/// `sqlite:///abs/path` and `sqlite://relative/path`: the rest is the file.
+/// `sqlite:///abs/path` and `sqlite://relative/path`: the rest is the file, and
+/// `?mode=ro` opens it read-only.
 fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> {
-    let path = decode(rest.split_once('?').map_or(rest, |(path, _)| path)).map_err(|_| {
+    let invalid = |reason: &str| {
         AppError::new(
             ErrorCategory::Configuration,
-            "not a connection URL: the path is not valid percent-encoding",
+            format!("not a connection URL: {reason}"),
         )
-    })?;
+    };
+    let rest = rest.split_once('#').map_or(rest, |(rest, _)| rest);
+    let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
+    let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
+    let path = decode(path).map_err(|_| invalid("the path is not valid percent-encoding"))?;
     if path.is_empty() {
         return Err(AppError::new(
             ErrorCategory::Configuration,
@@ -118,7 +132,11 @@ fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> 
             ),
         ));
     }
-    file(driver, std::path::Path::new(&path))
+    let mut connection = file(driver, std::path::Path::new(&path))?;
+    if parameters.read_only {
+        connection.profile.policy.read_only = Some(true);
+    }
+    Ok(connection)
 }
 
 /// A temporary connection to the file at `path`, named after it.
@@ -172,27 +190,72 @@ fn split_host_port(hostport: &str) -> Option<(String, Option<u16>)> {
     }
 }
 
-/// Postgres' `sslmode` and MySQL's `ssl-mode` (or `sslmode`), as Dexo's TLS modes.
-fn tls_mode(query: &str) -> Option<&'static str> {
-    query.split('&').find_map(|pair| {
-        let (key, value) = pair.split_once('=')?;
-        if !matches!(
-            key.to_ascii_lowercase().as_str(),
-            "sslmode" | "ssl-mode" | "ssl_mode"
-        ) {
-            return None;
+/// The query parameters a Dexo URL understands. Any other is refused, not dropped: a
+/// URL that says `?mode=ro` and opens the file for writing does worse than one that
+/// does not parse.
+#[derive(Default)]
+struct Parameters {
+    tls: Option<&'static str>,
+    /// `sslrootcert`, `sslcert` and `sslkey`, as the TLS settings' `ca_file`,
+    /// `client_cert` and `client_key`.
+    tls_files: Vec<(&'static str, String)>,
+    host: Option<String>,
+    read_only: bool,
+}
+
+impl Parameters {
+    fn read(query: &str, driver: &str) -> Result<Self, String> {
+        let mut read = Self::default();
+        for pair in query.split('&').filter(|pair| !pair.is_empty()) {
+            let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
+            let value =
+                decode(value).map_err(|_| format!("{key} is not valid percent-encoding"))?;
+            let lower = value.to_ascii_lowercase().replace('-', "_");
+            match (driver, key.to_ascii_lowercase().as_str()) {
+                ("sqlite", "mode") => match lower.as_str() {
+                    "ro" => read.read_only = true,
+                    "rw" | "rwc" => {}
+                    _ => return Err(format!("mode={value}: expected ro, rw or rwc")),
+                },
+                ("postgres" | "mysql" | "mariadb", "sslmode" | "ssl_mode" | "ssl-mode") => {
+                    read.tls = Some(match lower.as_str() {
+                        "disable" | "disabled" => "disable",
+                        "allow" | "prefer" | "preferred" => "preferred",
+                        "require" | "required" => "required",
+                        "verify_ca" => "verify_ca",
+                        "verify_full" | "verify_identity" => "verify_full",
+                        _ => return Err(format!("{key}={value} is not a TLS mode")),
+                    });
+                }
+                ("mysql" | "mariadb", "ssl") => {
+                    read.tls = Some(match lower.as_str() {
+                        "true" | "1" => "required",
+                        "false" | "0" => "disable",
+                        _ => return Err(format!("ssl={value}: expected true or false")),
+                    });
+                }
+                ("postgres", "host") if !value.is_empty() => read.host = Some(value),
+                ("postgres", "sslrootcert") => read.tls_files.push(("ca_file", value)),
+                ("postgres", "sslcert") => read.tls_files.push(("client_cert", value)),
+                ("postgres", "sslkey") => read.tls_files.push(("client_key", value)),
+                // Said for the server's logs or the client's own clock; Dexo names
+                // itself, keeps its own connect timeout, and always speaks UTF-8.
+                (
+                    "postgres",
+                    "application_name" | "fallback_application_name" | "connect_timeout",
+                )
+                | ("postgres", "client_encoding")
+                | ("mysql" | "mariadb", "charset" | "connect_timeout") => {}
+                _ => {
+                    return Err(format!(
+                        "{key} is not a parameter Dexo reads in a {driver} URL; \
+                         save a connection to set it"
+                    ));
+                }
+            }
         }
-        Some(
-            match value.to_ascii_lowercase().replace('-', "_").as_str() {
-                "disable" | "disabled" => "disable",
-                "allow" | "prefer" | "preferred" => "preferred",
-                "require" | "required" => "required",
-                "verify_ca" => "verify_ca",
-                "verify_full" | "verify_identity" => "verify_full",
-                _ => return None,
-            },
-        )
-    })
+        Ok(read)
+    }
 }
 
 /// Percent-decoding, so `p%40ss` is `p@ss`. `+` is left alone: it is a space only in
@@ -203,7 +266,11 @@ fn decode(text: &str) -> Result<String, ()> {
     let mut i = 0;
     while i < bytes.len() {
         if bytes[i] == b'%' {
-            let hex = text.get(i + 1..i + 3).ok_or(())?;
+            // Two hex digits; `from_str_radix` alone would take `%+1` as 0x01.
+            let hex = text
+                .get(i + 1..i + 3)
+                .filter(|hex| hex.bytes().all(|byte| byte.is_ascii_hexdigit()))
+                .ok_or(())?;
             out.push(u8::from_str_radix(hex, 16).map_err(|_| ())?);
             i += 3;
         } else {
@@ -265,8 +332,26 @@ mod tests {
     }
 
     #[test]
+    fn fragments_hosts_and_parameters() {
+        let parsed = parse("postgres://u@%2Fvar%2Frun%2Fpostgresql/db#notes").unwrap();
+        assert_eq!(parsed.profile.config["host"], "/var/run/postgresql");
+        assert_eq!(parsed.profile.config["database"], "db");
+        let parsed = parse("postgres://u@/db?host=/tmp/sock").unwrap();
+        assert_eq!(parsed.profile.config["host"], "/tmp/sock");
+        let parsed = parse("mariadb://u@h/db?ssl=true").unwrap();
+        assert_eq!(parsed.profile.config["tls"]["mode"], "required");
+        let parsed = parse("sqlite:///tmp/x.db?mode=ro").unwrap();
+        assert_eq!(parsed.profile.policy.read_only, Some(true));
+        assert_eq!(parsed.profile.config["path"], "/tmp/x.db");
+    }
+
+    #[test]
     fn what_is_not_a_connection_url_says_why() {
         for url in [
+            "postgres://u%+1@h/db",
+            "postgres://u@h/db?options=-c%20statement_timeout%3D0",
+            "postgres://u@h/db?sslmode=sometimes",
+            "sqlite:///x.db?mode=memory",
             "postgres.example.com",
             "ftp://u@h/x",
             "postgres://host/db",
