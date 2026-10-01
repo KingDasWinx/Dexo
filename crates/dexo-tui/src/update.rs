@@ -1111,8 +1111,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        // ANALYZE runs the statement, so it asks first; it used to run straight from the
+        // palette, and its "confirmation" was a flag it set on itself.
         Action::ConfirmExplainAnalyze => {
-            model.explain.analyze_confirmed = true;
+            model.explain_prompt = Some(crate::widgets::form::FooterFocus::Submit);
+            Vec::new()
+        }
+        Action::RunExplainAnalyze => {
+            model.explain_prompt = None;
             execute_on_document_connection(model, action)
         }
         Action::OpenAdmin => {
@@ -1881,6 +1887,14 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Palette) => mouse_palette(model, hit),
         Some(OverlayKind::Help) => mouse_help(model, hit),
         Some(OverlayKind::ClosePrompt) => mouse_close_prompt(model, hit),
+        Some(OverlayKind::ExplainPrompt) => match hit {
+            Some(HitTarget::FooterSubmit) => update(model, Action::RunExplainAnalyze),
+            Some(HitTarget::FooterCancel) => {
+                model.explain_prompt = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         Some(OverlayKind::DeleteConnection) => mouse_delete_connection(model, hit),
         Some(OverlayKind::NodeMenu) => mouse_node_menu(model, hit),
         Some(OverlayKind::ResultsMenu) => mouse_results_menu(model, hit),
@@ -2926,6 +2940,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.close_prompt.is_some() {
         return handle_close_prompt_key(model, key);
+    }
+    if model.explain_prompt.is_some() {
+        return handle_explain_prompt_key(model, key);
     }
     if model.connections.delete_target.is_some() {
         return handle_delete_connection_key(model, key);
@@ -4493,10 +4510,10 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             effects.extend(refresh_table_data(model));
             return effects;
         }
-        Action::OpenExplain | Action::ConfirmExplainAnalyze => {
+        Action::OpenExplain | Action::RunExplainAnalyze => {
             effects.extend(explain_effect(
                 model,
-                matches!(action, Action::ConfirmExplainAnalyze),
+                matches!(action, Action::RunExplainAnalyze),
             ));
             return effects;
         }
@@ -6117,6 +6134,32 @@ fn handle_close_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('s') => resolve_close(model, CloseChoice::Save),
         KeyCode::Char('d') => resolve_close(model, CloseChoice::Discard),
         _ => Vec::new(),
+    }
+}
+
+/// Run and Cancel, nothing to type: the footer walk skips the input stop it would land on.
+fn handle_explain_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let Some(focus) = model.explain_prompt.as_mut() else {
+        return Vec::new();
+    };
+    match footer_key(focus, &key) {
+        FooterKey::Submit => update(model, Action::RunExplainAnalyze),
+        FooterKey::Cancel => {
+            model.explain_prompt = None;
+            Vec::new()
+        }
+        FooterKey::Moved => {
+            if *focus == FooterFocus::Input {
+                *focus = if matches!(key.code, KeyCode::BackTab | KeyCode::Up) {
+                    FooterFocus::Cancel
+                } else {
+                    FooterFocus::Submit
+                };
+            }
+            Vec::new()
+        }
+        FooterKey::Pass => Vec::new(),
     }
 }
 

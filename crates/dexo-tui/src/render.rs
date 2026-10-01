@@ -177,6 +177,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.connections.delete_target.is_some() {
         render_delete_connection(frame, model, hits);
     }
+    if let Some(focus) = model.explain_prompt {
+        render_explain_prompt(frame, model, focus, hits);
+    }
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
@@ -249,6 +252,72 @@ fn render_close_prompt(
     for (_, label, button) in buttons {
         register_label(hits, footer_row, &footer, label, HitTarget::Button(button));
     }
+}
+
+fn render_explain_prompt(
+    frame: &mut Frame,
+    model: &Model,
+    focus: crate::widgets::form::FooterFocus,
+    hits: &mut HitMap,
+) {
+    let area = frame.area();
+    if area.width < 20 || area.height < 8 {
+        return;
+    }
+    let document = model.active_document();
+    let text = document.text();
+    let cursor = text
+        .chars()
+        .take(document.cursor())
+        .map(char::len_utf8)
+        .sum();
+    let statement = dexo_sql::statement_at(&text, cursor)
+        .map(|span| text[span.byte_range].trim().to_string())
+        .unwrap_or_default();
+    let width = 64.min(area.width);
+    let preview_width = width.saturating_sub(6) as usize;
+    let first_line = statement.lines().next().unwrap_or_default();
+    let mut preview: String = first_line.chars().take(preview_width).collect();
+    if first_line.chars().count() > preview_width || statement.lines().nth(1).is_some() {
+        preview.pop();
+        preview.push('…');
+    }
+    let production = model.connection.environment == "production";
+    let footer = crate::widgets::form::footer_line("Run", focus);
+    let mut lines = vec![
+        "EXPLAIN ANALYZE runs this statement to time it,".to_string(),
+        "then rolls back what it changed.".to_string(),
+    ];
+    if production {
+        lines.push("This is a production connection.".to_string());
+    }
+    lines.extend([
+        String::new(),
+        format!("  {preview}"),
+        String::new(),
+        footer.clone(),
+    ]);
+    let popup = centered(area, width, lines.len() as u16 + 2);
+    let warning = model.theme.style(Role::Warning, model.capabilities);
+    let body: Vec<Line> = lines
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            if production && index == 2 {
+                Line::styled(text.clone(), warning)
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, "Explain Analyze")),
+        popup,
+    );
+    register_overlay(hits, popup);
+    let footer_row = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
+    crate::widgets::form::register_footer(hits, footer_row, &footer, "Run");
 }
 
 fn register_pane_dividers(hits: &mut HitMap, plan: LayoutPlan) {

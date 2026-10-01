@@ -367,6 +367,7 @@ pub enum Action {
     DismissToast,
     ToastTick,
     ConfirmExplainAnalyze,
+    RunExplainAnalyze,
     OpenAdmin,
     AdminPause,
     AdminResume,

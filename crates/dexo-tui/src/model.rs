@@ -1617,6 +1617,9 @@ pub struct Model {
     pub node_menu: NodeMenuState,
     pub pending_execute: Option<PendingExecute>,
     pub close_prompt: Option<ClosePrompt>,
+    /// Asked before EXPLAIN ANALYZE runs the statement under the cursor; the focused
+    /// footer button while it is open.
+    pub explain_prompt: Option<crate::widgets::form::FooterFocus>,
     pub layout_preset: LayoutPreset,
     pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
@@ -1717,6 +1720,7 @@ impl Default for Model {
             node_menu: NodeMenuState::default(),
             pending_execute: None,
             close_prompt: None,
+            explain_prompt: None,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,

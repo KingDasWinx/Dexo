@@ -28,7 +28,6 @@ pub struct ExplainScreen {
     pub captured_at: String,
     pub paused: bool,
     pub analyze: bool,
-    pub analyze_confirmed: bool,
     pub raw: String,
 }
 
@@ -41,7 +40,6 @@ impl Default for ExplainScreen {
             captured_at: String::new(),
             paused: false,
             analyze: false,
-            analyze_confirmed: false,
             raw: String::new(),
         }
     }
@@ -77,7 +75,6 @@ impl ExplainScreen {
             raw: plan.raw.clone(),
             captured_at: "1710000000".into(),
             analyze: true,
-            analyze_confirmed: true,
             plan: Some(plan),
             ..Self::default()
         }
@@ -85,8 +82,8 @@ impl ExplainScreen {
 
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!(
-            "explain captured_at={} paused={} analyze={} confirmed={}",
-            self.captured_at, self.paused, self.analyze, self.analyze_confirmed
+            "explain captured_at={} paused={} analyze={}",
+            self.captured_at, self.paused, self.analyze
         )];
         if let Some(plan) = &self.plan {
             let body = match self.view {

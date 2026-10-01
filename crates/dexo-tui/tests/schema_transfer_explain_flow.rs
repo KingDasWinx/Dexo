@@ -8,7 +8,7 @@ use dexo_driver_api::{
     AlterOp, CatalogObject, ColumnSpec, DdlExecutor, DdlOutcome, DdlPlan, DriverError, ObjectId,
     ObjectKind, QualifiedName, SchemaChange, TableDef, TableShape,
 };
-use dexo_tui::runtime::explain_manager::ExplainManager;
+use dexo_tui::runtime::explain_manager::statement_sql;
 use dexo_tui::runtime::schema_manager::{DiffFilters, DiffRequest, SchemaManager};
 use dexo_tui::screens::file_picker::FilePicker;
 
@@ -199,13 +199,11 @@ fn editor_with_cursor_in_second_statement() -> (String, usize) {
 
 #[tokio::test]
 async fn explain_uses_statement_at_editor_cursor() {
-    let runtime = ExplainManager::default();
     let (sql, cursor) = editor_with_cursor_in_second_statement();
-    runtime.explain(&sql, cursor, false).await.unwrap();
-    assert_eq!(runtime.explain_sql(), "SELECT * FROM orders");
-    assert!(runtime.explain(&sql, cursor, true).await.is_err());
-    runtime.confirm_analyze();
-    runtime.explain(&sql, cursor, true).await.unwrap();
+    assert_eq!(
+        statement_sql(&sql, cursor).as_deref(),
+        Some("SELECT * FROM orders")
+    );
 }
 
 fn transfer_session() -> dexo_tui::runtime::SessionId {
