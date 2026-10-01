@@ -4595,9 +4595,10 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
             Vec::new()
         }
         dexo_app::run_guard::RunVerdict::Confirm { flagged, typed } => {
-            model.run_prompt = Some(crate::screens::run_prompt::RunPrompt::new(
-                statements, flagged, typed,
-            ));
+            let mut prompt = crate::screens::run_prompt::RunPrompt::new(statements, flagged, typed);
+            prompt.connection = model.connection.name.clone();
+            prompt.session = model.active_session;
+            model.run_prompt = Some(prompt);
             Vec::new()
         }
     }
@@ -6297,6 +6298,15 @@ fn submit_run_prompt(model: &mut Model) -> Vec<Effect> {
     };
     if !prompt.accepted() {
         prompt.error = Some("The name does not match; nothing was run.".into());
+        return Vec::new();
+    }
+    // A closing session can switch the editor to another connection without a
+    // connection change; what was confirmed for one never runs on another.
+    if prompt.connection != model.connection.name || prompt.session != model.active_session {
+        model.run_prompt = None;
+        model
+            .messages
+            .warn("The connection changed under the dialog; nothing was run.".into());
         return Vec::new();
     }
     let statements = std::mem::take(&mut prompt.statements);

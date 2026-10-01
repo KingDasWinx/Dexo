@@ -20,6 +20,10 @@ pub struct RunPrompt {
     pub typed: TextInput,
     pub footer: FooterFocus,
     pub error: Option<String>,
+    /// The connection and session the statements were judged for. Run refuses when
+    /// either moved, whatever moved it.
+    pub connection: String,
+    pub session: Option<crate::runtime::SessionId>,
 }
 
 impl RunPrompt {
@@ -38,6 +42,8 @@ impl RunPrompt {
             typed: TextInput::default(),
             footer,
             error: None,
+            connection: String::new(),
+            session: None,
         }
     }
 

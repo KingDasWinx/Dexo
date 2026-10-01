@@ -195,3 +195,49 @@ fn a_connection_change_closes_the_run_prompt() {
     );
     assert!(model.run_prompt.is_none());
 }
+
+/// A session that closes under the dialog can switch the editor to another connection
+/// without a connection change; the answer still must not run there.
+#[test]
+fn a_session_closing_under_the_prompt_runs_nothing_on_the_next_connection() {
+    let mut model = live("production", false, "delete from orders");
+    let mut profiles: Vec<ConnectionProfile> = model
+        .connections
+        .profiles
+        .iter()
+        .map(|row| row.profile.clone())
+        .collect();
+    profiles.push(ConnectionProfile::new(
+        ConnectionId(uuid::Uuid::from_u128(2)),
+        None,
+        "other",
+        "postgres",
+        "production",
+        serde_json::json!({"host":"h","port":5432,"username":"u","database":"d"}),
+        SecretRef::new("r2".into()),
+    ));
+    model.connections.load_profiles(profiles);
+    model.connections.upsert_session(SessionRow {
+        id: SessionId(uuid::Uuid::from_u128(202)),
+        connection: "other".into(),
+        transaction: TransactionState::Idle,
+        generation: 1,
+        environment: "production".into(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
+    update(&mut model, Action::ExecuteDocument);
+    assert!(model.run_prompt.is_some());
+    update(
+        &mut model,
+        Action::SessionClosed {
+            session: SessionId(uuid::Uuid::from_u128(101)),
+        },
+    );
+    type_text(&mut model, "shop");
+    assert!(
+        !ran(&press(&mut model, KeyCode::Enter)),
+        "the answer for shop ran on {}",
+        model.connection.name
+    );
+}
