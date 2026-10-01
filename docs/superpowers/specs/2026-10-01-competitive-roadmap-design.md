@@ -1,0 +1,129 @@
+# Dexo competitive roadmap: 1.4.2 to 1.6
+
+Date: 2026-10-01. Status: approved direction. It replaces the single-release 1.4.2 scope written earlier the same day. Each release gets its own plan in `docs/superpowers/plans/` when work on it starts.
+
+## Why
+
+The competitors were studied in their source (clones in `~/Documents/dexo-examples-projects/tui`), on GitHub, and through their Hacker News launches.
+
+| Project | Stars | Stack | What matters |
+|---|---|---|---|
+| harlequin | 6.4k | Python, Textual | DuckDB and SQLite built in, about ten adapters as extras; no grid editing, EXPLAIN, schema diff, import or keyring |
+| rainfrog | 5.4k | Rust, ratatui | Postgres, MySQL, SQLite; in Homebrew core; the comparison every launch thread will ask for |
+| sqlit | 4.9k | Python, Textual | About 40 providers through drivers installed on demand; Docker discovery; `--mock` demo; grid edits only generate SQL; SSH through paramiko |
+| lazysql | 4.3k | Go, tview | Five databases; basic vim editor; free WHERE; honest row counts; reverse FK on `f`; plaintext credentials |
+| lazydb | 54 | Rust, ratatui | Five weeks old and about 1,270 commits: vim with `:s`, WHERE/ORDER BY bars, multi-column header sort, `--url`, `lsp --stdio`, `mcp setup`; no SSH, EXPLAIN, schema diff, import, export or audit log |
+| Dexo | 11 | Rust, ratatui | The deepest of all; loses on the first five minutes, editor and grid basics, and visibility |
+
+Three findings set the order of this roadmap:
+
+1. **Stars come from launches, not features.** sqlit reached 4.9k stars in nine months from one Show HN at 190 points; harlequin had launches at 309 and 183 points, rainfrog one at 192. The most voted feature request in any of these trackers has 13 thumbs-up. Dexo is not in awesome-tuis, awesome-ratatui, nixpkgs or Homebrew core.
+2. **lazydb targets the same position** ("database workspace exposed to coding agents") and moves fast. Whoever launches first with the agent story owns it, so the launch waits for what a first-time user needs, not for every feature.
+3. **The safety story has a hole**, and safety is the pitch:
+   - The SQL editor runs any statement on a production connection without asking. `query_runner.rs` classifies statements only to pick a read or write request, and `confirm_destructive` is used nowhere in `dexo-tui`.
+   - A read-only MySQL connection accepts writes. `ConnectRequest.read_only` reaches the driver (`connection_profile.rs:114`); the Postgres factory applies `default_transaction_read_only=on`, the MySQL factory ignores it.
+   - On a read-only Postgres connection, `SET default_transaction_read_only = off` in the editor turns the server-side guard off.
+
+## Positioning
+
+"A terminal database workbench with guardrails for AI agents." The launch post follows the pattern that worked for the others: `Show HN: Dexo – a terminal database workbench with guardrails for AI agents (Postgres, MySQL, SQLite)`. The pitch is only used once 1.4.2 has shipped.
+
+The README answers the questions every launch thread asked: why not psql, pgcli, DataGrip or rainfrog; where the passwords go; how to install without Python; whether it can be tried read-only.
+
+## 1.4.2: safety
+
+Ships in days, before anything else.
+
+- **A1 Editor write guard.** Before the editor runs anything, each statement is classified. On a read-only connection, any statement that is not read-only is refused with a message naming it; nothing is sent. When the connection policy has `confirm_destructive` (the default for production and staging), destructive statements -- `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, `ALTER ... DROP` -- open a confirmation dialog listing them. On production, any write (data or schema) needs the connection name typed, the same rule the grid review uses. `SET`, session and unknown statements count as writes. `StatementEffect` has no notion of destructive, so `dexo-sql` gains it through sqlparser, next to `statement_guard.rs`. The guard sits in `start_query`, where statement, selection and document runs all pass.
+- **A4 Read-only enforced by every driver.** MySQL sends `SET SESSION TRANSACTION READ ONLY` on connect through the `OptsBuilder` in `dexo-driver-mysql/src/factory.rs`, on every connection it opens. Postgres keeps `default_transaction_read_only=on`; A1 refusing `SET` keeps it from being switched off. A driver that cannot enforce read-only refuses to connect a read-only profile rather than pretend.
+- **A5 Welcome says how to connect.** The welcome modal (`render.rs`) names `n` and the palette's add-connection command next to the lines it already has.
+- **A6 An honest Vim label.** Until B5 lands, Settings and the README call the profile "Vim-style keys", since it rebinds keys and the editor is not modal.
+
+## 1.5: launch kit
+
+Everything a first-time user or a launch thread hits in the first five minutes.
+
+### Try it in seconds
+
+- **D2 SQLite.** A `dexo-driver-sqlite` crate on the workspace's `rusqlite` (bundled), run on blocking threads, cancel through the interrupt handle. Catalog (tables, views, indexes, triggers, columns, foreign keys), queries, row editing, `EXPLAIN QUERY PLAN` in the Explain view, import and export. The connection form takes a file path.
+- **D4 Demo mode.** `dexo --demo` opens a temporary SQLite database seeded from an embedded script (a small store: customers, products, orders, order items, with foreign keys), so anyone can try every screen in seconds. Never saved as a profile.
+- **A2 Temporary connections from a URL.** `dexo postgres://…`, `postgresql://`, `mysql://`, `mariadb://` and `sqlite:///path` open the TUI connected, without saving a profile. The password in a URL is kept in memory only and never written anywhere (not SQLite, not recovery, not logs); a stderr note says the URL may be in shell history and suggests `--password-prompt`. The TUI marks the connection as temporary and offers "Save connection…", which goes through the normal form and puts the password in the keyring.
+- **D1 MariaDB.** Official support through the MySQL driver: driver id `mariadb` in the connection form, version detection, catalog query differences fixed, an integration container in CI next to MySQL. The README stops saying it is unsupported.
+- **D7 Password command.** A connection can take its password from a command (`password_command`, for 1Password, pass or Vault) instead of the keyring. It runs through the platform shell with a 30-second timeout; stdout is the secret, held in memory only; a non-zero exit fails the connection with a message naming the command, never its output.
+
+### Editor
+
+- **B1 Find and replace.** Ctrl+F finds in the active document, Ctrl+H adds replace; next and previous, match count, case-sensitive and whole-word toggles, replace one and replace all as one undo step. Esc closes. Matches are highlighted in the editor.
+- **B2 Line editing.** Toggle line comment (`--`) on the line or selection with Ctrl+/ (terminals send it as Ctrl+_ or Ctrl+7; accept those). Duplicate line, and move line up and down; keys chosen to not collide with the existing keymap (check `keymap.rs` in every profile).
+- **B3 External editor.** A key opens the document in `$VISUAL`, then `$EDITOR`, then a platform default, suspending the TUI; on exit the buffer is replaced as one undo step. A non-zero exit keeps the buffer unchanged. This is also the answer for vim users until B5.
+- **B6 psql meta-commands.** A line starting with `\` is answered by Dexo from the catalog, never sent to the server: `\dt`, `\dv`, `\di`, `\dn`, `\df` with an optional pattern, `\d name` for the object's columns, keys and indexes, `\l` for databases, `\x` to toggle the record view and `\?` for the list. Results show in the grid like any query, on every driver.
+
+### Results
+
+- **C1 WHERE and ORDER BY bars.** Above the grid of a table document or a query result, two inputs take free SQL text. Enter applies by re-running through `dexo_sql::derive_page`; Esc reverts to the last applied text; an invalid clause leaves the last good result on screen with the error in Messages. Raw clauses exist only in the TUI path; the MCP surface keeps typed filters.
+- **C2 Header sort.** Clicking a column header (or a key on the focused column) cycles ascending, descending, none; Shift adds a column to a multi-column sort with priority numbers in the header. Server-side, through the same derivation as C1.
+- **A3 Honest row counts.** Table documents show the count as exact (`843 rows`), estimated (`~4.3M rows`, from `pg_class.reltuples`, `information_schema.TABLES.TABLE_ROWS` or SQLite's `sqlite_stat1`), or open-ended (`300+ rows`) when only the page is known. A key runs the exact `COUNT(*)` in the background and pressing it again cancels it. Query results that hit the row limit say so (`10,000+ rows, limit reached`).
+
+### Make it yours
+
+- **D6 User themes and keymaps.** Theme files and a keymap overlay in the config directory are loaded at start (`load_theme_file` exists and is unused; `parse_keymap` handles the embedded profiles). Invalid files fall back to the built-in with a message naming the file and line. Dexo ships a few presets (Dracula, Gruvbox, Nord, Catppuccin, Tokyo Night) and Settings previews a theme live before it is applied.
+
+### Agents
+
+- **E3 MCP setup and probe.** `dexo mcp setup --client claude-code|codex|cursor|claude-desktop` writes or merges that client's config (with a backup and `--dry-run`), and `dexo mcp doctor --probe` starts `dexo mcp serve`, runs initialize and tools/list, and reports, for every client. `--skill` also writes an agent skill file that explains Dexo's tools, grants and read-only default.
+
+### Fixes
+
+- **F1 EXPLAIN validated end to end** on Postgres, MySQL and SQLite in the TUI and CLI; any failure found is fixed in this release.
+- **F2 Pending bugs** reported during earlier work: Inspect fails with `role "…" does not exist`; `citext` and other native types show as hex; the welcome logo colours do not render; the schema editor form has no Submit/Cancel footer; the keybindings modal has no PageUp/PageDown; single-line inputs split words at accented letters.
+
+### Launch assets
+
+- README: the pitch line, a `dexo --demo` quick try at the top, a comparison table against rainfrog, harlequin, lazysql and sqlit, and a GIF where the editor stops a `DELETE` without `WHERE` on production and the agent's calls show in the audit screen.
+- `--help` gives every subcommand a one-line description.
+
+## Launch, after 1.5
+
+- Show HN with the title above; r/commandline, r/rust and r/PostgreSQL the same week.
+- Pull requests to awesome-tuis and awesome-ratatui ("APIs, Databases"), and a nixpkgs `by-name` package.
+- Homebrew core once Dexo meets its notability bar; the tap stays until then.
+
+## 1.6: what nobody has
+
+- **E1 Approval cockpit.** A grant can be `ask`: the MCP server records each write it would make as a pending approval in `dexo-storage` and waits; the TUI shows an Agent Activity screen with live tool calls from the audit log and pending approvals with the SQL or DDL diff, Approve or Deny, and a timeout (default 120 s) that denies. The two processes talk only through the shared SQLite database.
+- **E2 Semantic notes.** Notes on tables and columns, kept in `dexo-storage`, edited from the inspector, seeded from database comments. `object_describe` and `catalog_search` return them, so agents get the meaning of a schema, not just its shape. dbt's 2026 benchmark (11 questions, 15 tables) took text-to-SQL from 90.0% to 98.2% with semantic context; cite it with that scale.
+- **B4 Live diagnostics.** The unused `dexo_sql::Diagnostic` is wired in. Parse errors and unknown tables or columns (checked only against objects the catalog has loaded, never guessed) are underlined, with the message in the status line when the cursor is on them. A failed run turns the server's position into a diagnostic and moves the cursor there.
+- **B5 Vim mode.** When the keymap profile is `vim`, the editor is modal: Normal, Insert, Visual, Visual-line. Motions `h j k l w b e 0 ^ $ gg G`, counts, operators `d c y` with motions, `dd yy cc`, `x p P u Ctrl+R`, `i a I A o O`, `v V`, `.` repeat, `/ n N` search sharing B1's engine, `:s` substitute, and `:w :q :wq`. The mode shows in the status bar. Other profiles keep today's non-modal editor. The profile's label goes back to "Vim".
+- **C3 Referenced by.** From a row, list the foreign keys that point at its table (from the loaded catalog) and open a referencing table filtered to this row's key, with Back returning. Complements the existing Open Related.
+- **C4 Saved queries.** Named SQL saved per project and connection in `dexo-storage`, with Save Query As, a searchable Open Saved Query picker with preview, rename and delete. Distinct from snippets (templates) and history (log).
+- **D5 Docker discovery.** The connections screen lists running Postgres, MySQL and MariaDB containers found through `docker ps` and `docker inspect` (the CLI, no new dependency), with host port, user and database from the container's environment. Choosing one prefills the connection form; a password from the environment goes to the keyring only if the user saves. No Docker on PATH means no section, not an error.
+- **D8 Pre-connect command.** A connection can run a command before connecting and wait for a local port, for `kubectl port-forward`, cloud-sql-proxy or Teleport, which native SSH does not cover. `${port}` picks a free local port; the process is stopped when the connection closes.
+
+## Later
+
+- **D3 DuckDB.** A `dexo-driver-duckdb` crate behind a cargo feature: catalog, queries, `EXPLAIN` in the Explain view, and reading CSV or Parquet files directly. The bundled engine compiles C++ and grows the binary, so release targets enable it only once CI shows the build time and size are acceptable.
+- **E4 What-if index.** On Postgres with the `hypopg` extension, the Explain view offers "Try index…": create a hypothetical index in the session, re-run EXPLAIN (never ANALYZE), compare with the baseline through the existing plan comparison, then reset. Without `hypopg`, it says how to install it. `query_explain` in MCP takes the same optional hypothetical indexes.
+- **E5 Language server.** `dexo lsp` serves completion (the editor's `dexo-sql` engine with a connection's cached catalog), diagnostics (B4) and formatting over stdio, for Neovim, Helix and VS Code. The connection is chosen by flag or a `-- dexo: connection=name` first line.
+- A project file (`.dexo.toml`, no secrets) that a team commits to share connections and scope MCP to the repository.
+- An ER diagram of a schema in the terminal.
+- SQL Server.
+
+## Product rules every item follows
+
+- Every Submit/Cancel dialog: arrows walk the buttons, Esc cancels.
+- Menus and the palette show each action's hotkey; new actions are in the palette.
+- Every document belongs to a connection; offline actions connect by themselves.
+- Secrets never go in SQLite, TOML, argv, logs or panic reports.
+- TUI, CLI and MCP go through `dexo-app`; drivers do not import UI crates.
+- New dependencies come from crates.io and pass `cargo deny check`.
+
+## Non-goals
+
+- Thirty databases. Postgres, MySQL, MariaDB and SQLite, then DuckDB and SQL Server.
+- A built-in "chat with your database". Agents come in through MCP, grounded by E2.
+- Charts in the grid.
+- Claiming Dexo would have stopped a specific public incident. The PocketOS deletion (April 2026) went through a cloud API token, not SQL.
+
+## Release
+
+Each release lands on `development`, one commit per item, then a PR to `main` merged with a merge commit, then `./publish.sh <version>` on `main`. The CHANGELOG is generated from the commit subjects.
