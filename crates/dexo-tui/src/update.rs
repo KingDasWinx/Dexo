@@ -5793,10 +5793,26 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
         model.messages.warn("connection is read-only".into());
         return Vec::new();
     }
-    if let Some(review) = &model.data.review
-        && review.production
-        && !review.confirmed
-    {
+    // Production is read from the connection, not only from an open review: the
+    // palette's Apply Changes arrives with no review, and used to apply straight away.
+    let production = dexo_app::Environment::parse_strict(&model.connection.environment)
+        == dexo_app::Environment::Production
+        || model
+            .data
+            .review
+            .as_ref()
+            .is_some_and(|review| review.production);
+    let confirmed = model
+        .data
+        .review
+        .as_ref()
+        .is_some_and(|review| review.confirmed);
+    if production && !confirmed {
+        if model.data.review.is_none() {
+            model.data.environment =
+                dexo_app::Environment::parse_strict(&model.connection.environment);
+            model.data.open_review();
+        }
         model
             .messages
             .warn("type the target to confirm production apply".into());

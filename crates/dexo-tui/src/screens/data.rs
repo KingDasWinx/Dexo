@@ -341,17 +341,51 @@ mod tests {
     }
 
     #[test]
+    /// The palette's Apply Changes arrives with no review open; on production it opens
+    /// the review instead of applying.
+    #[test]
+    fn palette_apply_on_production_opens_the_review_first() {
+        let mut model = Model::default();
+        model.data.table = editable_table();
+        model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
+        model.data.target = QualifiedName::new(Some("db"), Some("public"), "items");
+        model.connection.environment = "production".into();
+        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
+        model
+            .data
+            .changes
+            .insert(vec![("id".into(), DbValue::I64(1))]);
+        let effects = update(&mut model, Action::ApplyChanges);
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, crate::Effect::ApplyMutations { .. })),
+            "applied on production without a confirmed review"
+        );
+        assert!(
+            model
+                .data
+                .review
+                .as_ref()
+                .is_some_and(|review| review.production)
+        );
+    }
+
+    #[test]
     fn review_states_require_production_confirm() {
         let mut model = Model::default();
         model.data.table = editable_table();
         model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
         model.data.target = QualifiedName::new(Some("db"), Some("public"), "items");
-        model.data.environment = Environment::Production;
+        // The review reads production from the connection; setting the screen's own
+        // environment here used to be overwritten and test nothing.
+        model.connection.environment = "production".into();
         model
             .data
             .changes
             .insert(vec![("id".into(), DbValue::I64(1))]);
         update(&mut model, Action::OpenReview);
+        assert!(model.data.review.as_ref().unwrap().production);
         update(&mut model, Action::ApplyChanges);
         assert_eq!(
             model.data.review.as_ref().unwrap().status,
