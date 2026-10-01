@@ -83,15 +83,20 @@ pub fn block_cursor(model: &Model) -> bool {
     active(model) && model.vim.mode != Mode::Insert && model.vim.prompt.is_none()
 }
 
-/// What Visual-line mode has selected: whole lines, whatever column the cursor is in.
+/// What Visual mode has selected, as the operators will take it: both ends included,
+/// whichever way it was made -- and whole lines in Visual-line mode.
 pub fn display_selection(model: &Model) -> Option<Range<usize>> {
-    if !active(model) || model.vim.mode != Mode::VisualLine {
+    if !active(model) {
         return None;
     }
     let chars: Vec<char> = model.active_document().text().chars().collect();
     let cursor = model.active_document().cursor();
     let (first, last) = ordered(model.vim.visual_anchor, cursor);
-    Some(line_start(&chars, first)..line_end(&chars, last))
+    match model.vim.mode {
+        Mode::VisualLine => Some(line_start(&chars, first)..line_end(&chars, last)),
+        Mode::Visual => Some(first..(last + 1).min(chars.len()).max(first)),
+        Mode::Normal | Mode::Insert => None,
+    }
 }
 
 pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
@@ -156,10 +161,20 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
     }
 }
 
-/// After the plain editor moved the cursor in Normal mode: back onto a character.
+/// After the plain editor moved the cursor: back onto a character in Normal mode, and
+/// in Visual mode the selection still runs from where it started -- an arrow key let
+/// go of it.
 pub fn after_pass(model: &mut Model) {
-    if active(model) && model.vim.mode == Mode::Normal {
-        clamp_normal(model);
+    if !active(model) {
+        return;
+    }
+    match model.vim.mode {
+        Mode::Normal => clamp_normal(model),
+        Mode::Visual | Mode::VisualLine => {
+            let anchor = model.vim.visual_anchor;
+            model.active_document_mut().anchor = Some(anchor);
+        }
+        Mode::Insert => {}
     }
 }
 
@@ -302,7 +317,16 @@ fn command(model: &mut Model) -> Outcome {
             finish_change(model, changes, op == 'c');
             Outcome::Done
         }
-        Parsed::Simple(_, ch) if visual && "xdDcCyY".contains(ch) => {
+        // `o` goes to the other end; the insert commands are not Visual's.
+        Parsed::Simple(_, 'o') if visual => {
+            let cursor = model.active_document().cursor();
+            let anchor = model.vim.visual_anchor;
+            model.vim.visual_anchor = cursor;
+            set_cursor(model, anchor);
+            Outcome::Done
+        }
+        Parsed::Simple(_, 'i' | 'a' | 'I' | 'A' | 'O') if visual => Outcome::Done,
+        Parsed::Simple(_, ch) if visual && "xXdDcCyY".contains(ch) => {
             let op = match ch {
                 'x' | 'D' | 'X' => 'd',
                 'C' => 'c',
@@ -1081,6 +1105,41 @@ mod tests {
         keys(&mut model, "iselect 1\u{1b}");
         assert_eq!(text(&model), "SELECT 1");
         assert!(!model.active_document().kind.is_placeholder());
+    }
+
+    /// Visual mode acts on what it shows: both ends, whichever way it was made, arrows
+    /// keeping the selection, and the insert commands staying out of it.
+    #[test]
+    fn visual_mode_operates_on_what_it_shows() {
+        let mut model = vim("abcdef");
+        model.active_document_mut().sql.set_cursor(3).unwrap();
+        keys(&mut model, "vhh");
+        assert_eq!(super::display_selection(&model), Some(1..4));
+        keys(&mut model, "d");
+        assert_eq!(text(&model), "aef");
+
+        let mut model = vim("abcdef");
+        keys(&mut model, "v");
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        );
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::NONE)),
+        );
+        keys(&mut model, "d");
+        assert_eq!(text(&model), "def");
+
+        let mut model = vim("name rest");
+        keys(&mut model, "viwd");
+        assert_eq!(model.vim.mode, Mode::Normal);
+        assert_eq!(text(&model), "est");
+
+        let mut model = vim("abc");
+        keys(&mut model, "vlX");
+        assert_eq!(text(&model), "c");
+        assert_eq!(model.vim.mode, Mode::Normal);
     }
 
     #[test]
