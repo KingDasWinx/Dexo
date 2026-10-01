@@ -205,6 +205,9 @@ pub struct WorkbenchRuntime {
     query: QueryService,
     live: Arc<tokio::sync::Mutex<Option<query_runner::LiveQuery>>>,
     opening: Arc<tokio::sync::Mutex<Option<OpenedSession>>>,
+    /// The profile each session was opened with. A temporary connection has no other
+    /// record of one, and the side connections export and import open need it.
+    session_profiles: std::collections::HashMap<SessionId, ConnectionProfile>,
     transfer: transfer_manager::TransferManager,
 }
 
@@ -223,6 +226,7 @@ impl WorkbenchRuntime {
             query: QueryService::new(Arc::new(TaskRegistry::default())),
             live: Arc::new(tokio::sync::Mutex::new(None)),
             opening: Arc::new(tokio::sync::Mutex::new(None)),
+            session_profiles: std::collections::HashMap::new(),
             transfer: transfer_manager::TransferManager::default(),
         }
     }
@@ -789,13 +793,16 @@ impl WorkbenchRuntime {
             .ok_or_else(|| "session is closed".to_string())?;
         let session_arc = Arc::clone(&active.session);
         let name = active.connection.clone();
-        let profile = self.with_repo(|repo| {
-            repo.list()
-                .map_err(|error| error.to_string())?
-                .into_iter()
-                .find(|profile| profile.name == name)
-                .ok_or_else(|| "connection profile not found".into())
-        })?;
+        let profile = match self.session_profiles.get(&session) {
+            Some(profile) => profile.clone(),
+            None => self.with_repo(|repo| {
+                repo.list()
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .find(|profile| profile.name == name)
+                    .ok_or_else(|| "connection profile not found".into())
+            })?,
+        };
         let secret = profile
             .password(&self.secrets)
             .map_err(|error| error.to_string())?
@@ -1005,6 +1012,7 @@ impl WorkbenchRuntime {
             })
             .collect();
         let id = self.sessions.insert(profile.name.clone(), session);
+        self.session_profiles.insert(id, profile.clone());
         // Before the connection is announced, so the palette is right from its first draw.
         self.emit(Action::SessionCapabilities {
             session: id,
@@ -1155,6 +1163,7 @@ impl WorkbenchRuntime {
 
     async fn close_session(&mut self, session: SessionId) {
         self.sessions.remove(session);
+        self.session_profiles.remove(&session);
         self.emit(Action::SessionClosed { session }).await;
     }
 
@@ -1496,6 +1505,7 @@ impl WorkbenchRuntime {
     async fn close_project_sessions(&mut self) {
         for id in self.sessions.ids() {
             self.sessions.remove(id);
+            self.session_profiles.remove(&id);
             self.emit(Action::SessionClosed { session: id }).await;
         }
         self.emit(Action::ProjectSessionsClosed).await;
