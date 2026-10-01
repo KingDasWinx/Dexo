@@ -126,6 +126,38 @@ fn parse_block(value: &serde_json::Value) -> PlanNode {
     if let Some(table) = value.get("table") {
         return parse_table(table);
     }
+    // MariaDB's names for the same steps: sorted output arrives as `read_sorted_file`
+    // around a `filesort`, and a GROUP BY goes through a `temporary_table`.
+    if let Some(inner) = value.get("read_sorted_file") {
+        return parse_block(inner);
+    }
+    if let Some(sort) = value.get("filesort") {
+        return PlanNode {
+            kind: "Sort".into(),
+            relation: None,
+            detail: sort
+                .get("sort_key")
+                .and_then(serde_json::Value::as_str)
+                .map(|key| format!("by {key}")),
+            estimates: cost_metrics(value),
+            actual: analyzed_metrics(sort),
+            loops: None,
+            children: vec![parse_block(sort)],
+            native: value.clone(),
+        };
+    }
+    if let Some(inner) = value.get("temporary_table") {
+        return PlanNode {
+            kind: "Temporary table".into(),
+            relation: None,
+            detail: None,
+            estimates: PlanMetrics::default(),
+            actual: analyzed_metrics(inner),
+            loops: None,
+            children: vec![parse_block(inner)],
+            native: value.clone(),
+        };
+    }
     if let Some(inner) = value
         .get("ordering_operation")
         .or_else(|| value.get("grouping_operation"))
@@ -194,7 +226,9 @@ fn parse_table(value: &serde_json::Value) -> PlanNode {
             cost: value
                 .pointer("/cost_info/prefix_cost")
                 .and_then(json_f64)
-                .or_else(|| value.pointer("/cost_info/query_cost").and_then(json_f64)),
+                .or_else(|| value.pointer("/cost_info/query_cost").and_then(json_f64))
+                // MariaDB puts a plain `cost` on the table.
+                .or_else(|| value.get("cost").and_then(json_f64)),
             rows: value
                 .get("rows_examined_per_scan")
                 .and_then(json_f64)
@@ -225,7 +259,11 @@ fn analyzed_metrics(value: &serde_json::Value) -> PlanMetrics {
     });
     PlanMetrics {
         cost: None,
-        rows: value.get("r_rows").and_then(json_f64),
+        // A filesort says how many rows it put out, not `r_rows`.
+        rows: value
+            .get("r_rows")
+            .or_else(|| value.get("r_output_rows"))
+            .and_then(json_f64),
         width: None,
         time_ms: time,
     }
@@ -233,7 +271,10 @@ fn analyzed_metrics(value: &serde_json::Value) -> PlanMetrics {
 
 fn cost_metrics(value: &serde_json::Value) -> PlanMetrics {
     PlanMetrics {
-        cost: value.pointer("/cost_info/query_cost").and_then(json_f64),
+        cost: value
+            .pointer("/cost_info/query_cost")
+            .and_then(json_f64)
+            .or_else(|| value.get("cost").and_then(json_f64)),
         rows: None,
         width: None,
         time_ms: None,
@@ -447,6 +488,36 @@ async fn explain_text(conn: &mut mysql_async::Conn, sql: &str) -> Result<String,
 #[cfg(test)]
 mod tests {
     use super::{MysqlExplainCaps, NativeExplainFormat, parse_json, select_format, wrap_explain};
+
+    /// MariaDB wraps sorted output in `read_sorted_file` and `filesort`, and a GROUP BY
+    /// in a `temporary_table`; every table under them shows, with its cost.
+    #[test]
+    fn mariadb_sorts_and_temporary_tables_keep_their_tables() {
+        let joined = parse_json(include_str!(
+            "../tests/fixtures/mariadb-analyze-join-sorted.json"
+        ))
+        .unwrap();
+        let root = &joined.root;
+        assert_eq!(root.kind, "Nested loop");
+        assert_eq!(root.children[0].kind, "Sort");
+        assert_eq!(root.children[0].children[0].relation.as_deref(), Some("c"));
+        assert_eq!(root.children[0].actual.rows, Some(200.0));
+        assert_eq!(root.children[1].relation.as_deref(), Some("o"));
+        assert!(root.estimates.cost.is_some());
+        assert!(root.children[1].estimates.cost.is_some());
+
+        let grouped = parse_json(include_str!(
+            "../tests/fixtures/mariadb-explain-group-sorted.json"
+        ))
+        .unwrap();
+        let sort = &grouped.root;
+        assert_eq!(sort.kind, "Sort");
+        assert_eq!(sort.children[0].kind, "Temporary table");
+        assert_eq!(
+            sort.children[0].children[0].children[0].relation.as_deref(),
+            Some("o")
+        );
+    }
 
     #[test]
     fn prefers_json_and_uses_tree_for_analyze() {
