@@ -49,6 +49,10 @@ pub struct VimState {
     visual_anchor: usize,
     /// `:` or `/` being typed on the status line.
     pub prompt: Option<Prompt>,
+    /// An Insert session's command and count (`3ia`), and the keys typed in it, which
+    /// the count repeats at Esc.
+    insert: Option<(char, usize)>,
+    insert_typed: Vec<KeyEvent>,
     /// The document all of this is about. Another one becoming active starts afresh: an
     /// Insert session's undo depth or a Visual anchor means nothing in it.
     document: Option<String>,
@@ -132,6 +136,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
         {
             recording.push(key);
         }
+        model.vim.insert_typed.push(key);
         return Outcome::Pass;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -396,6 +401,7 @@ fn simple(model: &mut Model, count: usize, ch: char, keys: &[KeyEvent]) -> Outco
         'i' | 'a' | 'I' | 'A' | 'o' | 'O' => {
             begin_change(model, true, keys);
             enter_insert(model, ch);
+            model.vim.insert = Some((ch, count));
         }
         'v' | 'V' => {
             let mode = if ch == 'v' {
@@ -412,11 +418,20 @@ fn simple(model: &mut Model, count: usize, ch: char, keys: &[KeyEvent]) -> Outco
                 model.vim.mode = mode;
             }
         }
+        // A count given to `.` takes the place of the change's own: `2dd` then `3.`
+        // deletes three lines, not six.
         '.' => {
-            let keys = model.vim.last_change.clone();
-            for _ in 0..count {
-                replay(model, &keys);
-            }
+            let digits = &keys[..keys.len().saturating_sub(1)];
+            let change = model.vim.last_change.clone();
+            let replayed: Vec<KeyEvent> = if digits.is_empty() {
+                change
+            } else {
+                let body = change.iter().skip_while(
+                    |key| matches!(key.code, KeyCode::Char(ch) if ch.is_ascii_digit() && ch != '0'),
+                );
+                digits.iter().chain(body).copied().collect()
+            };
+            replay(model, &replayed);
         }
         'n' | 'N' => {
             if let Some((pattern, forward)) = model.vim.last_search.clone() {
@@ -487,6 +502,22 @@ fn finish_change(model: &mut Model, changes: bool, into_insert: bool) {
 }
 
 fn leave_insert(model: &mut Model) {
+    // `3ia<Esc>` puts the text in three times; `3o` opens three lines with it.
+    if let Some((how, count)) = model.vim.insert.take()
+        && count > 1
+    {
+        let typed = std::mem::take(&mut model.vim.insert_typed);
+        for _ in 1..count {
+            if matches!(how, 'o' | 'O') {
+                enter_insert(model, how);
+            }
+            for key in &typed {
+                crate::screens::editor::handle_key(model, *key);
+                model.editor.completion_open = false;
+            }
+        }
+    }
+    model.vim.insert_typed.clear();
     crate::screens::editor::end_typing(model);
     if let Some(depth) = model.vim.change_depth.take() {
         model.active_document_mut().sql.merge_undo_since(depth);
@@ -536,6 +567,7 @@ fn enter_insert(model: &mut Model, how: char) {
     }
     model.active_document_mut().anchor = None;
     model.vim.mode = Mode::Insert;
+    model.vim.insert_typed.clear();
 }
 
 fn move_cursor(model: &mut Model, motion: Motion, count: usize) {
@@ -637,13 +669,22 @@ fn operate(model: &mut Model, op: char, count: usize, motion: Option<Motion>) {
             (line_span(&chars, cursor, target), true)
         }
         Some(motion) => {
-            // `cw` changes to the end of the word, as Vim does.
-            let motion = if op == 'c' && motion == Motion::WordForward {
+            let on_blank = chars.get(cursor).is_some_and(|ch| class(*ch) == 0);
+            // `cw` changes to the end of the word, as Vim does -- unless it starts on a
+            // blank, where it changes the blanks.
+            let motion = if op == 'c' && motion == Motion::WordForward && !on_blank {
                 Motion::WordEnd
             } else {
                 motion
             };
-            let (to, linewise, inclusive) = target(&chars, cursor, motion, count);
+            let (mut to, linewise, inclusive) = target(&chars, cursor, motion, count);
+            // An operator over `w` stops at the end of the line its last word ends: `dw`
+            // on a line's last word leaves the line break.
+            if motion == Motion::WordForward
+                && let Some(newline) = chars[cursor.min(to)..to].iter().rposition(|ch| *ch == '\n')
+            {
+                to = cursor + newline;
+            }
             if linewise {
                 (line_span(&chars, cursor, to), true)
             } else {
@@ -1025,6 +1066,10 @@ fn next_word_start(chars: &[char], at: usize) -> usize {
         }
     }
     while at < len && class(chars[at]) == 0 {
+        // An empty line is a word of its own, as in Vim.
+        if chars[at] == '\n' && chars.get(at + 1) == Some(&'\n') {
+            return at + 1;
+        }
         at += 1;
     }
     at
@@ -1197,6 +1242,35 @@ mod tests {
         keys(&mut model, ":q!\n");
         assert!(model.close_prompt.is_none());
         assert!(model.documents.iter().all(|doc| doc.id != "dirty"));
+    }
+
+    /// Vim's own edges: `dw` on a line's last word, `cw` on blanks, `w` onto an empty
+    /// line, a count for `.`, and counts on the insert commands.
+    #[test]
+    fn motions_and_counts_as_vim_has_them() {
+        let mut model = vim("one two\nthree");
+        model.active_document_mut().sql.set_cursor(4).unwrap();
+        keys(&mut model, "dw");
+        assert_eq!(text(&model), "one \nthree");
+
+        let mut model = vim("one   two");
+        model.active_document_mut().sql.set_cursor(3).unwrap();
+        keys(&mut model, "cwX\u{1b}");
+        assert_eq!(text(&model), "oneXtwo");
+
+        let mut model = vim("a\n\nb");
+        keys(&mut model, "w");
+        assert_eq!(model.active_document().cursor(), 2);
+
+        let mut model = vim("1\n2\n3\n4\n5\n6");
+        keys(&mut model, "2dd3.");
+        assert_eq!(text(&model), "6");
+
+        let mut model = vim("");
+        keys(&mut model, "3ia\u{1b}");
+        assert_eq!(text(&model), "aaa");
+        keys(&mut model, "2ox\u{1b}");
+        assert_eq!(text(&model), "aaa\nx\nx");
     }
 
     #[test]
