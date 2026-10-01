@@ -266,3 +266,25 @@ fn explain_analyze_of_a_write_is_refused_on_a_read_only_connection() {
         "a read was refused"
     );
 }
+
+/// On MySQL a `#` line is a comment: it is neither a statement of its own that a
+/// read-only connection refuses, nor a quote that merges what follows.
+#[test]
+fn a_mysql_hash_comment_is_a_comment() {
+    let mut model = live("local", true, "# list them\nSHOW TABLES");
+    model.connection.driver = "mysql".into();
+    assert!(
+        ran(&update(&mut model, Action::ExecuteDocument)),
+        "{:?}",
+        model.messages.last().map(|entry| entry.message.clone())
+    );
+    let mut model = live(
+        "local",
+        false,
+        "# drop the customer's old table\nDROP TABLE customers_old;\nselect 1",
+    );
+    model.connection.driver = "mysql".into();
+    update(&mut model, Action::ExecuteDocument);
+    let prompt = model.run_prompt.as_ref().expect("DROP ran without asking");
+    assert_eq!(prompt.statements, ["DROP TABLE customers_old", "select 1"]);
+}

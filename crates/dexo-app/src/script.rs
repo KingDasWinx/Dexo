@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use dexo_driver_api::{QueryEvent, QueryRequest, Session};
-use dexo_sql::{split_statements, statement_at};
+use dexo_sql::{Dialect, split_statements_in, statement_at_in};
 
 use crate::error::AppError;
 use crate::query_service::QueryService;
@@ -26,9 +26,21 @@ pub fn statements_for(
     cursor: usize,
     selection: Option<Range<usize>>,
 ) -> Vec<String> {
+    statements_for_dialect(sql, target, cursor, selection, Dialect::Postgres)
+}
+
+/// [`statements_for`] split the way `dialect` reads comments and strings, so a MySQL
+/// `#` comment is a comment and not a statement of its own.
+pub fn statements_for_dialect(
+    sql: &str,
+    target: ExecutionTarget,
+    cursor: usize,
+    selection: Option<Range<usize>>,
+    dialect: Dialect,
+) -> Vec<String> {
     let fragment = match target {
         ExecutionTarget::Document => sql.to_string(),
-        ExecutionTarget::CurrentStatement => statement_at(sql, cursor)
+        ExecutionTarget::CurrentStatement => statement_at_in(sql, cursor, dialect)
             .map(|span| sql[span.byte_range].to_string())
             .unwrap_or_default(),
         ExecutionTarget::Selection => selection
@@ -36,7 +48,7 @@ pub fn statements_for(
             .unwrap_or("")
             .to_string(),
     };
-    split_statements(&fragment)
+    split_statements_in(&fragment, dialect)
         .into_iter()
         .map(|span| fragment[span.byte_range].trim().to_string())
         .filter(|item| !item.is_empty())

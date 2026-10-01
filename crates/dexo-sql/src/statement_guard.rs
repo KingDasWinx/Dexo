@@ -5,7 +5,7 @@ use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
 use crate::Dialect;
-use crate::statement::first_keyword;
+use crate::statement::{first_keyword, mysql_mask};
 
 /// What a statement touches, as identifier paths such as `["db", "public", "orders"]`.
 /// Unquoted Postgres identifiers are folded to lowercase, as the server folds them, so
@@ -189,7 +189,7 @@ impl Destructive {
 /// `SELECT INTO`, `FOR UPDATE`, `set_config()`, a data-modifying CTE -- does not, nor
 /// does anything sqlparser cannot parse.
 pub fn is_read(sql: &str, dialect: Dialect) -> bool {
-    let keyword = first_keyword(sql);
+    let keyword = keyword_in(sql, dialect);
     let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"));
     match inspect_read(sql, dialect) {
         Ok(_) => true,
@@ -208,7 +208,7 @@ pub fn is_read(sql: &str, dialect: Dialect) -> bool {
 /// What makes one statement destructive, if anything does. A statement that neither
 /// parses nor is plainly a read is `Unrecognized`: unknown counts against it.
 pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
-    match first_keyword(sql).as_deref() {
+    match keyword_in(sql, dialect).as_deref() {
         Some("DROP") => return Some(Destructive::Drop),
         Some("TRUNCATE") => return Some(Destructive::Truncate),
         _ => {}
@@ -219,6 +219,14 @@ pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
     let mut finder = DestructiveFinder::default();
     let _ = statement.visit(&mut finder);
     finder.found
+}
+
+/// The first keyword past the comments `dialect` has: MySQL's `#` too.
+fn keyword_in(sql: &str, dialect: Dialect) -> Option<String> {
+    match dialect {
+        Dialect::Postgres => first_keyword(sql),
+        Dialect::Mysql => first_keyword(&mysql_mask(sql)),
+    }
 }
 
 /// Visits nested statements too, so a `DELETE` inside a CTE is found.
@@ -701,5 +709,16 @@ mod tests {
             Dialect::Postgres
         ));
         assert!(is_read("SHOW TABLES LIKE 'o\\'%'", Dialect::Mysql));
+    }
+
+    /// A `#` comment before a MySQL statement is a comment, not a statement Dexo cannot
+    /// read.
+    #[test]
+    fn a_mysql_hash_comment_before_a_read_is_still_a_read() {
+        assert!(is_read("# list them\nSHOW TABLES", Dialect::Mysql));
+        assert!(is_read(
+            "# count them\nselect count(*) from orders",
+            Dialect::Mysql
+        ));
     }
 }

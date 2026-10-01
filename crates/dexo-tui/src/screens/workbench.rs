@@ -1,4 +1,4 @@
-use dexo_app::{ExecutionTarget, statements_for};
+use dexo_app::{ExecutionTarget, statements_for_dialect};
 
 use crate::model::Model;
 
@@ -9,7 +9,13 @@ pub fn planned_statements(model: &Model) -> Vec<String> {
     let selection = doc
         .selection()
         .map(|range| char_to_byte_index(&sql, range.start)..char_to_byte_index(&sql, range.end));
-    statements_for(&sql, model.execution_target, cursor, selection)
+    statements_for_dialect(
+        &sql,
+        model.execution_target,
+        cursor,
+        selection,
+        crate::screens::editor::editor_dialect(model),
+    )
 }
 
 fn char_to_byte_index(text: &str, char_index: usize) -> usize {

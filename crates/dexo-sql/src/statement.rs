@@ -1,5 +1,7 @@
 use std::ops::Range;
 
+use crate::Dialect;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum StatementEffect {
     ReadOnly,
@@ -201,7 +203,78 @@ fn trim_end(sql: &str, start: usize, end: usize) -> usize {
 }
 
 pub fn statement_at(sql: &str, byte_index: usize) -> Option<StatementSpan> {
-    let statements = split_statements(sql);
+    pick_statement(sql, split_statements(sql), byte_index)
+}
+
+/// [`split_statements`] read the way `dialect` reads comments and strings. MySQL takes
+/// `#` as a line comment and a backslash as an escape inside strings; the plain splitter
+/// knows neither, so an apostrophe in a `#` comment, or a `\'` in a string, swallowed
+/// every statement after it.
+pub fn split_statements_in(sql: &str, dialect: Dialect) -> Vec<StatementSpan> {
+    match dialect {
+        Dialect::Postgres => split_statements(sql),
+        Dialect::Mysql => split_statements(&mysql_mask(sql)),
+    }
+}
+
+/// [`statement_at`] for `dialect`, as [`split_statements_in`] splits it.
+pub fn statement_at_in(sql: &str, byte_index: usize, dialect: Dialect) -> Option<StatementSpan> {
+    pick_statement(sql, split_statements_in(sql, dialect), byte_index)
+}
+
+/// `sql` with MySQL's `#` comments blanked and every backslash-escaped character in a
+/// string replaced, byte for byte, so offsets into it are offsets into `sql`.
+pub(crate) fn mysql_mask(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    if bytes[i] == b'\\'
+                        && quote != b'`'
+                        && bytes.get(i + 1).is_some_and(u8::is_ascii)
+                    {
+                        out[i + 1] = b'_';
+                        i += 2;
+                    } else {
+                        i += 1;
+                    }
+                }
+                i += 1;
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => {
+                i += 2;
+                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+                    i += 1;
+                }
+                i += 2;
+            }
+            b'#' => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    out[i] = b' ';
+                    i += 1;
+                }
+            }
+            _ => i += 1,
+        }
+    }
+    // Only ASCII bytes were written, over whole characters or over ASCII ones.
+    String::from_utf8(out).unwrap_or_else(|_| sql.to_string())
+}
+
+fn pick_statement(
+    sql: &str,
+    statements: Vec<StatementSpan>,
+    byte_index: usize,
+) -> Option<StatementSpan> {
     statements
         .iter()
         .find(|span| byte_index >= span.byte_range.start && byte_index <= span.byte_range.end)
@@ -479,7 +552,40 @@ pub(crate) fn segments(sql: &str, statements: &[StatementSpan]) -> Vec<Range<usi
 
 #[cfg(test)]
 mod tests {
-    use super::{StatementEffect, split_statements, statement_at};
+    use super::{StatementEffect, split_statements, split_statements_in, statement_at};
+    use crate::Dialect;
+
+    /// MySQL reads `#` as a comment and `\'` as a quote inside a string; the splitter
+    /// read neither, so an apostrophe in a comment, or an escaped quote, swallowed
+    /// every statement after it.
+    #[test]
+    fn mysql_hash_comments_and_backslash_escapes_split_like_mysql() {
+        let texts = |sql: &str, dialect: Dialect| -> Vec<String> {
+            split_statements_in(sql, dialect)
+                .into_iter()
+                .map(|span| sql[span.byte_range].trim().to_string())
+                .collect()
+        };
+        assert_eq!(
+            texts(
+                "# drop the customer's old table\nDROP TABLE customers_old;\nselect 1",
+                Dialect::Mysql
+            ),
+            ["DROP TABLE customers_old", "select 1"]
+        );
+        assert_eq!(
+            texts(
+                "SHOW TABLES LIKE 'o\\'%'; DELETE FROM orders",
+                Dialect::Mysql
+            ),
+            ["SHOW TABLES LIKE 'o\\'%'", "DELETE FROM orders"]
+        );
+        assert_eq!(
+            texts("select '#not a comment'", Dialect::Mysql),
+            ["select '#not a comment'"]
+        );
+        assert_eq!(texts("select 1 # 2", Dialect::Postgres), ["select 1 # 2"]);
+    }
 
     #[test]
     fn cte_delete_is_mutating() {
