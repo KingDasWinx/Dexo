@@ -53,6 +53,15 @@ impl DriverDescriptor {
         }
     }
 
+    /// The SQL family a driver id speaks: MariaDB speaks MySQL. Everything keyed on
+    /// the dialect asks this instead of comparing ids.
+    pub fn family(id: &str) -> &str {
+        match id {
+            "mariadb" => "mysql",
+            other => other,
+        }
+    }
+
     pub fn for_id(id: &str) -> Option<Self> {
         [Self::postgres(), Self::mysql()]
             .into_iter()

@@ -99,6 +99,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.run_prompt = None;
             }
             model.connection.name = name.clone();
+            // Copy as SQL and the grid's own statements quote the way this server does;
+            // the dialect stayed Postgres whatever the connection was.
+            model.data.dialect = match dexo_driver_api::DriverDescriptor::family(&driver) {
+                "mysql" => dexo_app::data::SqlDialect::Mysql,
+                _ => dexo_app::data::SqlDialect::Postgres,
+            };
             model.connection.ready = ready;
             model.connection.environment = environment;
             model.connection.read_only = read_only;
@@ -5429,7 +5435,8 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
             return Vec::new();
         }
     };
-    match dexo_sql::derive_page(&sql, &model.data.sort, &model.data.filter, page) {
+    let dialect = crate::screens::editor::editor_dialect(model);
+    match dexo_sql::derive_page_in(&sql, &model.data.sort, &model.data.filter, page, dialect) {
         Ok(derived) => {
             if let Some(tab) = model.results.tabs.get_mut(model.results.active) {
                 tab.local_only = None;
@@ -5438,9 +5445,9 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
             if let Some(filter) = &model.data.filter {
                 parameters = dexo_sql::filter_values(filter);
             }
-            let derived = match model.data.dialect {
-                dexo_app::data::SqlDialect::Postgres => postgres_placeholders(&derived),
-                dexo_app::data::SqlDialect::Mysql => derived,
+            let derived = match dialect {
+                dexo_sql::Dialect::Postgres => postgres_placeholders(&derived),
+                dexo_sql::Dialect::Mysql => derived,
             };
             start_derived_script(model, derived, parameters)
         }

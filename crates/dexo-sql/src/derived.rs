@@ -1,6 +1,7 @@
 use dexo_driver_api::{Filter, Page, Sort};
 
-use crate::statement::{StatementEffect, split_statements};
+use crate::Dialect;
+use crate::statement::{StatementEffect, split_statements_in};
 
 pub fn derive_page(
     sql: &str,
@@ -8,11 +9,25 @@ pub fn derive_page(
     filter: &Option<Filter>,
     page: Page,
 ) -> Result<String, String> {
+    derive_page_in(sql, sort, filter, page, Dialect::Postgres)
+}
+
+/// [`derive_page`] with `dialect`'s identifier quoting. It always used double quotes,
+/// which MySQL reads as a string: `WHERE "name" = ?` compared the text `name` with the
+/// value and quietly returned the wrong rows.
+pub fn derive_page_in(
+    sql: &str,
+    sort: &[Sort],
+    filter: &Option<Filter>,
+    page: Page,
+    dialect: Dialect,
+) -> Result<String, String> {
     let trimmed = sql.trim();
     if trimmed.is_empty() {
         return Err("empty query".into());
     }
-    let statements = split_statements(trimmed);
+    let quote = |ident: &str| quote(ident, dialect);
+    let statements = split_statements_in(trimmed, dialect);
     if statements.len() != 1 {
         return Err("only one statement can be re-run remotely".into());
     }
@@ -28,7 +43,7 @@ pub fn derive_page(
     let mut wrapped = format!("SELECT * FROM ({body}) AS _dexo_derived");
     if let Some(filter) = filter {
         wrapped.push_str(" WHERE ");
-        wrapped.push_str(&render_filter(filter)?);
+        wrapped.push_str(&render_filter(filter, &quote)?);
     }
     if !sort.is_empty() {
         wrapped.push_str(" ORDER BY ");
@@ -50,11 +65,14 @@ pub fn derive_page(
     Ok(wrapped)
 }
 
-fn quote(ident: &str) -> String {
-    format!("\"{}\"", ident.replace('"', "\"\""))
+fn quote(ident: &str, dialect: Dialect) -> String {
+    match dialect {
+        Dialect::Postgres => format!("\"{}\"", ident.replace('"', "\"\"")),
+        Dialect::Mysql => format!("`{}`", ident.replace('`', "``")),
+    }
 }
 
-fn render_filter(filter: &Filter) -> Result<String, String> {
+fn render_filter(filter: &Filter, quote: &dyn Fn(&str) -> String) -> Result<String, String> {
     match filter {
         Filter::Eq(column, _) => Ok(format!("{} = ?", quote(&column.0))),
         Filter::Ne(column, _) => Ok(format!("{} <> ?", quote(&column.0))),
@@ -68,7 +86,7 @@ fn render_filter(filter: &Filter) -> Result<String, String> {
             "({})",
             parts
                 .iter()
-                .map(render_filter)
+                .map(|part| render_filter(part, quote))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(" AND ")
         )),
@@ -76,11 +94,11 @@ fn render_filter(filter: &Filter) -> Result<String, String> {
             "({})",
             parts
                 .iter()
-                .map(render_filter)
+                .map(|part| render_filter(part, quote))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(" OR ")
         )),
-        Filter::Not(inner) => Ok(format!("NOT ({})", render_filter(inner)?)),
+        Filter::Not(inner) => Ok(format!("NOT ({})", render_filter(inner, quote)?)),
     }
 }
 

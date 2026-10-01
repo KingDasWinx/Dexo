@@ -478,3 +478,40 @@ fn page_without_session_does_not_change_offset_or_loading() {
     assert_eq!(model.data.page_offset, 0);
     assert!(!model.data.loading);
 }
+
+/// Filtering a MySQL result re-runs it with MySQL's `?` placeholders. The grid's dialect
+/// never followed the connection, so MySQL got Postgres' `$1` and the re-run failed.
+#[test]
+fn a_mysql_filter_rerun_uses_mysql_placeholders() {
+    let mut model = Model::default();
+    update(
+        &mut model,
+        Action::ConnectionChanged {
+            name: "shop".into(),
+            ready: true,
+            environment: "local".into(),
+            session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(7))),
+            generation: 1,
+            token: 0,
+            read_only: false,
+            driver: "mysql".into(),
+        },
+    );
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id, name from users".into());
+    model.results.tabs = vec![tab];
+    model.data.filter = Some(dexo_driver_api::Filter::Eq(
+        dexo_driver_api::ColumnId("name".into()),
+        dexo_driver_api::DbValue::Text("ana".into()),
+    ));
+    let effects = update(&mut model, Action::ApplyRemoteSort);
+    let sql = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::StartScript(request) => Some(request.statements[0].clone()),
+            _ => None,
+        })
+        .expect("the filter did not re-run");
+    assert!(sql.contains('?') && !sql.contains("$1"), "{sql}");
+    assert!(sql.contains("`name`"), "{sql}");
+}

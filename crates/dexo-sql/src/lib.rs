@@ -23,7 +23,7 @@ pub use context::{
     Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, TriggerMode,
     TriggerOrigin, analyze, should_open,
 };
-pub use derived::{derive_page, filter_values};
+pub use derived::{derive_page, derive_page_in, filter_values};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};
