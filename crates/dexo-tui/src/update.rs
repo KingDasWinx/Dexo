@@ -1439,6 +1439,26 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::EditorToggleComment
+        | Action::EditorDuplicateLine
+        | Action::EditorMoveLine { .. }
+            if model.active_document().kind.is_table()
+                || model.active_document().kind.is_placeholder() =>
+        {
+            Vec::new()
+        }
+        Action::EditorToggleComment => {
+            crate::screens::editor::toggle_comment(model);
+            Vec::new()
+        }
+        Action::EditorDuplicateLine => {
+            crate::screens::editor::duplicate_lines(model);
+            Vec::new()
+        }
+        Action::EditorMoveLine { up } => {
+            crate::screens::editor::move_lines(model, up);
+            Vec::new()
+        }
         Action::EditorUndo => {
             crate::screens::editor::undo(model);
             crate::screens::editor::refresh_intelligence(model, false);

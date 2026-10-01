@@ -1216,6 +1216,170 @@ pub fn redo(model: &mut Model) {
     let _ = doc.sql.redo();
 }
 
+/// The lines a line edit acts on, first and last: the cursor's, or every line the
+/// selection touches -- one ending at the very start of a line leaves that line out.
+fn touched_lines(doc: &EditorDocument, text: &str) -> (usize, usize) {
+    let line_of = |at: usize| text.chars().take(at).filter(|ch| *ch == '\n').count();
+    match doc.selection() {
+        Some(range) => {
+            let first = line_of(range.start);
+            let mut last = line_of(range.end);
+            let at_line_start = range.end > 0 && text.chars().nth(range.end - 1) == Some('\n');
+            if last > first && at_line_start {
+                last -= 1;
+            }
+            (first, last)
+        }
+        None => {
+            let line = line_of(doc.cursor());
+            (line, line)
+        }
+    }
+}
+
+/// Where each line starts, in chars.
+fn line_starts(lines: &[&str]) -> Vec<usize> {
+    let mut starts = Vec::with_capacity(lines.len());
+    let mut at = 0;
+    for line in lines {
+        starts.push(at);
+        at += line.chars().count() + 1;
+    }
+    starts
+}
+
+/// Replaces lines `first..=last` with `block` as one undo step, then puts the cursor and
+/// the selection back where they were, moved by `shift` chars.
+fn replace_lines(model: &mut Model, first: usize, last: usize, block: &str, shift: isize) {
+    end_typing(model);
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let starts = line_starts(&lines);
+    let range = starts[first]..starts[last] + lines[last].chars().count();
+    // Never back past the edited lines: taking `-- ` off under the cursor would
+    // otherwise drop it onto the line above.
+    let floor = range.start as isize;
+    let moved = |at: usize| (at as isize + shift).max(floor) as usize;
+    let (anchor, cursor) = (doc.anchor.map(moved), moved(doc.sql.cursor()));
+    doc.sql.begin_group();
+    let _ = doc.sql.replace_chars(range, block);
+    doc.sql.end_group();
+    let len = doc.sql.text().chars().count();
+    doc.anchor = anchor.map(|at| at.min(len));
+    let _ = doc.sql.set_cursor(cursor.min(len));
+    refresh_intelligence(model, false);
+    follow_cursor(model);
+}
+
+/// Ctrl+/: comments the touched lines out with `--`, or, when every one of them already
+/// is, takes the comment off. Blank lines are left alone.
+pub fn toggle_comment(model: &mut Model) {
+    let doc = model.active_document();
+    let text = doc.text();
+    let (first, last) = touched_lines(doc, &text);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let block = &lines[first..=last];
+    let filled: Vec<&&str> = block
+        .iter()
+        .filter(|line| !line.trim().is_empty())
+        .collect();
+    if filled.is_empty() {
+        return;
+    }
+    let commented = filled
+        .iter()
+        .all(|line| line.trim_start().starts_with("--"));
+    // One column for the whole block, the shallowest indent, so the dashes line up.
+    let indent = filled
+        .iter()
+        .map(|line| line.chars().take_while(|ch| ch.is_whitespace()).count())
+        .min()
+        .unwrap_or(0);
+    let mut shift = 0isize;
+    let edited: Vec<String> = block
+        .iter()
+        .map(|line| {
+            if line.trim().is_empty() {
+                return line.to_string();
+            }
+            let lead = line.chars().take_while(|ch| ch.is_whitespace()).count();
+            if commented {
+                let rest: String = line.chars().skip(lead).collect();
+                let bare = rest
+                    .strip_prefix("-- ")
+                    .or_else(|| rest.strip_prefix("--"))
+                    .unwrap_or(&rest);
+                let removed = rest.chars().count() - bare.chars().count();
+                shift -= removed as isize;
+                format!("{}{bare}", line.chars().take(lead).collect::<String>())
+            } else {
+                shift += 3;
+                let head: String = line.chars().take(indent).collect();
+                let tail: String = line.chars().skip(indent).collect();
+                format!("{head}-- {tail}")
+            }
+        })
+        .collect();
+    // The cursor moves with its own line's edit; one line is the common case, and for
+    // a block the selection is put around all of it below.
+    let single = first == last;
+    replace_lines(
+        model,
+        first,
+        last,
+        &edited.join("\n"),
+        if single { shift } else { 0 },
+    );
+    if !single {
+        select_lines(model, first, last);
+    }
+}
+
+/// Selects lines `first..=last` whole, so a repeated line edit acts on the same block.
+fn select_lines(model: &mut Model, first: usize, last: usize) {
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let lines: Vec<&str> = text.split('\n').collect();
+    let starts = line_starts(&lines);
+    doc.anchor = Some(starts[first]);
+    let _ = doc
+        .sql
+        .set_cursor(starts[last] + lines[last].chars().count());
+}
+
+/// Ctrl+Shift+D: the touched lines again, below themselves; the cursor goes with the copy.
+pub fn duplicate_lines(model: &mut Model) {
+    let doc = model.active_document();
+    let text = doc.text();
+    let (first, last) = touched_lines(doc, &text);
+    let lines: Vec<&str> = text.split('\n').collect();
+    let block = lines[first..=last].join("\n");
+    let shift = block.chars().count() as isize + 1;
+    replace_lines(model, first, last, &format!("{block}\n{block}"), shift);
+}
+
+/// Ctrl+Shift+Up and Down: the touched lines trade places with the line above or below.
+pub fn move_lines(model: &mut Model, up: bool) {
+    let doc = model.active_document();
+    let text = doc.text();
+    let (first, last) = touched_lines(doc, &text);
+    let lines: Vec<&str> = text.split('\n').collect();
+    if (up && first == 0) || (!up && last + 1 >= lines.len()) {
+        return;
+    }
+    let block = lines[first..=last].join("\n");
+    if up {
+        let above = lines[first - 1];
+        let shift = -(above.chars().count() as isize + 1);
+        replace_lines(model, first - 1, last, &format!("{block}\n{above}"), shift);
+    } else {
+        let below = lines[last + 1];
+        let shift = below.chars().count() as isize + 1;
+        replace_lines(model, first, last + 1, &format!("{below}\n{block}"), shift);
+    }
+}
+
 pub fn select_all(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();

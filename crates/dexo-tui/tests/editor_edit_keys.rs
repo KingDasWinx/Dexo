@@ -128,3 +128,51 @@ fn without_a_selection_copy_and_cut_take_the_whole_line() {
     assert_eq!(copied(&effects), Some("select 2;\n"));
     assert_eq!(model.active_document().text(), "select 1;\nselect 3;");
 }
+
+/// Each line edit is one undo step and counts in chars, so accented text survives.
+#[test]
+fn line_edits_comment_duplicate_and_move_in_one_undo_step() {
+    let text = "select ação\n  from t\nwhere x";
+    let mut model = editor_with(text, 2);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(
+        model.active_document().text(),
+        "-- select ação\n  from t\nwhere x"
+    );
+    assert_eq!(model.active_document().cursor(), 5);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(model.active_document().text(), text);
+
+    // A block: every touched line, the dashes at its shallowest indent.
+    let mut model = editor_with(text, 0);
+    model.active_document_mut().anchor = Some(3);
+    model.active_document_mut().sql.set_cursor(15).unwrap();
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(
+        model.active_document().text(),
+        "-- select ação\n--   from t\nwhere x"
+    );
+    press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().text(), text);
+
+    let mut model = editor_with(text, 14);
+    update(&mut model, Action::EditorDuplicateLine);
+    assert_eq!(
+        model.active_document().text(),
+        "select ação\n  from t\n  from t\nwhere x"
+    );
+    update(&mut model, Action::EditorMoveLine { up: true });
+    update(&mut model, Action::EditorMoveLine { up: true });
+    assert_eq!(
+        model.active_document().text(),
+        "  from t\nselect ação\n  from t\nwhere x"
+    );
+    // Nothing above the first line to trade with.
+    update(&mut model, Action::EditorMoveLine { up: true });
+    assert_eq!(model.active_document().cursor(), 2);
+    press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
+    assert_eq!(
+        model.active_document().text(),
+        "select ação\n  from t\n  from t\nwhere x"
+    );
+}
