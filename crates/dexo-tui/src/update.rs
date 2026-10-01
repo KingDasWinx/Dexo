@@ -99,17 +99,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.run_prompt = None;
             }
             model.connection.name = name.clone();
-            // Copy as SQL and the grid's own statements quote the way this server does;
-            // the dialect stayed Postgres whatever the connection was.
-            model.data.dialect = match dexo_driver_api::DriverDescriptor::family(&driver) {
-                "mysql" => dexo_app::data::SqlDialect::Mysql,
-                "sqlite" => dexo_app::data::SqlDialect::Sqlite,
-                _ => dexo_app::data::SqlDialect::Postgres,
-            };
+            set_connection_driver(model, driver.clone());
             model.connection.ready = ready;
             model.connection.environment = environment;
             model.connection.read_only = read_only;
-            model.connection.driver = driver;
             model.active_session = session;
             model.session_generation = generation;
             model.connection_form.close();
@@ -3991,6 +3984,18 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     connect_to(model, profile)
 }
 
+/// The active connection's driver, and with it the dialect Copy as SQL and the grid's
+/// own statements quote in -- set together, so switching sessions cannot leave the one
+/// a previous connection spoke.
+fn set_connection_driver(model: &mut Model, driver: String) {
+    model.data.dialect = match dexo_app::dialect_for_driver(&driver) {
+        dexo_sql::Dialect::Mysql => dexo_app::data::SqlDialect::Mysql,
+        dexo_sql::Dialect::Sqlite => dexo_app::data::SqlDialect::Sqlite,
+        dexo_sql::Dialect::Postgres => dexo_app::data::SqlDialect::Postgres,
+    };
+    model.connection.driver = driver;
+}
+
 /// Sessions are found by the connection's name: when it changes, its open sessions go
 /// with it -- here, in the runtime, and on the status line -- instead of being left
 /// under a name nothing has any more.
@@ -4110,7 +4115,7 @@ fn activate_existing_session(
     model.explorer.offline = false;
     model.connection.environment = session.environment.clone();
     model.connection.read_only = session.read_only;
-    model.connection.driver = session.driver.clone();
+    set_connection_driver(model, session.driver.clone());
     model.active_session = Some(session.id);
     model.session_generation = session.generation;
     model.connections.selected_session = Some(session.id);
@@ -8237,6 +8242,37 @@ mod tests {
         assert!(model.connections.temporary.is_empty());
         assert_eq!(model.connection.name, "shop");
         assert_eq!(model.connections.sessions[0].connection, "shop");
+    }
+
+    /// Going back to an open session of another driver brings its SQL dialect back.
+    #[test]
+    fn switching_sessions_switches_the_grid_dialect() {
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let mut model = Model::default();
+        model.data.dialect = dexo_app::data::SqlDialect::Mysql;
+        model.connection.driver = "mysql".into();
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(3)),
+            None,
+            "pg",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "db"}),
+            SecretRef::new("ref".into()),
+        );
+        let session = crate::screens::connections::SessionRow {
+            id: crate::runtime::SessionId(uuid::Uuid::from_u128(4)),
+            connection: "pg".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        };
+        super::activate_existing_session(&mut model, &profile, session);
+        assert_eq!(model.connection.driver, "postgres");
+        assert_eq!(model.data.dialect, dexo_app::data::SqlDialect::Postgres);
     }
 
     #[test]
