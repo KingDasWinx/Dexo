@@ -98,6 +98,7 @@ pub enum OverlayKind {
     ValueViewer,
     ObjectOverlay,
     SchemaForm,
+    InsertRow,
     Connections,
     Projects,
     ConfigTransfer,
@@ -129,12 +130,42 @@ impl PartialEq for LastClick {
     }
 }
 
+/// Text views that scroll by line.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum ScrollArea {
+    Help,
+    Inspector,
+    Explain,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HitMap {
     targets: Vec<(HitTarget, Rect)>,
+    scroll_limits: Vec<(ScrollArea, u16)>,
 }
 
 impl HitMap {
+    /// The furthest a view can scroll, as last drawn. Only the render knows how many lines
+    /// a view has and how tall it came out; without the bound, every key past the end kept
+    /// counting, and scrolling back took as many presses before anything moved.
+    pub fn set_scroll_limit(&mut self, area: ScrollArea, max: usize) {
+        let max = u16::try_from(max).unwrap_or(u16::MAX);
+        self.scroll_limits.retain(|(known, _)| *known != area);
+        self.scroll_limits.push((area, max));
+    }
+
+    /// Moves `scroll` by `delta` lines, within the bound the last frame recorded. A view
+    /// not drawn yet has no bound, and only the lower one applies.
+    pub fn scroll(&self, area: ScrollArea, scroll: u16, delta: i32) -> u16 {
+        let moved = (i32::from(scroll) + delta).max(0);
+        let limit = self
+            .scroll_limits
+            .iter()
+            .find(|(known, _)| *known == area)
+            .map_or(i32::from(u16::MAX), |(_, max)| i32::from(*max));
+        moved.min(limit) as u16
+    }
+
     pub fn register(&mut self, target: HitTarget, rect: Rect) {
         if rect.width == 0 || rect.height == 0 {
             return;
@@ -194,6 +225,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.settings.open, OverlayKind::Settings),
         (model.connection_form.open, OverlayKind::ConnectionForm),
         (model.data.query_prompt.open, OverlayKind::DataQueryPrompt),
+        (model.data.insert_form.open, OverlayKind::InsertRow),
         (
             model.transaction_prompt.open,
             OverlayKind::TransactionPrompt,

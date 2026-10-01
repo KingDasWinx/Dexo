@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+async-trait.workspace = true
 clap.workspace = true
 dexo-app = { path = "../dexo-app" }
 dexo-driver-api = { path = "../dexo-driver-api" }
@@ -24,3 +25,4 @@ clap.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
 serde_json.workspace = true
 tempfile.workspace = true
+uuid.workspace = true

@@ -13,6 +13,19 @@ pub fn copy_text(text: String) -> Result<(), String> {
     copy_with_adapter(text, os_adapter)
 }
 
+/// Asks the terminal to put the text on the system clipboard (OSC 52). It reaches places
+/// arboard does not: over SSH, inside tmux, where arboard fell back to XWayland, and after
+/// Dexo exits on Wayland, where arboard's copy dies with the process. Terminals that do
+/// not know the sequence ignore it.
+pub fn copy_via_terminal(text: &str) -> std::io::Result<()> {
+    use base64::Engine;
+    use std::io::Write;
+    let payload = base64::engine::general_purpose::STANDARD.encode(text);
+    let mut out = std::io::stdout().lock();
+    write!(out, "\x1b]52;c;{payload}\x07")?;
+    out.flush()
+}
+
 fn os_adapter(text: String) -> Result<(), String> {
     let slot = shared_clipboard();
     let mut guard = slot.lock().map_err(|e| e.to_string())?;
@@ -109,12 +122,19 @@ mod tests {
         assert!(slot.is_some());
     }
 
+    /// The tests below share the one system clipboard; run in parallel, each could read
+    /// the other's text back.
+    static SYSTEM_CLIPBOARD: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
     #[test]
     fn os_clipboard_survives_immediate_reuse() {
         // Exercises the real Linux/X11 ownership path when a display is present.
         if std::env::var_os("DISPLAY").is_none() && std::env::var_os("WAYLAND_DISPLAY").is_none() {
             return;
         }
+        let _turn = SYSTEM_CLIPBOARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
         copy_text("dexo-clipboard-smoke-1".into()).expect("first copy");
         copy_text("dexo-clipboard-smoke-2".into()).expect("second copy");
         // Read back through the still-alive shared handle (process-exit Drop is separate).
@@ -127,5 +147,34 @@ mod tests {
             .get_text()
             .expect("read back");
         assert_eq!(text, "dexo-clipboard-smoke-2");
+    }
+
+    /// Reading back through the process's own handle proved nothing on Wayland: arboard
+    /// wrote to XWayland, which does not pass a windowless client's selection on, so
+    /// every copy reported success and reached no other program.
+    #[test]
+    fn a_copy_reaches_other_programs_on_wayland() {
+        if std::env::var_os("WAYLAND_DISPLAY").is_none() {
+            return;
+        }
+        let Ok(probe) = std::process::Command::new("wl-paste")
+            .arg("--version")
+            .output()
+        else {
+            return;
+        };
+        if !probe.status.success() {
+            return;
+        }
+        let _turn = SYSTEM_CLIPBOARD
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        let marker = format!("dexo-wayland-{}", std::process::id());
+        copy_text(marker.clone()).expect("copy");
+        let pasted = std::process::Command::new("wl-paste")
+            .arg("--no-newline")
+            .output()
+            .expect("wl-paste");
+        assert_eq!(String::from_utf8_lossy(&pasted.stdout), marker);
     }
 }

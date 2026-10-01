@@ -436,7 +436,7 @@ impl FilePicker {
 
         lines.push(
             self.name
-                .labeled_line("name:", self.focus == FilePickerFocus::Name),
+                .labeled_line("name: ", self.focus == FilePickerFocus::Name),
         );
         kinds.push(FilePickerLineKind::Name);
         if let Some(error) = &self.error {

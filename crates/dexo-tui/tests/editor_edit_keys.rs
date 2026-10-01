@@ -57,6 +57,43 @@ fn ctrl_delete_deletes_the_word_ahead() {
 }
 
 #[test]
+fn ctrl_delete_takes_blanks_on_one_side_of_the_word() {
+    let mut model = editor_with("foo bar baz", 3);
+    press(&mut model, KeyCode::Delete, KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().text(), "foo baz");
+}
+
+/// Ctrl+Left/Right stop at a line's edges and at an empty line instead of running on to
+/// the next word, cross a lone `.` with its word, and keep `ç` inside its word.
+#[test]
+fn ctrl_arrows_stop_at_line_edges_and_keep_accented_words_whole() {
+    let text = "select p.preço\n\n    from produtos";
+    let walk = |code: KeyCode, from: usize, presses: usize| {
+        let mut model = editor_with(text, from);
+        (0..presses)
+            .map(|_| {
+                press(&mut model, code, KeyModifiers::CONTROL);
+                model.active_document().cursor()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(walk(KeyCode::Right, 0, 7), [6, 8, 14, 15, 24, 33, 33]);
+    assert_eq!(walk(KeyCode::Left, 33, 8), [25, 20, 16, 15, 9, 7, 0, 0]);
+}
+
+#[test]
+fn ctrl_up_and_down_scroll_the_view_and_leave_the_cursor() {
+    let mut model = editor_with("a\nb\nc", 0);
+    for _ in 0..5 {
+        press(&mut model, KeyCode::Down, KeyModifiers::CONTROL);
+    }
+    assert_eq!(model.active_document().viewport_line, 2);
+    press(&mut model, KeyCode::Up, KeyModifiers::CONTROL);
+    assert_eq!(model.active_document().viewport_line, 1);
+    assert_eq!(model.active_document().cursor(), 0);
+}
+
+#[test]
 fn a_word_delete_is_one_undo_step_and_a_selection_goes_first() {
     let mut model = editor_with("select name from orders", 23);
     press(&mut model, KeyCode::Backspace, KeyModifiers::CONTROL);

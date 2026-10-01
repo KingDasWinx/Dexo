@@ -21,7 +21,10 @@ pub struct DriverError {
     category: DriverErrorCategory,
     message: String,
     native_code: Option<String>,
+    /// 1-based character offset into the statement, where the server says it failed.
     position: Option<u32>,
+    detail: Option<String>,
+    hint: Option<String>,
     retryable: bool,
 }
 
@@ -32,8 +35,28 @@ impl DriverError {
             message: message.into(),
             native_code: None,
             position: None,
+            detail: None,
+            hint: None,
             retryable: false,
         }
+    }
+
+    pub fn with_detail(mut self, detail: impl Into<String>) -> Self {
+        self.detail = Some(detail.into());
+        self
+    }
+
+    pub fn with_hint(mut self, hint: impl Into<String>) -> Self {
+        self.hint = Some(hint.into());
+        self
+    }
+
+    pub fn detail(&self) -> Option<&str> {
+        self.detail.as_deref()
+    }
+
+    pub fn hint(&self) -> Option<&str> {
+        self.hint.as_deref()
     }
 
     pub fn unsupported(reason: impl Into<String>) -> Self {

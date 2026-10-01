@@ -51,11 +51,11 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     );
     match model.results.view {
         ResultsView::Explain => {
-            let plan = model.explain.lines().join("\n");
-            frame.render_widget(
-                Paragraph::new(plan).scroll((model.results.explain_scroll, 0)),
-                body,
-            );
+            let plan = model.explain.lines();
+            let max_scroll = plan.len().saturating_sub((body.height as usize).max(1));
+            hits.set_scroll_limit(crate::mouse::ScrollArea::Explain, max_scroll);
+            let scroll = (model.results.explain_scroll as usize).min(max_scroll) as u16;
+            frame.render_widget(Paragraph::new(plan.join("\n")).scroll((scroll, 0)), body);
         }
         ResultsView::Messages => {
             frame.render_widget(
@@ -289,24 +289,31 @@ fn message_lines(model: &Model) -> Vec<Line<'static>> {
             model.theme.style(Role::Muted, model.capabilities),
         ))];
     }
-    model
-        .messages
-        .iter()
-        .map(|entry| {
-            let role = match entry.severity {
-                Severity::Info => Role::Muted,
-                Severity::Warn => Role::Warning,
-                Severity::Error => Role::Error,
-            };
-            Line::from(vec![
-                Span::styled(
-                    format!("{:<5} ", entry.severity.label()),
-                    model.theme.style(role, model.capabilities),
-                ),
-                Span::raw(entry.message.clone()),
-            ])
-        })
-        .collect()
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let mut lines = Vec::new();
+    for entry in model.messages.iter() {
+        let role = match entry.severity {
+            Severity::Info => Role::Muted,
+            Severity::Warn => Role::Warning,
+            Severity::Error => Role::Error,
+        };
+        let stamp = format!("[{}] ", entry.at);
+        let indent = " ".repeat(stamp.chars().count() + 6);
+        lines.push(Line::from(vec![
+            Span::styled(stamp, muted),
+            Span::styled(
+                format!("{:<5} ", entry.severity.label()),
+                model.theme.style(role, model.capabilities),
+            ),
+            Span::raw(entry.message.clone()),
+        ]));
+        // Under the message and aligned with it, dimmer, so the eye lands on the message
+        // first and the SQLSTATE, caret, DETAIL and HINT read as its footnotes.
+        for detail in &entry.details {
+            lines.push(Line::from(Span::styled(format!("{indent}{detail}"), muted)));
+        }
+    }
+    lines
 }
 
 #[cfg(test)]

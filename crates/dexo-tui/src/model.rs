@@ -428,6 +428,91 @@ impl Severity {
 pub struct Notification {
     pub message: String,
     pub severity: Severity,
+    /// Local wall-clock time, `HH:MM:SS`.
+    pub at: String,
+    /// Lines under the message: where the server said it failed, SQLSTATE, DETAIL, HINT.
+    pub details: Vec<String>,
+}
+
+impl Notification {
+    /// Rows the entry takes in the Messages view before wrapping.
+    pub fn line_count(&self) -> usize {
+        1 + self.details.len()
+    }
+}
+
+/// Local wall-clock time as `HH:MM:SS`, for the console and the Messages view.
+pub fn clock() -> String {
+    chrono::Local::now().format("%H:%M:%S").to_string()
+}
+
+/// What the server said about a failed statement, laid out the way psql prints it: the
+/// SQLSTATE and position, the offending line with a caret under the failing token, then
+/// DETAIL and HINT. `statement` is `(index, count)` so a script names which one failed.
+pub fn describe_query_error(
+    sql: &str,
+    error: &dexo_driver_api::DriverError,
+    statement: (usize, usize),
+) -> Vec<String> {
+    let mut lines = Vec::new();
+    let location = error
+        .position()
+        .and_then(|position| sql_location(sql, position));
+    let mut header = Vec::new();
+    if let Some(code) = error.native_code() {
+        header.push(format!("SQLSTATE {code}"));
+    }
+    if let Some((line, column, _)) = &location {
+        header.push(format!("line {line}, column {column}"));
+    }
+    if statement.1 > 1 {
+        header.push(format!("statement {} of {}", statement.0 + 1, statement.1));
+    }
+    if !header.is_empty() {
+        lines.push(header.join(" · "));
+    }
+    if let Some((line, column, text)) = location {
+        let prefix = format!("LINE {line}: ");
+        lines.push(format!("{prefix}{text}"));
+        lines.push(format!(
+            "{}^",
+            " ".repeat(prefix.chars().count() + column - 1)
+        ));
+    }
+    if let Some(detail) = error.detail() {
+        lines.push(format!("DETAIL: {detail}"));
+    }
+    if let Some(hint) = error.hint() {
+        lines.push(format!("HINT: {hint}"));
+    }
+    lines
+}
+
+/// 1-based line and column of a 1-based character offset, with that line's text (tabs
+/// widened to one space so the caret stays under the character it points at).
+fn sql_location(sql: &str, position: u32) -> Option<(usize, usize, String)> {
+    let offset = (position as usize).checked_sub(1)?;
+    let mut line_start = 0;
+    let mut line = 1;
+    for (index, ch) in sql.chars().enumerate() {
+        if index == offset {
+            break;
+        }
+        if ch == '\n' {
+            line += 1;
+            line_start = index + 1;
+        }
+    }
+    if offset > sql.chars().count() {
+        return None;
+    }
+    let text: String = sql
+        .chars()
+        .skip(line_start)
+        .take_while(|ch| *ch != '\n')
+        .map(|ch| if ch == '\t' { ' ' } else { ch })
+        .collect();
+    Some((line, offset - line_start + 1, text.trim_end().to_string()))
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -461,13 +546,38 @@ impl Notifications {
         self.emit(Severity::Error, message);
     }
 
+    /// It failed, and the server said more than one line about it.
+    pub fn error_with(&mut self, message: String, details: Vec<String>) {
+        self.emit_with(Severity::Error, message, details);
+    }
+
     fn emit(&mut self, severity: Severity, message: String) {
+        self.emit_with(severity, message, Vec::new());
+    }
+
+    fn emit_with(&mut self, severity: Severity, message: String, details: Vec<String>) {
         self.toast = Some(Toast {
             message: message.clone(),
             severity,
             ticks_left: severity.ticks(),
         });
-        self.entries.push(Notification { message, severity });
+        self.entries.push(Notification {
+            message,
+            severity,
+            at: clock(),
+            details,
+        });
+    }
+
+    /// Rows every entry takes, the bound the Messages view scrolls within.
+    pub fn line_count(&self) -> usize {
+        self.entries.iter().map(Notification::line_count).sum()
+    }
+
+    /// Scroll offset that puts the newest entry at the top of the view.
+    pub fn newest_offset(&self) -> usize {
+        self.line_count()
+            .saturating_sub(self.entries.last().map_or(0, Notification::line_count))
     }
 
     pub fn last(&self) -> Option<&Notification> {

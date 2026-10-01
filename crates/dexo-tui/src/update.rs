@@ -215,11 +215,38 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::ScriptFinished { .. } => {
+        Action::ScriptFinished { key } => {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
+            // A run that went through answers with rows, so a pane left on Messages by the
+            // previous error comes back to them.
+            if operation_matches(model, &key) {
+                model.results.view = crate::model::ResultsView::Grid;
+            }
             persist_history_effect(model)
+        }
+        Action::QueryFailed {
+            key,
+            index,
+            message,
+            details,
+        } => {
+            model.active_task = None;
+            model.active_query = None;
+            model.active_operation = None;
+            if let Some(tab) = result_tab_mut(model, &key, index) {
+                tab.status = crate::model::OperationStatus::Failed;
+            }
+            model.messages.error_with(message, details);
+            // The grid of a failed statement is empty; the reason is in Messages, so the
+            // pane goes there and puts the new entry at the top.
+            if operation_matches(model, &key) {
+                model.results.view = crate::model::ResultsView::Messages;
+                model.results.messages_scroll =
+                    u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
+            }
+            Vec::new()
         }
         Action::CheckpointTick => checkpoint_session(model),
         Action::OnboardingTick => {
@@ -801,17 +828,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             columns,
         } => {
             if generation == model.session_generation {
-                model.data.table = dexo_app::data::TableMeta {
-                    columns: columns
-                        .into_iter()
-                        .map(|column| dexo_app::data::ColumnDef {
-                            name: column.name,
-                            primary_key: column.primary_key,
-                            unique: column.unique,
-                            nullable: true,
-                        })
-                        .collect(),
-                };
+                model.data.table = dexo_app::data::TableMeta::from_keys(columns);
                 model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
                 model.data.row_changes.clear();
             }
@@ -888,6 +905,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ClipboardWritten { text } => {
+            // Said out loud: a copy that went nowhere used to look exactly like one that
+            // worked.
+            let lines = text.lines().count().max(1);
+            model.messages.info(if lines == 1 {
+                "copied to clipboard".into()
+            } else {
+                format!("copied {lines} lines to clipboard")
+            });
             model.explorer.copied = Some(text.clone());
             model.data.clipboard = text;
             Vec::new()
@@ -1499,7 +1524,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ResultsUp => {
             match model.results.view {
                 crate::model::ResultsView::Explain => {
-                    model.results.explain_scroll = model.results.explain_scroll.saturating_sub(1);
+                    model.results.explain_scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Explain,
+                        model.results.explain_scroll,
+                        -1,
+                    );
                 }
                 crate::model::ResultsView::Messages => {
                     model.results.messages_scroll = model.results.messages_scroll.saturating_sub(1);
@@ -1511,15 +1540,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ResultsDown => {
             match model.results.view {
                 crate::model::ResultsView::Explain => {
-                    model.results.explain_scroll = model.results.explain_scroll.saturating_add(1);
+                    model.results.explain_scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Explain,
+                        model.results.explain_scroll,
+                        1,
+                    );
                 }
                 crate::model::ResultsView::Messages => {
                     // Bounded by the log itself; it is the one list here that only grows.
+                    // An entry can span several rows, so the bound counts rows, not entries.
                     model.results.messages_scroll = model
                         .results
                         .messages_scroll
                         .saturating_add(1)
-                        .min(model.messages.len().saturating_sub(1) as u16);
+                        .min(model.messages.line_count().saturating_sub(1) as u16);
                 }
                 crate::model::ResultsView::Grid => model.results.move_cursor_row(1, false),
             }
@@ -1863,6 +1897,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::TransactionPrompt) => mouse_transaction(model, hit),
         Some(OverlayKind::DocumentNamePrompt) => mouse_document_name(model, hit),
         Some(OverlayKind::DataQueryPrompt) => mouse_data_query(model, hit),
+        Some(OverlayKind::InsertRow) => mouse_insert_row(model, hit),
         Some(OverlayKind::ConnectionForm) => mouse_connection_form(model, hit),
         Some(OverlayKind::Settings) => mouse_settings(model, hit),
         Some(OverlayKind::Recovery) => mouse_recovery(model, hit),
@@ -1960,6 +1995,18 @@ fn mouse_transaction(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             model.transaction_prompt.error = None;
             Vec::new()
         }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_insert_row(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match hit {
+        Some(HitTarget::FormField(index)) => {
+            model.data.insert_form.focus = index;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) => update(model, Action::SubmitInsertRow),
+        Some(HitTarget::FooterCancel) => update(model, Action::CancelInsertRow),
         _ => Vec::new(),
     }
 }
@@ -2634,9 +2681,15 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
     }
     if overlay == Some(OverlayKind::Help) {
         if delta < 0 {
-            model.help.scroll = model.help.scroll.saturating_sub(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, -1);
         } else {
-            model.help.scroll = model.help.scroll.saturating_add(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, 1);
         }
         return Vec::new();
     }
@@ -2803,12 +2856,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             }
         }
         Some(HitTarget::Editor) => {
-            let doc = model.active_document_mut();
-            if delta < 0 {
-                doc.viewport_line = doc.viewport_line.saturating_sub(1);
-            } else {
-                doc.viewport_line = doc.viewport_line.saturating_add(1);
-            }
+            crate::screens::editor::scroll_view(model, delta.signum());
             Vec::new()
         }
         _ => match model.effective_focus() {
@@ -2830,12 +2878,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             Focus::DocumentTabs => update(model, Action::MoveDocumentTabCursor(delta)),
             Focus::Console => Vec::new(),
             Focus::Editor | Focus::Palette => {
-                let doc = model.active_document_mut();
-                if delta < 0 {
-                    doc.viewport_line = doc.viewport_line.saturating_sub(1);
-                } else {
-                    doc.viewport_line = doc.viewport_line.saturating_add(1);
-                }
+                crate::screens::editor::scroll_view(model, delta.signum());
                 Vec::new()
             }
         },
@@ -2913,11 +2956,19 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Up => {
-                model.inspector.scroll = model.inspector.scroll.saturating_sub(1);
+                model.inspector.scroll = model.hits.scroll(
+                    crate::mouse::ScrollArea::Inspector,
+                    model.inspector.scroll,
+                    -1,
+                );
                 Vec::new()
             }
             KeyCode::Down => {
-                model.inspector.scroll = model.inspector.scroll.saturating_add(1);
+                model.inspector.scroll = model.hits.scroll(
+                    crate::mouse::ScrollArea::Inspector,
+                    model.inspector.scroll,
+                    1,
+                );
                 Vec::new()
             }
             _ => Vec::new(),
@@ -3103,49 +3154,33 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.data.insert_form.open {
-        return match key.code {
-            KeyCode::Esc => update(model, Action::CancelInsertRow),
-            KeyCode::Enter => update(model, Action::SubmitInsertRow),
-            KeyCode::Up => {
-                model.data.insert_form.focus = model
-                    .data
-                    .insert_form
-                    .focus
-                    .checked_sub(1)
-                    .unwrap_or(model.data.insert_form.fields.len().saturating_sub(1));
-                Vec::new()
+        use crate::widgets::form::FooterFocus;
+        let footer = model.data.insert_form.footer_focus();
+        let form = &mut model.data.insert_form;
+        match key.code {
+            KeyCode::Esc => return update(model, Action::CancelInsertRow),
+            KeyCode::Enter if footer == FooterFocus::Cancel => {
+                return update(model, Action::CancelInsertRow);
             }
-            KeyCode::Down | KeyCode::Tab => {
-                model.data.insert_form.focus =
-                    (model.data.insert_form.focus + 1) % model.data.insert_form.fields.len().max(1);
-                Vec::new()
-            }
+            KeyCode::Enter => return update(model, Action::SubmitInsertRow),
+            KeyCode::Down | KeyCode::Tab => form.focus_next(),
+            KeyCode::Up | KeyCode::BackTab => form.focus_prev(),
+            KeyCode::Left | KeyCode::Right if footer != FooterFocus::Input => form.toggle_button(),
             KeyCode::Backspace => {
-                if let Some(field) = model
-                    .data
-                    .insert_form
-                    .fields
-                    .get_mut(model.data.insert_form.focus)
-                {
+                if let Some(field) = form.focused_field_mut() {
                     field.value.pop();
                 }
-                Vec::new()
             }
             KeyCode::Char(ch)
                 if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
             {
-                if let Some(field) = model
-                    .data
-                    .insert_form
-                    .fields
-                    .get_mut(model.data.insert_form.focus)
-                {
+                if let Some(field) = form.focused_field_mut() {
                     field.value.push(ch);
                 }
-                Vec::new()
             }
-            _ => Vec::new(),
-        };
+            _ => {}
+        }
+        return Vec::new();
     }
     if model.data.review.is_some() {
         return match key.code {
@@ -3999,11 +4034,17 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Up | KeyCode::PageUp => {
-            model.help.scroll = model.help.scroll.saturating_sub(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, -1);
             Vec::new()
         }
         KeyCode::Down | KeyCode::PageDown => {
-            model.help.scroll = model.help.scroll.saturating_add(1);
+            model.help.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, 1);
             Vec::new()
         }
         KeyCode::Backspace => {
@@ -4164,11 +4205,13 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
     };
     model.results_menu.open = false;
     match *id {
+        // The value itself: it copied as a one-column table, header and trailing
+        // newline included, so pasting `2` gave `n` and `2` on two lines.
         "copy-cell" => {
             if let Some((row, col)) = model.results.selection() {
                 model.results.select_cell(row, col);
             }
-            copy_grid(model, dexo_app::data::CopyFormat::Text)
+            copy_grid(model, dexo_app::data::CopyFormat::Value)
         }
         other => {
             if other.starts_with("data.copy") && model.results.picked_rows.is_empty() {
@@ -5118,7 +5161,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
     if model.documents[index].console_log.is_empty() {
         model.documents[index]
             .console_log
-            .push(format!("[{}] Connected", format_clock()));
+            .push(format!("[{}] Connected", crate::model::clock()));
     }
     match crate::runtime::data_manager::table_request(
         target.clone(),
@@ -5131,7 +5174,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
         Ok(request) => {
             model.documents[index].console_log.push(format!(
                 "[{}] {}> SELECT * FROM {} LIMIT {}",
-                format_clock(),
+                crate::model::clock(),
                 target.display_unquoted(),
                 target.display_unquoted(),
                 model.data.page_limit
@@ -5175,18 +5218,9 @@ fn log_rows_retrieved(model: &mut Model, row_count: usize) {
     };
     document.console_log.push(format!(
         "[{}] {row_count} rows retrieved starting from {} in {elapsed_ms} ms",
-        format_clock(),
+        crate::model::clock(),
         offset + 1
     ));
-}
-
-fn format_clock() -> String {
-    let secs = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_secs();
-    let (h, m, s) = ((secs / 3600) % 24, (secs / 60) % 60, secs % 60);
-    format!("{h:02}:{m:02}:{s:02}")
 }
 
 fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
@@ -6993,14 +7027,17 @@ fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePi
     };
     model.file_picker.open_browser_with_recents(recents);
     if mode == crate::screens::file_picker::FilePickerMode::Save {
-        let preset = model
-            .active_document()
+        // The picker only opens for a document that has never been saved, so the file
+        // name alone left the field empty every time; the tab's name is the one to offer.
+        let document = model.active_document();
+        let preset = document
             .path
             .as_ref()
             .and_then(|path| path.file_name())
-            .map(|name| name.to_string_lossy().into_owned());
-        if let Some(name) = preset {
-            model.file_picker.name.set_text(name);
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| document.title.clone());
+        if !preset.trim().is_empty() {
+            model.file_picker.name.set_text(preset);
         }
     }
 }

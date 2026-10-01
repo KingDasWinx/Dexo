@@ -32,6 +32,7 @@ fn init_tracing() {
         let (writer, guard) = tracing_appender::non_blocking(file);
         let _ = tracing_subscriber::fmt()
             .with_writer(writer)
+            .with_ansi(false)
             .with_env_filter(filter())
             .try_init();
         // ponytail: keep the non-blocking worker for process lifetime.

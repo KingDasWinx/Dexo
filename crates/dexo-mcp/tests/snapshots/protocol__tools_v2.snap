@@ -1,0 +1,619 @@
+---
+source: crates/dexo-mcp/tests/protocol.rs
+assertion_line: 413
+expression: client.tools().await
+---
+[
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Cancel the running query of one server session. Needs an admin grant for this connection.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "confirm_target": {
+          "description": "Required to terminate a session: repeat `session_id` exactly to confirm.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this action. Retrying with the same id and payload returns the first result.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Server session to act on, from `admin_list_sessions`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "admin_cancel_query"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Server sessions: id, user, database, state and duration. Query text is not returned. Listed only when the profile allows it explicitly.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "admin_list_sessions"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "confirm_target": {
+          "description": "Required to terminate a session: repeat `session_id` exactly to confirm.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this action. Retrying with the same id and payload returns the first result.",
+          "type": "string"
+        },
+        "session_id": {
+          "description": "Server session to act on, from `admin_list_sessions`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "session_id"
+      ],
+      "type": "object"
+    },
+    "name": "admin_terminate_session"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Children of a catalog node, live from the server: databases, then schemas, then tables and views, then columns and indexes. Omit `parent_id` for the roots. Objects outside the allowlist are not listed.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "parent_id": {
+          "description": "`id` of the node whose children to list, from an earlier catalog_list or catalog_search; omit for the roots.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "type": "object"
+    },
+    "name": "catalog_list"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Search table, view and column names in the connection's indexed catalog. The first search on a connection indexes it, which can take a while on a large server.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "At most this many hits (default 50, at most 200).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "query": {
+          "description": "Part of a table, view or column name.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query"
+      ],
+      "type": "object"
+    },
+    "name": "catalog_search"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "additionalProperties": true,
+          "description": "Primary-key (or unique) column to value, naming exactly one row.",
+          "type": "object"
+        },
+        "operation_id": {
+          "description": "Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Table to write, e.g. `public.orders`.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "identity"
+      ],
+      "type": "object"
+    },
+    "name": "data_delete"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Run one INSERT, UPDATE or DELETE. Every table it touches must be inside the grant; needs the profile rule `--allow-tool data_execute_sql`.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.",
+          "type": "string"
+        },
+        "sql": {
+          "description": "One INSERT, UPDATE or DELETE.",
+          "type": "string"
+        },
+        "target": {
+          "description": "The table the grant was issued for. Every table the statement touches must be inside the grant.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "sql"
+      ],
+      "type": "object"
+    },
+    "name": "data_execute_sql"
+  },
+  {
+    "annotations": {
+      "destructiveHint": false,
+      "readOnlyHint": false
+    },
+    "description": "Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Table to write, e.g. `public.orders`; a bare name uses the connection's default database and schema.",
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": true,
+          "description": "Column name to value for the new row.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "values"
+      ],
+      "type": "object"
+    },
+    "name": "data_insert"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "One page of a table or view, without writing SQL. Works in structured-only profiles. Follow `next_offset` for the next page.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "limit": {
+          "description": "Rows per page (default 100, capped by the profile's max_rows).",
+          "format": "uint32",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "offset": {
+          "description": "Row offset of the page (default 0); use the `next_offset` of the previous page.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": [
+            "integer",
+            "null"
+          ]
+        },
+        "table": {
+          "description": "Table or view to read, qualified like object_describe.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "table"
+      ],
+      "type": "object"
+    },
+    "name": "data_read"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "identity": {
+          "additionalProperties": true,
+          "description": "Primary-key (or unique) column to value, naming exactly one row.",
+          "type": "object"
+        },
+        "operation_id": {
+          "description": "Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.",
+          "type": "string"
+        },
+        "target": {
+          "description": "Table to write, e.g. `public.orders`.",
+          "type": "string"
+        },
+        "values": {
+          "additionalProperties": true,
+          "description": "Column name to new value.",
+          "type": "object"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "identity",
+        "values"
+      ],
+      "type": "object"
+    },
+    "name": "data_update"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "The saved connections this profile may use: driver, database, environment, and whether writes are possible at all. Pass a name as `connection` to the other tools.",
+    "inputSchema": {
+      "properties": {},
+      "type": "object"
+    },
+    "name": "list_connections"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Columns (with type and key role) of one table or view.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Qualified name such as `public.orders` or `db.public.orders`; a bare name uses the connection's default database and schema.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "object_describe"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "The CREATE statement of one object, as the server reports it.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Qualified name such as `public.orders` or `db.public.orders`; a bare name uses the connection's default database and schema.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "object_get_ddl"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Objects this one depends on and objects that depend on it, limited to what the allowlist shows.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "name": {
+          "description": "Qualified name such as `public.orders` or `db.public.orders`; a bare name uses the connection's default database and schema.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "name": "object_relationships"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Run one read-only statement inside a read-only transaction and return the rows as a table. Every table it names must be inside the profile's allowlist.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sql": {
+          "description": "One read-only statement: SELECT, WITH … SELECT, VALUES, TABLE, or EXPLAIN without ANALYZE.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "type": "object"
+    },
+    "name": "query_execute_read"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sql": {
+          "description": "One read-only statement: SELECT, WITH … SELECT, VALUES, TABLE, or EXPLAIN without ANALYZE.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "type": "object"
+    },
+    "name": "query_explain"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Check whether query_execute_read would accept a statement, without running it. Says why when it would not.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "sql": {
+          "description": "One read-only statement: SELECT, WITH … SELECT, VALUES, TABLE, or EXPLAIN without ANALYZE.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "sql"
+      ],
+      "type": "object"
+    },
+    "name": "query_validate"
+  },
+  {
+    "annotations": {
+      "destructiveHint": true,
+      "readOnlyHint": false
+    },
+    "description": "Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "confirm_target": {
+          "description": "Required for destructive DDL: repeat `target` exactly to confirm.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "connection": {
+          "description": "Connection name from `list_connections`; optional when the profile has exactly one.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "operation_id": {
+          "description": "Unique id for this change. Retrying with the same id and payload returns the first result instead of writing twice.",
+          "type": "string"
+        },
+        "sql": {
+          "description": "One CREATE TABLE, ALTER TABLE, DROP, CREATE INDEX or CREATE VIEW.",
+          "type": "string"
+        },
+        "target": {
+          "description": "The object the grant was issued for.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "operation_id",
+        "target",
+        "sql"
+      ],
+      "type": "object"
+    },
+    "name": "schema_apply_ddl"
+  },
+  {
+    "annotations": {
+      "readOnlyHint": true
+    },
+    "description": "Differences between two saved schema snapshots, limited to objects this profile may see. Read-only: nothing is applied.",
+    "inputSchema": {
+      "$schema": "https://json-schema.org/draft/2020-12/schema",
+      "properties": {
+        "from_snapshot": {
+          "description": "Name of the older snapshot, saved with `dexo schema snapshot --connection C --name N`.",
+          "type": "string"
+        },
+        "to_snapshot": {
+          "description": "Name of the newer snapshot.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from_snapshot",
+        "to_snapshot"
+      ],
+      "type": "object"
+    },
+    "name": "schema_diff"
+  }
+]

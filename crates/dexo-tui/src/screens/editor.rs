@@ -964,6 +964,15 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             move_line_edge(model, false, shift);
             true
         }
+        // Ctrl+Up and Ctrl+Down move the view and leave the cursor, as in VS Code.
+        KeyCode::Up if ctrl && !shift => {
+            scroll_view(model, -1);
+            true
+        }
+        KeyCode::Down if ctrl && !shift => {
+            scroll_view(model, 1);
+            true
+        }
         KeyCode::Up => {
             move_vertical(model, -1, shift);
             true
@@ -1118,7 +1127,7 @@ fn backspace(model: &mut Model, word: bool) {
     } else {
         let cursor = doc.sql.cursor();
         let start = if word {
-            word_jump(&doc.sql.text(), cursor, -1)
+            word_delete_start(&doc.sql.text(), cursor)
         } else {
             cursor.saturating_sub(1)
         };
@@ -1140,7 +1149,7 @@ fn delete(model: &mut Model, word: bool) {
         let cursor = doc.sql.cursor();
         let text = doc.sql.text();
         let end = if word {
-            word_jump(&text, cursor, 1)
+            word_delete_end(&text, cursor)
         } else {
             (cursor + 1).min(text.chars().count())
         };
@@ -1263,6 +1272,18 @@ fn page(model: &mut Model, direction: i32, shift: bool) {
     move_vertical(model, direction * rows as i32, shift);
 }
 
+/// Moves the view a line without the cursor, for the wheel and Ctrl+Up/Down. It stops with
+/// the last line at the top, so turning back moves at once instead of first unwinding
+/// every line scrolled past the end.
+pub(crate) fn scroll_view(model: &mut Model, delta: i32) {
+    let doc = model.active_document_mut();
+    let last = doc.sql.text().matches('\n').count();
+    doc.viewport_line = doc
+        .viewport_line
+        .saturating_add_signed(delta as isize)
+        .min(last);
+}
+
 fn apply_move(doc: &mut EditorDocument, cursor: usize, shift: bool) {
     if shift {
         if doc.anchor.is_none() {
@@ -1303,33 +1324,169 @@ fn current_line_indent(model: &Model) -> String {
         .collect()
 }
 
+/// Ctrl+Left and Ctrl+Right, the way VS Code moves: Left to the start of the run before
+/// the cursor, Right to the end of the run after it. Neither leaves the line except from
+/// its edge, and then across one line break, so the end of a line and an empty line are
+/// stops. A lone separator glued to a word goes with it, so `p.name` is one press. It used
+/// to skip every non-word character, blank lines included, and took `ç` for punctuation.
 fn word_jump(text: &str, cursor: usize, delta: i32) -> usize {
     // ponytail: O(n) char scan per keystroke; switch to rope line/char APIs if files get huge.
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
-    let mut i = cursor.min(len);
-    let is_word = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+    let mut at = cursor.min(len);
+    let lone_separator = |run: &std::ops::Range<usize>| {
+        run.len() == 1
+            && !is_word_char(chars[run.start])
+            && chars.get(run.end).is_some_and(|ch| is_word_char(*ch))
+    };
     if delta < 0 {
-        if i == 0 {
-            return 0;
+        if at > 0 && chars[at - 1] == '\n' {
+            at -= 1;
         }
-        i -= 1;
-        while i > 0 && !is_word(chars[i]) {
-            i -= 1;
+        let line_start = chars[..at]
+            .iter()
+            .rposition(|ch| *ch == '\n')
+            .map_or(0, |index| index + 1);
+        let mut run = run_before(&chars, line_start, at);
+        if let Some(lone) = run.clone().filter(|run| lone_separator(run)) {
+            run = run_before(&chars, line_start, lone.start);
         }
-        while i > 0 && is_word(chars[i - 1]) {
-            i -= 1;
-        }
-        i
+        run.map_or(line_start, |run| run.start)
     } else {
-        while i < len && is_word(chars[i]) {
-            i += 1;
+        if at < len && chars[at] == '\n' {
+            at += 1;
         }
-        while i < len && !is_word(chars[i]) {
-            i += 1;
+        let line_end = chars[at..]
+            .iter()
+            .position(|ch| *ch == '\n')
+            .map_or(len, |index| at + index);
+        let mut run = run_after(&chars, at, line_end);
+        if let Some(lone) = run.clone().filter(|run| lone_separator(run)) {
+            run = run_after(&chars, lone.end, line_end);
         }
-        i
+        run.map_or(line_end, |run| run.end)
     }
+}
+
+/// The nearest run of word characters, or of punctuation, before `at` and after
+/// `line_start`, blanks between skipped.
+fn run_before(chars: &[char], line_start: usize, at: usize) -> Option<std::ops::Range<usize>> {
+    let mut end = at;
+    while end > line_start && is_blank(chars[end - 1]) {
+        end -= 1;
+    }
+    if end == line_start {
+        return None;
+    }
+    let word = is_word_char(chars[end - 1]);
+    let mut start = end - 1;
+    while start > line_start
+        && !is_blank(chars[start - 1])
+        && is_word_char(chars[start - 1]) == word
+    {
+        start -= 1;
+    }
+    Some(start..end)
+}
+
+/// [`run_before`] the other way: the nearest run after `at` and before `line_end`.
+fn run_after(chars: &[char], at: usize, line_end: usize) -> Option<std::ops::Range<usize>> {
+    let mut start = at;
+    while start < line_end && is_blank(chars[start]) {
+        start += 1;
+    }
+    if start == line_end {
+        return None;
+    }
+    let word = is_word_char(chars[start]);
+    let mut end = start + 1;
+    while end < line_end && !is_blank(chars[end]) && is_word_char(chars[end]) == word {
+        end += 1;
+    }
+    Some(start..end)
+}
+
+/// Letters (accented ones too), digits and `_` are one kind of run; anything else that is
+/// not a space is the other, so `products.name` takes three presses, not one.
+fn is_word_char(ch: char) -> bool {
+    ch.is_alphanumeric() || ch == '_'
+}
+
+fn is_blank(ch: char) -> bool {
+    ch == ' ' || ch == '\t'
+}
+
+/// Where Ctrl+Backspace deletes back to, the way VS Code does it. At the start of a line
+/// it takes only the line break. Two or more blanks before the cursor go on their own, so
+/// clearing indentation or a gap never eats the word before it. Otherwise it takes the
+/// blank, then one run of word characters or one run of punctuation, and never crosses
+/// into the line above. It used to skip every non-word character, newlines included, so
+/// one press in an empty line could delete the end of the statement above it.
+fn word_delete_start(text: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let cursor = cursor.min(chars.len());
+    if cursor == 0 {
+        return 0;
+    }
+    if chars[cursor - 1] == '\n' {
+        return cursor - 1;
+    }
+    let line_start = chars[..cursor]
+        .iter()
+        .rposition(|ch| *ch == '\n')
+        .map_or(0, |index| index + 1);
+    let mut start = cursor;
+    while start > line_start && is_blank(chars[start - 1]) {
+        start -= 1;
+    }
+    if cursor - start >= 2 || start == line_start {
+        return start;
+    }
+    let word = is_word_char(chars[start - 1]);
+    while start > line_start
+        && !is_blank(chars[start - 1])
+        && is_word_char(chars[start - 1]) == word
+    {
+        start -= 1;
+    }
+    start
+}
+
+/// Ctrl+Delete, the counterpart of [`word_delete_start`]: at the end of a line it takes
+/// only the line break, and two or more blanks go on their own. Otherwise it takes one run
+/// and the blanks on one side of it, never both, so the words either side are not glued
+/// together: `select |name from` loses `name `, `foo| bar baz` loses ` bar`.
+fn word_delete_end(text: &str, cursor: usize) -> usize {
+    let chars: Vec<char> = text.chars().collect();
+    let len = chars.len();
+    let cursor = cursor.min(len);
+    let blank_end = |from: usize| {
+        let mut end = from;
+        while end < len && is_blank(chars[end]) {
+            end += 1;
+        }
+        end
+    };
+    if cursor == len {
+        return len;
+    }
+    if chars[cursor] == '\n' {
+        return cursor + 1;
+    }
+    let start = blank_end(cursor);
+    if start - cursor >= 2 || start == len || chars[start] == '\n' {
+        return start;
+    }
+    let word = is_word_char(chars[start]);
+    let mut end = start;
+    while end < len
+        && !is_blank(chars[end])
+        && chars[end] != '\n'
+        && is_word_char(chars[end]) == word
+    {
+        end += 1;
+    }
+    if start == cursor { blank_end(end) } else { end }
 }
 
 fn line_bounds(text: &str, cursor: usize) -> (usize, usize) {

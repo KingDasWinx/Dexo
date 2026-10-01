@@ -16,6 +16,19 @@ impl ObjectPolicy {
         Self { rules }
     }
 
+    /// A catalog or schema is listed when some allow rule reaches below it and no deny
+    /// rule covers it whole.
+    pub fn reveals(&self, container: &ObjectRef) -> bool {
+        !self
+            .rules
+            .iter()
+            .any(|rule| rule.effect == Effect::Deny && rule.selector.matches(container))
+            && self
+                .rules
+                .iter()
+                .any(|rule| rule.effect == Effect::Allow && rule.selector.reaches(container))
+    }
+
     pub fn decide(&self, object: &ObjectRef) -> Decision {
         let mut matched: Vec<&SelectorRule> = self
             .rules

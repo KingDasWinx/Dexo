@@ -300,6 +300,8 @@ pub enum McpCommand {
         selector: String,
         #[arg(long)]
         deny: bool,
+        #[arg(long)]
+        remove: bool,
     },
     Policy {
         #[arg(long)]
@@ -349,6 +351,28 @@ pub enum McpProfileCommand {
     Disable {
         #[arg(long)]
         name: String,
+    },
+    Set {
+        #[arg(long)]
+        name: String,
+        #[arg(long = "connection")]
+        connections: Vec<String>,
+        #[arg(long)]
+        clear_connections: bool,
+        #[arg(long, value_parser = ["structured", "raw-read"])]
+        query_mode: Option<String>,
+        #[arg(long)]
+        max_rows: Option<u64>,
+        #[arg(long)]
+        max_bytes: Option<u64>,
+        #[arg(long)]
+        timeout_secs: Option<u64>,
+        #[arg(long)]
+        max_concurrency: Option<u32>,
+        #[arg(long = "allow-tool")]
+        allow_tools: Vec<String>,
+        #[arg(long = "deny-tool")]
+        deny_tools: Vec<String>,
     },
 }
 

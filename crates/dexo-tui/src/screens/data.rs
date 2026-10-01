@@ -34,6 +34,56 @@ impl InsertRowForm {
         self.focus = 0;
     }
 
+    /// The fields, then Insert, then Cancel: the ring Tab and the arrows walk, the same
+    /// one the connection form uses.
+    fn slots(&self) -> usize {
+        self.fields.len() + 2
+    }
+
+    pub fn focus_next(&mut self) {
+        self.focus = (self.focus + 1) % self.slots();
+    }
+
+    pub fn focus_prev(&mut self) {
+        self.focus = (self.focus + self.slots() - 1) % self.slots();
+    }
+
+    /// Left and Right step between the two buttons once one of them has the focus.
+    pub fn toggle_button(&mut self) {
+        self.focus = match self.footer_focus() {
+            FooterFocus::Submit => self.fields.len() + 1,
+            FooterFocus::Cancel => self.fields.len(),
+            FooterFocus::Input => self.focus,
+        };
+    }
+
+    pub fn footer_focus(&self) -> FooterFocus {
+        match self.focus.checked_sub(self.fields.len()) {
+            None => FooterFocus::Input,
+            Some(0) => FooterFocus::Submit,
+            Some(_) => FooterFocus::Cancel,
+        }
+    }
+
+    pub fn focused_field_mut(&mut self) -> Option<&mut crate::screens::schema_editor::FormField> {
+        self.fields.get_mut(self.focus)
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines: Vec<String> = self
+            .fields
+            .iter()
+            .enumerate()
+            .map(|(index, field)| {
+                let marker = if index == self.focus { ">" } else { " " };
+                format!("{marker} {}: {}", field.label, field.value)
+            })
+            .collect();
+        lines.push(String::new());
+        lines.push(footer_line("Insert", self.footer_focus()));
+        lines
+    }
+
     /// Empty fields are omitted entirely rather than sent as `Null`, so a
     /// left-blank auto-increment/serial or defaulted column falls through to
     /// the database's own default instead of an explicit NULL overriding it.

@@ -1,29 +1,32 @@
+use dexo_app::Environment;
 use dexo_app::mcp::grant::{DEFAULT_TTL_SECS, Grant, GrantCapability};
 use dexo_app::mcp::ledger::{GrantLedger, MemoryGrantLedger};
-use dexo_app::mcp::{Effect, McpProfile, McpService, SelectorRule};
-use dexo_driver_api::{
-    CatalogObject, ConnectRequest, ConnectionFactory, ObjectId, ObjectKind, QualifiedName, Session,
-};
+use dexo_app::mcp::{Effect, McpConnection, McpProfile, McpService, SelectorRule};
+use dexo_driver_api::{ConnectRequest, ConnectionFactory, Session};
 use dexo_driver_mysql::MysqlFactory;
 use dexo_driver_postgres::PostgresFactory;
 use dexo_mcp::tools_write::call_write_tool;
+use dexo_sql::Dialect;
 use dexo_test_support::DatabasePair;
 use secrecy::SecretString;
 use serde_json::json;
-
-fn table(name: &str) -> CatalogObject {
-    CatalogObject::new(
-        ObjectId::new(name),
-        ObjectKind::Table,
-        QualifiedName::new(Some("dexo"), Some("public"), name),
-        None,
-    )
-}
 
 async fn drain(mut stream: dexo_driver_api::QueryStream) {
     use futures_util::StreamExt;
     while let Some(event) = stream.next().await {
         let _ = event;
+    }
+}
+
+fn connection(dialect: Dialect) -> McpConnection {
+    McpConnection {
+        name: "local".into(),
+        driver: dialect.name().into(),
+        dialect,
+        database: Some("dexo".into()),
+        default_schema: (dialect == Dialect::Postgres).then(|| "public".to_string()),
+        environment: Environment::Local,
+        read_only: false,
     }
 }
 
@@ -75,9 +78,13 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
     )
     .await;
 
-    for session in [&*pg as &dyn Session, &*mysql as &dyn Session] {
+    for (session, dialect) in [
+        (&*pg as &dyn Session, Dialect::Postgres),
+        (&*mysql as &dyn Session, Dialect::Mysql),
+    ] {
+        let connection = connection(dialect);
         let profile = write_profile();
-        let service = McpService::new(profile.clone(), vec![table("items")]);
+        let service = McpService::new(profile.clone());
         let ledger = MemoryGrantLedger::default();
         ledger
             .insert_grant(
@@ -96,7 +103,7 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
         let denied = call_write_tool(
             &service,
             &ledger,
-            Some(session),
+            Some((&connection, session)),
             "s",
             "schema_apply_ddl",
             json!({
@@ -113,7 +120,5 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
         .await
         .unwrap_err();
         assert!(denied.to_string().contains("not found"));
-        let hidden = service.describe("secrets");
-        assert!(hidden.is_err());
     }
 }

@@ -141,6 +141,21 @@ fn mcp_grant_lifecycle_and_audit_export() {
 
     let dir = tempfile::tempdir().unwrap();
     unsafe { std::env::set_var("DEXO_DATA_HOME", dir.path()) }
+    {
+        let paths = dexo_storage::AppPaths::from_data_home(dir.path().to_path_buf());
+        let db = dexo_storage::Database::open(&paths.database).unwrap();
+        dexo_storage::ConnectionRepository::new(db.connection())
+            .save(&dexo_app::ConnectionProfile::new(
+                dexo_app::ConnectionId(uuid::Uuid::new_v4()),
+                None,
+                "local",
+                "postgres",
+                "local",
+                serde_json::json!({"host": "127.0.0.1", "port": 5432, "database": "db", "username": "u"}),
+                dexo_app::SecretRef::new("unused".into()),
+            ))
+            .unwrap();
+    }
 
     let noop = || {
         let _ = Arc::new(AtomicBool::new(false));
@@ -288,4 +303,42 @@ fn mcp_grant_lifecycle_and_audit_export() {
     .unwrap();
     let tools = dexo_app::mcp::advertised_tools(&dexo_app::mcp::McpProfile::new("assistant"));
     assert!(!tools.iter().any(|name| name.contains("grant")));
+}
+
+#[test]
+fn mcp_profile_set_args_parse() {
+    let set = Args::parse_from([
+        "dexo",
+        "mcp",
+        "profile",
+        "set",
+        "--name",
+        "assistant",
+        "--connection",
+        "local",
+        "--connection",
+        "reports",
+        "--query-mode",
+        "raw-read",
+        "--max-rows",
+        "200",
+        "--deny-tool",
+        "data_execute_sql",
+    ]);
+    assert!(matches!(
+        set.command,
+        Some(dexo_cli::args::Command::Mcp {
+            command: McpCommand::Profile {
+                command: McpProfileCommand::Set {
+                    ref connections,
+                    ref query_mode,
+                    max_rows: Some(200),
+                    ref deny_tools,
+                    ..
+                }
+            }
+        }) if connections == &["local", "reports"]
+            && query_mode.as_deref() == Some("raw-read")
+            && deny_tools == &["data_execute_sql"]
+    ));
 }

@@ -13,6 +13,18 @@ fn serve_stdout_is_jsonrpc_with_debug_logging() {
     let mut profile = McpProfile::new("conformance-fixture");
     profile.enabled = true;
     profile.selectors = vec![SelectorRule::parse(Effect::Allow, "db.public.*").unwrap()];
+    dexo_storage::ConnectionRepository::new(db.connection())
+        .save(&dexo_app::ConnectionProfile::new(
+            dexo_app::ConnectionId(uuid::Uuid::new_v4()),
+            None,
+            "local",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "127.0.0.1", "port": 1, "database": "db", "username": "u"}),
+            dexo_app::SecretRef::new("unused".into()),
+        ))
+        .unwrap();
+    profile.connections = vec!["local".into()];
     McpProfileRepository::new(db.connection())
         .save(&profile)
         .unwrap();
@@ -50,6 +62,10 @@ fn serve_stdout_is_jsonrpc_with_debug_logging() {
         );
         assert_eq!(parsed.unwrap()["jsonrpc"], "2.0");
     }
+    assert!(
+        stdout.lines().any(|line| line.contains("\"id\":1")),
+        "no initialize response on stdout\nstderr={stderr}"
+    );
     assert!(
         !stderr.contains("\"jsonrpc\""),
         "protocol response leaked to stderr: {stderr}"

@@ -1,7 +1,10 @@
-use dexo_app::mcp::McpService;
+use std::sync::Arc;
+
+use dexo_app::mcp::{GrantLedger, McpConnection, McpService};
 use rmcp::ServiceExt;
 use tracing_subscriber::EnvFilter;
 
+use crate::backend::McpBackend;
 use crate::server::DexoMcpServer;
 
 pub fn init_mcp_tracing() {
@@ -12,59 +15,40 @@ pub fn init_mcp_tracing() {
         .try_init();
 }
 
-pub async fn serve_profile(service: McpService) -> anyhow::Result<()> {
-    serve_with_session(service, None).await
-}
-
-pub async fn serve_with_session(
+pub async fn serve_stdio(
     service: McpService,
-    session: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
-) -> anyhow::Result<()> {
-    serve_with_ledger(service, session, None).await
-}
-
-pub async fn serve_with_ledger(
-    service: McpService,
-    session: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
-    ledger: Option<std::sync::Arc<dyn dexo_app::mcp::GrantLedger>>,
+    connections: Vec<McpConnection>,
+    backend: Arc<dyn McpBackend>,
+    ledger: Arc<dyn GrantLedger>,
 ) -> anyhow::Result<()> {
     init_mcp_tracing();
-    let mut server = DexoMcpServer::new(service);
-    if let Some(session) = session {
-        server = server.with_session(session);
-    }
-    if let Some(ledger) = ledger {
-        server = server.with_ledger(ledger);
-    }
+    let server = DexoMcpServer::new(service, connections, backend, ledger);
+    let stop = server.stop_token();
     let running = server.serve(rmcp::transport::io::stdio()).await?;
-    running.waiting().await?;
+    let outcome = running.waiting().await;
+    stop.cancel();
+    outcome?;
     Ok(())
 }
 
-pub async fn serve_io<R, W>(service: McpService, read: R, write: W) -> anyhow::Result<()>
-where
-    R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
-    W: tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
-{
-    serve_io_with_ledger(service, read, write, None).await
-}
-
-pub async fn serve_io_with_ledger<R, W>(
+pub async fn serve_io<R, W>(
     service: McpService,
+    connections: Vec<McpConnection>,
+    backend: Arc<dyn McpBackend>,
+    ledger: Arc<dyn GrantLedger>,
     read: R,
     write: W,
-    ledger: Option<std::sync::Arc<dyn dexo_app::mcp::GrantLedger>>,
 ) -> anyhow::Result<()>
 where
     R: tokio::io::AsyncRead + Send + Sync + Unpin + 'static,
     W: tokio::io::AsyncWrite + Send + Sync + Unpin + 'static,
 {
     init_mcp_tracing();
-    let mut server = DexoMcpServer::new(service);
-    if let Some(ledger) = ledger {
-        server = server.with_ledger(ledger);
-    }
+    let server = DexoMcpServer::new(service, connections, backend, ledger);
+    let stop = server.stop_token();
     let running = server.serve((read, write)).await?;
-    running.waiting().await?;
+    let outcome = running.waiting().await;
+    stop.cancel();
+    outcome?;
     Ok(())
 }

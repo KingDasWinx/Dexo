@@ -57,7 +57,7 @@ impl<'a> McpProfileRepository<'a> {
             params![profile.id.to_string()],
         )?;
         for rule in &profile.selectors {
-            let pattern = display_selector(&rule.selector);
+            let pattern = rule.selector.to_string();
             self.conn.execute(
                 "INSERT INTO mcp_selectors (id, profile_id, effect, pattern) VALUES (?1, ?2, ?3, ?4)",
                 params![
@@ -177,25 +177,6 @@ fn row_to_profile(row: &rusqlite::Row<'_>) -> rusqlite::Result<McpProfile> {
         selectors: Vec::new(),
         tool_rules: Vec::new(),
     })
-}
-
-fn display_selector(selector: &dexo_app::mcp::Selector) -> String {
-    let mut parts = Vec::new();
-    for seg in [
-        selector.catalog.as_ref(),
-        selector.schema.as_ref(),
-        selector.object.as_ref(),
-        selector.column.as_ref(),
-    ]
-    .into_iter()
-    .flatten()
-    {
-        parts.push(match seg {
-            dexo_app::mcp::selector::Segment::Star => "*".to_string(),
-            dexo_app::mcp::selector::Segment::Exact(name) => name.clone(),
-        });
-    }
-    parts.join(".")
 }
 
 #[cfg(test)]

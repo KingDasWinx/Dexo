@@ -94,12 +94,6 @@ impl McpProfile {
         Ok(())
     }
 
-    pub fn column_isolation(&self) -> bool {
-        self.selectors
-            .iter()
-            .any(|rule| rule.selector.column.is_some())
-    }
-
     pub fn tool_allowed(&self, name: &str) -> bool {
         if name == "*" {
             return false;

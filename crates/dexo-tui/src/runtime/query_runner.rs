@@ -26,6 +26,7 @@ pub async fn run_script(
 ) {
     let key = request.key.clone();
     let _ = action_tx.send(Action::OperationStarted(key.clone())).await;
+    let statements = request.statements.len();
     let mut failed = false;
     for (index, sql) in request.statements.iter().enumerate() {
         if failed && request.policy == ScriptPolicy::StopOnError {
@@ -73,12 +74,7 @@ pub async fn run_script(
                         }
                     }
                     Err(error) => {
-                        let _ = action_tx
-                            .send(Action::OperationFailed {
-                                key: key.clone(),
-                                message: error.to_string(),
-                            })
-                            .await;
+                        report_failure(&action_tx, &key, index, sql, &error, statements).await;
                         return true;
                     }
                 }
@@ -91,13 +87,8 @@ pub async fn run_script(
             Err(_) => {
                 let _ = session.cancel(task.query).await;
                 query.registry().cancel(task.task);
-                let _ = action_tx
-                    .send(Action::OperationFailed {
-                        key: key.clone(),
-                        message: DriverError::new(DriverErrorCategory::Timeout, "query timed out")
-                            .to_string(),
-                    })
-                    .await;
+                let error = DriverError::new(DriverErrorCategory::Timeout, "query timed out");
+                report_failure(&action_tx, &key, index, sql, &error, statements).await;
                 failed = true;
             }
         }
@@ -105,6 +96,34 @@ pub async fn run_script(
     if !failed {
         let _ = action_tx.send(Action::ScriptFinished { key }).await;
     }
+}
+
+/// Sends the failure to the model with what the server said about it, and leaves a line in
+/// the log file, which until now received nothing about a failed statement. The file gets
+/// the category, SQLSTATE and the server's one-line message; the statement text and the
+/// DETAIL line, which quotes row values, stay out of it.
+async fn report_failure(
+    action_tx: &tokio::sync::mpsc::Sender<Action>,
+    key: &OperationKey,
+    index: usize,
+    sql: &str,
+    error: &DriverError,
+    statements: usize,
+) {
+    tracing::warn!(
+        category = ?error.category(),
+        code = error.native_code().unwrap_or("-"),
+        statement = index + 1,
+        "statement failed: {error}"
+    );
+    let _ = action_tx
+        .send(Action::QueryFailed {
+            key: key.clone(),
+            index,
+            message: error.to_string(),
+            details: crate::model::describe_query_error(sql, error, (index, statements)),
+        })
+        .await;
 }
 
 async fn forward_event(
