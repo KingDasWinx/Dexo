@@ -35,5 +35,6 @@ pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
 pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
 pub use statement::{StatementEffect, StatementSpan, split_statements, statement_at};
 pub use statement_guard::{
-    GuardRejection, Inspection, inspect_data_write, inspect_read, inspect_schema_write,
+    Destructive, GuardRejection, Inspection, destructive, inspect_data_write, inspect_read,
+    inspect_schema_write, is_read,
 };

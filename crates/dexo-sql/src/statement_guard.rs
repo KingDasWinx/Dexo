@@ -5,6 +5,7 @@ use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect};
 use sqlparser::parser::Parser;
 
 use crate::Dialect;
+use crate::statement::first_keyword;
 
 /// What a statement touches, as identifier paths such as `["db", "public", "orders"]`.
 /// Unquoted Postgres identifiers are folded to lowercase, as the server folds them, so
@@ -156,6 +157,96 @@ pub fn inspect_schema_write(sql: &str, dialect: Dialect) -> Result<Inspection, G
     guard.finish(extra)
 }
 
+/// Why the editor asks before it runs a statement.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Destructive {
+    DeleteWithoutWhere,
+    UpdateWithoutWhere,
+    Drop,
+    Truncate,
+    AlterDrop,
+    /// Neither parsed nor plainly a read, so what it does cannot be told.
+    Unrecognized,
+}
+
+impl Destructive {
+    pub fn describe(self) -> &'static str {
+        match self {
+            Self::DeleteWithoutWhere => "DELETE without WHERE removes every row",
+            Self::UpdateWithoutWhere => "UPDATE without WHERE changes every row",
+            Self::Drop => "DROP removes the object and what it holds",
+            Self::Truncate => "TRUNCATE removes every row",
+            Self::AlterDrop => "ALTER ... DROP removes part of the table",
+            Self::Unrecognized => "Dexo could not read this statement",
+        }
+    }
+}
+
+/// Whether one statement only reads. SHOW and DESCRIBE count, and so does a plain
+/// EXPLAIN, which never runs what it explains. A read that writes on the side --
+/// `SELECT INTO`, `FOR UPDATE`, `set_config()`, a data-modifying CTE -- does not, nor
+/// does anything sqlparser cannot parse.
+pub fn is_read(sql: &str, dialect: Dialect) -> bool {
+    let keyword = first_keyword(sql);
+    if matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC")) {
+        return true;
+    }
+    match inspect_read(sql, dialect) {
+        Ok(_) => true,
+        Err(GuardRejection::WrongKind) => keyword.as_deref() == Some("EXPLAIN"),
+        Err(_) => false,
+    }
+}
+
+/// What makes one statement destructive, if anything does. A statement that neither
+/// parses nor is plainly a read is `Unrecognized`: unknown counts against it.
+pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
+    match first_keyword(sql).as_deref() {
+        Some("DROP") => return Some(Destructive::Drop),
+        Some("TRUNCATE") => return Some(Destructive::Truncate),
+        _ => {}
+    }
+    let Ok(statement) = parse_one(sql, dialect) else {
+        return (!is_read(sql, dialect)).then_some(Destructive::Unrecognized);
+    };
+    let mut finder = DestructiveFinder::default();
+    let _ = statement.visit(&mut finder);
+    finder.found
+}
+
+/// Visits nested statements too, so a `DELETE` inside a CTE is found.
+#[derive(Default)]
+struct DestructiveFinder {
+    found: Option<Destructive>,
+}
+
+impl Visitor for DestructiveFinder {
+    type Break = ();
+
+    fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
+        self.found = match statement {
+            Statement::Delete(delete) if delete.selection.is_none() => {
+                Some(Destructive::DeleteWithoutWhere)
+            }
+            Statement::Update(update) if update.selection.is_none() => {
+                Some(Destructive::UpdateWithoutWhere)
+            }
+            // Every drop operation displays as `DROP ...`; matching the text covers
+            // columns, constraints, keys, indexes and partitions alike.
+            Statement::AlterTable(alter)
+                if alter
+                    .operations
+                    .iter()
+                    .any(|operation| operation.to_string().starts_with("DROP")) =>
+            {
+                Some(Destructive::AlterDrop)
+            }
+            _ => return ControlFlow::Continue(()),
+        };
+        ControlFlow::Break(())
+    }
+}
+
 fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
     let mut statements = match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
@@ -280,7 +371,10 @@ impl Visitor for Guard {
 
 #[cfg(test)]
 mod tests {
-    use super::{GuardRejection, inspect_data_write, inspect_read, inspect_schema_write};
+    use super::{
+        Destructive, GuardRejection, destructive, inspect_data_write, inspect_read,
+        inspect_schema_write, is_read,
+    };
     use crate::Dialect;
 
     fn path(parts: &[&str]) -> Vec<String> {
@@ -463,5 +557,95 @@ mod tests {
                 .relations,
             vec![path(&["shop", "items"])]
         );
+    }
+
+    #[test]
+    fn plain_reads_are_reads() {
+        for sql in [
+            "select 1",
+            "with t as (select 1 as n) select n from t",
+            "-- note\nselect * from items",
+            "show tables",
+            "SHOW search_path",
+            "describe items",
+            "explain select * from items",
+        ] {
+            assert!(is_read(sql, Dialect::Postgres), "{sql}");
+        }
+    }
+
+    #[test]
+    fn writes_hidden_in_reads_are_not_reads() {
+        for sql in [
+            "select * into backup from items",
+            "select * from items for update",
+            "select set_config('default_transaction_read_only', 'off', false)",
+            "with d as (delete from items returning *) select * from d",
+            "explain analyze delete from items",
+            "set default_transaction_read_only = off",
+            "begin",
+            "insert into items values (1)",
+            "not sql at all",
+        ] {
+            assert!(!is_read(sql, Dialect::Postgres), "{sql}");
+        }
+    }
+
+    #[test]
+    fn destructive_statements_say_why() {
+        let pg = |sql: &str| destructive(sql, Dialect::Postgres);
+        assert_eq!(
+            pg("delete from items"),
+            Some(Destructive::DeleteWithoutWhere)
+        );
+        assert_eq!(
+            pg("DeLeTe from items"),
+            Some(Destructive::DeleteWithoutWhere)
+        );
+        assert_eq!(
+            pg("-- clean up\nDELETE FROM items"),
+            Some(Destructive::DeleteWithoutWhere)
+        );
+        assert_eq!(
+            pg("update items set n = 0"),
+            Some(Destructive::UpdateWithoutWhere)
+        );
+        assert_eq!(
+            pg("update items set n = (select max(n) from items where id = 1)"),
+            Some(Destructive::UpdateWithoutWhere)
+        );
+        assert_eq!(pg("drop table items"), Some(Destructive::Drop));
+        assert_eq!(pg("DROP INDEX items_n"), Some(Destructive::Drop));
+        assert_eq!(pg("truncate items"), Some(Destructive::Truncate));
+        assert_eq!(
+            pg("alter table items drop column n"),
+            Some(Destructive::AlterDrop)
+        );
+        assert_eq!(
+            pg("alter table items drop constraint items_pkey"),
+            Some(Destructive::AlterDrop)
+        );
+        assert!(pg("with d as (delete from items returning id) select * from d").is_some());
+        assert_eq!(pg("frobnicate items"), Some(Destructive::Unrecognized));
+        assert_eq!(
+            destructive("delete from items limit 10", Dialect::Mysql),
+            Some(Destructive::DeleteWithoutWhere)
+        );
+    }
+
+    #[test]
+    fn ordinary_writes_and_reads_are_not_destructive() {
+        for sql in [
+            "delete from items where id = 1",
+            "update items set n = 0 where id in (select id from items)",
+            "insert into items values (1, 2)",
+            "alter table items add column m int",
+            "alter table items alter column n drop not null",
+            "create table t (id int)",
+            "select 1",
+            "show tables",
+        ] {
+            assert_eq!(destructive(sql, Dialect::Postgres), None, "{sql}");
+        }
     }
 }

@@ -295,7 +295,7 @@ fn skip_cte_prefix(sql: &str) -> Option<&str> {
     }
 }
 
-fn first_keyword(sql: &str) -> Option<String> {
+pub(crate) fn first_keyword(sql: &str) -> Option<String> {
     let i = skip_ws(sql, 0);
     let rest = &sql[i..];
     let ident = take_ident(rest)?;
