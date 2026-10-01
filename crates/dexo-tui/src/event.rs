@@ -226,21 +226,21 @@ async fn edit_externally(
     let suspended = guard.suspend();
     // Through the shell, so `code --wait` and other editors with arguments work; the
     // path goes as an argument, never spliced into the command.
-    let status = if cfg!(windows) {
-        tokio::process::Command::new("cmd")
-            .arg("/C")
-            .arg(format!("{editor} \"{}\"", file.path().display()))
-            .status()
-            .await
-    } else {
-        tokio::process::Command::new("sh")
-            .arg("-c")
-            .arg(format!("{editor} \"$1\""))
-            .arg("sh")
-            .arg(file.path())
-            .status()
-            .await
-    };
+    #[cfg(windows)]
+    let status = tokio::process::Command::new("cmd")
+        .arg("/C")
+        // Verbatim: `arg` would escape the quotes as `\"`, which cmd does not read.
+        .raw_arg(format!("{editor} \"{}\"", file.path().display()))
+        .status()
+        .await;
+    #[cfg(not(windows))]
+    let status = tokio::process::Command::new("sh")
+        .arg("-c")
+        .arg(format!("{editor} \"$1\""))
+        .arg("sh")
+        .arg(file.path())
+        .status()
+        .await;
     guard
         .resume(suspended)
         .map_err(|error| format!("could not take the terminal back: {error}"))?;

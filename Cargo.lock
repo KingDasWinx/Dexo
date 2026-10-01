@@ -1717,6 +1717,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "image",
+ "libc",
  "proptest",
  "secrecy",
  "serde",

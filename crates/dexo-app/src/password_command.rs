@@ -42,8 +42,7 @@ pub fn run(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
         match child.try_wait() {
             Ok(Some(status)) => break status,
             Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
+                stop_tree(&mut child);
                 return Err(fail(format!(
                     "did not finish within {}s",
                     timeout.as_secs()
@@ -70,17 +69,47 @@ pub fn run(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
     Ok(SecretString::from(secret.to_string()))
 }
 
+/// Stops the shell and everything it started. Killing only the shell left the command
+/// itself (`sleep 60`, a password manager waiting on a prompt) running, re-parented.
+fn stop_tree(child: &mut std::process::Child) {
+    #[cfg(unix)]
+    {
+        // `shell` made the child a process group leader, so its pid is the group's.
+        // SAFETY: killpg only sends a signal; a group that has gone already is ESRCH.
+        unsafe {
+            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        }
+    }
+    #[cfg(windows)]
+    {
+        let _ = Command::new("taskkill")
+            .args(["/PID", &child.id().to_string(), "/T", "/F"])
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status();
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+}
+
 #[cfg(windows)]
 fn shell(command: &str) -> Command {
+    use std::os::windows::process::CommandExt;
     let mut shell = Command::new("cmd");
-    shell.args(["/C", command]);
+    // Verbatim: `args` would escape the command's quotes as `\"`, which cmd does not
+    // read, and `op read "op://vault/item"` would arrive mangled.
+    shell.arg("/C").raw_arg(command);
     shell
 }
 
 #[cfg(not(windows))]
 fn shell(command: &str) -> Command {
+    use std::os::unix::process::CommandExt;
     let mut shell = Command::new("sh");
     shell.args(["-c", command]);
+    // Its own process group, so a timeout can stop all of it.
+    shell.process_group(0);
     shell
 }
 
@@ -119,11 +148,23 @@ mod tests {
     #[test]
     fn a_command_that_hangs_is_stopped_at_the_deadline() {
         let started = std::time::Instant::now();
-        let error = run("sleep 30", Duration::from_millis(300))
+        // The marker makes the sleep findable; it must be gone, not re-parented.
+        let error = run("sleep 41.273; true", Duration::from_millis(300))
             .unwrap_err()
             .to_string();
         assert!(error.contains("did not finish"), "{error}");
         assert!(started.elapsed() < Duration::from_secs(5));
+        std::thread::sleep(Duration::from_millis(200));
+        let left = std::process::Command::new("pgrep")
+            .args(["-f", "^sleep 41.273"])
+            .output()
+            .map(|output| output.stdout)
+            .unwrap_or_default();
+        assert!(
+            left.is_empty(),
+            "still running: {}",
+            String::from_utf8_lossy(&left)
+        );
     }
 
     #[test]
