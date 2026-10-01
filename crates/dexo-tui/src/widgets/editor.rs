@@ -32,11 +32,17 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     let focused = model.effective_focus() == Focus::Editor;
     let block = crate::render::pane_block(model, &title, focused);
-    let inner = block.inner(area);
+    let pane = block.inner(area);
     frame.render_widget(block, area);
-    if inner.width == 0 || inner.height == 0 {
+    if pane.width == 0 || pane.height == 0 {
         return;
     }
+    // The find bar takes the pane's last rows; the text keeps the rest.
+    let bar = (crate::screens::find::bar_rows(model) as u16).min(pane.height.saturating_sub(1));
+    let inner = Rect {
+        height: pane.height - bar,
+        ..pane
+    };
 
     // ponytail: the whole buffer is still copied, split and scanned once per frame --
     // under a millisecond at 3 300 lines (benches/editor_navigation). Read the rope's
@@ -80,7 +86,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         .iter()
         .filter(|span| span.byte_range.start < window_end && span.byte_range.end > byte_at)
         .collect();
+    // Where each row's text starts, in chars, for the find overlay below.
+    let mut row_starts = Vec::with_capacity(end - start);
     for (row, line) in lines[start..end].iter().enumerate() {
+        row_starts.push(char_at);
         let line_no = start + row + 1;
         let marker = if stmt.contains(&(start + row)) {
             "▸"
@@ -100,27 +109,59 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 .take(visible.skip_chars)
                 .map(char::len_utf8)
                 .sum::<usize>();
-        if let Some(range) = &sel {
-            spans.extend(selection_spans(
-                &visible.text,
-                line_start + visible.skip_chars,
-                range,
-                sel_style,
-            ));
-        } else {
-            spans.extend(highlight_spans(
-                &visible.text,
-                visible_byte,
-                &window_highlights,
-            ));
-        }
+        // The selection is painted over the highlighting below, so selecting text --
+        // or the find bar's current match -- keeps the rest of the line in colour.
+        spans.extend(highlight_spans(
+            &visible.text,
+            visible_byte,
+            &window_highlights,
+        ));
         rendered.push(Line::from(spans));
         char_at = line_end + 1;
         byte_at += line.len() + 1;
     }
     frame.render_widget(Paragraph::new(rendered), inner);
 
-    if model.effective_focus() == Focus::Editor {
+    let text_rect = Rect {
+        x: inner.x + gutter,
+        width: text_width,
+        ..inner
+    };
+    let window = Window {
+        area: text_rect,
+        lines: &lines[start..end],
+        starts: &row_starts,
+        scrolled: doc.viewport_column,
+    };
+    let found = if model.find.open {
+        crate::screens::find::find_all(&text, model.find.query.as_str(), model.find.options)
+    } else {
+        Vec::new()
+    };
+    // Every match is underlined and lit, on top of whatever highlighting it has; the
+    // current one is the selection, painted after it.
+    let lit = model
+        .theme
+        .style(Role::Warning, model.capabilities)
+        .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
+    paint(frame, &window, &found, lit);
+    if let Some(range) = &sel {
+        paint(frame, &window, std::slice::from_ref(range), sel_style);
+    }
+    if model.find.open {
+        render_find_bar(
+            frame,
+            Rect {
+                y: pane.y + inner.height,
+                height: bar,
+                ..pane
+            },
+            model,
+            &found,
+        );
+    }
+
+    if model.effective_focus() == Focus::Editor && !model.find.open {
         let (line, col) = line_col_of(&text, cursor);
         if line >= start && line < end {
             let line_text = lines.get(line).copied().unwrap_or("");
@@ -133,6 +174,68 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         }
     }
 }
+
+/// The find bar: the query, which match is current, the toggles, and what the keys do.
+/// The terminal cursor sits in the field being typed into.
+fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::ops::Range<usize>]) {
+    use crate::screens::find::FindField;
+    if area.height == 0 {
+        return;
+    }
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let on = model
+        .theme
+        .style(Role::Focus, model.capabilities)
+        .add_modifier(Modifier::BOLD);
+    let toggle =
+        |label: &'static str, enabled: bool| Span::styled(label, if enabled { on } else { muted });
+    let count = match (crate::screens::find::current(model, found), found.len()) {
+        _ if model.find.query.is_empty() => String::new(),
+        (_, 0) => "no matches".to_string(),
+        (Some(index), total) => format!("{}/{total}", index + 1),
+        (None, total) => format!("{total} found"),
+    };
+    let find = &model.find;
+    let mut rows = vec![Line::from(vec![
+        Span::styled(FIND_LABEL, muted),
+        Span::raw(find.query.as_str().to_string()),
+        Span::raw("  "),
+        Span::raw(count),
+        Span::raw("  "),
+        toggle("Aa", find.options.case_sensitive),
+        Span::raw(" "),
+        toggle("Word", find.options.whole_word),
+        Span::styled(
+            "  Enter next · Shift+Enter prev · Alt+C case · Alt+W word · Alt+R replace · Esc",
+            muted,
+        ),
+    ])];
+    if find.replacing {
+        rows.push(Line::from(vec![
+            Span::styled(REPLACE_LABEL, muted),
+            Span::raw(find.replacement.as_str().to_string()),
+            Span::styled("  Enter replace · Alt+A all · Tab switch", muted),
+        ]));
+    }
+    frame.render_widget(Paragraph::new(rows), area);
+    if model.effective_focus() == Focus::Editor {
+        let (row, input) = match find.field {
+            FindField::Query => (0, &find.query),
+            FindField::Replace => (1, &find.replacement),
+        };
+        let typed: String = input.as_str().chars().take(input.cursor()).collect();
+        let x = area.x
+            + FIND_LABEL.len() as u16
+            + unicode_width::UnicodeWidthStr::width(typed.as_str()) as u16;
+        if row < area.height && x < area.x + area.width {
+            frame.set_cursor_position(Position::new(x, area.y + row));
+        }
+    }
+}
+
+/// Both labels are as wide, so the two fields start in the same column.
+const FIND_LABEL: &str = "Find    ";
+const REPLACE_LABEL: &str = "Replace ";
 
 /// What the editor shows when no document is open: the ways to get one. Typing works
 /// too -- the first keystroke becomes a document of the active connection.
@@ -230,38 +333,39 @@ fn visible_slice(line: &str, skip_cols: usize, width: usize) -> Visible {
     }
 }
 
-fn selection_spans(
-    visible: &str,
-    line_char_start: usize,
-    range: &std::ops::Range<usize>,
-    sel_style: Style,
-) -> Vec<Span<'static>> {
-    let mut spans = Vec::new();
-    let mut buf = String::new();
-    let mut selected = false;
-    for (offset, ch) in visible.chars().enumerate() {
-        let index = line_char_start + offset;
-        let now = index >= range.start && index < range.end;
-        if now != selected && !buf.is_empty() {
-            spans.push(span_owned(std::mem::take(&mut buf), selected, sel_style));
-        }
-        selected = now;
-        buf.push(ch);
-    }
-    if !buf.is_empty() {
-        spans.push(span_owned(buf, selected, sel_style));
-    }
-    if spans.is_empty() {
-        spans.push(Span::raw(String::new()));
-    }
-    spans
+/// The rows on screen: where they are drawn, their text, where each starts in the
+/// document (in chars), and how far the view is scrolled sideways.
+struct Window<'a> {
+    area: Rect,
+    lines: &'a [&'a str],
+    starts: &'a [usize],
+    scrolled: usize,
 }
 
-fn span_owned(text: String, selected: bool, sel_style: Style) -> Span<'static> {
-    if selected {
-        Span::styled(text, sel_style)
-    } else {
-        Span::raw(text)
+/// Lays `style` over the cells that show `ranges` (document chars), on top of what the
+/// paragraph drew there.
+fn paint(frame: &mut Frame, window: &Window, ranges: &[std::ops::Range<usize>], style: Style) {
+    if ranges.is_empty() {
+        return;
+    }
+    for (row, line) in window.lines.iter().enumerate() {
+        let line_start = window.starts[row];
+        let line_end = line_start + line.chars().count();
+        for range in ranges
+            .iter()
+            .filter(|range| range.start < line_end && range.end > line_start)
+        {
+            let from = range.start.max(line_start) - line_start;
+            let to = range.end.min(line_end) - line_start;
+            let x0 = display_width_range(line, window.scrolled, from);
+            let x1 = display_width_range(line, window.scrolled, to).min(window.area.width as usize);
+            for x in x0..x1 {
+                let position = Position::new(window.area.x + x as u16, window.area.y + row as u16);
+                if let Some(cell) = frame.buffer_mut().cell_mut(position) {
+                    cell.set_style(style);
+                }
+            }
+        }
     }
 }
 

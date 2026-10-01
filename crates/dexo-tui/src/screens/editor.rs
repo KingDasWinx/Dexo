@@ -196,7 +196,7 @@ fn text_area(model: &Model) -> Option<(usize, usize)> {
         true,
     );
     let inner = ratatui::widgets::Block::bordered().inner(plan.content);
-    let rows = inner.height as usize;
+    let rows = (inner.height as usize).saturating_sub(crate::screens::find::bar_rows(model));
     let cols = inner.width.saturating_sub(crate::widgets::editor::GUTTER) as usize;
     (rows > 0 && cols > 0).then_some((rows, cols))
 }
@@ -932,15 +932,11 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             move_snippet_stop(model, -1);
             true
         }
-        // Ctrl (Alt on macOS) takes the word Ctrl+Left would cross. Terminals without the
-        // extended keyboard protocol send Ctrl+Backspace as ^H, which arrives as Ctrl+H.
+        // Ctrl (Alt on macOS) takes the word Ctrl+Left would cross. A terminal without
+        // the kitty protocol sends Ctrl+Backspace as ^H; `update` turns that back into
+        // Ctrl+Backspace before it gets here.
         KeyCode::Backspace => {
             backspace(model, ctrl || alt);
-            suggest_live(model);
-            true
-        }
-        KeyCode::Char('h') if ctrl => {
-            backspace(model, true);
             suggest_live(model);
             true
         }
@@ -1022,7 +1018,11 @@ fn shift_snippet_stops(model: &mut Model, mark: (usize, usize)) {
 /// way turned the next tab in the text into an accepted suggestion instead of
 /// indentation.
 pub fn paste(model: &mut Model, text: &str) -> bool {
-    if model.focus != crate::model::Focus::Editor || model.active_document().kind.is_table() {
+    // With the find bar open, a paste is for the bar.
+    if model.focus != crate::model::Focus::Editor
+        || model.active_document().kind.is_table()
+        || model.find.open
+    {
         return false;
     }
     // The completion popup is the editor's own, not a modal with a claim on the paste:

@@ -1682,6 +1682,11 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// Keys arrive through the kitty keyboard protocol. Without it Ctrl+Backspace is sent
+    /// as ^H, the same byte as Ctrl+H.
+    pub keys_disambiguated: bool,
+    /// The find bar at the foot of the editor, Ctrl+F and Ctrl+H.
+    pub find: crate::screens::find::FindState,
     pub theme: Theme,
     pub capabilities: TerminalCapabilities,
     pub keymap: Keymap,
@@ -1798,6 +1803,8 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            keys_disambiguated: false,
+            find: crate::screens::find::FindState::default(),
         }
     }
 }

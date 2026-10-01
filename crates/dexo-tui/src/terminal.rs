@@ -81,6 +81,12 @@ impl<B: TerminalControl> TerminalGuard<B> {
         })
     }
 
+    /// Whether keys arrive unambiguously (the kitty keyboard protocol), so Ctrl+H is not
+    /// also what Ctrl+Backspace sends.
+    pub fn keyboard_enhanced(&self) -> bool {
+        self.keyboard_enhanced
+    }
+
     pub fn enable_paste(&mut self) -> Result<(), TuiError> {
         if self.paste {
             return Ok(());

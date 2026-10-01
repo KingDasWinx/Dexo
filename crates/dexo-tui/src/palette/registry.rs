@@ -1057,6 +1057,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RefreshSqlIntelligence),
         },
         CommandSpec {
+            id: "editor.find",
+            title: "Find",
+            keywords: &["search", "match", "next"],
+            shortcut: Some("Ctrl+F"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenFind { replace: false }),
+        },
+        CommandSpec {
+            id: "editor.replace",
+            title: "Find and Replace",
+            keywords: &["search", "substitute", "replace all"],
+            shortcut: Some("Ctrl+H"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenFind { replace: true }),
+        },
+        CommandSpec {
             id: "editor.undo",
             title: "Undo",
             keywords: &["revert", "back"],

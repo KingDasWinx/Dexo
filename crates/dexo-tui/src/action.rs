@@ -433,6 +433,10 @@ pub enum Action {
     RefreshSqlIntelligence,
     FormatSql,
     EditorUndo,
+    /// Ctrl+F, or Ctrl+H with `replace`.
+    OpenFind {
+        replace: bool,
+    },
     EditorRedo,
     EditorSelectAll,
     AcceptCompletion,

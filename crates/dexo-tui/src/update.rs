@@ -1427,6 +1427,18 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             crate::screens::editor::apply_format(model);
             Vec::new()
         }
+        Action::OpenFind { replace } => {
+            let doc = model.active_document();
+            if doc.kind.is_table() || doc.kind.is_placeholder() {
+                model
+                    .messages
+                    .warn("Find searches a SQL document; open one first.".into());
+            } else {
+                model.focus = Focus::Editor;
+                crate::screens::find::open(model, replace);
+            }
+            Vec::new()
+        }
         Action::EditorUndo => {
             crate::screens::editor::undo(model);
             crate::screens::editor::refresh_intelligence(model, false);
@@ -3049,6 +3061,16 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
 }
 
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    // Without the kitty keyboard protocol, ^H is what Ctrl+Backspace sends; taking it for
+    // Ctrl+H (find and replace) would leave those terminals no key to delete a word.
+    let key = if !model.keys_disambiguated
+        && key.code == KeyCode::Char('h')
+        && key.modifiers == KeyModifiers::CONTROL
+    {
+        KeyEvent::new(KeyCode::Backspace, KeyModifiers::CONTROL)
+    } else {
+        key
+    };
     if model.onboarding.open {
         return handle_onboarding_key(model, key);
     }
@@ -3445,6 +3467,13 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
+    if model.find.open
+        && model.effective_focus() == Focus::Editor
+        && model.pending_chord.keys.is_empty()
+        && crate::screens::find::handle_key(model, key)
+    {
+        return Vec::new();
+    }
     let spec = crate::keymap::KeySpec {
         modifiers: key.modifiers,
         code: key.code,
@@ -3475,7 +3504,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
     }
     let revision = model.active_document().sql.revision();
-    if !model.active_document().kind.is_table() && crate::screens::editor::handle_key(model, key) {
+    // With the find bar open, the keys it does not take still reach the keymap above,
+    // never the text underneath.
+    if !model.active_document().kind.is_table()
+        && !model.find.open
+        && crate::screens::editor::handle_key(model, key)
+    {
         // Highlighting and parameters are functions of the text. An arrow key moves the
         // cursor and changes neither, and re-deriving them from the whole buffer on every
         // repeat was half of what made a long script lag behind the key.
