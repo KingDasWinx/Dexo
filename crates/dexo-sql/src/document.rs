@@ -99,6 +99,21 @@ impl SqlDocument {
         }
     }
 
+    /// How many undo steps there are, to hand to [`Self::merge_undo_since`].
+    pub fn undo_depth(&self) -> usize {
+        self.undo.len()
+    }
+
+    /// Every undo step taken since `depth` becomes one, so a change made of several
+    /// edits -- Vim's `cw` and the typing after it -- undoes in one go.
+    pub fn merge_undo_since(&mut self, depth: usize) {
+        self.end_group();
+        if self.undo.len() > depth + 1 {
+            let merged: Vec<Inverse> = self.undo.drain(depth..).flatten().collect();
+            self.undo.push(merged);
+        }
+    }
+
     pub fn replace_chars(&mut self, range: Range<usize>, text: &str) -> Result<(), SqlError> {
         self.validate_char_range(&range)?;
         let deleted = self.rope.slice(range.clone()).to_string();

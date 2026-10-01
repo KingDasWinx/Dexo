@@ -55,7 +55,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     };
     let gutter = GUTTER;
     let text_width = inner.width.saturating_sub(gutter);
-    let sel = doc.selection();
+    // Vim's Visual-line mode selects whole lines, wherever the cursor is in them.
+    let sel = crate::screens::vim::display_selection(model).or_else(|| doc.selection());
     let cursor = doc.cursor();
     let stmt = current_statement_lines(&text, cursor);
     let sel_style = model

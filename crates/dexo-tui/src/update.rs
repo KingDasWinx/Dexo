@@ -3579,12 +3579,37 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
     }
     let revision = model.active_document().sql.revision();
+    // Vim mode has the keys the keymap left, before the plain editor does.
+    if crate::screens::vim::active(model)
+        && model.effective_focus() == Focus::Editor
+        && !model.active_document().kind.is_table()
+        && !model.active_document().kind.is_placeholder()
+        && !model.find.open
+    {
+        match crate::screens::vim::handle_key(model, key) {
+            crate::screens::vim::Outcome::Pass => {}
+            crate::screens::vim::Outcome::Done => {
+                if model.active_document().sql.revision() != revision {
+                    crate::screens::editor::refresh_intelligence(model, false);
+                }
+                return crate::screens::editor::take_completion_effects(model);
+            }
+            crate::screens::vim::Outcome::Then(actions) => {
+                let mut effects = Vec::new();
+                for action in actions {
+                    effects.extend(update(model, action));
+                }
+                return effects;
+            }
+        }
+    }
     // With the find bar open, the keys it does not take still reach the keymap above,
     // never the text underneath.
     if !model.active_document().kind.is_table()
         && !model.find.open
         && crate::screens::editor::handle_key(model, key)
     {
+        crate::screens::vim::after_pass(model);
         // Highlighting and parameters are functions of the text. An arrow key moves the
         // cursor and changes neither, and re-deriving them from the whole buffer on every
         // repeat was half of what made a long script lag behind the key.

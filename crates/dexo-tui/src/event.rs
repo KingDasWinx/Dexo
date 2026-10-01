@@ -203,6 +203,10 @@ async fn run_loop(
         // The theme can change under the user (mode, accent), so this is offered every
         // frame and the guard only forwards a change.
         guard.set_cursor_color(model.theme.caret_rgb(model.capabilities))?;
+        // Vim mode: a block outside Insert; everyone else keeps the terminal's caret.
+        guard.set_cursor_shape(
+            crate::screens::vim::active(&model).then(|| crate::screens::vim::block_cursor(&model)),
+        )?;
         guard.set_background_color(model.theme.background_rgb(model.capabilities))?;
     }
     Ok(())

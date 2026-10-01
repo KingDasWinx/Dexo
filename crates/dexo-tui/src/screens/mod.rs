@@ -25,4 +25,5 @@ pub mod settings;
 pub mod transaction_prompt;
 pub mod transfer;
 pub mod value_viewer;
+pub mod vim;
 pub mod workbench;

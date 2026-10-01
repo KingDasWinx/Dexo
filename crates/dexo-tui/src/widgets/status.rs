@@ -47,7 +47,38 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     } else {
         Style::default()
     };
+    // Vim's `:` and `/` are typed on this line, as in Vim, with the cursor in them.
+    if crate::screens::vim::active(model)
+        && let Some(prompt) = &model.vim.prompt
+    {
+        let typed = format!("{}{}", prompt.kind, prompt.input.as_str());
+        frame.render_widget(Paragraph::new(typed.clone()), area);
+        let before: String = prompt
+            .input
+            .as_str()
+            .chars()
+            .take(prompt.input.cursor())
+            .collect();
+        let x = area.x + 1 + unicode_width::UnicodeWidthStr::width(before.as_str()) as u16;
+        if x < area.x + area.width {
+            frame.set_cursor_position(ratatui::layout::Position::new(x, area.y));
+        }
+        return;
+    }
     let mut spans = Vec::new();
+    if crate::screens::vim::active(model) && model.effective_focus() == crate::model::Focus::Editor
+    {
+        spans.push(Span::styled(
+            format!("-- {} -- ", model.vim.mode.label()),
+            model
+                .theme
+                .style(Role::Focus, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        if !model.vim.pending.is_empty() {
+            spans.push(Span::raw(format!("{}  ", model.vim.pending)));
+        }
+    }
     if !model.mouse {
         spans.push(Span::styled(
             "MOUSE OFF · Ctrl+P settings.mouse  ",
