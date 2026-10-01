@@ -1,9 +1,11 @@
 use std::collections::BTreeMap;
 
 use dexo_driver_api::{
-    ConnectRequest, ConnectionSecrets, RouteRequest, SshRequest, TlsRequest, TransportRequest,
-    split_endpoint,
+    ConnectRequest, ConnectionSecrets, DriverDescriptor, RouteRequest, SshRequest, TlsRequest,
+    TransportRequest, split_endpoint,
 };
+use dexo_secrets::{SecretError, SecretStore};
+use secrecy::SecretString;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -83,12 +85,45 @@ impl ConnectionProfile {
             .filter(|command| !command.is_empty())
     }
 
+    /// Whether the driver opens a file (SQLite) rather than dialling a host.
+    pub fn is_file(&self) -> bool {
+        DriverDescriptor::for_id(&self.driver).is_some_and(|descriptor| descriptor.file)
+    }
+
+    /// The database password `store` holds for this connection. A file has none, so it
+    /// is never looked up and nothing ever asks for it.
+    pub fn password(&self, store: &dyn SecretStore) -> Result<Option<SecretString>, SecretError> {
+        if self.is_file() {
+            return Ok(Some(SecretString::from(String::new())));
+        }
+        store.get(self.secret_ref.as_str())
+    }
+
+    /// A file's request is its `config.path` and nothing else: no host, user or secret,
+    /// and no transport to validate. A policy's verified-TLS requirement guards a network
+    /// path, so production and staging do not refuse a file for having none.
     pub fn connect_request(
         &self,
         secrets: impl Into<ConnectionSecrets>,
     ) -> Result<(ConnectRequest, ConnectionPolicy), AppError> {
         let secrets = secrets.into();
         let policy = ConnectionPolicy::resolve(&self.environment, &self.policy)?;
+        if self.is_file() {
+            let path = config_str(&self.config, &["path"]).ok_or_else(|| {
+                AppError::new(
+                    ErrorCategory::Configuration,
+                    "the path of the database file is required",
+                )
+            })?;
+            let request = ConnectRequest::new(
+                path,
+                None,
+                String::new(),
+                SecretString::from(String::new()),
+                policy.read_only,
+            );
+            return Ok((request, policy));
+        }
         let transport = transport_from_config(&self.config, &self.driver)?;
         transport
             .validate_for_policy(policy.require_verified_tls)
@@ -335,6 +370,27 @@ mod tests {
         );
         let error = profile.connect_request(secret_map()).unwrap_err();
         assert_eq!(error.category(), ErrorCategory::Configuration);
+    }
+
+    #[test]
+    fn a_file_needs_no_host_user_secret_or_tls() {
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::nil()),
+            None,
+            "shop",
+            "sqlite",
+            "production",
+            serde_json::json!({ "path": "/data/shop.db" }),
+            SecretRef::new("r".into()),
+        );
+        let (request, policy) = profile
+            .connect_request(dexo_driver_api::ConnectionSecrets::default())
+            .unwrap();
+        assert_eq!(request.endpoint, "/data/shop.db");
+        assert!(request.database.is_none() && request.username.is_empty());
+        assert!(policy.require_verified_tls);
+        let store = dexo_secrets::MemorySecretStore::default();
+        assert!(profile.password(&store).unwrap().is_some());
     }
 
     #[test]

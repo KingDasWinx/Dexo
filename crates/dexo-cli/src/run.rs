@@ -23,7 +23,7 @@ use dexo_driver_api::{
     CatalogListOptions, CatalogObject, CatalogReader, DbValue, QueryEvent, RowBatch,
 };
 use dexo_runtime::TaskRegistry;
-use dexo_secrets::{KeyringSecretStore, SecretStore};
+use dexo_secrets::KeyringSecretStore;
 use dexo_storage::{
     AppPaths, CatalogCache, ConnectionRepository, Database, McpProfileRepository,
     SchemaSnapshotStore, SqliteGrantLedger, export_portable, import_portable,
@@ -386,6 +386,7 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
             port,
             database,
             username,
+            path,
             environment,
             non_interactive,
             password_stdin,
@@ -393,14 +394,17 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
             test,
             no_test,
         } => {
-            let password = match &password_command {
-                Some(_) => String::new(),
-                None => read_secret(non_interactive, password_stdin)?,
+            // A file has no password to read, and a password command answers for itself.
+            let password = match (&path, &password_command) {
+                (None, None) => read_secret(non_interactive, password_stdin)?,
+                _ => String::new(),
             };
             let repo = ConnectionRepository::new(db.connection());
-            let extra_config = match password_command {
-                Some(command) => serde_json::json!({ "password_command": command }),
-                None => serde_json::Value::Null,
+            // The path goes where a file profile keeps it.
+            let extra_config = match (path, password_command) {
+                (Some(path), _) => serde_json::json!({ "path": path }),
+                (None, Some(command)) => serde_json::json!({ "password_command": command }),
+                (None, None) => serde_json::Value::Null,
             };
             let (profile, persist) = create_connection(
                 NewConnection {
@@ -853,14 +857,12 @@ async fn profile_secret(
         })
         .await??);
     }
-    Ok(KeyringSecretStore
-        .get(profile.secret_ref.as_str())?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCategory::Authentication,
-                "secret is missing for this connection",
-            )
-        })?)
+    Ok(profile.password(&KeyringSecretStore)?.ok_or_else(|| {
+        AppError::new(
+            ErrorCategory::Authentication,
+            "secret is missing for this connection",
+        )
+    })?)
 }
 
 pub(crate) async fn connect_session(

@@ -10,6 +10,16 @@ SSH tunnels verify known hosts. A new or changed host key requires confirmation 
 
 If the keychain is missing or locked, Dexo asks for the secret for the current session. It does not write a file vault.
 
+## SQLite
+
+A SQLite connection is a file. Pick the `SQLite` driver in the connection form and give the file's path; there is no host, port, user or password, and nothing goes to the keychain. From the command line:
+
+```sh
+dexo connections add --name shop --driver sqlite --path ./shop.db
+```
+
+The path is stored absolute. Opening a file that does not exist creates it, except on a read-only connection, which refuses. The catalog shows `main` and any database you `ATTACH`, with tables, views, columns, indexes, foreign keys and triggers. Rows are edited by primary key, or by `rowid` when a table has none. Explain shows `EXPLAIN QUERY PLAN`; SQLite has no `EXPLAIN ANALYZE`, and the schema editor and administration screens do not apply to it.
+
 ## Environments and the SQL editor
 
 Each connection has an environment: local, development, staging or production. A label Dexo does not know, such as `prod`, counts as production.
@@ -18,6 +28,6 @@ Each connection has an environment: local, development, staging or production. A
 - On production, any write asks for the connection's name, typed exactly, before it runs.
 - Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.
 
-A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`.
+A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`, and SQLite opens the file read-only, which covers anything it attaches, so neither `PRAGMA query_only = 0` nor an `ATTACH` can write.
 
 A statement Dexo cannot read counts as a write: production asks for the name, and elsewhere it asks before running, like a destructive statement. Maintenance it knows -- `VACUUM`, `ANALYZE`, `REINDEX`, `CLUSTER`, `REFRESH MATERIALIZED VIEW`, `CHECKPOINT`, `OPTIMIZE` -- asks only on production.

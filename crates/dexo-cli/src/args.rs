@@ -259,14 +259,17 @@ pub enum ConnectionsCommand {
         name: String,
         #[arg(long)]
         driver: String,
-        #[arg(long)]
+        #[arg(long, default_value = "", required_unless_present = "path")]
         host: String,
         #[arg(long)]
         port: Option<u16>,
-        #[arg(long)]
+        #[arg(long, default_value = "", required_unless_present = "path")]
         database: String,
-        #[arg(long)]
+        #[arg(long, default_value = "", required_unless_present = "path")]
         username: String,
+        /// The database file, for a driver that opens one (sqlite).
+        #[arg(long, conflicts_with_all = ["host", "port", "database", "username"])]
+        path: Option<String>,
         #[arg(long, default_value = "local")]
         environment: String,
         #[arg(long)]

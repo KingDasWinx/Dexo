@@ -11,7 +11,7 @@
   </p>
 </div>
 
-Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
+Dexo is a keyboard-driven workbench for PostgreSQL, MySQL and SQLite. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
 
 <div align="center">
   <img src="assets/demo.gif" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
@@ -20,7 +20,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL and MySQL. It ships as a term
 ## Features
 
 - **Workbench** — catalog explorer, SQL editor, results grid, inspector, and a command palette. Every document belongs to a connection, keeps its own results, and reconnects when you return to it. Layouts persist per project.
-- **Drivers** — official PostgreSQL and MySQL drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies.
+- **Drivers** — official PostgreSQL, MySQL and SQLite drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies for the servers. A SQLite connection is just a file path.
 - **Query execution** — run a statement, a selection, or a whole script, with streamed pages, cancellation, and explicit transactions.
 - **Data and schema** — lazily loaded catalog, editable grids with a review step before any write, object forms, DDL preview, and schema diff across live databases, saved snapshots, and files.
 - **Data transfer** — streaming import and export, plus native backup and restore that never overwrite the source.
@@ -151,6 +151,7 @@ Profiles start disabled and read-only. Write tools require a temporary grant cre
 | PostgreSQL | 14.18, 16.9, 17.5 |
 | MySQL | 8.0.42, 8.4.5, 9.3.0 |
 | MariaDB | 10.11, 11.4 |
+| SQLite | 3.53.2, built into the binary |
 
 Other server versions may work but are not tested. MySQL 5.7 is end-of-life. PostgreSQL derivatives are not supported until they have a dedicated driver and test matrix.
 
@@ -175,7 +176,7 @@ The TUI, CLI, and MCP server are adapters over `dexo-app`. Drivers implement sha
 | `dexo` | Binary and official driver registry |
 | `dexo-app` | Use cases |
 | `dexo-tui`, `dexo-cli`, `dexo-mcp` | Adapters |
-| `dexo-driver-postgres`, `dexo-driver-mysql` | Official drivers |
+| `dexo-driver-postgres`, `dexo-driver-mysql`, `dexo-driver-sqlite` | Official drivers |
 | `dexo-sql`, `dexo-storage`, `dexo-secrets`, `dexo-transport` | Shared engines |
 
 Local state is a single SQLite database with versioned migrations.

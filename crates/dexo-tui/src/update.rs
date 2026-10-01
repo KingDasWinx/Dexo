@@ -176,6 +176,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SessionOpened { token } => vec![Effect::AdoptSession { token }],
+        Action::SessionCapabilities {
+            session,
+            unavailable,
+        } => {
+            model.unavailable.insert(session, unavailable);
+            Vec::new()
+        }
         Action::SaveConnection => save_connection(model),
         Action::QueryResultSetStarted { key, index } => {
             if operation_matches(model, &key) {
@@ -526,6 +533,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::SessionClosed { session } => {
             model.connections.remove_session(session);
+            model.unavailable.remove(&session);
             if model.active_session == Some(session) {
                 if let Some(next) = model.connections.sessions.first().cloned()
                     && let Some(profile) = model
@@ -1201,7 +1209,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         // ANALYZE runs the statement, so it asks first; it used to run straight from the
         // palette, and its "confirmation" was a flag it set on itself.
         Action::ConfirmExplainAnalyze => {
-            if !analyze_refused(model) {
+            if let Some(reason) =
+                model.unavailable_reason(dexo_driver_api::Capability::ExplainAnalyze)
+            {
+                model.messages.warn(reason.to_string());
+            } else if !analyze_refused(model) {
                 model.explain_prompt = Some(crate::widgets::form::FooterFocus::Submit);
             }
             Vec::new()

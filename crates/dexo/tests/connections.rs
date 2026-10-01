@@ -49,3 +49,33 @@ fn connections_add_lists_without_leaking_password() {
     assert!(!loaded.config.to_string().contains("SUPER_SECRET_SENTINEL"));
     assert!(!format!("{loaded:?}").contains("SUPER_SECRET_SENTINEL"));
 }
+
+/// A SQLite connection is a path: `connections add` asks for no host, user or password,
+/// and `query` opens the file without the keychain.
+#[test]
+fn a_sqlite_connection_is_a_path_that_answers_queries() {
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("shop.db");
+    let dexo = || {
+        let mut command = Command::cargo_bin("dexo").unwrap();
+        command.env("DEXO_DATA_HOME", dir.path());
+        command
+    };
+    dexo()
+        .args(["connections", "add", "--name", "shop", "--driver", "sqlite"])
+        .args(["--path", file.to_str().unwrap(), "--no-test"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("saved shop"));
+    dexo()
+        .args(["query", "--connection", "shop", "--sql"])
+        .arg("create table t (n integer); insert into t values (7)")
+        .assert()
+        .success();
+    dexo()
+        .args(["query", "--connection", "shop", "--sql", "select n from t"])
+        .args(["--format", "jsonl", "--non-interactive"])
+        .assert()
+        .success()
+        .stdout("{\"n\":7}\n");
+}

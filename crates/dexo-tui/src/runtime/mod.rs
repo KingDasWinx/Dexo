@@ -733,9 +733,8 @@ impl WorkbenchRuntime {
                 .find(|profile| profile.name == name)
                 .ok_or_else(|| "connection profile not found".into())
         })?;
-        let secret = self
-            .secrets
-            .get(profile.secret_ref.as_str())
+        let secret = profile
+            .password(&self.secrets)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "secret is missing for this connection".to_string())?;
         transfer_manager::RuntimeAccess::from_profile(
@@ -927,7 +926,22 @@ impl WorkbenchRuntime {
             return;
         };
         drop(slot);
+        let unavailable = session
+            .capabilities()
+            .iter()
+            .filter(|state| !state.available)
+            .map(|state| {
+                let reason = state.reason().unwrap_or("this driver cannot do that");
+                (state.capability, reason.to_string())
+            })
+            .collect();
         let id = self.sessions.insert(profile.name.clone(), session);
+        // Before the connection is announced, so the palette is right from its first draw.
+        self.emit(Action::SessionCapabilities {
+            session: id,
+            unavailable,
+        })
+        .await;
         let generation = self
             .sessions
             .get(id)
@@ -1003,9 +1017,10 @@ impl WorkbenchRuntime {
     async fn test_input(&mut self, input: NewConnection, password: String) {
         match dexo_app::test_connection_input(input) {
             Ok(profile) => {
-                if let Err(error) = self
-                    .secrets
-                    .put_memory(profile.secret_ref.as_str(), &password)
+                if !profile.is_file()
+                    && let Err(error) = self
+                        .secrets
+                        .put_memory(profile.secret_ref.as_str(), &password)
                 {
                     self.emit(Action::ConnectionFormError {
                         message: error.to_string(),
@@ -1071,9 +1086,8 @@ impl WorkbenchRuntime {
         &self,
         profile: &ConnectionProfile,
     ) -> Result<Arc<dyn dexo_driver_api::Session>, String> {
-        let secret = self
-            .secrets
-            .get(profile.secret_ref.as_str())
+        let secret = profile
+            .password(&self.secrets)
             .map_err(|error| error.to_string())?
             .ok_or_else(|| "secret is missing for this connection".to_string())?;
         let factory = self

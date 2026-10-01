@@ -44,6 +44,11 @@ pub enum Action {
     SessionOpened {
         token: u64,
     },
+    /// What a newly opened session's driver cannot do, and why.
+    SessionCapabilities {
+        session: SessionId,
+        unavailable: Vec<(dexo_driver_api::Capability, String)>,
+    },
     SecretRequired {
         purpose: crate::screens::secret_prompt::SecretPurpose,
         profile: ConnectionProfile,

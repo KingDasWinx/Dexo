@@ -5,11 +5,13 @@ use crate::action::Action;
 use crate::runtime::SessionSecrets;
 use crate::screens::secret_prompt::SecretPurpose;
 
+/// The password to connect with, or the prompt that asks for one. A file connection
+/// has no password, so it never prompts.
 pub fn connect_with_store(
     store: &dyn SecretStore,
     profile: &ConnectionProfile,
 ) -> Result<secrecy::SecretString, Box<Action>> {
-    match store.get(profile.secret_ref.as_str()) {
+    match profile.password(store) {
         Ok(Some(secret)) => Ok(secret),
         Ok(None) | Err(SecretError::Unavailable) => Err(Box::new(Action::SecretRequired {
             purpose: SecretPurpose::DatabasePassword,

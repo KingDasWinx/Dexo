@@ -81,7 +81,7 @@ pub(crate) fn capabilities() -> Vec<CapabilityState> {
         CapabilityState::unavailable(Capability::ExplainAnalyze, "SQLite has no EXPLAIN ANALYZE"),
         CapabilityState::unavailable(
             Capability::Admin,
-            "SQLite has no server sessions, locks or variables to administer",
+            "SQLite has no users, grants, server sessions or locks to administer",
         ),
         CapabilityState::available(Capability::Import),
         CapabilityState::available(Capability::Export),

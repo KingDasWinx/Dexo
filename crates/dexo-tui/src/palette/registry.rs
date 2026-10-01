@@ -1294,7 +1294,21 @@ fn first_unmet(model: &Model, requirements: &[Requirement]) -> Option<String> {
         .find_map(|value| unmet_requirement(model, *value))
 }
 
+/// The driver capability a command needs, where the driver may lack it.
+fn capability_for(id: &str) -> Option<dexo_driver_api::Capability> {
+    use dexo_driver_api::Capability;
+    match id {
+        "schema.preview" | "schema.raw" => Some(Capability::Ddl),
+        "schema.security" | "admin.sessions" => Some(Capability::Admin),
+        "explain.analyze" => Some(Capability::ExplainAnalyze),
+        _ => None,
+    }
+}
+
 fn contextual_reason(model: &Model, id: &str) -> Option<String> {
+    if let Some(reason) = capability_for(id).and_then(|needed| model.unavailable_reason(needed)) {
+        return Some(reason.to_string());
+    }
     if model.connection.read_only
         && matches!(
             id,

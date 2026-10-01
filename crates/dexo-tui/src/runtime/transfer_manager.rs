@@ -405,14 +405,20 @@ impl RuntimeAccess {
         let (connect, _) = profile
             .connect_request(secret.clone())
             .map_err(|error| error.to_string())?;
-        let (host, port) = dexo_driver_api::split_endpoint(&connect.endpoint)
-            .map_err(|error| error.to_string())?;
+        // A file's endpoint is its path; there is no host for a native tool to dial.
+        let (host, port) = if profile.is_file() {
+            (None, None)
+        } else {
+            let (host, port) = dexo_driver_api::split_endpoint(&connect.endpoint)
+                .map_err(|error| error.to_string())?;
+            (Some(host), Some(port))
+        };
         Ok(Self {
             action_tx,
             session: Some(session),
             driver: Some(profile.driver.clone()),
-            host: Some(host),
-            port: Some(port),
+            host,
+            port,
             database: connect.database.clone(),
             username: Some(connect.username.clone()),
             secret: Some(secret),

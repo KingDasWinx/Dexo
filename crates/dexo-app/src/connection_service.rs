@@ -64,7 +64,7 @@ pub fn create(
         repo.save(&profile)?;
         return Ok((profile, SecretPersist::Stored));
     }
-    if password.is_empty() {
+    if password.is_empty() && !profile.is_file() {
         return Err(AppError::new(
             ErrorCategory::Authentication,
             "password is required",
@@ -77,6 +77,9 @@ pub fn create(
         ));
     }
     repo.save(&profile)?;
+    if profile.is_file() {
+        return Ok((profile, SecretPersist::Stored));
+    }
     let persist = put_secret(secrets, profile.secret_ref.as_str(), password)?;
     Ok((profile, persist))
 }
@@ -103,39 +106,29 @@ pub fn set_secret(
             format!("unknown connection '{name}'"),
         )
     })?;
+    if profile.is_file() {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("'{name}' opens a file and has no password"),
+        ));
+    }
     let persist = put_secret(secrets, profile.secret_ref.as_str(), password)?;
     Ok((profile, persist))
 }
 
 fn build_profile(input: NewConnection) -> Result<ConnectionProfile, AppError> {
-    let name = require_field("name", input.name)?;
+    let name = require_field("name", input.name.clone())?;
     let driver = normalize_driver(&input.driver)?;
-    let host = require_field("host", input.host)?;
-    let database = require_field("database", input.database)?;
-    let username = require_field("username", input.username)?;
-    let port = input.port.unwrap_or(default_port(&driver));
-    if port == 0 {
-        return Err(AppError::new(
-            ErrorCategory::Configuration,
-            "connection port is invalid",
-        ));
-    }
     let environment = if input.environment.trim().is_empty() {
         "local".into()
     } else {
         input.environment.trim().to_ascii_lowercase()
     };
-    let mut config = serde_json::json!({
-        "host": host,
-        "port": port,
-        "database": database,
-        "username": username,
-    });
-    if let (Some(target), Some(extra)) = (config.as_object_mut(), input.extra_config.as_object()) {
-        for (key, value) in extra {
-            target.insert(key.clone(), value.clone());
-        }
-    }
+    let config = if dexo_driver_api::DriverDescriptor::for_id(&driver).is_some_and(|d| d.file) {
+        file_config(&input.extra_config)?
+    } else {
+        host_config(&input, &driver)?
+    };
     let mut profile = ConnectionProfile::new(
         ConnectionId(Uuid::new_v4()),
         None,
@@ -148,6 +141,51 @@ fn build_profile(input: NewConnection) -> Result<ConnectionProfile, AppError> {
     profile.policy = input.policy;
     profile.group_path = input.group_path;
     Ok(profile)
+}
+
+/// A file connection keeps only its path, made absolute: the profile is opened later
+/// from wherever Dexo runs, and a relative path would name a different file there.
+fn file_config(extra: &serde_json::Value) -> Result<serde_json::Value, AppError> {
+    let path = extra
+        .get("path")
+        .and_then(|value| value.as_str())
+        .unwrap_or_default();
+    let path = require_field("path", path.to_string())?;
+    let path = std::path::absolute(&path)
+        .ok()
+        .and_then(|path| path.into_os_string().into_string().ok())
+        .ok_or_else(|| {
+            AppError::new(
+                ErrorCategory::Configuration,
+                format!("the path {path} cannot be made absolute"),
+            )
+        })?;
+    Ok(serde_json::json!({ "path": path }))
+}
+
+fn host_config(input: &NewConnection, driver: &str) -> Result<serde_json::Value, AppError> {
+    let host = require_field("host", input.host.clone())?;
+    let database = require_field("database", input.database.clone())?;
+    let username = require_field("username", input.username.clone())?;
+    let port = input.port.unwrap_or(default_port(driver));
+    if port == 0 {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            "connection port is invalid",
+        ));
+    }
+    let mut config = serde_json::json!({
+        "host": host,
+        "port": port,
+        "database": database,
+        "username": username,
+    });
+    if let (Some(target), Some(extra)) = (config.as_object_mut(), input.extra_config.as_object()) {
+        for (key, value) in extra {
+            target.insert(key.clone(), value.clone());
+        }
+    }
+    Ok(config)
 }
 
 fn put_secret(
@@ -181,6 +219,7 @@ fn normalize_driver(driver: &str) -> Result<String, AppError> {
         "postgres" | "postgresql" => Ok("postgres".into()),
         "mysql" => Ok("mysql".into()),
         "mariadb" => Ok("mariadb".into()),
+        "sqlite" | "sqlite3" => Ok("sqlite".into()),
         "" => Err(AppError::new(
             ErrorCategory::Configuration,
             "driver is required",

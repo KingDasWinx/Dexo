@@ -1605,6 +1605,12 @@ pub struct Model {
     pub height: u16,
     pub layout_mode: LayoutMode,
     pub connection: ConnectionStatus,
+    /// What each open session's driver says it cannot do, and why; the palette disables
+    /// those commands for the active one.
+    pub unavailable: std::collections::HashMap<
+        crate::runtime::SessionId,
+        Vec<(dexo_driver_api::Capability, String)>,
+    >,
     pub transaction: TransactionState,
     /// The output pane on screen. It belongs to `results_owner`; every other document
     /// keeps its own in `EditorDocument::results` until it is activated again.
@@ -1711,6 +1717,7 @@ impl Default for Model {
                 read_only: false,
                 driver: String::new(),
             },
+            unavailable: std::collections::HashMap::new(),
             theme: crate::theme::builtin_dark(),
             capabilities: TerminalCapabilities {
                 color_depth: crate::capabilities::ColorDepth::TrueColor,
@@ -1816,6 +1823,15 @@ impl From<TransactionState> for Model {
 impl Model {
     pub fn fixture(seed: impl Into<Self>) -> Self {
         seed.into()
+    }
+
+    /// Why the active session's driver cannot do `capability`, if it cannot.
+    pub fn unavailable_reason(&self, capability: dexo_driver_api::Capability) -> Option<&str> {
+        self.active_session
+            .and_then(|session| self.unavailable.get(&session))?
+            .iter()
+            .find(|(lacking, _)| *lacking == capability)
+            .map(|(_, reason)| reason.as_str())
     }
 
     /// No real document is open -- the list is empty or holds only the stand-in. The

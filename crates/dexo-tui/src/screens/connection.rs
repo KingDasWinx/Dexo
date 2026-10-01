@@ -5,7 +5,7 @@ use crate::screens::schema_editor::FormField;
 use crate::widgets::form::{FooterFocus, footer_line};
 
 const BASIC_FIELDS: &[&str] = &[
-    "name", "driver", "host", "port", "database", "username", "password",
+    "name", "driver", "path", "host", "port", "database", "username", "password",
 ];
 
 #[derive(Clone, Debug, PartialEq)]
@@ -83,6 +83,15 @@ impl ConnectionForm {
             profile
                 .config
                 .get("username")
+                .and_then(|v| v.as_str())
+                .unwrap_or(""),
+        );
+        set_field(
+            &mut form.fields,
+            "path",
+            profile
+                .config
+                .get("path")
                 .and_then(|v| v.as_str())
                 .unwrap_or(""),
         );
@@ -268,9 +277,11 @@ impl ConnectionForm {
     pub fn submit(&mut self) -> Option<(NewConnection, String)> {
         self.errors.clear();
         let password = field(&self.fields, "password");
+        let opens_file = DriverDescriptor::for_id(&field(&self.fields, "driver"))
+            .is_some_and(|descriptor| descriptor.file);
         match to_input(&self.fields) {
             Ok(input) => {
-                if self.editing.is_none() && password.is_empty() {
+                if self.editing.is_none() && password.is_empty() && !opens_file {
                     self.errors.push("password is required".into());
                     return None;
                 }
@@ -383,11 +394,12 @@ fn is_basic(label: &str) -> bool {
     BASIC_FIELDS.contains(&label)
 }
 
-fn drivers() -> [&'static str; 3] {
+fn drivers() -> [&'static str; 4] {
     [
         DriverDescriptor::postgres().id,
         DriverDescriptor::mysql().id,
         DriverDescriptor::mariadb().id,
+        DriverDescriptor::sqlite().id,
     ]
 }
 
@@ -473,16 +485,40 @@ fn has_advanced_values(fields: &[FormField]) -> bool {
     })
 }
 
+/// The fields a driver takes. A file driver takes a path where the others take a host,
+/// port, database, user and password, and has no transport or TLS to set.
 fn blank_fields(driver: &str) -> Vec<FormField> {
     let driver = normalize_driver(driver);
     let descriptor = DriverDescriptor::for_id(driver);
+    let driver_field = FormField {
+        label: "driver".into(),
+        value: driver.into(),
+        secret: false,
+    };
+    let environment = FormField {
+        label: "environment".into(),
+        value: "local".into(),
+        secret: false,
+    };
+    if descriptor
+        .as_ref()
+        .is_some_and(|descriptor| descriptor.file)
+    {
+        return vec![
+            field_of("name", false),
+            driver_field,
+            field_of("path", false),
+            environment,
+            field_of("group", false),
+            field_of("read_only", false),
+            field_of("confirm_destructive", false),
+            field_of("max_rows", false),
+            field_of("timeout_secs", false),
+        ];
+    }
     let mut fields = vec![
         field_of("name", false),
-        FormField {
-            label: "driver".into(),
-            value: driver.into(),
-            secret: false,
-        },
+        driver_field,
         field_of("host", false),
         FormField {
             label: "port".into(),
@@ -495,11 +531,7 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
         field_of("database", false),
         field_of("username", false),
         field_of("password", true),
-        FormField {
-            label: "environment".into(),
-            value: "local".into(),
-            secret: false,
-        },
+        environment,
         field_of("group", false),
     ];
     let Some(descriptor) = descriptor else {
@@ -622,6 +654,10 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
             }),
         );
     }
+    let path = field(fields, "path");
+    if !path.trim().is_empty() {
+        extra.insert("path".into(), serde_json::Value::String(path.trim().into()));
+    }
     let group = field(fields, "group");
     Ok(NewConnection {
         name: field(fields, "name"),
@@ -736,6 +772,11 @@ mod tests {
         );
         assert!(form.lines().join("\n").contains("< MariaDB >"));
         form.cycle_driver(1);
+        let dump = form.lines().join("\n");
+        assert!(dump.contains("< SQLite >"));
+        assert!(dump.contains("path:"));
+        assert!(!dump.contains("host:") && !dump.contains("password:"));
+        form.cycle_driver(1);
         assert_eq!(
             form.fields
                 .iter()
@@ -744,6 +785,27 @@ mod tests {
                 .value,
             "postgres"
         );
+    }
+
+    /// A file connection submits its path and no password; asking for one would leave
+    /// the form unsubmittable, with no field to type it in.
+    #[test]
+    fn a_sqlite_connection_submits_a_path_without_a_password() {
+        let mut form = ConnectionForm::open();
+        form.focus = 1;
+        form.cycle_driver(3);
+        for (label, value) in [("name", "shop"), ("path", "/data/shop.db")] {
+            let field = form
+                .fields
+                .iter_mut()
+                .find(|field| field.label == label)
+                .unwrap();
+            field.value = value.into();
+        }
+        let (input, password) = form.submit().expect("submits");
+        assert_eq!(input.driver, "sqlite");
+        assert_eq!(input.extra_config["path"], "/data/shop.db");
+        assert!(password.is_empty());
     }
 
     #[test]
