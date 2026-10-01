@@ -832,7 +832,7 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         };
         // The shortcut sits against the right edge so the keys read as one column
         // instead of trailing each title at a different offset.
-        let shortcut = entry.shortcut.unwrap_or_default();
+        let shortcut = entry.shortcut.as_deref().unwrap_or_default();
         let used = 2 + category.chars().count() + title.chars().count();
         let gap = inner_width
             .saturating_sub(used + shortcut.chars().count())
@@ -1033,7 +1033,7 @@ fn render_node_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         } else {
             " "
         };
-        let shortcut = entry.shortcut.unwrap_or_default();
+        let shortcut = entry.shortcut.as_deref().unwrap_or_default();
         let used = 2 + entry.title.chars().count();
         let gap = inner_width
             .saturating_sub(used + shortcut.chars().count())

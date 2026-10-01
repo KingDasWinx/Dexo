@@ -1314,6 +1314,62 @@ pub fn command_spec(id: &str) -> Option<CommandSpec> {
     command_specs().into_iter().find(|spec| spec.id == id)
 }
 
+/// The key a command has in the active keymap, written the way the palette shows keys
+/// (`Ctrl+Shift+D`); a command no built-in keymap binds keeps the label its spec gives.
+/// A fixed string said Ctrl+E in the Emacs keymap, where the key is `ctrl+x ctrl+e`.
+fn shortcut_for(model: &Model, id: &str, fallback: Option<&'static str>) -> Option<String> {
+    static BOUND: std::sync::OnceLock<std::collections::HashSet<String>> =
+        std::sync::OnceLock::new();
+    let bound = BOUND.get_or_init(|| {
+        [
+            crate::keymap::Keymap::default_profile(),
+            crate::keymap::Keymap::vim_profile(),
+            crate::keymap::Keymap::emacs_profile(),
+        ]
+        .iter()
+        .flat_map(|keymap| {
+            keymap
+                .bindings
+                .iter()
+                .map(|binding| binding.command.clone())
+        })
+        .collect()
+    });
+    if !bound.contains(id) {
+        return fallback.map(str::to_string);
+    }
+    model
+        .keymap
+        .bindings
+        .iter()
+        .find(|binding| binding.command == id)
+        .map(|binding| pretty_chord(&crate::keymap::chord_label(&binding.chord)))
+}
+
+/// `ctrl+shift+d` as `Ctrl+Shift+D`, `ctrl+x ctrl+e` as `Ctrl+X Ctrl+E`.
+fn pretty_chord(label: &str) -> String {
+    label
+        .split(' ')
+        .map(|key| {
+            key.split('+')
+                .map(|part| match part {
+                    "pageup" => "PageUp".to_string(),
+                    "pagedown" => "PageDown".to_string(),
+                    _ => {
+                        let mut chars = part.chars();
+                        match chars.next() {
+                            Some(first) => first.to_uppercase().chain(chars).collect(),
+                            None => "+".to_string(),
+                        }
+                    }
+                })
+                .collect::<Vec<_>>()
+                .join("+")
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
 pub fn palette_entries(model: &Model) -> Vec<PaletteEntry> {
     all_entries(model)
         .into_iter()
@@ -1331,7 +1387,7 @@ pub fn all_entries(model: &Model) -> Vec<PaletteEntry> {
             id: spec.id,
             title: spec.title,
             keywords: spec.keywords,
-            shortcut: spec.shortcut,
+            shortcut: shortcut_for(model, spec.id, spec.shortcut),
             requirements: spec.requirements,
             disabled_reason: first_unmet(model, spec.requirements)
                 .or_else(|| contextual_reason(model, spec.id)),

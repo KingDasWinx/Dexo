@@ -305,7 +305,7 @@ fn query_commands_expose_one_action_per_execution_scope() {
     let actual: Vec<_> = entries
         .iter()
         .filter(|entry| entry.id.starts_with("query.execute"))
-        .map(|entry| (entry.id, entry.shortcut))
+        .map(|entry| (entry.id, entry.shortcut.as_deref()))
         .collect();
 
     assert_eq!(
@@ -550,4 +550,31 @@ fn backup_and_restore_carry_the_drivers_reason() {
             "{id}"
         );
     }
+}
+
+/// The palette shows each command's key in the keymap in use, not a fixed label.
+#[test]
+fn shortcuts_follow_the_active_keymap() {
+    let shortcut = |keymap: dexo_tui::keymap::Keymap, id: &str| {
+        let model = dexo_tui::Model {
+            keymap,
+            ..dexo_tui::Model::default()
+        };
+        dexo_tui::palette::palette_entries(&model)
+            .into_iter()
+            .find(|entry| entry.id == id)
+            .and_then(|entry| entry.shortcut)
+    };
+    assert_eq!(
+        shortcut(
+            dexo_tui::keymap::Keymap::default_profile(),
+            "editor.external"
+        )
+        .as_deref(),
+        Some("Ctrl+E")
+    );
+    assert_eq!(
+        shortcut(dexo_tui::keymap::Keymap::emacs_profile(), "editor.external").as_deref(),
+        Some("Ctrl+X Ctrl+E")
+    );
 }

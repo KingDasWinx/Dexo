@@ -56,7 +56,8 @@ pub struct PaletteEntry {
     pub id: &'static str,
     pub title: &'static str,
     pub keywords: &'static [&'static str],
-    pub shortcut: Option<&'static str>,
+    /// The key the active keymap gives the command, as the palette shows it.
+    pub shortcut: Option<String>,
     pub requirements: &'static [Requirement],
     pub disabled_reason: Option<String>,
     pub invocation: PaletteInvocation,

@@ -102,7 +102,8 @@ async fn run_loop(
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
     let _ = crate::update::update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
-    model.keys_disambiguated = guard.keyboard_enhanced();
+    // The Windows console reports Ctrl+H and Ctrl+Backspace apart, protocol or not.
+    model.keys_disambiguated = guard.keyboard_enhanced() || cfg!(windows);
     model.onboarding.open = show_onboarding && temporary.is_none();
     model.onboarding.logo_frames = logo_frames;
     if let Some((profile, warning)) = temporary {
