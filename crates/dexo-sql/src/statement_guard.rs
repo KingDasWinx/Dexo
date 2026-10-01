@@ -195,6 +195,9 @@ pub fn is_read(sql: &str, dialect: Dialect) -> bool {
         return true;
     }
     let keyword = keyword_in(sql, dialect);
+    if dialect == Dialect::Sqlite && keyword.as_deref() == Some("PRAGMA") {
+        return pragma_reads(sql);
+    }
     let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"));
     match inspect_read(sql, dialect) {
         Ok(_) => true,
@@ -224,6 +227,9 @@ pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
         ) => {
             return None;
         }
+        // SQLite's session statements: writes, so production asks and read-only refuses,
+        // but they destroy nothing and are not unreadable.
+        Some("ATTACH" | "DETACH" | "PRAGMA") if dialect == Dialect::Sqlite => return None,
         _ => {}
     }
     let Ok(statement) = parse_one(sql, dialect) else {
@@ -232,6 +238,55 @@ pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
     let mut finder = DestructiveFinder::default();
     let _ = statement.visit(&mut finder);
     finder.found
+}
+
+/// Whether a SQLite PRAGMA only reads. `PRAGMA name = value` sets, and so does
+/// `PRAGMA journal_mode(WAL)`: the parenthesised form reads only for the pragmas that
+/// take an argument to look at (`table_info(t)`). Bare, a pragma reports its value --
+/// except the few that act when named.
+fn pragma_reads(sql: &str) -> bool {
+    const LOOKS_AT: &[&str] = &[
+        "table_info",
+        "table_xinfo",
+        "table_list",
+        "index_list",
+        "index_info",
+        "index_xinfo",
+        "foreign_key_list",
+        "foreign_key_check",
+        "integrity_check",
+        "quick_check",
+    ];
+    const ACTS: &[&str] = &[
+        "optimize",
+        "incremental_vacuum",
+        "wal_checkpoint",
+        "shrink_memory",
+    ];
+    let body = sql.trim().trim_end_matches(';').trim_end();
+    let Some(rest) = body
+        .get(6..)
+        .filter(|_| body[..6].eq_ignore_ascii_case("pragma"))
+    else {
+        return false;
+    };
+    if rest.contains(['=', ';']) {
+        return false;
+    }
+    let (name, argument) = match rest.split_once('(') {
+        Some((name, argument)) => (name, Some(argument)),
+        None => (rest, None),
+    };
+    let name = name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .trim()
+        .to_ascii_lowercase();
+    match argument {
+        Some(_) => LOOKS_AT.contains(&name.as_str()),
+        None => !ACTS.contains(&name.as_str()),
+    }
 }
 
 /// The first keyword past the comments `dialect` has: MySQL's `#` too.
@@ -411,6 +466,28 @@ mod tests {
         inspect_schema_write, is_read,
     };
     use crate::Dialect;
+
+    /// A PRAGMA that only reports is a read; one that sets or acts is a write, and
+    /// none of them is destructive.
+    #[test]
+    fn sqlite_pragmas_read_unless_they_set_or_act() {
+        let sqlite = |sql: &str| is_read(sql, Dialect::Sqlite);
+        assert!(sqlite("pragma table_info(t)"));
+        assert!(sqlite("PRAGMA main.foreign_key_list('orders');"));
+        assert!(sqlite("pragma journal_mode"));
+        assert!(!sqlite("pragma journal_mode = wal"));
+        assert!(!sqlite("pragma journal_mode(WAL)"));
+        assert!(!sqlite("pragma optimize"));
+        assert!(!sqlite("pragma user_version; delete from t"));
+        for sql in [
+            "pragma user_version = 3",
+            "detach database x",
+            "attach 'a.db' as a",
+        ] {
+            assert_eq!(destructive(sql, Dialect::Sqlite), None, "{sql}");
+            assert!(!sqlite(sql), "{sql}");
+        }
+    }
 
     fn path(parts: &[&str]) -> Vec<String> {
         parts.iter().map(|part| part.to_string()).collect()
