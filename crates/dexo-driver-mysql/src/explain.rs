@@ -197,7 +197,8 @@ pub fn parse_tree(raw: &str) -> Result<ExplainPlan, DriverError> {
     let (root, _) = build_tree(&lines, 0, lines[0].0);
     Ok(ExplainPlan {
         planning_ms: None,
-        execution_ms: None,
+        // MySQL reports no total; the root's last-row time is the time the query took.
+        execution_ms: root.actual.time_ms,
         root,
         raw: raw.to_string(),
     })
@@ -220,13 +221,19 @@ fn parse_tree_node(text: &str) -> PlanNode {
         .split_once(" on ")
         .map(|(kind, rel)| (kind.trim().to_string(), Some(rel.trim().to_string())))
         .unwrap_or_else(|| (kind_rel.trim().to_string(), None));
+    // `(cost=… rows=…) (actual time=… rows=… loops=…)`, either group optional. A node
+    // with no estimate starts straight at `actual`, and reading `rows=` from the whole
+    // text used to file its actual rows as the estimate.
+    let (estimate_part, actual_part) = match rest.strip_prefix("actual ") {
+        Some(actual) => ("", actual),
+        None => rest.split_once("(actual ").unwrap_or((rest, "")),
+    };
     let estimates = PlanMetrics {
-        cost: extract_number(rest, "cost="),
-        rows: extract_number(rest, "rows="),
+        cost: extract_number(estimate_part, "cost="),
+        rows: extract_number(estimate_part, "rows="),
         width: None,
         time_ms: None,
     };
-    let actual_part = rest.split("(actual ").nth(1).unwrap_or("");
     let actual = PlanMetrics {
         cost: None,
         rows: extract_number(actual_part, "rows="),
@@ -385,6 +392,23 @@ mod tests {
     fn wrap_never_adds_analyze_unless_requested() {
         assert!(!wrap_explain("select 1", NativeExplainFormat::Json, false).contains("ANALYZE"));
         assert!(wrap_explain("select 1", NativeExplainFormat::Tree, true).contains("ANALYZE"));
+    }
+
+    #[test]
+    fn analyze_tree_keeps_actual_rows_apart_from_estimates() {
+        let plan = super::parse_tree(
+            "-> Limit: 5 row(s)  (actual time=1.78..1.78 rows=5 loops=1)\n    -> Nested loop inner join  (cost=476 rows=3000) (actual time=0.0307..1.03 rows=3000 loops=1)",
+        )
+        .unwrap();
+        assert_eq!(plan.root.estimates.rows, None);
+        assert_eq!(plan.root.actual.rows, Some(5.0));
+        assert_eq!(plan.root.loops, Some(1));
+        assert_eq!(plan.execution_ms, Some(1.78));
+        let join = &plan.root.children[0];
+        assert_eq!(join.estimates.rows, Some(3000.0));
+        assert_eq!(join.estimates.cost, Some(476.0));
+        assert_eq!(join.actual.rows, Some(3000.0));
+        assert_eq!(join.actual.time_ms, Some(1.03));
     }
 
     #[test]
