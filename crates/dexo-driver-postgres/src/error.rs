@@ -30,8 +30,17 @@ fn category(error: &tokio_postgres::Error) -> DriverErrorCategory {
         return DriverErrorCategory::Network;
     }
     if let Some(db) = error.as_db_error() {
-        if db.code().code() == "42501" {
+        let code = db.code().code();
+        if code == "42501" {
             return DriverErrorCategory::Permission;
+        }
+        // Class 28 is a rejected login (a wrong password is 28P01); class 08 a
+        // connection that failed. Neither is the statement's fault.
+        if code.starts_with("28") {
+            return DriverErrorCategory::Authentication;
+        }
+        if code.starts_with("08") {
+            return DriverErrorCategory::Network;
         }
         return DriverErrorCategory::Syntax;
     }

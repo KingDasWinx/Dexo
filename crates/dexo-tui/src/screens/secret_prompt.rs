@@ -37,6 +37,22 @@ impl SecretBuffer {
     pub fn into_secret(self) -> SecretString {
         self.0
     }
+
+    pub fn push(&mut self, ch: char) {
+        let mut text = self.0.expose_secret().to_string();
+        text.push(ch);
+        self.0 = SecretString::from(text);
+    }
+
+    pub fn pop(&mut self) {
+        let mut text = self.0.expose_secret().to_string();
+        text.pop();
+        self.0 = SecretString::from(text);
+    }
+
+    pub fn chars(&self) -> usize {
+        self.0.expose_secret().chars().count()
+    }
 }
 
 impl Clone for SecretBuffer {
@@ -74,6 +90,9 @@ pub struct SecretPrompt {
     pub delete: Option<DeleteSecretDecision>,
     /// For a temporary connection: the secret stays in memory, no keychain offer.
     pub temporary: bool,
+    /// Keep it in the keychain rather than for this session only (Alt+K).
+    pub keychain: bool,
+    pub footer: crate::widgets::form::FooterFocus,
 }
 
 impl Default for SecretPrompt {
@@ -87,6 +106,8 @@ impl Default for SecretPrompt {
             profile: None,
             delete: None,
             temporary: false,
+            keychain: false,
+            footer: crate::widgets::form::FooterFocus::Input,
         }
     }
 }
@@ -106,6 +127,8 @@ impl SecretPrompt {
             profile: Some(profile),
             delete: None,
             temporary: false,
+            keychain: false,
+            footer: crate::widgets::form::FooterFocus::Input,
         }
     }
 
@@ -114,13 +137,35 @@ impl SecretPrompt {
     }
 
     pub fn lines(&self) -> Vec<String> {
-        vec![
-            format!("secret required for {}", self.profile_name),
-            if self.temporary {
-                "s session only  esc cancel".into()
-            } else {
-                "s session only  k save to keychain  esc cancel".into()
-            },
-        ]
+        use crate::widgets::form::{FooterFocus, footer_line};
+        let what = match self.purpose {
+            SecretPurpose::DatabasePassword => "Password",
+            SecretPurpose::SshPassword => "SSH password",
+            SecretPurpose::SshPassphrase => "SSH key passphrase",
+            SecretPurpose::ProxyPassword => "Proxy password",
+            SecretPurpose::TlsPassphrase => "TLS key passphrase",
+        };
+        let marker = if self.footer == FooterFocus::Input {
+            ">"
+        } else {
+            " "
+        };
+        let mut lines = vec![
+            format!("{what} for {}", self.profile_name),
+            format!(
+                "{marker} {}: {}",
+                what.to_lowercase(),
+                "*".repeat(self.buffer.chars())
+            ),
+        ];
+        // A temporary connection has no saved profile for a keychain entry to belong to.
+        if !self.temporary {
+            lines.push(format!(
+                "  [{}] save to the keychain  Alt+K",
+                if self.keychain { "x" } else { " " }
+            ));
+        }
+        lines.push(footer_line("Submit", self.footer));
+        lines
     }
 }

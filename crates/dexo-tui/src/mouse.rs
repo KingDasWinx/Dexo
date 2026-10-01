@@ -41,7 +41,6 @@ pub enum HitTarget {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HitButton {
     Close,
-    Session,
     Keychain,
     Cancel,
     Theme,

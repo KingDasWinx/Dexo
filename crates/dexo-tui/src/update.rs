@@ -2187,20 +2187,22 @@ fn mouse_results_menu(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
 }
 
 fn mouse_secret(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::screens::secret_prompt::SecretChoiceKind;
     match hit {
-        Some(HitTarget::Button(HitButton::Session)) => update(
-            model,
-            Action::SubmitSecret {
-                kind: crate::screens::secret_prompt::SecretChoiceKind::SessionOnly,
-            },
-        ),
-        Some(HitTarget::Button(HitButton::Keychain)) => update(
-            model,
-            Action::SubmitSecret {
-                kind: crate::screens::secret_prompt::SecretChoiceKind::SaveToKeychain,
-            },
-        ),
-        Some(HitTarget::Button(HitButton::Cancel) | HitTarget::Overlay) => update(
+        Some(HitTarget::FooterSubmit) => {
+            let kind = if model.secret_prompt.keychain {
+                SecretChoiceKind::SaveToKeychain
+            } else {
+                SecretChoiceKind::SessionOnly
+            };
+            update(model, Action::SubmitSecret { kind })
+        }
+        Some(HitTarget::Button(HitButton::Keychain)) => {
+            model.secret_prompt.keychain =
+                !model.secret_prompt.keychain && !model.secret_prompt.temporary;
+            Vec::new()
+        }
+        Some(HitTarget::FooterCancel | HitTarget::Overlay) => update(
             model,
             Action::SubmitSecret {
                 kind: crate::screens::secret_prompt::SecretChoiceKind::Cancel,
@@ -3689,28 +3691,39 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+/// The secret prompt: type the secret, Alt+K to keep it in the keychain, Enter to use
+/// it; the arrows walk Submit and Cancel and Esc cancels, as in every dialog.
 fn handle_secret_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    match key.code {
-        KeyCode::Esc => update(
-            model,
-            Action::SubmitSecret {
-                kind: crate::screens::secret_prompt::SecretChoiceKind::Cancel,
-            },
-        ),
-        KeyCode::Char('s') => update(
-            model,
-            Action::SubmitSecret {
-                kind: crate::screens::secret_prompt::SecretChoiceKind::SessionOnly,
-            },
-        ),
-        KeyCode::Char('k') => update(
-            model,
-            Action::SubmitSecret {
-                kind: crate::screens::secret_prompt::SecretChoiceKind::SaveToKeychain,
-            },
-        ),
-        _ => Vec::new(),
+    use crate::screens::secret_prompt::SecretChoiceKind;
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let prompt = &mut model.secret_prompt;
+    if key.code == KeyCode::Char('k') && key.modifiers.contains(KeyModifiers::ALT) {
+        prompt.keychain = !prompt.keychain && !prompt.temporary;
+        return Vec::new();
     }
+    let kind = match footer_key(&mut prompt.footer, &key) {
+        FooterKey::Cancel => SecretChoiceKind::Cancel,
+        FooterKey::Submit if prompt.keychain => SecretChoiceKind::SaveToKeychain,
+        FooterKey::Submit => SecretChoiceKind::SessionOnly,
+        FooterKey::Moved => return Vec::new(),
+        FooterKey::Pass => {
+            if prompt.footer == FooterFocus::Input {
+                match key.code {
+                    KeyCode::Backspace => prompt.buffer.pop(),
+                    KeyCode::Char(ch)
+                        if !key
+                            .modifiers
+                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+                    {
+                        prompt.buffer.push(ch)
+                    }
+                    _ => {}
+                }
+            }
+            return Vec::new();
+        }
+    };
+    update(model, Action::SubmitSecret { kind })
 }
 
 /// The "Delete connection" dialog: arrows and Tab move between its buttons, Enter
@@ -3823,6 +3836,7 @@ fn submit_secret(
             kind,
             profile,
             secret,
+            token: model.connections.pending_connect.unwrap_or(0),
         }],
     }
 }
@@ -8274,6 +8288,64 @@ mod tests {
         super::activate_existing_session(&mut model, &profile, session);
         assert_eq!(model.connection.driver, "postgres");
         assert_eq!(model.data.dialect, dexo_app::data::SqlDialect::Postgres);
+    }
+
+    /// The secret prompt takes the secret as typed; Enter uses it for the session,
+    /// Alt+K first keeps it in the keychain -- never for a temporary connection.
+    #[test]
+    fn the_secret_prompt_takes_what_is_typed() {
+        use crate::screens::secret_prompt::{SecretBuffer, SecretChoiceKind, SecretPurpose};
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(5)),
+            None,
+            "shop",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "db"}),
+            SecretRef::new("ref".into()),
+        );
+        let prompt = |model: &mut Model| {
+            update(
+                model,
+                Action::SecretRequired {
+                    purpose: SecretPurpose::DatabasePassword,
+                    profile: profile.clone(),
+                    buffer: SecretBuffer::new(String::new()),
+                },
+            );
+        };
+        let key = |code, modifiers| Action::Key(KeyEvent::new(code, modifiers));
+        let submitted = |effects: Vec<Effect>| match &effects[..] {
+            [Effect::SubmitSecret { kind, secret, .. }] => {
+                Some((*kind, secret.expose().to_string()))
+            }
+            _ => None,
+        };
+
+        let mut model = Model::default();
+        prompt(&mut model);
+        for ch in "pw1".chars() {
+            update(&mut model, key(KeyCode::Char(ch), KeyModifiers::NONE));
+        }
+        update(&mut model, key(KeyCode::Backspace, KeyModifiers::NONE));
+        update(&mut model, key(KeyCode::Char('2'), KeyModifiers::NONE));
+        assert!(!model.secret_prompt.lines().join("\n").contains("pw2"));
+        let effects = update(&mut model, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            submitted(effects),
+            Some((SecretChoiceKind::SessionOnly, "pw2".to_string()))
+        );
+
+        prompt(&mut model);
+        update(&mut model, key(KeyCode::Char('x'), KeyModifiers::NONE));
+        update(&mut model, key(KeyCode::Char('k'), KeyModifiers::ALT));
+        let effects = update(&mut model, key(KeyCode::Enter, KeyModifiers::NONE));
+        assert_eq!(
+            submitted(effects),
+            Some((SecretChoiceKind::SaveToKeychain, "x".to_string()))
+        );
     }
 
     #[test]

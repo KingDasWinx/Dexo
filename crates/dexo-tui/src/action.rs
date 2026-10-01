@@ -716,6 +716,9 @@ pub enum Effect {
         kind: crate::screens::secret_prompt::SecretChoiceKind,
         profile: ConnectionProfile,
         secret: crate::screens::secret_prompt::SecretBuffer,
+        /// The connect that asked for the secret: the dial answers it, and an answer to
+        /// any other is dropped as stale.
+        token: u64,
     },
     DuplicateProfile {
         id: dexo_app::ConnectionId,

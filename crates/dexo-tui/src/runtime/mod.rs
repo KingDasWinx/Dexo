@@ -85,14 +85,15 @@ impl OperationKey {
 
 pub(crate) struct SessionSecrets {
     keyring: Box<dyn SecretStore>,
-    memory: MemorySecretStore,
+    /// Shared with the spawned dials, so one the server turned down can forget it.
+    memory: Arc<MemorySecretStore>,
 }
 
 impl Default for SessionSecrets {
     fn default() -> Self {
         Self {
             keyring: Box::new(KeyringSecretStore),
-            memory: MemorySecretStore::default(),
+            memory: Arc::new(MemorySecretStore::default()),
         }
     }
 }
@@ -176,10 +177,14 @@ impl Password {
 }
 
 /// Dials `profile` with the password `password` resolves to, within `CONNECT_TIMEOUT`.
+/// A password the server turns down is forgotten if this session was holding it in
+/// memory -- a URL's, or one typed for the session -- so the next connect asks again
+/// instead of failing with it for ever.
 async fn dial(
     factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
     profile: &ConnectionProfile,
     password: Password,
+    memory: &MemorySecretStore,
 ) -> Result<(Box<dyn dexo_driver_api::Session>, SecretString), String> {
     let secret = password.resolve().await?;
     let (connect, _) = profile
@@ -187,7 +192,16 @@ async fn dial(
         .map_err(|error| error.to_string())?;
     match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await {
         Ok(Ok(session)) => Ok((session, secret)),
-        Ok(Err(error)) => Err(map_driver_error(error).to_string()),
+        Ok(Err(error)) => {
+            let rejected = error.category() == dexo_driver_api::DriverErrorCategory::Authentication;
+            let message = map_driver_error(error).to_string();
+            let key = profile.secret_ref.as_str();
+            if rejected && matches!(memory.get(key), Ok(Some(_))) {
+                let _ = memory.delete(key);
+                return Err(format!("{message} -- connect again to enter the password"));
+            }
+            Err(message)
+        }
         Err(_) => Err(format!(
             "{} did not answer within {}s",
             profile.name,
@@ -275,7 +289,8 @@ impl WorkbenchRuntime {
                 kind,
                 profile,
                 secret,
-            } => self.submit_secret(kind, profile, secret).await,
+                token,
+            } => self.submit_secret(kind, profile, secret, token).await,
             crate::Effect::DuplicateProfile { id } => self.duplicate_profile(id).await,
             crate::Effect::TestConnection { input, password } => {
                 self.test_input(input, password).await
@@ -901,6 +916,7 @@ impl WorkbenchRuntime {
         kind: crate::screens::secret_prompt::SecretChoiceKind,
         profile: ConnectionProfile,
         secret: crate::screens::secret_prompt::SecretBuffer,
+        token: u64,
     ) {
         use crate::screens::secret_prompt::SecretChoiceKind;
         let key = profile.secret_ref.as_str();
@@ -910,7 +926,7 @@ impl WorkbenchRuntime {
             SecretChoiceKind::SaveToKeychain => self.secrets.put_keychain(key, secret.expose()),
         };
         match result {
-            Ok(()) => self.connect_profile(profile, 0).await,
+            Ok(()) => self.connect_profile(profile, token).await,
             Err(SecretError::Unavailable) => {
                 self.emit(Action::SecretRequired {
                     purpose: crate::screens::secret_prompt::SecretPurpose::DatabasePassword,
@@ -971,8 +987,9 @@ impl WorkbenchRuntime {
         };
         let opening = Arc::clone(&self.opening);
         let action_tx = self.action_tx.clone();
+        let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
-            let action = match dial(factory, &profile, password).await {
+            let action = match dial(factory, &profile, password, &memory).await {
                 Ok((session, secret)) => {
                     let printed = from_command.then_some(secret);
                     *opening.lock().await = Some((token, profile, Arc::from(session), printed));
@@ -1142,9 +1159,12 @@ impl WorkbenchRuntime {
                 .map_err(|error| error.to_string())
         });
         let action_tx = self.action_tx.clone();
+        let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
             let answered = match ready {
-                Ok((factory, password)) => dial(factory, &profile, password).await.map(drop),
+                Ok((factory, password)) => {
+                    dial(factory, &profile, password, &memory).await.map(drop)
+                }
                 Err(message) => Err(message),
             };
             let (ok, message) = match answered {

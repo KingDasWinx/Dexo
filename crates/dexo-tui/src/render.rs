@@ -1666,23 +1666,10 @@ fn render_secret(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             hits,
             rect,
             line,
-            "s session only",
-            HitTarget::Button(HitButton::Session),
-        );
-        register_label(
-            hits,
-            rect,
-            line,
-            "k save to keychain",
+            "save to the keychain",
             HitTarget::Button(HitButton::Keychain),
         );
-        register_label(
-            hits,
-            rect,
-            line,
-            "esc cancel",
-            HitTarget::Button(HitButton::Cancel),
-        );
+        crate::widgets::form::register_footer(hits, rect, line, "Submit");
     });
 }
 

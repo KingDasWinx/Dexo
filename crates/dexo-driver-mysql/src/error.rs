@@ -8,7 +8,10 @@ pub fn map_error(error: mysql_async::Error) -> DriverError {
         if server.code == 1317 {
             return DriverError::new(DriverErrorCategory::Cancelled, "query cancelled");
         }
-        let category = if is_permission(&error) {
+        // 1045 is a rejected login: a wrong password, or a user that does not exist.
+        let category = if server.code == 1045 {
+            DriverErrorCategory::Authentication
+        } else if is_permission(&error) {
             DriverErrorCategory::Permission
         } else {
             DriverErrorCategory::Syntax
