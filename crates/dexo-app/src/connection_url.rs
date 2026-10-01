@@ -12,6 +12,9 @@ use crate::error::{AppError, ErrorCategory};
 pub struct UrlConnection {
     pub profile: ConnectionProfile,
     pub password: Option<SecretString>,
+    /// Something whoever opens the connection should be told, such as that the
+    /// password was given where other users can read it.
+    pub warning: Option<String>,
 }
 
 impl std::fmt::Debug for UrlConnection {
@@ -108,6 +111,7 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
     Ok(UrlConnection {
         profile: temporary(name, driver, config),
         password,
+        warning: None,
     })
 }
 
@@ -155,6 +159,7 @@ pub fn file(driver: &str, path: &std::path::Path) -> Result<UrlConnection, AppEr
     Ok(UrlConnection {
         profile: temporary(name, driver, config),
         password: None,
+        warning: None,
     })
 }
 

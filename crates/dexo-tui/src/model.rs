@@ -1688,6 +1688,8 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// Said once the startup connection is ready, where "Connected" would cover it.
+    pub startup_warning: Option<String>,
     /// `\x`: the grid shows each row as a record, one field per line, as psql's
     /// expanded display does. For the session, not one result.
     pub expanded_records: bool,
@@ -1815,6 +1817,7 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            startup_warning: None,
             expanded_records: false,
             external_edit: None,
             keys_disambiguated: false,

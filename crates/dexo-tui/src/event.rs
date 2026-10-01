@@ -57,7 +57,7 @@ async fn run_async(registry: DriverRegistry, startup: Startup) -> Result<(), Tui
                     .remember_secret(connection.profile.secret_ref.as_str(), password)
                     .map_err(map_tui)?;
             }
-            Some(connection.profile)
+            Some((connection.profile, connection.warning))
         }
     };
     let mut guard = TerminalGuard::enter(CrosstermTerminal)?;
@@ -92,7 +92,7 @@ async fn run_async(registry: DriverRegistry, startup: Startup) -> Result<(), Tui
 
 async fn run_loop(
     bootstrap: crate::runtime::storage_worker::BootstrapState,
-    temporary: Option<dexo_app::ConnectionProfile>,
+    temporary: Option<(dexo_app::ConnectionProfile, Option<String>)>,
     show_onboarding: bool,
     logo_frames: Arc<Vec<crate::entrance::LogoFrame>>,
     runtime: &mut WorkbenchRuntime,
@@ -105,11 +105,15 @@ async fn run_loop(
     model.keys_disambiguated = guard.keyboard_enhanced();
     model.onboarding.open = show_onboarding && temporary.is_none();
     model.onboarding.logo_frames = logo_frames;
-    if let Some(profile) = temporary {
+    if let Some((profile, warning)) = temporary {
         let effects = crate::update::update(
             &mut model,
             Action::OpenTemporaryConnection(Box::new(profile)),
         );
+        if let Some(warning) = warning {
+            model.messages.warn(warning.clone());
+            model.startup_warning = Some(warning);
+        }
         if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
             return Ok(());
         }

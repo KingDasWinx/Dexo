@@ -82,8 +82,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             if answered_connect && ready {
                 // Replaces the "Connecting…" toast; leaving that one up would read as a
-                // dial that never finished.
-                model.messages.info(format!("Connected to {name}"));
+                // dial that never finished. A warning from startup outranks it.
+                match model.startup_warning.take() {
+                    Some(warning) => model.messages.warn(warning),
+                    None => model.messages.info(format!("Connected to {name}")),
+                }
             }
             // An execution that was waiting on this connection. Dropped rather than
             // deferred again if the token moved on or the user changed tabs, because

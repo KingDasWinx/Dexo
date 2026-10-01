@@ -54,16 +54,20 @@ pub fn temporary_connection(
     password_prompt: bool,
 ) -> anyhow::Result<dexo_app::connection_url::UrlConnection> {
     let mut connection = dexo_app::connection_url::parse(url)?;
-    if password_prompt {
+    // A file has no password to ask for.
+    if password_prompt && !connection.profile.is_file() {
         let password =
             rpassword::prompt_password(format!("Password for {}: ", connection.profile.name))?;
         if !password.is_empty() {
             connection.password = Some(secrecy::SecretString::from(password));
         }
     } else if connection.password.is_some() {
-        eprintln!(
-            "dexo: the password in this URL may be in your shell history; `dexo --password-prompt <url>` asks for it instead"
-        );
+        // Printed here for whoever reads the terminal afterwards, and given to the
+        // workbench, whose screen covers this line at once.
+        let warning = "Other users can see this URL's password (ps) while Dexo runs; \
+                       --password-prompt asks for it instead.";
+        eprintln!("dexo: {warning}");
+        connection.warning = Some(warning.to_string());
     }
     Ok(connection)
 }
