@@ -939,8 +939,9 @@ fn run_explain(
     format: OutputFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
+    let sql = dexo_app::explain_service::single_statement(&sql)?.to_string();
     if analyze && !confirm {
-        anyhow::bail!("EXPLAIN ANALYZE executes the statement; pass --confirm");
+        anyhow::bail!("EXPLAIN ANALYZE runs the statement, then rolls it back; pass --confirm");
     }
     let plan = tokio::runtime::Runtime::new()?
         .block_on(explain_live(registry, connection, sql, analyze))?;

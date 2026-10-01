@@ -1,6 +1,6 @@
 use dexo_driver_api::{ExplainPlan, ExplainProvider, ExplainRequest, PlanNode};
 
-use crate::error::AppError;
+use crate::error::{AppError, ErrorCategory};
 use crate::query_service::map_driver_error;
 
 #[derive(Clone, Debug, Eq, PartialEq, serde::Serialize)]
@@ -116,6 +116,26 @@ pub fn ratio_label(estimate: Option<f64>, actual: Option<f64>) -> Option<String>
         Some("actual rows << estimate (heuristic)".into())
     } else {
         None
+    }
+}
+
+/// The one statement an EXPLAIN covers. A file holding several used to reach the server
+/// whole and come back as Postgres' "cannot insert multiple commands into a prepared
+/// statement".
+pub fn single_statement(sql: &str) -> Result<&str, AppError> {
+    match dexo_sql::split_statements(sql).as_slice() {
+        [span] => Ok(sql[span.byte_range.clone()].trim().trim_end_matches(';')),
+        [] => Err(AppError::new(
+            ErrorCategory::Syntax,
+            "there is no statement to explain",
+        )),
+        many => Err(AppError::new(
+            ErrorCategory::Syntax,
+            format!(
+                "EXPLAIN covers one statement and this has {}; pass the one to explain",
+                many.len()
+            ),
+        )),
     }
 }
 
