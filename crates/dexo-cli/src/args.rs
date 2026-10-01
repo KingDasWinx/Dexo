@@ -254,6 +254,9 @@ pub enum ConnectionsCommand {
         non_interactive: bool,
         #[arg(long)]
         password_stdin: bool,
+        /// Read the password from this command at every connect (`op read …`, `pass show …`).
+        #[arg(long)]
+        password_command: Option<String>,
         #[arg(long)]
         test: bool,
         #[arg(long)]

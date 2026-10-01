@@ -367,11 +367,19 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
             environment,
             non_interactive,
             password_stdin,
+            password_command,
             test,
             no_test,
         } => {
-            let password = read_secret(non_interactive, password_stdin)?;
+            let password = match &password_command {
+                Some(_) => String::new(),
+                None => read_secret(non_interactive, password_stdin)?,
+            };
             let repo = ConnectionRepository::new(db.connection());
+            let extra_config = match password_command {
+                Some(command) => serde_json::json!({ "password_command": command }),
+                None => serde_json::Value::Null,
+            };
             let (profile, persist) = create_connection(
                 NewConnection {
                     name,
@@ -381,6 +389,7 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
                     database,
                     username,
                     environment,
+                    extra_config,
                     ..NewConnection::default()
                 },
                 &password,
@@ -810,18 +819,33 @@ async fn collect_snapshot(
     Ok(objects)
 }
 
-pub(crate) async fn connect_session(
-    registry: &DriverRegistry,
+/// The connection's password: from its password command when it has one, run off the
+/// async workers because it may take seconds, otherwise from the keychain.
+async fn profile_secret(
     profile: &dexo_app::ConnectionProfile,
-) -> anyhow::Result<Box<dyn dexo_driver_api::Session>> {
-    let secret = KeyringSecretStore
+) -> anyhow::Result<secrecy::SecretString> {
+    if let Some(command) = profile.password_command() {
+        let command = command.to_string();
+        return Ok(tokio::task::spawn_blocking(move || {
+            dexo_app::password_command::run(&command, dexo_app::password_command::TIMEOUT)
+        })
+        .await??);
+    }
+    Ok(KeyringSecretStore
         .get(profile.secret_ref.as_str())?
         .ok_or_else(|| {
             AppError::new(
                 ErrorCategory::Authentication,
                 "secret is missing for this connection",
             )
-        })?;
+        })?)
+}
+
+pub(crate) async fn connect_session(
+    registry: &DriverRegistry,
+    profile: &dexo_app::ConnectionProfile,
+) -> anyhow::Result<Box<dyn dexo_driver_api::Session>> {
+    let secret = profile_secret(profile).await?;
     let factory = registry.get(&profile.driver)?;
     let (connect, _) = profile.connect_request(secret)?;
     Ok(factory.connect(connect).await.map_err(map_driver_error)?)
@@ -900,14 +924,7 @@ async fn execute_script(
                 format!("unknown connection '{connection}'"),
             )
         })?;
-    let secret = KeyringSecretStore
-        .get(profile.secret_ref.as_str())?
-        .ok_or_else(|| {
-            AppError::new(
-                ErrorCategory::Authentication,
-                "secret is missing for this connection",
-            )
-        })?;
+    let secret = profile_secret(&profile).await?;
     let factory = registry.get(&profile.driver)?;
     let (connect, conn_policy) = profile.connect_request(secret)?;
     let session = factory.connect(connect).await.map_err(map_driver_error)?;

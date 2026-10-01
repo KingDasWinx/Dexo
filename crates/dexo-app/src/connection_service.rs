@@ -53,6 +53,17 @@ pub fn create(
     repo: &impl ConnectionProfiles,
 ) -> Result<(ConnectionProfile, SecretPersist), AppError> {
     let profile = build_profile(input)?;
+    if profile.password_command().is_some() {
+        // The password manager answers every connect; nothing goes to the keychain.
+        if repo.get_by_name(&profile.name)?.is_some() {
+            return Err(AppError::new(
+                ErrorCategory::Configuration,
+                format!("connection '{}' already exists", profile.name),
+            ));
+        }
+        repo.save(&profile)?;
+        return Ok((profile, SecretPersist::Stored));
+    }
     if password.is_empty() {
         return Err(AppError::new(
             ErrorCategory::Authentication,

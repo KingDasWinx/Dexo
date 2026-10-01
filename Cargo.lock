@@ -1742,6 +1742,7 @@ dependencies = [
  "dexo-secrets",
  "dexo-storage",
  "rpassword",
+ "secrecy",
  "serde_json",
  "tempfile",
  "tokio",

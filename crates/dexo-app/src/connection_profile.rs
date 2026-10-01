@@ -73,6 +73,16 @@ impl ConnectionProfile {
         }
     }
 
+    /// The command that prints this connection's password, when it takes the password
+    /// from a password manager instead of the keychain.
+    pub fn password_command(&self) -> Option<&str> {
+        self.config
+            .get("password_command")
+            .and_then(serde_json::Value::as_str)
+            .map(str::trim)
+            .filter(|command| !command.is_empty())
+    }
+
     pub fn connect_request(
         &self,
         secrets: impl Into<ConnectionSecrets>,
