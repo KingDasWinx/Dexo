@@ -118,10 +118,15 @@ fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> 
             ),
         ));
     }
-    let path = std::path::absolute(&path).map_err(|error| {
+    file(driver, std::path::Path::new(&path))
+}
+
+/// A temporary connection to the file at `path`, named after it.
+pub fn file(driver: &str, path: &std::path::Path) -> Result<UrlConnection, AppError> {
+    let path = std::path::absolute(path).map_err(|error| {
         AppError::new(
             ErrorCategory::Configuration,
-            format!("not a connection URL: {path}: {error}"),
+            format!("{}: {error}", path.display()),
         )
     })?;
     let name = path

@@ -21,6 +21,7 @@ dexo-tui = { path = "../dexo-tui" }
 dexo-storage = { path = "../dexo-storage" }
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
+rusqlite.workspace = true
 
 [dev-dependencies]
 tokio-util.workspace = true

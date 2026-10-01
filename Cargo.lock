@@ -1692,6 +1692,7 @@ dependencies = [
  "dexo-tui",
  "futures-util",
  "predicates",
+ "rusqlite",
  "secrecy",
  "serde_json",
  "tempfile",

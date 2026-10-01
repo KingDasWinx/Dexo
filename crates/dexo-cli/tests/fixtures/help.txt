@@ -27,6 +27,9 @@ Options:
       --password-prompt
           Ask for the URL's password on the terminal instead of putting it in the URL, where shell history keeps it
 
+      --demo
+          Open a sample shop (customers, products, orders) to try every screen on, with nothing to install or connect to. It starts over on every run
+
   -h, --help
           Print help
 

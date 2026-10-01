@@ -1,3 +1,5 @@
+mod demo;
+
 use std::sync::Arc;
 
 use clap::Parser;
@@ -27,6 +29,7 @@ impl TuiRunner for Workbench {
     fn run(self, start: TuiStart) -> anyhow::Result<()> {
         let startup = match start {
             TuiStart::Workbench => dexo_tui::Startup::Workbench,
+            TuiStart::Demo => dexo_tui::Startup::Temporary(Box::new(demo::create()?)),
             TuiStart::Url {
                 url,
                 password_prompt,

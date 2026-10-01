@@ -2,6 +2,8 @@
 
 `dexo` with no subcommand starts the TUI. Subcommands reuse the same app layer.
 
+`dexo <url>` starts it connected to a URL -- `postgres://`, `postgresql://`, `mysql://`, `mariadb://` or `sqlite:///path` -- without saving a connection; the password stays in memory, and `--password-prompt` asks for it instead of reading it from the URL. "Save Connection…" in the palette keeps it. `dexo --demo` starts it on a sample shop in SQLite, recreated on every run.
+
 Help text is golden-tested in `crates/dexo-cli/tests/help.rs`. Snippets:
 
 ```text

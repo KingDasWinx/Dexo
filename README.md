@@ -99,6 +99,16 @@ Start the workbench:
 dexo
 ```
 
+Try it on a sample shop, with nothing to install or connect to, or open a database straight from its URL without saving a connection:
+
+```sh
+dexo --demo
+dexo postgres://user@localhost:5432/shop
+dexo sqlite:///path/to/file.db
+```
+
+`dexo --password-prompt <url>` asks for the password instead of reading it from the URL, where your shell history would keep it.
+
 Add a connection from the sidebar with <kbd>n</kbd>, or from the command line. Passwords are stored in the operating system's keychain, never in the local database.
 
 ```sh

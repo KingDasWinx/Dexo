@@ -18,6 +18,10 @@ pub struct Args {
     /// shell history keeps it.
     #[arg(long, requires = "url")]
     pub password_prompt: bool,
+    /// Open a sample shop (customers, products, orders) to try every screen on, with
+    /// nothing to install or connect to. It starts over on every run.
+    #[arg(long, conflicts_with = "url")]
+    pub demo: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
@@ -26,6 +30,7 @@ pub struct Args {
 pub enum TuiStart {
     Workbench,
     Url { url: String, password_prompt: bool },
+    Demo,
 }
 
 #[derive(Debug)]
@@ -42,6 +47,7 @@ impl Args {
                 url,
                 password_prompt: self.password_prompt,
             }),
+            (None, None) if self.demo => LaunchMode::Tui(TuiStart::Demo),
             (None, None) => LaunchMode::Tui(TuiStart::Workbench),
         }
     }

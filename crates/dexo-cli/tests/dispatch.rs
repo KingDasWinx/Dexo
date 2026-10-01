@@ -42,6 +42,11 @@ fn bare_dexo_invokes_tui_runner() {
             ..
         })
     ));
+    assert!(matches!(
+        Args::parse_from(["dexo", "--demo"]).launch_mode(),
+        LaunchMode::Tui(dexo_cli::args::TuiStart::Demo)
+    ));
+    assert!(Args::try_parse_from(["dexo", "--demo", "postgres://ana@db/shop"]).is_err());
     let args = Args::parse_from(["dexo"]);
     run_dispatch(args, DriverRegistry::new(), move || {
         flag.store(true, Ordering::SeqCst);
