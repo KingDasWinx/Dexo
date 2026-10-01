@@ -242,3 +242,27 @@ fn a_session_closing_under_the_prompt_runs_nothing_on_the_next_connection() {
         model.connection.name
     );
 }
+
+/// EXPLAIN ANALYZE runs the statement, so on a read-only connection a write is refused
+/// before the dialog, not sent for the server to refuse.
+#[test]
+fn explain_analyze_of_a_write_is_refused_on_a_read_only_connection() {
+    let mut model = live("local", true, "delete from orders");
+    update(&mut model, Action::ConfirmExplainAnalyze);
+    assert!(model.explain_prompt.is_none(), "the analyze dialog opened");
+    let effects = update(&mut model, Action::RunExplainAnalyze);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RunExplain { .. })),
+        "EXPLAIN ANALYZE of a write was sent"
+    );
+    let mut model = live("local", true, "select * from orders");
+    let effects = update(&mut model, Action::RunExplainAnalyze);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RunExplain { analyze: true, .. })),
+        "a read was refused"
+    );
+}

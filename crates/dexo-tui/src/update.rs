@@ -1122,7 +1122,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         // ANALYZE runs the statement, so it asks first; it used to run straight from the
         // palette, and its "confirmation" was a flag it set on itself.
         Action::ConfirmExplainAnalyze => {
-            model.explain_prompt = Some(crate::widgets::form::FooterFocus::Submit);
+            if !analyze_refused(model) {
+                model.explain_prompt = Some(crate::widgets::form::FooterFocus::Submit);
+            }
             Vec::new()
         }
         Action::RunExplainAnalyze => {
@@ -6134,12 +6136,43 @@ fn results_of_document<'a>(
         .map(|candidate| &mut candidate.results)
 }
 
+/// EXPLAIN ANALYZE runs the statement under the cursor, so on a read-only connection
+/// a statement that is not a read is refused here, before anything is sent, with the
+/// editor's own words. It used to reach the server, which refused it.
+fn analyze_refused(model: &mut Model) -> bool {
+    if !model.connection.read_only {
+        return false;
+    }
+    let document = model.active_document();
+    let text = document.text();
+    let cursor = text
+        .chars()
+        .take(document.cursor())
+        .map(char::len_utf8)
+        .sum();
+    let Some(sql) = crate::runtime::explain_manager::statement_sql(&text, cursor) else {
+        return false;
+    };
+    if dexo_sql::is_read(&sql, crate::screens::editor::editor_dialect(model)) {
+        return false;
+    }
+    let first = sql.lines().next().unwrap_or_default().to_string();
+    model.messages.error(format!(
+        "Not run: {} is read-only, and EXPLAIN ANALYZE would run a statement that is not a read: {first}",
+        model.connection.name,
+    ));
+    true
+}
+
 /// EXPLAIN is an operation like a run: it holds the slot Ctrl+F2 cancels, and it waits
 /// for one already running instead of racing it on the same session.
 fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
+    if analyze && analyze_refused(model) {
+        return Vec::new();
+    }
     if model.active_operation.is_some() {
         model
             .messages
