@@ -49,69 +49,37 @@ pub async fn run_live(
     document: &str,
     cursor: usize,
     analyze: bool,
+    operation: crate::runtime::OperationId,
     tx: tokio::sync::mpsc::Sender<crate::action::Action>,
 ) {
     let manager = ExplainManager::default();
     if analyze {
         manager.confirm_analyze();
     }
-    match manager.explain(document, cursor, analyze).await {
-        Ok(()) => {
-            let sql = manager.explain_sql();
-            let Some(provider) = session.explain() else {
-                let _ = tx
-                    .send(crate::action::Action::OperationFailed {
-                        key: crate::runtime::OperationKey::new(
-                            crate::runtime::OperationId::new(),
-                            "",
-                            "",
-                            0,
-                        ),
-                        message: "explain unavailable".into(),
-                    })
-                    .await;
-                return;
-            };
-            let request = if analyze {
-                ExplainRequest::analyzed(sql)
-            } else {
-                ExplainRequest::estimated(sql)
-            };
-            match provider.explain(request).await {
-                Ok(plan) => {
-                    let _ = tx
-                        .send(crate::action::Action::ExplainLoaded {
-                            plan: Box::new(plan),
-                        })
-                        .await;
-                }
-                Err(error) => {
-                    let _ = tx
-                        .send(crate::action::Action::OperationFailed {
-                            key: crate::runtime::OperationKey::new(
-                                crate::runtime::OperationId::new(),
-                                "",
-                                "",
-                                0,
-                            ),
-                            message: error.to_string(),
-                        })
-                        .await;
-                }
+    let outcome = match manager.explain(document, cursor, analyze).await {
+        Ok(()) => match session.explain() {
+            Some(provider) => {
+                let sql = manager.explain_sql();
+                let request = if analyze {
+                    ExplainRequest::analyzed(sql)
+                } else {
+                    ExplainRequest::estimated(sql)
+                };
+                provider
+                    .explain(request)
+                    .await
+                    .map_err(|error| error.to_string())
             }
-        }
-        Err(message) => {
-            let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
-                    message,
-                })
-                .await;
-        }
-    }
+            None => Err("explain is unavailable for this connection".into()),
+        },
+        Err(message) => Err(message),
+    };
+    let action = match outcome {
+        Ok(plan) => crate::action::Action::ExplainLoaded {
+            plan: Box::new(plan),
+            operation,
+        },
+        Err(message) => crate::action::Action::ExplainFailed { operation, message },
+    };
+    let _ = tx.send(action).await;
 }

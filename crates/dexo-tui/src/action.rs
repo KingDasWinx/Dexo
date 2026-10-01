@@ -438,6 +438,11 @@ pub enum Action {
     },
     ExplainLoaded {
         plan: Box<dexo_driver_api::ExplainPlan>,
+        operation: OperationId,
+    },
+    ExplainFailed {
+        operation: OperationId,
+        message: String,
     },
     AdminSessionsLoaded {
         sessions: Vec<dexo_driver_api::SessionInfo>,
@@ -743,6 +748,7 @@ pub enum Effect {
         cursor: usize,
         analyze: bool,
         session: SessionId,
+        operation: OperationId,
         generation: u64,
     },
     LoadAdminSessions {

@@ -1337,7 +1337,6 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "schema.raw"
         | "schema.diff"
         | "schema.security"
-        | "explain.open"
         | "admin.sessions"
         | "data.page_next"
         | "data.page_prev"
@@ -1381,11 +1380,9 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explorer.favorite"
         | "explorer.up"
         | "explorer.down" => &[ExplorerNode],
-        "transfer.import"
-        | "backup.dump"
-        | "backup.restore"
-        | "explorer.refresh_all"
-        | "explain.analyze" => &[ActiveSession],
+        "transfer.import" | "backup.dump" | "backup.restore" | "explorer.refresh_all" => {
+            &[ActiveSession]
+        }
         "explorer.refresh" => &[ActiveSession, ExplorerNode],
         "connection.test"
         | "connection.duplicate"

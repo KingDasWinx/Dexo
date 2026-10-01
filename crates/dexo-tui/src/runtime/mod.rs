@@ -294,18 +294,39 @@ impl WorkbenchRuntime {
                 cursor,
                 analyze,
                 session,
+                operation,
                 generation: _,
             } => {
-                if let Some(active) = self.sessions.get(session) {
-                    explain_manager::run_live(
-                        Arc::clone(&active.session),
-                        &sql,
-                        cursor,
-                        analyze,
-                        self.action_tx.clone(),
-                    )
+                let Some(active) = self.sessions.get(session) else {
+                    self.emit(Action::ExplainFailed {
+                        operation,
+                        message: "session is closed".into(),
+                    })
                     .await;
-                }
+                    return;
+                };
+                // Spawned, never awaited here: this arm runs on the loop that draws frames,
+                // and an ANALYZE runs the whole statement -- the screen used to freeze
+                // until it finished. The live slot is what Ctrl+F2 cancels.
+                let session = Arc::clone(&active.session);
+                let task = self.query.registry().register().id;
+                *self.live.lock().await = Some(query_runner::LiveQuery {
+                    task,
+                    query: dexo_driver_api::QueryId(Uuid::new_v4()),
+                    session: Arc::clone(&session),
+                });
+                let live = Arc::clone(&self.live);
+                let registry = Arc::clone(self.query.registry());
+                let action_tx = self.action_tx.clone();
+                tokio::spawn(async move {
+                    explain_manager::run_live(session, &sql, cursor, analyze, operation, action_tx)
+                        .await;
+                    let mut slot = live.lock().await;
+                    if slot.as_ref().is_some_and(|live| live.task == task) {
+                        *slot = None;
+                    }
+                    registry.finish(task);
+                });
             }
             crate::Effect::LoadAdminSessions { session, .. } => {
                 if let Some(active) = self.sessions.get(session) {

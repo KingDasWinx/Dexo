@@ -1082,11 +1082,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::OpenRestore => {
             open_transfer(model, crate::screens::transfer::TransferMode::Restore)
         }
-        Action::OpenExplain => {
-            model.results.view = crate::model::ResultsView::Explain;
-            model.results.explain_scroll = 0;
-            explain_effect(model, false)
-        }
+        Action::OpenExplain => execute_on_document_connection(model, action),
         Action::DismissToast => {
             model.messages.dismiss();
             Vec::new()
@@ -1117,7 +1113,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConfirmExplainAnalyze => {
             model.explain.analyze_confirmed = true;
-            explain_effect(model, true)
+            execute_on_document_connection(model, action)
         }
         Action::OpenAdmin => {
             model.admin.open = true;
@@ -1410,12 +1406,29 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.schema_editor.preview = None;
             Vec::new()
         }
-        Action::ExplainLoaded { plan } => {
+        Action::ExplainLoaded { plan, operation } => {
+            if model.active_operation == Some(operation) {
+                model.active_operation = None;
+            }
             let previous = model.explain.plan.clone();
             model.explain.set_plan(*plan, previous.as_ref());
             // Show the plan where output lives; never move the user's focus for it.
             model.results.view = crate::model::ResultsView::Explain;
             model.results.explain_scroll = 0;
+            Vec::new()
+        }
+        Action::ExplainFailed { operation, message } => {
+            if model.active_operation == Some(operation) {
+                model.active_operation = None;
+            }
+            // The plan on screen belonged to an earlier statement; left there, it read as
+            // the answer for this one.
+            model.explain.plan = None;
+            model.explain.compare.clear();
+            model.messages.error(message);
+            model.results.view = crate::model::ResultsView::Messages;
+            model.results.messages_scroll =
+                u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
             Vec::new()
         }
         Action::AdminSessionsLoaded {
@@ -4480,6 +4493,13 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             effects.extend(refresh_table_data(model));
             return effects;
         }
+        Action::OpenExplain | Action::ConfirmExplainAnalyze => {
+            effects.extend(explain_effect(
+                model,
+                matches!(action, Action::ConfirmExplainAnalyze),
+            ));
+            return effects;
+        }
         _ => return effects,
     }
     effects.extend(start_query(model));
@@ -5964,10 +5984,22 @@ fn submit_data_query_prompt(model: &mut Model) -> Vec<Effect> {
     apply_remote_query(model)
 }
 
-fn explain_effect(model: &Model, analyze: bool) -> Vec<Effect> {
+/// EXPLAIN is an operation like a run: it holds the slot Ctrl+F2 cancels, and it waits
+/// for one already running instead of racing it on the same session.
+fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
+    if model.active_operation.is_some() {
+        model
+            .messages
+            .warn("a statement is still running; cancel it with Ctrl+F2 first".into());
+        return Vec::new();
+    }
+    let operation = crate::runtime::OperationId::new();
+    model.active_operation = Some(operation);
+    model.results.view = crate::model::ResultsView::Explain;
+    model.results.explain_scroll = 0;
     let document = model.active_document();
     let sql = document.text();
     let cursor = sql
@@ -5980,6 +6012,7 @@ fn explain_effect(model: &Model, analyze: bool) -> Vec<Effect> {
         cursor,
         analyze,
         session,
+        operation,
         generation: model.session_generation,
     }]
 }
@@ -7911,6 +7944,7 @@ mod tests {
             &mut model,
             Action::ExplainLoaded {
                 plan: Box::new(plan),
+                operation: crate::runtime::OperationId::new(),
             },
         );
 
