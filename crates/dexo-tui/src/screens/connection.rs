@@ -279,9 +279,10 @@ impl ConnectionForm {
         let password = field(&self.fields, "password");
         let opens_file = DriverDescriptor::for_id(&field(&self.fields, "driver"))
             .is_some_and(|descriptor| descriptor.file);
+        let from_command = !field(&self.fields, "password_command").trim().is_empty();
         match to_input(&self.fields) {
             Ok(input) => {
-                if self.editing.is_none() && password.is_empty() && !opens_file {
+                if self.editing.is_none() && password.is_empty() && !opens_file && !from_command {
                     self.errors.push("password is required".into());
                     return None;
                 }
@@ -439,6 +440,11 @@ fn populate_advanced_fields(fields: &mut [FormField], profile: &ConnectionProfil
         set_json_field(fields, "proxy_host", proxy.get("host"));
         set_json_field(fields, "proxy_port", proxy.get("port"));
     }
+    set_json_field(
+        fields,
+        "password_command",
+        profile.config.get("password_command"),
+    );
     set_option_field(fields, "read_only", profile.policy.read_only);
     set_option_field(
         fields,
@@ -533,6 +539,8 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
         field_of("password", true),
         environment,
         field_of("group", false),
+        // Prints the password -- `op read …`, `pass show …` -- in place of the keychain.
+        field_of("password_command", false),
     ];
     let Some(descriptor) = descriptor else {
         return fields;
@@ -652,6 +660,13 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
                 "host": proxy_host,
                 "port": field(fields, "proxy_port").parse::<u16>().unwrap_or(0),
             }),
+        );
+    }
+    let password_command = field(fields, "password_command");
+    if !password_command.trim().is_empty() {
+        extra.insert(
+            "password_command".into(),
+            serde_json::Value::String(password_command.trim().into()),
         );
     }
     let path = field(fields, "path");
@@ -806,6 +821,35 @@ mod tests {
         assert_eq!(input.driver, "sqlite");
         assert_eq!(input.extra_config["path"], "/data/shop.db");
         assert!(password.is_empty());
+    }
+
+    /// A password manager's command stands in for the password, and comes back when the
+    /// connection is edited.
+    #[test]
+    fn a_password_command_replaces_the_password() {
+        let mut form = ConnectionForm::open();
+        for (label, value) in [
+            ("name", "vault"),
+            ("host", "db"),
+            ("database", "shop"),
+            ("username", "ana"),
+            ("password_command", " op read op://dev/shop/password "),
+        ] {
+            form.set_value(label, value);
+        }
+        let (input, password) = form.submit().expect("no password needed");
+        assert!(password.is_empty());
+        assert_eq!(
+            input.extra_config["password_command"],
+            "op read op://dev/shop/password"
+        );
+        let profile = dexo_app::test_connection_input(input).unwrap();
+        let edit = ConnectionForm::open_edit(&profile);
+        assert!(
+            edit.lines()
+                .join("\n")
+                .contains("op read op://dev/shop/password")
+        );
     }
 
     #[test]

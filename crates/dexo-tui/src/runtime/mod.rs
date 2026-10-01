@@ -132,7 +132,69 @@ const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// A connect that finished, waiting for `Effect::AdoptSession` to move it into the
 /// registry. Parked rather than returned because the dialling runs in its own task.
-type OpenedSession = (u64, ConnectionProfile, Arc<dyn dexo_driver_api::Session>);
+/// A dialled session waiting to be adopted, with what a password command printed for
+/// it, kept in memory for the side connections (export, import) the session opens.
+type OpenedSession = (
+    u64,
+    ConnectionProfile,
+    Arc<dyn dexo_driver_api::Session>,
+    Option<SecretString>,
+);
+
+/// Where a connection's password comes from, settled before anything slow runs.
+enum Password {
+    Ready(SecretString),
+    /// A password manager's command: it may take seconds or hang, so it runs on a
+    /// blocking thread inside the spawned dial, never on the event loop.
+    Command(String),
+}
+
+impl Password {
+    fn for_profile(
+        profile: &ConnectionProfile,
+        secrets: &SessionSecrets,
+    ) -> Result<Self, Box<Action>> {
+        match profile.password_command() {
+            Some(command) => Ok(Self::Command(command.to_string())),
+            None => connection_manager::ConnectionManager::new(secrets)
+                .connect(profile)
+                .map(Self::Ready),
+        }
+    }
+
+    async fn resolve(self) -> Result<SecretString, String> {
+        match self {
+            Self::Ready(secret) => Ok(secret),
+            Self::Command(command) => tokio::task::spawn_blocking(move || {
+                dexo_app::password_command::run(&command, dexo_app::password_command::TIMEOUT)
+            })
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.to_string()),
+        }
+    }
+}
+
+/// Dials `profile` with the password `password` resolves to, within `CONNECT_TIMEOUT`.
+async fn dial(
+    factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
+    profile: &ConnectionProfile,
+    password: Password,
+) -> Result<(Box<dyn dexo_driver_api::Session>, SecretString), String> {
+    let secret = password.resolve().await?;
+    let (connect, _) = profile
+        .connect_request(SecretString::from(secret.expose_secret().to_string()))
+        .map_err(|error| error.to_string())?;
+    match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await {
+        Ok(Ok(session)) => Ok((session, secret)),
+        Ok(Err(error)) => Err(map_driver_error(error).to_string()),
+        Err(_) => Err(format!(
+            "{} did not answer within {}s",
+            profile.name,
+            CONNECT_TIMEOUT.as_secs()
+        )),
+    }
+}
 
 pub struct WorkbenchRuntime {
     action_tx: tokio::sync::mpsc::Sender<Action>,
@@ -870,44 +932,32 @@ impl WorkbenchRuntime {
         }
         // Everything up to the dial is local and fast; the dial itself is spawned, or a
         // host that never answers holds the whole event loop and the UI stops drawing.
-        let secret =
-            match connection_manager::ConnectionManager::new(&self.secrets).connect(&profile) {
-                Ok(secret) => secret,
-                Err(action) => return self.emit(*action).await,
-            };
-        let request = self
-            .drivers
-            .get(&profile.driver)
-            .map_err(|error| error.to_string())
-            .and_then(|factory| {
-                profile
-                    .connect_request(secret)
-                    .map(|(connect, _)| (factory, connect))
-                    .map_err(|error| error.to_string())
-            });
-        let (factory, connect) = match request {
-            Ok(pair) => pair,
-            Err(message) => return self.emit(Action::ConnectionFormError { message }).await,
+        // A password command is part of the dial.
+        let password = match Password::for_profile(&profile, &self.secrets) {
+            Ok(password) => password,
+            Err(action) => return self.emit(*action).await,
+        };
+        let from_command = matches!(password, Password::Command(_));
+        let factory = match self.drivers.get(&profile.driver) {
+            Ok(factory) => factory,
+            Err(error) => {
+                return self
+                    .emit(Action::ConnectionFormError {
+                        message: error.to_string(),
+                    })
+                    .await;
+            }
         };
         let opening = Arc::clone(&self.opening);
         let action_tx = self.action_tx.clone();
         tokio::spawn(async move {
-            let action = match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await
-            {
-                Ok(Ok(session)) => {
-                    *opening.lock().await = Some((token, profile, Arc::from(session)));
+            let action = match dial(factory, &profile, password).await {
+                Ok((session, secret)) => {
+                    let printed = from_command.then_some(secret);
+                    *opening.lock().await = Some((token, profile, Arc::from(session), printed));
                     Action::SessionOpened { token }
                 }
-                Ok(Err(error)) => Action::ConnectionFormError {
-                    message: map_driver_error(error).to_string(),
-                },
-                Err(_) => Action::ConnectionFormError {
-                    message: format!(
-                        "{} did not answer within {}s",
-                        profile.name,
-                        CONNECT_TIMEOUT.as_secs()
-                    ),
-                },
+                Err(message) => Action::ConnectionFormError { message },
             };
             let _ = action_tx.send(action).await;
         });
@@ -922,10 +972,15 @@ impl WorkbenchRuntime {
             // would drop its session on the floor.
             return;
         }
-        let Some((_, profile, session)) = slot.take() else {
+        let Some((_, profile, session, printed)) = slot.take() else {
             return;
         };
         drop(slot);
+        if let Some(secret) = printed {
+            let _ = self
+                .secrets
+                .put_memory(profile.secret_ref.as_str(), secret.expose_secret());
+        }
         let unavailable = session
             .capabilities()
             .iter()
@@ -1018,6 +1073,7 @@ impl WorkbenchRuntime {
         match dexo_app::test_connection_input(input) {
             Ok(profile) => {
                 if !profile.is_file()
+                    && profile.password_command().is_none()
                     && let Err(error) = self
                         .secrets
                         .put_memory(profile.secret_ref.as_str(), &password)
@@ -1028,25 +1084,7 @@ impl WorkbenchRuntime {
                     .await;
                     return;
                 }
-                let name = profile.name.clone();
-                match self.open_session(&profile).await {
-                    Ok(_) => {
-                        self.emit(Action::ConnectionTested {
-                            name,
-                            ok: true,
-                            message: "ok".into(),
-                        })
-                        .await;
-                    }
-                    Err(message) => {
-                        self.emit(Action::ConnectionTested {
-                            name,
-                            ok: false,
-                            message,
-                        })
-                        .await;
-                    }
-                }
+                self.spawn_test(profile);
             }
             Err(error) => {
                 self.emit(Action::ConnectionFormError {
@@ -1058,13 +1096,47 @@ impl WorkbenchRuntime {
     }
 
     async fn test_saved(&mut self, profile: ConnectionProfile) {
-        let name = profile.name.clone();
-        let (ok, message) = match self.open_session(&profile).await {
-            Ok(_) => (true, "ok".into()),
-            Err(message) => (false, message),
-        };
-        self.emit(Action::ConnectionTested { name, ok, message })
-            .await;
+        self.spawn_test(profile);
+    }
+
+    /// Dials `profile` once and reports whether it answered. Spawned like a connect: a
+    /// host or a password command that never answers would otherwise stop the UI.
+    fn spawn_test(&self, profile: ConnectionProfile) {
+        let ready = match profile.password_command() {
+            Some(command) => Ok(Password::Command(command.to_string())),
+            None => profile
+                .password(&self.secrets)
+                .map_err(|error| error.to_string())
+                .and_then(|secret| {
+                    secret
+                        .map(Password::Ready)
+                        .ok_or_else(|| "secret is missing for this connection".to_string())
+                }),
+        }
+        .and_then(|password| {
+            self.drivers
+                .get(&profile.driver)
+                .map(|factory| (factory, password))
+                .map_err(|error| error.to_string())
+        });
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            let answered = match ready {
+                Ok((factory, password)) => dial(factory, &profile, password).await.map(drop),
+                Err(message) => Err(message),
+            };
+            let (ok, message) = match answered {
+                Ok(()) => (true, "ok".into()),
+                Err(message) => (false, message),
+            };
+            let _ = action_tx
+                .send(Action::ConnectionTested {
+                    name: profile.name,
+                    ok,
+                    message,
+                })
+                .await;
+        });
     }
 
     async fn close_session(&mut self, session: SessionId) {
@@ -1080,38 +1152,6 @@ impl WorkbenchRuntime {
         let paths = AppPaths::discover().map_err(|error| error.to_string())?;
         let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
         f(&ConnectionRepository::new(db.connection()))
-    }
-
-    async fn open_session(
-        &self,
-        profile: &ConnectionProfile,
-    ) -> Result<Arc<dyn dexo_driver_api::Session>, String> {
-        let secret = profile
-            .password(&self.secrets)
-            .map_err(|error| error.to_string())?
-            .ok_or_else(|| "secret is missing for this connection".to_string())?;
-        let factory = self
-            .drivers
-            .get(&profile.driver)
-            .map_err(|error| error.to_string())?;
-        let (connect, _) = profile
-            .connect_request(secret)
-            .map_err(|error| error.to_string())?;
-        // These callers still dial on the event loop, so the cap is what keeps the UI
-        // from freezing for the OS timeout on an unroutable host.
-        // ponytail: spawn them like `connect_profile` if a 10s stall is still too long.
-        let boxed = tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect))
-            .await
-            .map_err(|_| {
-                format!(
-                    "{} did not answer within {}s",
-                    profile.name,
-                    CONNECT_TIMEOUT.as_secs()
-                )
-            })?
-            .map_err(map_driver_error)
-            .map_err(|error| error.to_string())?;
-        Ok(Arc::from(boxed))
     }
 
     pub async fn start_script(&mut self, request: ScriptRequest) -> anyhow::Result<()> {
