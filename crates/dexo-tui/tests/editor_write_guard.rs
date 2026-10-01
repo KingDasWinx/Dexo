@@ -147,7 +147,8 @@ fn a_destructive_statement_asks_and_esc_runs_nothing() {
 #[test]
 fn enter_on_the_default_focus_cancels_a_destructive_run() {
     let mut model = live("local", false, "drop table orders");
-    update(&mut model, Action::ExecuteDocument);
+    assert!(!ran(&update(&mut model, Action::ExecuteDocument)));
+    assert!(model.run_prompt.is_some());
     assert!(!ran(&press(&mut model, KeyCode::Enter)));
     assert!(model.run_prompt.is_none());
 }
