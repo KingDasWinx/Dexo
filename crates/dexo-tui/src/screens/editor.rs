@@ -176,7 +176,7 @@ impl Default for EditorState {
     }
 }
 
-fn editor_dialect(model: &Model) -> Dialect {
+pub(crate) fn editor_dialect(model: &Model) -> Dialect {
     if model.connection.driver == "mysql" {
         Dialect::Mysql
     } else {

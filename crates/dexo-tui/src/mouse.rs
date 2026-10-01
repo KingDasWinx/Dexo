@@ -87,6 +87,7 @@ pub enum OverlayKind {
     ResultsMenu,
     NodeMenu,
     ClosePrompt,
+    RunPrompt,
     ExplainPrompt,
     DeleteConnection,
     Review,
@@ -208,6 +209,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
     [
         // A question about losing work sits above everything else.
         (model.close_prompt.is_some(), OverlayKind::ClosePrompt),
+        (model.run_prompt.is_some(), OverlayKind::RunPrompt),
         (model.explain_prompt.is_some(), OverlayKind::ExplainPrompt),
         (
             model.connections.delete_target.is_some(),

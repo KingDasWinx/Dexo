@@ -15,6 +15,7 @@ pub mod mcp_profiles;
 pub mod object_inspector;
 pub mod projects;
 pub mod recovery;
+pub mod run_prompt;
 pub mod schema_diff;
 pub mod schema_editor;
 pub mod secret_prompt;

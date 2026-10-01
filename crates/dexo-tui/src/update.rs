@@ -94,6 +94,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 .filter(|pending| ready && pending.token == token)
                 .filter(|pending| model.active_document().id == pending.document)
                 .map(|pending| pending.action);
+            // An answer given for one connection never runs on another.
+            if model.connection.name != name || model.active_session != session {
+                model.run_prompt = None;
+            }
             model.connection.name = name.clone();
             model.connection.ready = ready;
             model.connection.environment = environment;
@@ -1898,6 +1902,22 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Palette) => mouse_palette(model, hit),
         Some(OverlayKind::Help) => mouse_help(model, hit),
         Some(OverlayKind::ClosePrompt) => mouse_close_prompt(model, hit),
+        Some(OverlayKind::RunPrompt) => match hit {
+            Some(HitTarget::FormField(_)) => {
+                if let Some(prompt) = model.run_prompt.as_mut()
+                    && prompt.expected.is_some()
+                {
+                    prompt.footer = crate::widgets::form::FooterFocus::Input;
+                }
+                Vec::new()
+            }
+            Some(HitTarget::FooterSubmit) => submit_run_prompt(model),
+            Some(HitTarget::FooterCancel) => {
+                model.run_prompt = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         Some(OverlayKind::ExplainPrompt) => match hit {
             Some(HitTarget::FooterSubmit) => update(model, Action::RunExplainAnalyze),
             Some(HitTarget::FooterCancel) => {
@@ -2951,6 +2971,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.close_prompt.is_some() {
         return handle_close_prompt_key(model, key);
+    }
+    if model.run_prompt.is_some() {
+        return handle_run_prompt_key(model, key);
     }
     if model.explain_prompt.is_some() {
         return handle_explain_prompt_key(model, key);
@@ -4553,6 +4576,53 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
     if statements.is_empty() {
         return Vec::new();
     }
+    // Statement, selection, document and history runs all pass here, so this is the
+    // one place the connection's policy is held to.
+    let dialect = crate::screens::editor::editor_dialect(model);
+    match dexo_app::run_guard::judge(&statements, dialect, &run_policy(model)) {
+        dexo_app::run_guard::RunVerdict::Run => launch_script(model, statements),
+        dexo_app::run_guard::RunVerdict::Refuse { index, sql } => {
+            let first = sql.trim().lines().next().unwrap_or_default().to_string();
+            model.messages.error(format!(
+                "Not run: {} is read-only, and statement {} is not a read: {first}",
+                model.connection.name,
+                index + 1,
+            ));
+            Vec::new()
+        }
+        dexo_app::run_guard::RunVerdict::Confirm { flagged, typed } => {
+            model.run_prompt = Some(crate::screens::run_prompt::RunPrompt::new(
+                statements, flagged, typed,
+            ));
+            Vec::new()
+        }
+    }
+}
+
+/// The connection's policy as the guard needs it. A profile that cannot be found or
+/// resolved -- a temporary connection, a custom label without its policy -- fails
+/// closed: destructive statements are confirmed.
+fn run_policy(model: &Model) -> dexo_app::run_guard::RunPolicy {
+    let confirm_destructive = model
+        .connections
+        .profiles
+        .iter()
+        .map(|row| &row.profile)
+        .find(|profile| profile.name == model.connection.name)
+        .and_then(|profile| {
+            dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy).ok()
+        })
+        .is_none_or(|policy| policy.confirm_destructive);
+    dexo_app::run_guard::RunPolicy {
+        connection: model.connection.name.clone(),
+        read_only: model.connection.read_only,
+        confirm_destructive,
+        production: dexo_app::Environment::parse_strict(&model.connection.environment)
+            == dexo_app::Environment::Production,
+    }
+}
+
+fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
     let operation = crate::runtime::OperationId::new();
     let session = model
         .active_session
@@ -6163,6 +6233,51 @@ fn handle_close_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('d') => resolve_close(model, CloseChoice::Discard),
         _ => Vec::new(),
     }
+}
+
+fn handle_run_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let Some(prompt) = model.run_prompt.as_mut() else {
+        return Vec::new();
+    };
+    match footer_key(&mut prompt.footer, &key) {
+        FooterKey::Submit => submit_run_prompt(model),
+        FooterKey::Cancel => {
+            model.run_prompt = None;
+            Vec::new()
+        }
+        FooterKey::Moved => {
+            // Nothing to type: the walk skips the input stop it would land on.
+            if prompt.expected.is_none() && prompt.footer == FooterFocus::Input {
+                prompt.footer = if matches!(key.code, KeyCode::BackTab | KeyCode::Up) {
+                    FooterFocus::Cancel
+                } else {
+                    FooterFocus::Submit
+                };
+            }
+            Vec::new()
+        }
+        FooterKey::Pass => {
+            if prompt.expected.is_some() && prompt.footer == FooterFocus::Input {
+                let _ = prompt.typed.handle_key(key);
+                prompt.error = None;
+            }
+            Vec::new()
+        }
+    }
+}
+
+fn submit_run_prompt(model: &mut Model) -> Vec<Effect> {
+    let Some(prompt) = model.run_prompt.as_mut() else {
+        return Vec::new();
+    };
+    if !prompt.accepted() {
+        prompt.error = Some("The name does not match; nothing was run.".into());
+        return Vec::new();
+    }
+    let statements = std::mem::take(&mut prompt.statements);
+    model.run_prompt = None;
+    launch_script(model, statements)
 }
 
 /// Run and Cancel, nothing to type: the footer walk skips the input stop it would land on.

@@ -7,3 +7,11 @@ TLS verifies certificates by default. Custom CA and client certificates are supp
 SSH tunnels verify known hosts. A new or changed host key requires confirmation and is never accepted automatically.
 
 If the keychain is missing or locked, Dexo asks for the secret for the current session. It does not write a file vault.
+
+## Environments and the SQL editor
+
+Each connection has an environment: local, development, staging or production. A label Dexo does not know, such as `prod`, counts as production.
+
+- On a read-only connection, the editor refuses any statement that is not a read and sends nothing. `SET`, transaction commands and anything Dexo cannot parse count as writes.
+- On production, any write asks for the connection's name, typed exactly, before it runs.
+- Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.

@@ -180,6 +180,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(focus) = model.explain_prompt {
         render_explain_prompt(frame, model, focus, hits);
     }
+    if let Some(prompt) = &model.run_prompt {
+        render_run_prompt(frame, model, prompt, hits);
+    }
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
@@ -254,6 +257,33 @@ fn render_close_prompt(
     }
 }
 
+fn render_run_prompt(
+    frame: &mut Frame,
+    model: &Model,
+    prompt: &crate::screens::run_prompt::RunPrompt,
+    hits: &mut HitMap,
+) {
+    let width = 72.min(frame.area().width);
+    let lines = prompt.lines(width.saturating_sub(2) as usize);
+    let popup = centered(frame.area(), width, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        Block::bordered().title(prompt.title()),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("name:") {
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Run");
+        }
+    });
+}
+
 fn render_explain_prompt(
     frame: &mut Frame,
     model: &Model,
@@ -282,7 +312,8 @@ fn render_explain_prompt(
         preview.pop();
         preview.push('…');
     }
-    let production = model.connection.environment == "production";
+    let production = dexo_app::Environment::parse_strict(&model.connection.environment)
+        == dexo_app::Environment::Production;
     let footer = crate::widgets::form::footer_line("Run", focus);
     let mut lines = vec![
         "EXPLAIN ANALYZE runs this statement to time it,".to_string(),
