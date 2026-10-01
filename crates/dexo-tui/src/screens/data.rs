@@ -325,7 +325,6 @@ mod tests {
     use crate::action::Action;
     use crate::model::Model;
     use crate::update;
-    use dexo_app::Environment;
     use dexo_app::data::{ColumnDef, ForeignKey, RowIdentity, TableMeta};
     use dexo_driver_api::{DbValue, QualifiedName};
 
@@ -340,7 +339,6 @@ mod tests {
         }
     }
 
-    #[test]
     /// The palette's Apply Changes arrives with no review open; on production it opens
     /// the review instead of applying.
     #[test]
