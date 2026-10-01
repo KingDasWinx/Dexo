@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod project;
 pub mod query_service;
 pub mod recovery_service;
+pub mod run_guard;
 pub mod schema;
 pub mod schema_diff;
 pub mod script;

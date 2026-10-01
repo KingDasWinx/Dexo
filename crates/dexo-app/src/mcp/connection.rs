@@ -44,7 +44,7 @@ impl McpConnection {
             dialect,
             database,
             default_schema: (dialect == Dialect::Postgres).then(|| "public".to_string()),
-            environment: mcp_environment(&profile.environment),
+            environment: Environment::parse_strict(&profile.environment),
             read_only: policy.read_only,
         })
     }
@@ -108,19 +108,9 @@ impl McpConnection {
     }
 }
 
-/// `Environment::parse` maps any unknown label to `Local`; MCP must fail closed instead,
-/// so `prod`, `PRD` or `live` count as production.
-fn mcp_environment(label: &str) -> Environment {
-    match Environment::known(label) {
-        Some(environment) => environment,
-        None if label.is_empty() || label.eq_ignore_ascii_case("local") => Environment::Local,
-        None => Environment::Production,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::{McpConnection, mcp_environment};
+    use super::McpConnection;
     use crate::connection_policy::Environment;
     use dexo_sql::Dialect;
 
@@ -153,13 +143,5 @@ mod tests {
         };
         assert_eq!(mysql.qualify(&path(&["t"])).path, ["db", "t"]);
         assert_eq!(mysql.qualify(&path(&["shop", "t"])).path, ["shop", "t"]);
-    }
-
-    #[test]
-    fn unknown_environment_labels_fail_closed() {
-        assert_eq!(mcp_environment("prod"), Environment::Production);
-        assert_eq!(mcp_environment("PRD"), Environment::Production);
-        assert_eq!(mcp_environment("local"), Environment::Local);
-        assert_eq!(mcp_environment("staging"), Environment::Staging);
     }
 }

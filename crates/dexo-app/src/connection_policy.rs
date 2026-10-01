@@ -42,6 +42,16 @@ impl Environment {
             _ => None,
         }
     }
+
+    /// `parse` maps any unknown label to `Local`. Anything that guards a write fails
+    /// closed instead, so `prod`, `PRD` or `live` count as production.
+    pub fn parse_strict(label: &str) -> Self {
+        match Self::known(label) {
+            Some(environment) => environment,
+            None if label.is_empty() || label.eq_ignore_ascii_case("local") => Self::Local,
+            None => Self::Production,
+        }
+    }
 }
 
 impl ConnectionPolicy {
@@ -162,5 +172,14 @@ mod tests {
         assert!(policy.read_only);
         assert_eq!(policy.max_rows, 50);
         assert_eq!(policy.timeout_secs, 5);
+    }
+
+    #[test]
+    fn unknown_environment_labels_fail_closed() {
+        assert_eq!(Environment::parse_strict("prod"), Environment::Production);
+        assert_eq!(Environment::parse_strict("PRD"), Environment::Production);
+        assert_eq!(Environment::parse_strict(""), Environment::Local);
+        assert_eq!(Environment::parse_strict("local"), Environment::Local);
+        assert_eq!(Environment::parse_strict("staging"), Environment::Staging);
     }
 }
