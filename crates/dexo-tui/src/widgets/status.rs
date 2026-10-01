@@ -15,7 +15,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     // The sidebar already shows a connected session with a dot, so the name carries a
     // prefix only when something is wrong.
-    let conn = if model.connection.ready {
+    let conn = if model.connection.ready && model.connections.is_temporary(&model.connection.name) {
+        // Nothing saved behind it: closing Dexo forgets it, unless Save Connection… keeps it.
+        format!("{} (temporary)", model.connection.name)
+    } else if model.connection.ready {
         model.connection.name.clone()
     } else if model.connection.name.is_empty() {
         "disconnected".into()

@@ -320,8 +320,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             profile,
             buffer,
         } => {
+            let temporary = model.connections.is_temporary(&profile.name);
             model.secret_prompt =
                 crate::screens::secret_prompt::SecretPrompt::open_for(purpose, profile, buffer);
+            model.secret_prompt.temporary = temporary;
             Vec::new()
         }
         Action::SubmitSecret { kind } => submit_secret(model, kind),
@@ -339,6 +341,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.connections.selected_profile = index;
             }
             match model.connections.selected().cloned() {
+                // Nothing saved to edit: editing a temporary connection is saving it.
+                Some(profile) if model.connections.is_temporary(&profile.name) => {
+                    return vec![Effect::RevealTemporarySecret {
+                        profile: Box::new(profile),
+                    }];
+                }
                 Some(profile) => {
                     model.connection_form =
                         crate::screens::connection::ConnectionForm::open_edit(&profile);
@@ -365,6 +373,49 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenNodeMenu => {
             open_node_menu(model);
+            Vec::new()
+        }
+        Action::OpenTemporaryConnection(profile) => open_temporary_connection(model, *profile),
+        Action::SaveTemporaryConnection => {
+            let selected = model
+                .connections
+                .selected()
+                .filter(|profile| model.connections.is_temporary(&profile.name));
+            match selected.or(model.connections.temporary.first()).cloned() {
+                Some(profile) => vec![Effect::RevealTemporarySecret {
+                    profile: Box::new(profile),
+                }],
+                None => {
+                    model
+                        .messages
+                        .warn("No temporary connection to save.".into());
+                    Vec::new()
+                }
+            }
+        }
+        Action::TemporarySaveForm { profile, password } => {
+            let mut form = crate::screens::connection::ConnectionForm::open_edit(&profile);
+            // A new profile with the temporary one's settings: saved through the normal
+            // path, so the password goes to the keychain like any other.
+            form.editing = None;
+            form.saving_temporary = true;
+            if let Some(password) = password {
+                form.set_value("password", password.expose());
+            }
+            model.connection_form = form;
+            Vec::new()
+        }
+        Action::DuplicateConnection
+        | Action::MoveConnectionGroup { .. }
+        | Action::DeleteConnection
+            if model
+                .connections
+                .selected()
+                .is_some_and(|profile| model.connections.is_temporary(&profile.name)) =>
+        {
+            model
+                .messages
+                .warn("This connection is temporary: save it first (Save Connection…).".into());
             Vec::new()
         }
         Action::DuplicateConnection => model
@@ -395,6 +446,27 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ProfileSaved(profile) => {
+            let mut effects = Vec::new();
+            // A temporary connection saved under its own name: its documents are bound
+            // to its id, and follow it to the saved one's.
+            if let Some(temporary) = model
+                .connections
+                .temporary
+                .iter()
+                .find(|temporary| temporary.name == profile.name && temporary.id != profile.id)
+            {
+                let (from, to) = (temporary.id.0.to_string(), profile.id.0.to_string());
+                for document in &mut model.documents {
+                    if document.connection_id.as_deref() == Some(from.as_str()) {
+                        document.connection_id = Some(to.clone());
+                    }
+                }
+                effects.push(flush_documents_effect(model));
+            }
+            // Saving a temporary connection dials nothing, so nothing else closes it.
+            if model.connection_form.saving_temporary {
+                model.connection_form.close();
+            }
             model.connections.load_profiles(
                 model
                     .connections
@@ -413,7 +485,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             );
             sync_explorer_connections(model);
             model.messages.info(format!("saved {}", profile.name));
-            Vec::new()
+            effects
         }
         Action::ProfileDeleted { name } => {
             model
@@ -3625,8 +3697,17 @@ fn submit_secret(
     model: &mut Model,
     kind: crate::screens::secret_prompt::SecretChoiceKind,
 ) -> Vec<Effect> {
+    use crate::screens::secret_prompt::SecretChoiceKind;
     let profile = model.secret_prompt.profile.clone();
     let secret = model.secret_prompt.buffer.clone();
+    // A temporary connection's secret_ref names no saved profile; a keychain entry under
+    // it would outlive the session with nothing to find or delete it.
+    let kind = match kind {
+        SecretChoiceKind::SaveToKeychain if model.secret_prompt.temporary => {
+            SecretChoiceKind::SessionOnly
+        }
+        kind => kind,
+    };
     model.secret_prompt.close();
     match (kind, profile) {
         (crate::screens::secret_prompt::SecretChoiceKind::Cancel, _) => Vec::new(),
@@ -3796,6 +3877,47 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     connect_to(model, profile)
 }
 
+/// `dexo <url>`: listed beside the saved connections, selected and dialled. A saved
+/// connection already going by the same name keeps it; sessions are found by name.
+fn open_temporary_connection(
+    model: &mut Model,
+    mut profile: dexo_app::ConnectionProfile,
+) -> Vec<Effect> {
+    let taken = |name: &str| {
+        model
+            .connections
+            .profiles
+            .iter()
+            .any(|row| row.profile.name == name)
+    };
+    if taken(&profile.name) {
+        let base = profile.name.clone();
+        profile.name = (2..)
+            .map(|n| format!("{base} ({n})"))
+            .find(|name| !taken(name))
+            .expect("an unused name");
+    }
+    model.connections.temporary.push(profile.clone());
+    let saved = model
+        .connections
+        .profiles
+        .iter()
+        .filter(|row| !row.temporary)
+        .map(|row| row.profile.clone())
+        .collect();
+    model.connections.load_profiles(saved);
+    sync_explorer_connections(model);
+    if let Some(index) = model
+        .connections
+        .profiles
+        .iter()
+        .position(|row| row.profile.id == profile.id)
+    {
+        model.connections.selected_profile = index;
+    }
+    connect_to(model, profile)
+}
+
 fn connect_to(model: &mut Model, profile: dexo_app::ConnectionProfile) -> Vec<Effect> {
     model.connect_token = model.connect_token.saturating_add(1);
     model.connections.pending_connect = Some(model.connect_token);
@@ -3905,7 +4027,11 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
                     }
                 }
             } else {
-                vec![Effect::CreateConnection { input, password }]
+                vec![Effect::CreateConnection {
+                    input,
+                    password,
+                    connect: !model.connection_form.saving_temporary,
+                }]
             }
         }
         None => Vec::new(),
@@ -4513,6 +4639,12 @@ fn switch_to_document_connection(model: &mut Model, index: usize) -> Switch {
         return Switch::Ready;
     };
     let Some(profile) = profile_by_uuid(model, &id) else {
+        // Its connection is gone: deleted, or a temporary one from an earlier run. From
+        // now on it is unbound -- wherever you are, which the tab then says.
+        let active = active_connection_uuid(model);
+        if let Some(document) = model.documents.get_mut(index) {
+            document.connection_id = active;
+        }
         return Switch::Ready;
     };
     if model.connection.name == profile.name && model.active_session.is_some() {
@@ -4725,8 +4857,8 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     } else {
         state.layout
     };
-    apply_layout(model, layout);
     model.connections.load_profiles(state.connections);
+    apply_layout(model, layout);
     rename_restored_consoles(model);
     sync_explorer_connections(model);
     model.editor.snippets = state.snippets;
@@ -4833,7 +4965,15 @@ fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>
     {
         model.active_document = index;
     }
-    if let Some(name) = layout.active_connection_id {
+    // A temporary connection from the last run, or one deleted since, is not coming
+    // back; naming it would leave the workbench "offline" to nothing.
+    if let Some(name) = layout.active_connection_id
+        && model
+            .connections
+            .profiles
+            .iter()
+            .any(|row| row.profile.name == name)
+    {
         model.connection.name = name;
     }
 }
@@ -7820,6 +7960,55 @@ mod tests {
             Some(connection_uuid.to_string().as_str())
         );
         assert_ne!(doc.id, "scratch");
+    }
+
+    /// `dexo <url>`: the profile exists only in the model, cannot be duplicated, moved
+    /// or deleted as if it were saved, and once saved its documents follow it.
+    #[test]
+    fn a_temporary_connection_is_listed_dialled_and_saved_with_its_documents() {
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let temporary = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(7)),
+            None,
+            "ana@db/shop",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "db"}),
+            SecretRef::new("memory-only".into()),
+        );
+        let mut model = Model::default();
+        let effects = update(
+            &mut model,
+            Action::OpenTemporaryConnection(Box::new(temporary.clone())),
+        );
+        assert!(matches!(&effects[..], [Effect::ConnectProfile { .. }]));
+        assert!(model.connections.profiles[0].temporary);
+        for action in [
+            Action::DuplicateConnection,
+            Action::DeleteConnection,
+            Action::MoveConnectionGroup { group: "x".into() },
+        ] {
+            assert!(update(&mut model, action).is_empty());
+        }
+        assert!(model.connections.delete_target.is_none());
+        assert!(matches!(
+            &update(&mut model, Action::EditSelectedConnection)[..],
+            [Effect::RevealTemporarySecret { .. }]
+        ));
+
+        model.active_document_mut().connection_id = Some(temporary.id.0.to_string());
+        let mut saved = temporary.clone();
+        saved.id = ConnectionId(uuid::Uuid::from_u128(8));
+        model.connection_form.saving_temporary = true;
+        update(&mut model, Action::ProfileSaved(saved.clone()));
+        assert!(model.connections.temporary.is_empty());
+        assert!(!model.connections.profiles[0].temporary);
+        assert!(!model.connection_form.open);
+        assert_eq!(
+            model.active_document().connection_id.as_deref(),
+            Some(saved.id.0.to_string().as_str())
+        );
     }
 
     #[test]

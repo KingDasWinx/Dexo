@@ -8,7 +8,7 @@ use dexo_app::{
 use dexo_runtime::TaskRegistry;
 use dexo_secrets::{KeyringSecretStore, MemorySecretStore, SecretError, SecretStore};
 use dexo_storage::{AppPaths, ConnectionRepository, Database};
-use secrecy::SecretString;
+use secrecy::{ExposeSecret, SecretString};
 use uuid::Uuid;
 
 use crate::action::{
@@ -169,14 +169,36 @@ impl WorkbenchRuntime {
         &self.sessions
     }
 
+    /// Where `dexo <url>` puts the URL's password: this process's memory, nowhere else.
+    pub fn remember_secret(&self, key: &str, secret: &SecretString) -> Result<(), SecretError> {
+        self.secrets.put_memory(key, secret.expose_secret())
+    }
+
     pub fn sessions_mut(&mut self) -> &mut SessionRegistry {
         &mut self.sessions
     }
 
     pub async fn dispatch(&mut self, effect: crate::Effect) {
         match effect {
-            crate::Effect::CreateConnection { input, password } => {
-                self.create_connection(input, password).await
+            crate::Effect::CreateConnection {
+                input,
+                password,
+                connect,
+            } => self.create_connection(input, password, connect).await,
+            crate::Effect::RevealTemporarySecret { profile } => {
+                let password = self
+                    .secrets
+                    .memory
+                    .get(profile.secret_ref.as_str())
+                    .ok()
+                    .flatten()
+                    .map(|secret| {
+                        crate::screens::secret_prompt::SecretBuffer::new(
+                            secret.expose_secret().to_string(),
+                        )
+                    });
+                self.emit(Action::TemporarySaveForm { profile, password })
+                    .await;
             }
             crate::Effect::ConnectProfile { profile, token } => {
                 self.connect_profile(profile, token).await
@@ -760,11 +782,13 @@ impl WorkbenchRuntime {
         }
     }
 
-    async fn create_connection(&mut self, input: NewConnection, password: String) {
+    async fn create_connection(&mut self, input: NewConnection, password: String, connect: bool) {
         match self.save_profile(input, &password) {
             Ok((profile, SecretPersist::Stored)) => {
                 self.emit(Action::ProfileSaved(profile.clone())).await;
-                self.connect_profile(profile, 0).await;
+                if connect {
+                    self.connect_profile(profile, 0).await;
+                }
             }
             Ok((profile, SecretPersist::SessionOnly)) => {
                 self.emit(Action::SecretRequired {

@@ -521,6 +521,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::EditSelectedConnection),
         },
         CommandSpec {
+            id: "connection.save_temporary",
+            title: "Save Connection…",
+            keywords: &["temporary", "url", "keep", "profile"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::SaveTemporaryConnection),
+        },
+        CommandSpec {
             id: "explorer.refresh",
             title: "Refresh Catalog Node",
             keywords: &["reload", "tree"],

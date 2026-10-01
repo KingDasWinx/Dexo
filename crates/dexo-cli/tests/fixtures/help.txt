@@ -1,6 +1,7 @@
 Local-first terminal database workbench
 
-Usage: dexo [COMMAND]
+Usage: dexo [OPTIONS] [URL]
+       dexo <COMMAND>
 
 Commands:
   doctor       
@@ -18,7 +19,14 @@ Commands:
   mcp          
   help         Print this message or the help of the given subcommand(s)
 
+Arguments:
+  [URL]
+          Open the workbench connected to this URL, without saving it: postgres://user@host/db, mysql://…, mariadb://…, sqlite:///path/to/file
+
 Options:
+      --password-prompt
+          Ask for the URL's password on the terminal instead of putting it in the URL, where shell history keeps it
+
   -h, --help
           Print help
 

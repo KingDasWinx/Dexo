@@ -215,6 +215,12 @@ fn collect(
                 NodeState::Collapsed | NodeState::Expanded => {
                     if is_connection_node(node) && state.offline {
                         " [offline]"
+                    } else if is_connection_node(node)
+                        && profiles
+                            .iter()
+                            .any(|row| row.temporary && row.profile.name == node.label)
+                    {
+                        " [temporary]"
                     } else {
                         ""
                     }
@@ -394,6 +400,7 @@ mod tests {
 
     fn connection_row(name: &str, sessions: usize) -> ConnectionRow {
         ConnectionRow {
+            temporary: false,
             profile: profile(name),
             sessions,
         }

@@ -18,7 +18,7 @@ pub mod update;
 pub mod widgets;
 
 pub use action::{Action, Effect};
-pub use event::run;
+pub use event::{Startup, run};
 pub use model::{
     Focus, GridCell, GridModel, Model, OperationStatus, ResultKey, ResultTab, ResultsState,
 };

@@ -16,6 +16,16 @@ pub enum Action {
         width: u16,
         height: u16,
     },
+    /// A connection opened without saving it -- from a URL or as the demo -- listed and
+    /// dialled at start.
+    OpenTemporaryConnection(Box<ConnectionProfile>),
+    /// "Save Connection…" on a temporary connection: asks the runtime for the password
+    /// it holds in memory, then opens the connection form with it.
+    SaveTemporaryConnection,
+    TemporarySaveForm {
+        profile: Box<ConnectionProfile>,
+        password: Option<crate::screens::secret_prompt::SecretBuffer>,
+    },
     ConnectionChanged {
         name: String,
         ready: bool,
@@ -654,10 +664,16 @@ pub enum Effect {
     CreateConnection {
         input: NewConnection,
         password: String,
+        /// False when a temporary connection is saved: its session is already open.
+        connect: bool,
     },
     ConnectProfile {
         profile: ConnectionProfile,
         token: u64,
+    },
+    /// Reads a temporary connection's password from the session's memory, for the form.
+    RevealTemporarySecret {
+        profile: Box<ConnectionProfile>,
     },
     /// Move the session a spawned connect parked into the registry. The registry needs
     /// `&mut WorkbenchRuntime`, which the task doing the dialling cannot hold.

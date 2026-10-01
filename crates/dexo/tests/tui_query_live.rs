@@ -34,6 +34,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
     let (host, port) = endpoint.rsplit_once(':').expect("host:port");
     runtime
         .dispatch(Effect::CreateConnection {
+            connect: true,
             input: NewConnection {
                 name: format!("{driver}-live"),
                 driver: driver.into(),

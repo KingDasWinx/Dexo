@@ -30,7 +30,18 @@ fn bare_dexo_invokes_tui_runner() {
     let started = Arc::new(AtomicBool::new(false));
     let flag = Arc::clone(&started);
     let args = Args::parse_from(["dexo"]);
-    assert!(matches!(args.launch_mode(), LaunchMode::Tui));
+    assert!(matches!(
+        args.launch_mode(),
+        LaunchMode::Tui(dexo_cli::args::TuiStart::Workbench)
+    ));
+    let args = Args::parse_from(["dexo", "--password-prompt", "postgres://ana@db/shop"]);
+    assert!(matches!(
+        args.launch_mode(),
+        LaunchMode::Tui(dexo_cli::args::TuiStart::Url {
+            password_prompt: true,
+            ..
+        })
+    ));
     let args = Args::parse_from(["dexo"]);
     run_dispatch(args, DriverRegistry::new(), move || {
         flag.store(true, Ordering::SeqCst);

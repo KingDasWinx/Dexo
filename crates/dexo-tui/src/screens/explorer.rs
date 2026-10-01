@@ -1423,6 +1423,7 @@ mod tests {
         let mut explorer = ExplorerState::default();
         explorer.sync_connection_roots(
             &[ConnectionRow {
+                temporary: false,
                 profile,
                 sessions: 1,
             }],

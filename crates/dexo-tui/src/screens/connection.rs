@@ -16,6 +16,9 @@ pub struct ConnectionForm {
     pub errors: Vec<String>,
     pub editing: Option<ConnectionProfile>,
     pub advanced: bool,
+    /// Saving a temporary connection: its session is already open, so saving connects
+    /// nothing new.
+    pub saving_temporary: bool,
 }
 
 impl Default for ConnectionForm {
@@ -27,6 +30,7 @@ impl Default for ConnectionForm {
             errors: Vec::new(),
             editing: None,
             advanced: false,
+            saving_temporary: false,
         }
     }
 }
@@ -47,6 +51,7 @@ impl ConnectionForm {
             errors: Vec::new(),
             editing: Some(profile.clone()),
             advanced: false,
+            saving_temporary: false,
         };
         set_field(&mut form.fields, "name", &profile.name);
         set_field(&mut form.fields, "driver", &profile.driver);
@@ -214,6 +219,10 @@ impl ConnectionForm {
             .map(|field| field.label.as_str())
     }
 
+    pub fn set_value(&mut self, label: &str, value: &str) {
+        set_field(&mut self.fields, label, value);
+    }
+
     pub fn set_error(&mut self, message: String) {
         self.errors = vec![message];
     }
@@ -284,6 +293,8 @@ impl ConnectionForm {
     pub fn title(&self) -> &'static str {
         if self.editing.is_some() {
             "Edit connection"
+        } else if self.saving_temporary {
+            "Save connection"
         } else {
             "Add connection"
         }

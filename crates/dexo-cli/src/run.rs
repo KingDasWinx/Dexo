@@ -5,7 +5,7 @@ use std::time::Duration;
 use crate::args::{
     Args, Command, ConfigCommand, ConnectionsCommand, LaunchMode, McpCommand, McpConfigCommand,
     McpGrantCommand, McpProfileCommand, OnError, OutputFormat, SchemaCommand, SchemaDiffFormat,
-    SessionsCommand, TransferCliFormat,
+    SessionsCommand, TransferCliFormat, TuiStart,
 };
 use crate::presenter;
 use dexo_app::mcp::{
@@ -34,16 +34,38 @@ pub fn run(args: Args) -> anyhow::Result<()> {
 }
 
 pub trait TuiRunner {
-    fn run(self) -> anyhow::Result<()>;
+    fn run(self, start: TuiStart) -> anyhow::Result<()>;
 }
 
+/// A runner that ignores how the workbench was asked to start, for tests.
 impl<F> TuiRunner for F
 where
     F: FnOnce() -> anyhow::Result<()>,
 {
-    fn run(self) -> anyhow::Result<()> {
+    fn run(self, _: TuiStart) -> anyhow::Result<()> {
         self()
     }
+}
+
+/// The connection a `dexo <url>` asks for: parsed, the file of a file URL made absolute,
+/// and the password asked for on the terminal when `--password-prompt` says so.
+pub fn temporary_connection(
+    url: &str,
+    password_prompt: bool,
+) -> anyhow::Result<dexo_app::connection_url::UrlConnection> {
+    let mut connection = dexo_app::connection_url::parse(url)?;
+    if password_prompt {
+        let password =
+            rpassword::prompt_password(format!("Password for {}: ", connection.profile.name))?;
+        if !password.is_empty() {
+            connection.password = Some(secrecy::SecretString::from(password));
+        }
+    } else if connection.password.is_some() {
+        eprintln!(
+            "dexo: the password in this URL may be in your shell history; `dexo --password-prompt <url>` asks for it instead"
+        );
+    }
+    Ok(connection)
 }
 
 pub fn run_with(args: Args, registry: DriverRegistry) -> anyhow::Result<()> {
@@ -58,7 +80,7 @@ pub fn run_dispatch(
     tui: impl TuiRunner,
 ) -> anyhow::Result<()> {
     match args.launch_mode() {
-        LaunchMode::Tui => tui.run(),
+        LaunchMode::Tui(start) => tui.run(start),
         LaunchMode::Cli(command) => run_cli(command, registry),
     }
 }

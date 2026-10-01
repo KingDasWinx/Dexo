@@ -3,6 +3,7 @@ pub mod catalog_service;
 pub mod connection_policy;
 pub mod connection_profile;
 pub mod connection_service;
+pub mod connection_url;
 pub mod data;
 pub mod diagnostic_service;
 pub mod driver_registry;

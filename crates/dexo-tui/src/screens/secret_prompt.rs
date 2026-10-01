@@ -72,6 +72,8 @@ pub struct SecretPrompt {
     pub buffer: SecretBuffer,
     pub profile: Option<ConnectionProfile>,
     pub delete: Option<DeleteSecretDecision>,
+    /// For a temporary connection: the secret stays in memory, no keychain offer.
+    pub temporary: bool,
 }
 
 impl Default for SecretPrompt {
@@ -84,6 +86,7 @@ impl Default for SecretPrompt {
             buffer: SecretBuffer::new(String::new()),
             profile: None,
             delete: None,
+            temporary: false,
         }
     }
 }
@@ -102,6 +105,7 @@ impl SecretPrompt {
             buffer,
             profile: Some(profile),
             delete: None,
+            temporary: false,
         }
     }
 
@@ -112,7 +116,11 @@ impl SecretPrompt {
     pub fn lines(&self) -> Vec<String> {
         vec![
             format!("secret required for {}", self.profile_name),
-            "s session only  k save to keychain  esc cancel".into(),
+            if self.temporary {
+                "s session only  esc cancel".into()
+            } else {
+                "s session only  k save to keychain  esc cancel".into()
+            },
         ]
     }
 }

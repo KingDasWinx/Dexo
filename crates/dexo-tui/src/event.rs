@@ -24,16 +24,23 @@ pub fn action_from_event(event: Event) -> Option<Action> {
     }
 }
 
-pub fn run(registry: DriverRegistry) -> Result<(), TuiError> {
+/// What the workbench opens on.
+pub enum Startup {
+    Workbench,
+    /// `dexo <url>`: a connection that is listed and dialled but never saved.
+    Temporary(Box<dexo_app::connection_url::UrlConnection>),
+}
+
+pub fn run(registry: DriverRegistry, startup: Startup) -> Result<(), TuiError> {
     crate::terminal::install_panic_hook();
-    tokio::runtime::Runtime::new()?.block_on(run_async(registry))
+    tokio::runtime::Runtime::new()?.block_on(run_async(registry, startup))
 }
 
 fn map_tui(error: impl std::fmt::Display) -> TuiError {
     std::io::Error::other(error.to_string()).into()
 }
 
-async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
+async fn run_async(registry: DriverRegistry, startup: Startup) -> Result<(), TuiError> {
     let paths = AppPaths::discover().map_err(map_tui)?;
     let first_run = !crate::entrance::is_complete(&paths.data_dir);
     let animate_entrance = crate::entrance::should_animate(&paths.data_dir);
@@ -42,6 +49,17 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     let (action_tx, action_rx) = tokio::sync::mpsc::channel(32);
     crate::runtime::update_check::spawn(paths.data_dir.clone(), action_tx.clone());
     let mut runtime = WorkbenchRuntime::new(action_tx, worker, registry);
+    let temporary = match startup {
+        Startup::Workbench => None,
+        Startup::Temporary(connection) => {
+            if let Some(password) = &connection.password {
+                runtime
+                    .remember_secret(connection.profile.secret_ref.as_str(), password)
+                    .map_err(map_tui)?;
+            }
+            Some(connection.profile)
+        }
+    };
     let mut guard = TerminalGuard::enter(CrosstermTerminal)?;
     // The workbench does not exist yet, so the theme is read from what was saved -- the
     // same mapping the workbench will apply, so the entrance cannot come up in another.
@@ -59,6 +77,7 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
     guard.enable_raw()?;
     let result = run_loop(
         bootstrap,
+        temporary,
         first_run,
         logo_frames,
         &mut runtime,
@@ -73,6 +92,7 @@ async fn run_async(registry: DriverRegistry) -> Result<(), TuiError> {
 
 async fn run_loop(
     bootstrap: crate::runtime::storage_worker::BootstrapState,
+    temporary: Option<dexo_app::ConnectionProfile>,
     show_onboarding: bool,
     logo_frames: Arc<Vec<crate::entrance::LogoFrame>>,
     runtime: &mut WorkbenchRuntime,
@@ -82,8 +102,17 @@ async fn run_loop(
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
     let mut model = Model::default();
     let _ = crate::update::update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
-    model.onboarding.open = show_onboarding;
+    model.onboarding.open = show_onboarding && temporary.is_none();
     model.onboarding.logo_frames = logo_frames;
+    if let Some(profile) = temporary {
+        let effects = crate::update::update(
+            &mut model,
+            Action::OpenTemporaryConnection(Box::new(profile)),
+        );
+        if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+            return Ok(());
+        }
+    }
     guard.set_mouse(model.mouse)?;
     let mut events = EventStream::new();
     let mut onboarding_tick = tokio::time::interval(Duration::from_millis(66));

@@ -9,6 +9,8 @@ use crate::screens::secret_prompt::DeleteSecretDecision;
 pub struct ConnectionRow {
     pub profile: ConnectionProfile,
     pub sessions: usize,
+    /// Opened from a URL or as the demo, and not saved.
+    pub temporary: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -37,6 +39,10 @@ pub struct ConnectionsScreen {
     pub delete_target: Option<ConnectionProfile>,
     pub delete_choice: DeleteChoice,
     pub error: Option<String>,
+    /// Connections this session opened without saving (`dexo <url>`, `dexo --demo`).
+    /// They are kept here, apart from the saved list, so reloading that list from
+    /// storage does not drop them while their session is still open.
+    pub temporary: Vec<ConnectionProfile>,
 }
 
 /// The buttons of the "Delete connection" dialog. Cancel comes first in the focus, so
@@ -71,20 +77,47 @@ pub const HINTS: [&str; 7] = [
 
 impl ConnectionsScreen {
     pub fn load_profiles(&mut self, profiles: Vec<ConnectionProfile>) {
-        self.profiles = profiles
+        // `ProfileSaved` hands the current rows back, temporary ones included.
+        let saved: Vec<ConnectionProfile> = profiles
             .into_iter()
-            .map(|profile| {
+            .filter(|profile| self.temporary.iter().all(|other| other.id != profile.id))
+            .collect();
+        // Saved under its own name, a temporary connection is that saved one from now on;
+        // its open session already goes by the name.
+        self.temporary
+            .retain(|profile| saved.iter().all(|other| other.name != profile.name));
+        let rows: Vec<(ConnectionProfile, bool)> = saved
+            .into_iter()
+            .map(|profile| (profile, false))
+            .chain(
+                self.temporary
+                    .iter()
+                    .cloned()
+                    .map(|profile| (profile, true)),
+            )
+            .collect();
+        self.profiles = rows
+            .into_iter()
+            .map(|(profile, temporary)| {
                 let sessions = self
                     .sessions
                     .iter()
                     .filter(|row| row.connection == profile.name)
                     .count();
-                ConnectionRow { profile, sessions }
+                ConnectionRow {
+                    profile,
+                    sessions,
+                    temporary,
+                }
             })
             .collect();
         if self.selected_profile >= self.profiles.len() {
             self.selected_profile = 0;
         }
+    }
+
+    pub fn is_temporary(&self, name: &str) -> bool {
+        self.temporary.iter().any(|profile| profile.name == name)
     }
 
     pub fn selected(&self) -> Option<&ConnectionProfile> {

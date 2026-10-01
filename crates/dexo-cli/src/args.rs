@@ -6,24 +6,43 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "dexo",
     version,
-    about = "Local-first terminal database workbench"
+    about = "Local-first terminal database workbench",
+    args_conflicts_with_subcommands = true
 )]
 pub struct Args {
+    /// Open the workbench connected to this URL, without saving it: postgres://user@host/db,
+    /// mysql://…, mariadb://…, sqlite:///path/to/file.
+    #[arg(value_name = "URL")]
+    pub url: Option<String>,
+    /// Ask for the URL's password on the terminal instead of putting it in the URL, where
+    /// shell history keeps it.
+    #[arg(long, requires = "url")]
+    pub password_prompt: bool,
     #[command(subcommand)]
     pub command: Option<Command>,
 }
 
+#[derive(Debug, Eq, PartialEq)]
+pub enum TuiStart {
+    Workbench,
+    Url { url: String, password_prompt: bool },
+}
+
 #[derive(Debug)]
 pub enum LaunchMode {
-    Tui,
+    Tui(TuiStart),
     Cli(Command),
 }
 
 impl Args {
     pub fn launch_mode(self) -> LaunchMode {
-        match self.command {
-            None => LaunchMode::Tui,
-            Some(command) => LaunchMode::Cli(command),
+        match (self.command, self.url) {
+            (Some(command), _) => LaunchMode::Cli(command),
+            (None, Some(url)) => LaunchMode::Tui(TuiStart::Url {
+                url,
+                password_prompt: self.password_prompt,
+            }),
+            (None, None) => LaunchMode::Tui(TuiStart::Workbench),
         }
     }
 }
