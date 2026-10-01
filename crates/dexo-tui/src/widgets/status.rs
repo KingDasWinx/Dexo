@@ -31,12 +31,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     };
     let env = environment_marker(&model.connection.environment, model.capabilities.unicode);
     let env_style = model.theme.style(
-        match model.connection.environment.to_ascii_lowercase().as_str() {
-            "production" => Role::Production,
-            "staging" => Role::Staging,
-            "development" => Role::Development,
-            _ => Role::Muted,
-        },
+        crate::accessibility::environment_role(&model.connection.environment)
+            .unwrap_or(Role::Muted),
         model.capabilities,
     );
     let err_style = model.theme.style(Role::Error, model.capabilities);

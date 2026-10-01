@@ -22,12 +22,21 @@ pub fn marker(role: Role, unicode: bool) -> &'static str {
     }
 }
 
+/// Read the way the editor's guard reads it: a label Dexo does not know, such as
+/// `prod`, is production, so the marker never says less than the prompts do.
 pub fn environment_marker(environment: &str, unicode: bool) -> &'static str {
-    match environment.to_ascii_lowercase().as_str() {
-        "production" => marker(Role::Production, unicode),
-        "staging" => marker(Role::Staging, unicode),
-        "development" => marker(Role::Development, unicode),
-        _ => "",
+    match environment_role(environment) {
+        Some(role) => marker(role, unicode),
+        None => "",
+    }
+}
+
+pub fn environment_role(environment: &str) -> Option<Role> {
+    match dexo_app::Environment::parse_strict(environment) {
+        dexo_app::Environment::Production => Some(Role::Production),
+        dexo_app::Environment::Staging => Some(Role::Staging),
+        dexo_app::Environment::Development => Some(Role::Development),
+        dexo_app::Environment::Local => None,
     }
 }
 
@@ -53,5 +62,14 @@ mod tests {
     fn environment_marker_uses_text_when_ascii() {
         assert_eq!(environment_marker("production", false), "[PROD]");
         assert_eq!(environment_marker("local", false), "");
+    }
+
+    /// A label Dexo does not know, such as `prod`, gets production's rules in the
+    /// editor, so it gets production's marker too.
+    #[test]
+    fn unknown_labels_are_marked_as_production() {
+        assert_eq!(environment_marker("prod", false), "[PROD]");
+        assert_eq!(environment_marker("local", false), "");
+        assert_eq!(environment_marker("", false), "");
     }
 }
