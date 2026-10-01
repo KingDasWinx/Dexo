@@ -125,7 +125,15 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     // to update does not come back at all.
     let notice = update_notice(model, room.saturating_sub(doors.chars().count() + 2));
     let reserved = doors.chars().count() + 2 + notice.as_ref().map_or(0, |n| n.chars().count() + 2);
-    if let Some(hint) = footer_hint(model)
+    // With the cursor on something the editor underlined, its message says what.
+    let wrong = (model.effective_focus() == crate::model::Focus::Editor)
+        .then(|| crate::screens::editor::diagnostic_at_cursor(model))
+        .flatten();
+    if let Some(message) = wrong
+        && room > reserved
+    {
+        spans.push(Span::styled(fit_hint(message, room - reserved), err_style));
+    } else if let Some(hint) = footer_hint(model)
         && room > reserved
     {
         spans.push(Span::raw(fit_hint(hint, room - reserved)));

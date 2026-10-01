@@ -138,6 +138,8 @@ pub enum Action {
         index: usize,
         message: String,
         details: Vec<String>,
+        /// Where in the statement the server says it failed: 1-based, in characters.
+        position: Option<u32>,
     },
     CheckpointTick,
     OnboardingTick,

@@ -245,6 +245,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             index,
             message,
             details,
+            position,
         } => {
             model.active_task = None;
             model.active_query = None;
@@ -252,6 +253,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if let Some(tab) = result_tab_mut(model, &key, index) {
                 tab.status = crate::model::OperationStatus::Failed;
             }
+            point_at_failure(model, &key, index, &message, position);
             model.messages.error_with(message, details);
             // The grid of a failed statement is empty; the reason is in Messages, so the
             // pane goes there and puts the new entry at the top.
@@ -1410,6 +1412,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.catalog_objects.clear();
                 model.catalog_revision = model.catalog_revision.wrapping_add(1);
                 model.absorb_catalog(&objects);
+                model.catalog_complete = true;
+                // The underlines can now say which tables and columns do not exist.
+                let sql = model.active_document().text();
+                let cursor = model.active_document().byte_cursor();
+                crate::screens::editor::refresh_diagnostics(model, &sql, cursor);
             } else {
                 let known: std::collections::HashSet<_> = model
                     .catalog_objects
@@ -4976,6 +4983,64 @@ fn run_policy(model: &Model) -> dexo_app::run_guard::RunPolicy {
     }
 }
 
+/// The server said where a statement failed: underline it there, and put the cursor on
+/// it -- if the document still reads as it did when the statement ran.
+fn point_at_failure(
+    model: &mut Model,
+    key: &crate::runtime::OperationKey,
+    index: usize,
+    message: &str,
+    position: Option<u32>,
+) {
+    let Some(position) = position.filter(|position| *position > 0) else {
+        return;
+    };
+    let Some((offset, revision)) = model
+        .results
+        .tabs
+        .get(index)
+        .filter(|tab| tab.key.operation == *key)
+        .and_then(|tab| tab.source_offset)
+    else {
+        return;
+    };
+    let Some(document) = model
+        .documents
+        .iter()
+        .position(|document| document.id == key.document)
+    else {
+        return;
+    };
+    let doc = &model.documents[document];
+    if doc.sql.revision() != revision {
+        return;
+    }
+    let text = doc.text();
+    let Some(within) = text[offset.min(text.len())..]
+        .char_indices()
+        .nth(position as usize - 1)
+        .map(|(at, _)| at)
+    else {
+        return;
+    };
+    let at = offset + within;
+    let end = text[at..]
+        .char_indices()
+        .find(|(_, ch)| ch.is_whitespace())
+        .map_or(text.len(), |(width, _)| at + width)
+        .max(at + text[at..].chars().next().map_or(0, char::len_utf8));
+    let mut diagnostic = dexo_sql::Diagnostic::server(message, "", None);
+    diagnostic.byte_range = Some(at..end);
+    model.editor.server_diagnostic = Some((doc.id.clone(), revision, diagnostic));
+    let cursor = text[..at].chars().count();
+    let doc = &mut model.documents[document];
+    doc.anchor = None;
+    let _ = doc.sql.set_cursor(cursor);
+    if document == model.active_document {
+        crate::screens::editor::follow_cursor(model);
+    }
+}
+
 fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
     let operation = crate::runtime::OperationId::new();
     let session = model
@@ -4989,6 +5054,20 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         document.clone(),
         model.session_generation.max(1),
     );
+    // Where each statement sits in the document, found in order, so a failure the server
+    // places can be shown in the text. A statement not in it (from history) has none.
+    let text = model.active_document().text();
+    let revision = model.active_document().sql.revision();
+    let mut from = 0;
+    let offsets: Vec<Option<(usize, u64)>> = statements
+        .iter()
+        .map(|sql| {
+            let at = text.get(from..)?.find(sql.as_str())? + from;
+            from = at + sql.len();
+            Some((at, revision))
+        })
+        .collect();
+    model.editor.server_diagnostic = None;
     model.results.tabs = statements
         .iter()
         .enumerate()
@@ -5001,6 +5080,7 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
                 format!("result {}", index + 1),
             );
             tab.source_sql = Some(sql.clone());
+            tab.source_offset = offsets[index];
             tab
         })
         .collect();
@@ -8385,6 +8465,46 @@ mod tests {
             submitted(effects),
             Some((SecretChoiceKind::SaveToKeychain, "x".to_string()))
         );
+    }
+
+    /// A failure the server places becomes an underline there, with the cursor on it.
+    #[test]
+    fn a_failed_statement_points_at_where_the_server_says() {
+        let mut model = Model::default();
+        model
+            .active_document_mut()
+            .sql
+            .insert(0, "select 1;\nselect ação, nope from t;")
+            .unwrap();
+        let effects = super::launch_script(
+            &mut model,
+            vec!["select 1".into(), "select ação, nope from t".into()],
+        );
+        let key = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::StartScript(request) => Some(request.key.clone()),
+                _ => None,
+            })
+            .expect("a script");
+        update(
+            &mut model,
+            Action::QueryFailed {
+                key,
+                index: 1,
+                message: "column \"nope\" does not exist".into(),
+                details: Vec::new(),
+                position: Some(14),
+            },
+        );
+        let text = model.active_document().text();
+        let cursor = model.active_document().cursor();
+        assert_eq!(
+            text.chars().skip(cursor).take(4).collect::<String>(),
+            "nope"
+        );
+        let (_, _, diagnostic) = model.editor.server_diagnostic.clone().expect("underlined");
+        assert_eq!(&text[diagnostic.byte_range.unwrap()], "nope");
     }
 
     #[test]

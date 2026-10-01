@@ -16,6 +16,8 @@ Theme, keymap, mouse capture, Unicode, and animation persist in a local settings
 | Ctrl+Shift+Up / Down | Move the line or selection up or down |
 | Ctrl+E | Edit the document in `$VISUAL` or `$EDITOR` (`ctrl+x ctrl+e` in the Emacs keymap) |
 
+The editor underlines what is wrong as you type: a statement that does not parse, and, once the catalog has been read whole, a table or a `alias.column` the database does not have -- never one it simply has not loaded. With the cursor on an underline the status line says what it is. When a run fails and the server says where, that spot is underlined and the cursor goes to it.
+
 Lines starting with a backslash are psql's commands, answered by Dexo from the catalog on every database and never sent to the server: `\dt`, `\dv`, `\di`, `\dn` and `\df` with an optional pattern (`*` and `?` wildcards), `\d name` for a table's columns, keys and indexes, `\l` for databases, `\x` for one field per line, and `\?` for the list.
 
 ### Vim mode

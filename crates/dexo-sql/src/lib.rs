@@ -1,6 +1,7 @@
 pub mod completion;
 pub mod context;
 pub mod derived;
+pub mod diagnose;
 pub mod diagnostic;
 pub mod dialect;
 pub mod document;
@@ -24,6 +25,7 @@ pub use context::{
     TriggerOrigin, analyze, should_open,
 };
 pub use derived::{derive_page, derive_page_in, filter_values};
+pub use diagnose::{KnownObjects, diagnose};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};

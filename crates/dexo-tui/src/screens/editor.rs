@@ -25,6 +25,12 @@ pub struct EditorState {
     /// asking any more.
     completion_at: Option<(String, u64, usize)>,
     pub highlights: Vec<HighlightSpan>,
+    /// What the document has wrong, built with the highlights and current with them.
+    pub diagnostics: Vec<dexo_sql::Diagnostic>,
+    /// Where the server said the last run failed, in the document and revision it ran.
+    pub server_diagnostic: Option<(String, u64, dexo_sql::Diagnostic)>,
+    /// The catalog as the diagnostics read it, and the catalog revision it was built at.
+    known: Option<(u64, dexo_sql::KnownObjects)>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
     pub completion_open: bool,
@@ -88,6 +94,9 @@ impl Clone for EditorState {
             painted: self.painted.clone(),
             completion_at: self.completion_at.clone(),
             highlights: self.highlights.clone(),
+            diagnostics: self.diagnostics.clone(),
+            server_diagnostic: self.server_diagnostic.clone(),
+            known: self.known.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
             completion_open: self.completion_open,
@@ -144,6 +153,9 @@ impl Default for EditorState {
             painted: None,
             completion_at: None,
             highlights: Vec::new(),
+            diagnostics: Vec::new(),
+            server_diagnostic: None,
+            known: None,
             parameters: Vec::new(),
             completions: Vec::new(),
             completion_open: false,
@@ -257,6 +269,7 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     model.editor.highlights = parsed.highlights;
     let document = model.active_document();
     model.editor.painted = Some((document.id.clone(), document.sql.revision()));
+    refresh_diagnostics(model, &sql, byte_cursor);
     model.editor.parameters = named_parameters(&sql, editor_dialect(model))
         .into_iter()
         .map(|parameter| ParameterValue {
@@ -268,6 +281,81 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     if with_completion {
         apply_completions(model, &sql, byte_cursor, false);
     }
+}
+
+/// Underlines what the document has wrong: what does not parse always, and tables and
+/// columns the catalog does not list once it has the whole database. A script too large
+/// to check on every key is left alone.
+pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
+    const LARGEST: usize = 512 * 1024;
+    if sql.len() > LARGEST {
+        model.editor.diagnostics.clear();
+        return;
+    }
+    let complete = model.catalog_complete && model.catalog_connection == model.connection.name;
+    if !complete {
+        model.editor.known = None;
+    } else if model.editor.known.as_ref().map(|(revision, _)| *revision)
+        != Some(model.catalog_revision)
+    {
+        let mut known = dexo_sql::KnownObjects::default();
+        for object in &model.catalog_objects {
+            let name = &object.qualified_name;
+            // MySQL names its databases as catalogs, the others as schemas.
+            let schema = name.schema().or(name.catalog()).unwrap_or("");
+            match object.kind {
+                dexo_driver_api::ObjectKind::Table
+                | dexo_driver_api::ObjectKind::View
+                | dexo_driver_api::ObjectKind::MaterializedView => {
+                    known.add_table(schema, name.object());
+                }
+                dexo_driver_api::ObjectKind::Column => {
+                    if let Some((table, column)) = name.object().rsplit_once('.') {
+                        known.add_column(schema, table, column);
+                    }
+                }
+                _ => {}
+            }
+        }
+        model.editor.known = Some((model.catalog_revision, known));
+    }
+    let found = dexo_sql::diagnose(
+        sql,
+        editor_dialect(model),
+        model.editor.known.as_ref().map(|(_, known)| known),
+        byte_cursor,
+    );
+    model.editor.diagnostics = found;
+}
+
+/// The diagnostics on screen for the active document: its own, and the server's from
+/// the last run while the text is as it ran. Byte ranges.
+pub fn current_diagnostics(model: &Model) -> Vec<&dexo_sql::Diagnostic> {
+    if !highlights_are_current(model) {
+        return Vec::new();
+    }
+    let doc = model.active_document();
+    let server = model
+        .editor
+        .server_diagnostic
+        .as_ref()
+        .filter(|(document, revision, _)| *document == doc.id && *revision == doc.sql.revision())
+        .map(|(_, _, diagnostic)| diagnostic);
+    model.editor.diagnostics.iter().chain(server).collect()
+}
+
+/// The message of the diagnostic the cursor is on, for the status line.
+pub fn diagnostic_at_cursor(model: &Model) -> Option<&str> {
+    let cursor = model.active_document().byte_cursor();
+    current_diagnostics(model)
+        .into_iter()
+        .find(|diagnostic| {
+            diagnostic
+                .byte_range
+                .as_ref()
+                .is_some_and(|range| range.start <= cursor && cursor <= range.end)
+        })
+        .map(|diagnostic| diagnostic.message.as_str())
 }
 
 pub fn close_completion(model: &mut Model) {

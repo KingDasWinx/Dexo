@@ -374,6 +374,9 @@ pub struct ResultTab {
     pub notices: Vec<String>,
     pub source_sql: Option<String>,
     pub local_only: Option<String>,
+    /// Where the statement began in its document, in bytes, and the document's revision
+    /// then: what turns the server's position for a failure into a place in the text.
+    pub source_offset: Option<(usize, u64)>,
 }
 
 impl ResultTab {
@@ -387,6 +390,7 @@ impl ResultTab {
             notices: Vec::new(),
             source_sql: None,
             local_only: None,
+            source_offset: None,
         }
     }
 }
@@ -1688,6 +1692,9 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// The completion catalog holds the whole database, so a table it does not list
+    /// is one the database does not have.
+    pub catalog_complete: bool,
     /// Vim mode's state, when the keymap profile is `vim`.
     pub vim: crate::screens::vim::VimState,
     /// Said once the startup connection is ready, where "Connected" would cover it.
@@ -1819,6 +1826,7 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            catalog_complete: false,
             vim: crate::screens::vim::VimState::default(),
             startup_warning: None,
             expanded_records: false,
@@ -2137,6 +2145,7 @@ impl Model {
         if self.catalog_connection != self.connection.name {
             self.catalog_objects.clear();
             self.catalog_connection = self.connection.name.clone();
+            self.catalog_complete = false;
         }
         self.catalog_revision = self.catalog_revision.wrapping_add(1);
         // Indexed once per page: a whole snapshot arrives at once, and finding each

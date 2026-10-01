@@ -146,6 +146,20 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         .style(Role::Warning, model.capabilities)
         .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
     paint(frame, &window, &found, lit);
+    let wrong: Vec<std::ops::Range<usize>> = crate::screens::editor::current_diagnostics(model)
+        .into_iter()
+        .filter_map(|diagnostic| diagnostic.byte_range.clone())
+        .map(|range| {
+            let start = text[..range.start.min(text.len())].chars().count();
+            let end = text[..range.end.min(text.len())].chars().count();
+            start..end.max(start + 1)
+        })
+        .collect();
+    let squiggle = model
+        .theme
+        .style(Role::Error, model.capabilities)
+        .add_modifier(Modifier::UNDERLINED);
+    paint(frame, &window, &wrong, squiggle);
     if let Some(range) = &sel {
         paint(frame, &window, std::slice::from_ref(range), sel_style);
     }

@@ -130,6 +130,7 @@ async fn report_failure(
             index,
             message: error.to_string(),
             details: crate::model::describe_query_error(sql, error, (index, statements)),
+            position: error.position(),
         })
         .await;
 }
