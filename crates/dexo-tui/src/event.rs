@@ -232,6 +232,14 @@ async fn edit_externally(
         .find(|value| !value.trim().is_empty())
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
     let suspended = guard.suspend();
+    // Out of raw mode, Ctrl+C at the terminal is SIGINT for Dexo too, and its default
+    // would end every open session while `code --wait` sits there. A handler (not an
+    // ignore, which the editor would inherit) keeps Dexo alive and leaves the editor
+    // its own Ctrl+C.
+    #[cfg(unix)]
+    let _interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+    #[cfg(windows)]
+    let _interrupt = tokio::signal::windows::ctrl_c().ok();
     // Through the shell, so `code --wait` and other editors with arguments work; the
     // path goes as an argument, never spliced into the command.
     #[cfg(windows)]
