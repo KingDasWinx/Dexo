@@ -23,14 +23,35 @@ fn parse_id(id: &ObjectId) -> Option<(&str, &str)> {
         .and_then(|rest| rest.split_once(':'))
 }
 
-fn split2(key: &str) -> (&str, &str) {
-    key.split_once('/').unwrap_or(("main", key))
+/// A key's parts, `/` between them. A name may hold `/` or `%` itself, so each part is
+/// written with those escaped, and read back unescaped.
+fn key2(schema: &str, name: &str) -> String {
+    format!("{}/{}", escape(schema), escape(name))
 }
 
-fn split3(key: &str) -> (&str, &str, &str) {
-    let (schema, rest) = split2(key);
+fn key3(schema: &str, table: &str, name: &str) -> String {
+    format!("{}/{}/{}", escape(schema), escape(table), escape(name))
+}
+
+fn escape(part: &str) -> String {
+    part.replace('%', "%25").replace('/', "%2F")
+}
+
+fn unescape(part: &str) -> String {
+    part.replace("%2F", "/").replace("%25", "%")
+}
+
+fn split2(key: &str) -> (String, String) {
+    match key.split_once('/') {
+        Some((schema, name)) => (unescape(schema), unescape(name)),
+        None => ("main".into(), unescape(key)),
+    }
+}
+
+fn split3(key: &str) -> (String, String, String) {
+    let (schema, rest) = key.split_once('/').unwrap_or(("main", key));
     let (table, name) = rest.split_once('/').unwrap_or((rest, rest));
-    (schema, table, name)
+    (unescape(schema), unescape(table), unescape(name))
 }
 
 /// A relation is named the way SQLite writes it, `main.orders`: the schema is its
@@ -98,7 +119,7 @@ impl CatalogReader for SqliteSession {
             "table" | "view" => Some(sl_id("catalog", split2(key).0)),
             "column" | "index" | "constraint" | "trigger" => {
                 let (schema, table, _) = split3(key);
-                let relation = self.relation_id(schema, table).await?;
+                let relation = self.relation_id(&schema, &table).await?;
                 Some(relation)
             }
             _ => return Ok(None),
@@ -138,7 +159,7 @@ impl CatalogReader for SqliteSession {
         let sql = format!(
             "SELECT sql FROM {}.sqlite_master WHERE {by} = ?1 AND sql IS NOT NULL
              ORDER BY CASE type WHEN 'table' THEN 0 WHEN 'view' THEN 0 WHEN 'index' THEN 1 ELSE 2 END, name",
-            quote(schema)
+            quote(&schema)
         );
         let name = name.to_string();
         let statements = self
@@ -188,12 +209,12 @@ impl SqliteSession {
                 let sql = format!(
                     "SELECT DISTINCT m.name FROM pragma_foreign_key_list(?1, ?2) f
                      JOIN {}.sqlite_master m ON m.type = 'table' AND m.name = f.\"table\" COLLATE NOCASE",
-                    quote(schema)
+                    quote(&schema)
                 );
                 let names = rows(conn, &sql, params![table, schema], |row| row.get(0))?;
                 Ok(names
                     .into_iter()
-                    .map(|name: String| sl_id("table", format!("{schema}/{name}")))
+                    .map(|name: String| sl_id("table", key2(&schema, &name)))
                     .collect())
             }
             ("table" | "view", false) => {
@@ -205,7 +226,7 @@ impl SqliteSession {
                      UNION ALL
                      SELECT 'trigger', name FROM {schema_q}.sqlite_master
                      WHERE type = 'trigger' AND tbl_name = ?1",
-                    schema_q = quote(schema)
+                    schema_q = quote(&schema)
                 );
                 let found = rows(conn, &sql, params![table, schema], |row| {
                     Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
@@ -213,14 +234,14 @@ impl SqliteSession {
                 Ok(found
                     .into_iter()
                     .map(|(kind, name)| match kind.as_str() {
-                        "trigger" => sl_id("trigger", format!("{schema}/{table}/{name}")),
-                        _ => sl_id("table", format!("{schema}/{name}")),
+                        "trigger" => sl_id("trigger", key3(&schema, &table, &name)),
+                        _ => sl_id("table", key2(&schema, &name)),
                     })
                     .collect())
             }
             ("trigger", true) => {
                 let (schema, table, _) = split3(&key);
-                Ok(vec![relation_kind(conn, schema, table)?])
+                Ok(vec![relation_kind(conn, &schema, &table)?])
             }
             _ => Ok(Vec::new()),
         })
@@ -242,7 +263,7 @@ fn relation_kind(conn: &Connection, schema: &str, name: &str) -> Result<ObjectId
     } else {
         "table"
     };
-    Ok(sl_id(kind, format!("{schema}/{name}")))
+    Ok(sl_id(kind, key2(schema, name)))
 }
 
 /// `main`, and every database an ATTACH added. `temp` only with system objects: it is
@@ -293,7 +314,7 @@ fn relations(
                 ("table", ObjectKind::Table)
             };
             CatalogObject::new(
-                sl_id(key, format!("{schema}/{name}")),
+                sl_id(key, key2(schema, &name)),
                 kind,
                 named(schema, name),
                 Some(parent.clone()),
@@ -309,7 +330,7 @@ fn relation_children(
     key: &str,
 ) -> Result<Vec<CatalogObject>, DriverError> {
     let (schema, table) = split2(key);
-    let child = |kind: &str, name: &str| sl_id(kind, format!("{schema}/{table}/{name}"));
+    let child = |kind: &str, name: &str| sl_id(kind, key3(&schema, &table, name));
     let mut objects = Vec::new();
 
     // `hidden` is 1 for a virtual table's hidden columns, 2 and 3 for generated ones,
@@ -334,7 +355,7 @@ fn relation_children(
         let mut object = CatalogObject::new(
             child("column", &name),
             ObjectKind::Column,
-            named(schema, format!("{table}.{name}")),
+            named(&schema, format!("{table}.{name}")),
             Some(parent.clone()),
         )
         .with_attribute("type", json!(data_type))
@@ -368,7 +389,7 @@ fn relation_children(
             CatalogObject::new(
                 child("index", &name),
                 ObjectKind::Index,
-                named(schema, name.clone()),
+                named(&schema, name.clone()),
                 Some(parent.clone()),
             )
             .with_attribute("driver.sqlite.unique", json!(unique))
@@ -376,13 +397,13 @@ fn relation_children(
         );
     }
 
-    for key in foreign_keys(conn, schema, table)? {
+    for key in foreign_keys(conn, &schema, &table)? {
         let name = format!("{table}_{}_fkey", key.local.join("_"));
         objects.push(
             CatalogObject::new(
                 child("constraint", &name),
                 ObjectKind::Constraint,
-                named(schema, name.clone()),
+                named(&schema, name.clone()),
                 Some(parent.clone()),
             )
             .with_attribute("driver.sqlite.constraint_type", json!("FOREIGN KEY"))
@@ -395,13 +416,13 @@ fn relation_children(
 
     let sql = format!(
         "SELECT name FROM {}.sqlite_master WHERE type = 'trigger' AND tbl_name = ?1 ORDER BY name",
-        quote(schema)
+        quote(&schema)
     );
-    for name in rows(conn, &sql, [table], |row| row.get::<_, String>(0))? {
+    for name in rows(conn, &sql, [&table], |row| row.get::<_, String>(0))? {
         objects.push(CatalogObject::new(
             child("trigger", &name),
             ObjectKind::Trigger,
-            named(schema, name.clone()),
+            named(&schema, name.clone()),
             Some(parent.clone()),
         ));
     }

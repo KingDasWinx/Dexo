@@ -59,10 +59,13 @@ fn wrap(parts: &[Filter], sep: &str, binder: &mut Binder) -> String {
     )
 }
 
-fn render_fetch(request: &DataRequest, rowid: bool) -> (String, Binder) {
+fn render_fetch(request: &DataRequest, rowid: Option<&str>) -> (String, Binder) {
     let mut binder = Binder::default();
     let cols = if request.columns.is_empty() {
-        if rowid { "rowid, *" } else { "*" }.to_string()
+        match rowid {
+            Some(alias) => format!("{alias}, *"),
+            None => "*".to_string(),
+        }
     } else {
         request
             .columns
@@ -184,20 +187,43 @@ fn cap_value(value: DbValue) -> DbValue {
 
 /// A table with no primary key is still keyed: by its rowid, which the page then
 /// carries as its first column. A view and a WITHOUT ROWID table (which must have a
-/// primary key) never need it.
-fn keyed_by_rowid(conn: &Connection, name: &QualifiedName) -> Result<bool, DriverError> {
+/// primary key) never need it. SQLite answers to `rowid`, `_rowid_` and `oid`, unless a
+/// real column has the name; the first one free is the key, and with none free the
+/// table has no key to edit by -- a column called `rowid` is the user's, not unique.
+fn rowid_alias(
+    conn: &Connection,
+    name: &QualifiedName,
+) -> Result<Option<&'static str>, DriverError> {
     let sql = format!(
         "SELECT type = 'table' AND NOT EXISTS (SELECT 1 FROM pragma_table_info(?1, ?2) WHERE pk > 0)
          FROM {}.sqlite_master WHERE name = ?1",
         quote(schema_of(name))
     );
-    Ok(conn
+    let keyless = conn
         .query_row(&sql, params![name.object(), schema_of(name)], |row| {
             row.get::<_, bool>(0)
         })
         .optional()
         .map_err(map_error)?
-        .unwrap_or(false))
+        .unwrap_or(false);
+    if !keyless {
+        return Ok(None);
+    }
+    let mut statement = conn
+        .prepare("SELECT name FROM pragma_table_xinfo(?1, ?2)")
+        .map_err(map_error)?;
+    let taken = statement
+        .query_map(params![name.object(), schema_of(name)], |row| {
+            row.get::<_, String>(0)
+        })
+        .map_err(map_error)?
+        .collect::<rusqlite::Result<Vec<_>>>()
+        .map_err(map_error)?;
+    Ok(["rowid", "_rowid_", "oid"].into_iter().find(|alias| {
+        !taken
+            .iter()
+            .any(|column| column.eq_ignore_ascii_case(alias))
+    }))
 }
 
 fn table_keys(conn: &Connection, name: &QualifiedName) -> Result<Vec<ColumnKeyInfo>, DriverError> {
@@ -222,11 +248,11 @@ fn table_keys(conn: &Connection, name: &QualifiedName) -> Result<Vec<ColumnKeyIn
         .map_err(map_error)?
         .collect::<rusqlite::Result<Vec<_>>>()
         .map_err(map_error)?;
-    if keyed_by_rowid(conn, name)? {
+    if let Some(alias) = rowid_alias(conn, name)? {
         keys.insert(
             0,
             ColumnKeyInfo {
-                name: "rowid".into(),
+                name: alias.into(),
                 primary_key: true,
                 unique: true,
             },
@@ -260,7 +286,11 @@ impl DataMutator for SqliteSession {
         Page::new(request.page.offset, request.page.limit)?;
         request.validate()?;
         self.with_conn(move |conn| {
-            let rowid = request.columns.is_empty() && keyed_by_rowid(conn, &request.object)?;
+            let rowid = if request.columns.is_empty() {
+                rowid_alias(conn, &request.object)?
+            } else {
+                None
+            };
             let (sql, binder) = render_fetch(&request, rowid);
             let mut statement = conn.prepare(&sql).map_err(map_error)?;
             let columns: Vec<_> = statement.columns().iter().map(column_meta).collect();

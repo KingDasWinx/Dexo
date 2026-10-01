@@ -620,3 +620,57 @@ async fn a_read_only_transaction_refuses_writes_until_it_ends() {
     .unwrap();
     assert_eq!(rows(&events), [vec![DbValue::I64(0)]]);
 }
+
+/// A name with `/` in it still finds its children, and a keyless table whose column is
+/// called `rowid` is keyed by `_rowid_`, the real row id, not by the user's column.
+#[tokio::test]
+async fn odd_names_keep_their_ids_and_their_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("odd.db");
+    seed(
+        &path,
+        "CREATE TABLE \"a/b%\" (id INTEGER PRIMARY KEY, v TEXT);
+         CREATE TABLE logs (rowid TEXT, body TEXT);
+         INSERT INTO logs VALUES ('same', 'one'), ('same', 'two');",
+    )
+    .await;
+    let session = open(&path, false).await;
+    let catalog = session.catalog().unwrap();
+    let options = CatalogListOptions::default();
+    let main = catalog.list_children(None, &options).await.unwrap().objects;
+    let tables = catalog
+        .list_children(Some(&main[0].id), &options)
+        .await
+        .unwrap()
+        .objects;
+    let odd = tables
+        .iter()
+        .find(|object| object.qualified_name.object() == "a/b%")
+        .expect("listed");
+    let columns = catalog
+        .list_children(Some(&odd.id), &options)
+        .await
+        .unwrap()
+        .objects;
+    let column = columns
+        .iter()
+        .find(|object| object.kind == ObjectKind::Column)
+        .expect("a column");
+    assert!(catalog.object(&column.id).await.unwrap().is_some());
+
+    let data = session.data().unwrap();
+    let keys = data.table_columns(&table("logs")).await.unwrap();
+    assert_eq!(keys[0].name, "_rowid_");
+    let page = data
+        .fetch(DataRequest {
+            object: table("logs"),
+            columns: vec![],
+            filter: None,
+            sort: vec![],
+            page: Page::new(0, 10).unwrap(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.rows[0][0], DbValue::I64(1));
+    assert_eq!(page.rows[1][0], DbValue::I64(2));
+}
