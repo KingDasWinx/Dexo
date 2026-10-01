@@ -168,8 +168,9 @@ impl PostgresSession {
     async fn explain_analyzed(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
         let (open, close) = analyze_fence(self.state());
         // One simple query, so nothing else sent on this shared connection lands inside
-        // the fence.
-        let fenced = format!("{open}; {}; {close}", wrap_explain(sql, true));
+        // the fence. Line breaks around the statement, because one ending in a `--`
+        // comment would otherwise comment out the ROLLBACK and leave the change pending.
+        let fenced = format!("{open};\n{}\n;\n{close}", wrap_explain(sql, true));
         match self.client.simple_query(&fenced).await {
             Ok(messages) => {
                 let text = messages

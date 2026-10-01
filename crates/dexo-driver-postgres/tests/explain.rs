@@ -83,3 +83,58 @@ async fn container_explain_estimated_and_analyze() {
     assert!(analyzed.execution_ms.is_some());
     assert!(analyzed.root.actual.time_ms.is_some() || analyzed.root.loops.is_some());
 }
+
+/// A trailing `--` comment on the explained statement used to comment out the fence's
+/// ROLLBACK, leaving the delete pending in an open transaction the next commit kept.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn analyze_rolls_back_a_statement_that_ends_in_a_line_comment() {
+    use dexo_driver_api::{ConnectRequest, ConnectionFactory, ExplainRequest, QueryRequest};
+    use dexo_driver_postgres::PostgresFactory;
+    use dexo_test_support::DatabasePair;
+    use futures_util::StreamExt;
+    use secrecy::SecretString;
+
+    async fn run(session: &dyn dexo_driver_api::Session, sql: &str) -> Vec<String> {
+        let mut stream = session.execute(QueryRequest::write(sql)).await.unwrap();
+        let mut values = Vec::new();
+        while let Some(event) = stream.next().await {
+            if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+                for row in batch.rows {
+                    values.extend(row.into_iter().map(|value| format!("{value:?}")));
+                }
+            }
+        }
+        values
+    }
+
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    run(&*session, "create table fence_probe (id int)").await;
+    run(
+        &*session,
+        "insert into fence_probe select generate_series(1, 5)",
+    )
+    .await;
+    session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed(
+            "delete from fence_probe -- clean up",
+        ))
+        .await
+        .unwrap();
+    let count = run(&*session, "select count(*) from fence_probe").await;
+    assert!(count.iter().any(|value| value.contains('5')), "{count:?}");
+    let open = run(&*session, "select txid_current_if_assigned() is not null").await;
+    assert!(open.iter().any(|value| value.contains("false")), "{open:?}");
+}
