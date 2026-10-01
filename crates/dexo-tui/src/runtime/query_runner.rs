@@ -32,6 +32,14 @@ pub async fn run_script(
         if failed && request.policy == ScriptPolicy::StopOnError {
             break;
         }
+        // Answered here, from the catalog: a backslash command never reaches the driver.
+        if dexo_app::meta_command::is_meta(sql) {
+            if let Err(error) = answer_meta(&action_tx, &key, index, session.as_ref(), sql).await {
+                report_failure(&action_tx, &key, index, sql, &error, statements).await;
+                failed = true;
+            }
+            continue;
+        }
         let effect = split_statements(sql)
             .first()
             .map(|span| span.effect)
@@ -124,6 +132,69 @@ async fn report_failure(
             details: crate::model::describe_query_error(sql, error, (index, statements)),
         })
         .await;
+}
+
+/// A backslash command's answer, sent as the events a query's result set would be.
+async fn answer_meta(
+    action_tx: &tokio::sync::mpsc::Sender<Action>,
+    key: &OperationKey,
+    index: usize,
+    session: &dyn Session,
+    sql: &str,
+) -> Result<(), DriverError> {
+    use dexo_app::meta_command::{self, MetaCommand};
+    let fail = |message: String| DriverError::new(DriverErrorCategory::Syntax, message);
+    let command = meta_command::parse(sql).map_err(|error| fail(error.to_string()))?;
+    if command == MetaCommand::ToggleRecordView {
+        let _ = action_tx.send(Action::ToggleRecordView).await;
+        return Ok(());
+    }
+    let catalog = session.catalog().ok_or_else(|| {
+        DriverError::new(
+            DriverErrorCategory::Capability,
+            "this connection has no catalog to answer from",
+        )
+    })?;
+    let answer = meta_command::answer(catalog, &command)
+        .await
+        .map_err(|error| fail(error.to_string()))?;
+    let _ = action_tx
+        .send(Action::QueryResultSetStarted {
+            key: key.clone(),
+            index,
+        })
+        .await;
+    let columns = answer
+        .columns
+        .iter()
+        .map(|name| dexo_driver_api::ColumnMeta {
+            name: name.to_string(),
+            type_name: "text".into(),
+            nullable: false,
+        })
+        .collect();
+    let rows = answer
+        .rows
+        .into_iter()
+        .map(|row| {
+            row.into_iter()
+                .map(dexo_driver_api::DbValue::Text)
+                .collect()
+        })
+        .collect();
+    for event in [
+        QueryEvent::Columns(columns),
+        QueryEvent::Rows(dexo_driver_api::RowBatch { rows }),
+        QueryEvent::ResultSetFinished {
+            index,
+            rows_affected: None,
+        },
+    ] {
+        if forward_event(action_tx, key, index, event).await {
+            break;
+        }
+    }
+    Ok(())
 }
 
 async fn forward_event(

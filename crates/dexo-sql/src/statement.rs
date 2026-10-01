@@ -29,6 +29,16 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
     let mut i = start;
     let mut scan = Scan::default();
     while i < bytes.len() {
+        // A psql backslash command -- `\dt`, `\d orders` -- is a line, not SQL: it ends
+        // where the line does, `;` or not.
+        if i == start && bytes[i] == b'\\' {
+            let line_end = sql[i..].find('\n').map_or(bytes.len(), |at| i + at);
+            spans.push(classify_span(sql, start..trim_end(sql, start, line_end)));
+            start = skip_ws(sql, line_end);
+            i = start;
+            scan = Scan::default();
+            continue;
+        }
         match bytes[i] {
             b';' => {
                 if start < i {
@@ -41,7 +51,12 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
             }
             b' ' | b'\t' | b'\r' | b'\n' => {
                 let next = skip_ws(sql, i);
-                if sql[i..next].contains('\n')
+                let new_line = sql[i..next].contains('\n');
+                if new_line && bytes.get(next) == Some(&b'\\') {
+                    spans.push(classify_span(sql, start..trim_end(sql, start, i)));
+                    start = next;
+                    scan = Scan::default();
+                } else if new_line
                     && let Some(word) = take_ident(&sql[next..])
                     && scan.starts_new(word)
                 {
@@ -307,6 +322,10 @@ fn classify_span(sql: &str, range: Range<usize>) -> StatementSpan {
 }
 
 fn classify(sql: &str) -> (StatementEffect, bool) {
+    // Answered by Dexo from the catalog, never sent.
+    if is_backslash_command(sql) {
+        return (StatementEffect::ReadOnly, true);
+    }
     let first = first_keyword(sql);
     match first.as_deref() {
         Some("SELECT" | "SHOW" | "EXPLAIN" | "DESCRIBE" | "DESC" | "VALUES" | "TABLE") => {
@@ -324,6 +343,13 @@ fn classify(sql: &str) -> (StatementEffect, bool) {
         }
         Some(_) | None => (StatementEffect::Unknown, false),
     }
+}
+
+/// A psql backslash command on its own line. One with a `;` in it is not taken for one:
+/// `\dt ; DELETE …` on one line is what a server would see as SQL.
+pub fn is_backslash_command(sql: &str) -> bool {
+    let sql = sql.trim();
+    sql.starts_with('\\') && !sql.contains(';') && !sql.contains('\n')
 }
 
 fn classify_with(sql: &str) -> (StatementEffect, bool) {
@@ -555,6 +581,31 @@ pub(crate) fn segments(sql: &str, statements: &[StatementSpan]) -> Vec<Range<usi
 #[cfg(test)]
 mod tests {
     use super::{StatementEffect, split_statements, split_statements_in, statement_at};
+
+    /// A backslash command is its own statement, ending at its line, and a read; with
+    /// a `;` on the line it is not one, and counts against the run like unknown SQL.
+    #[test]
+    fn backslash_commands_end_at_their_line() {
+        let sql = "\\dt public.*\nselect 1;\n\\d orders\nselect 2";
+        let spans = super::split_statements(sql);
+        let texts: Vec<&str> = spans
+            .iter()
+            .map(|span| &sql[span.byte_range.clone()])
+            .collect();
+        assert_eq!(
+            texts,
+            ["\\dt public.*", "select 1", "\\d orders", "select 2"]
+        );
+        assert_eq!(spans[0].effect, super::StatementEffect::ReadOnly);
+        assert!(super::is_backslash_command("\\x"));
+        assert!(!super::is_backslash_command("\\dt ; delete from t"));
+        assert!(!crate::is_read(
+            "\\dt ; delete from t",
+            crate::Dialect::Postgres
+        ));
+        assert!(crate::is_read("\\dt", crate::Dialect::Mysql));
+        assert_eq!(crate::destructive("\\l", crate::Dialect::Sqlite), None);
+    }
     use crate::Dialect;
 
     /// MySQL reads `#` as a comment and `\'` as a quote inside a string; the splitter

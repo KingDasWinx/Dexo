@@ -1688,6 +1688,9 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// `\x`: the grid shows each row as a record, one field per line, as psql's
+    /// expanded display does. For the session, not one result.
+    pub expanded_records: bool,
     /// A document waiting to be opened in `$VISUAL` or `$EDITOR`. The event loop owns
     /// the terminal, so it takes this between frames.
     pub external_edit: Option<ExternalEdit>,
@@ -1812,6 +1815,7 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            expanded_records: false,
             external_edit: None,
             keys_disambiguated: false,
             find: crate::screens::find::FindState::default(),

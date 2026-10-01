@@ -70,10 +70,50 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 body,
             );
         }
+        ResultsView::Grid if model.expanded_records && model.results.row_count() > 0 => {
+            frame.render_widget(Paragraph::new(record_lines(model, body)), body);
+        }
         ResultsView::Grid => {
             frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
         }
     }
+}
+
+/// `\\x`: from the cursor's row on, each row as psql's expanded display shows it -- a
+/// `-[ RECORD n ]-` rule, then one field per line -- as many as fit.
+fn record_lines(model: &Model, area: Rect) -> Vec<ratatui::text::Line<'static>> {
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let first = model.results.cursor_row().unwrap_or(0);
+    let mut lines = Vec::new();
+    for row in first..model.results.row_count() {
+        if lines.len() >= area.height as usize {
+            break;
+        }
+        let rule = format!("-[ RECORD {} ]", row + 1);
+        let fill = (area.width as usize).saturating_sub(rule.chars().count());
+        lines.push(ratatui::text::Line::styled(
+            format!("{rule}{}", "-".repeat(fill)),
+            muted,
+        ));
+        let fields = crate::widgets::row_detail::row_detail_fields(&model.results, row);
+        let width = fields
+            .iter()
+            .map(|field| field.name.chars().count())
+            .max()
+            .unwrap_or(0);
+        for field in fields {
+            let (crate::widgets::row_detail::RowDetailValue::Text(value)
+            | crate::widgets::row_detail::RowDetailValue::Json(value)) = field.value;
+            // One line a field, as psql prints it; the value's own breaks would push
+            // the next field off the screen, so they show as spaces.
+            let value = value.replace(['\n', '\r'], " ");
+            lines.push(ratatui::text::Line::from(vec![
+                ratatui::text::Span::styled(format!("{:<width$} │ ", field.name), muted),
+                ratatui::text::Span::raw(value),
+            ]));
+        }
+    }
+    lines
 }
 
 /// One row inside the pane holding the view selector and, after a divider, the result

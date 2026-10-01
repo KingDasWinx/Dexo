@@ -34,6 +34,7 @@ async fn storage_worker_creates_and_loads_the_default_project() {
 }
 
 struct FakeSession {
+    executions: AtomicU64,
     commits: AtomicU64,
     cancels: AtomicU64,
     tx: Mutex<TransactionState>,
@@ -44,6 +45,7 @@ struct FakeSession {
 impl Default for FakeSession {
     fn default() -> Self {
         Self {
+            executions: AtomicU64::new(0),
             commits: AtomicU64::new(0),
             cancels: AtomicU64::new(0),
             tx: Mutex::new(TransactionState::Idle),
@@ -69,6 +71,7 @@ impl Session for FakeSession {
     }
 
     async fn execute(&self, _request: QueryRequest) -> Result<QueryStream, DriverError> {
+        self.executions.fetch_add(1, Ordering::SeqCst);
         let count = self
             .remaining
             .lock()
@@ -376,4 +379,24 @@ async fn stale_generation_is_ignored_by_the_reducer() {
         },
     );
     assert_eq!(model.results.row_count(), 0);
+}
+
+/// Backslash commands are answered from the catalog in the runtime: in a script with SQL
+/// around them, only the SQL reaches the driver, and each still gets its result set.
+#[tokio::test]
+async fn backslash_commands_never_reach_the_driver() {
+    let fake = Arc::new(FakeSession::with_rows(vec![1]));
+    let (_dir, mut runtime, mut actions) = runtime_with_session(fake.clone()).await;
+    runtime
+        .start_script(script_request("\\l\nselect 1;\n\\dt"))
+        .await
+        .unwrap();
+    let received = collect_until_finished(&mut actions).await;
+    assert_eq!(fake.executions.load(Ordering::SeqCst), 1);
+    assert_eq!(result_set_indexes(&received), vec![0, 1, 2]);
+    let databases = received.iter().find_map(|action| match action {
+        Action::QueryRows { index: 0, rows, .. } => Some(rows.clone()),
+        _ => None,
+    });
+    assert_eq!(databases, Some(vec![vec![DbValue::Text("db".into())]]));
 }

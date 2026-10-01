@@ -1427,6 +1427,18 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             crate::screens::editor::apply_format(model);
             Vec::new()
         }
+        Action::ToggleRecordView => {
+            model.expanded_records = !model.expanded_records;
+            model.messages.info(
+                if model.expanded_records {
+                    "Expanded display is on: one field per line."
+                } else {
+                    "Expanded display is off."
+                }
+                .into(),
+            );
+            Vec::new()
+        }
         Action::OpenFind { replace } => {
             let doc = model.active_document();
             if doc.kind.is_table() || doc.kind.is_placeholder() {
@@ -6414,6 +6426,20 @@ fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
         model
             .messages
             .warn("a statement is still running; cancel it with Ctrl+F2 first".into());
+        return Vec::new();
+    }
+    let document = model.active_document();
+    let text = document.text();
+    let under_cursor = dexo_sql::statement_at_in(
+        &text,
+        document.byte_cursor(),
+        crate::screens::editor::editor_dialect(model),
+    );
+    if under_cursor.is_some_and(|span| dexo_sql::is_backslash_command(&text[span.byte_range])) {
+        model.messages.warn(
+            "A backslash command is answered by Dexo from the catalog; the server has no plan for it."
+                .into(),
+        );
         return Vec::new();
     }
     let operation = crate::runtime::OperationId::new();

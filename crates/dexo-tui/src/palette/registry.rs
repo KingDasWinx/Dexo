@@ -1057,6 +1057,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::RefreshSqlIntelligence),
         },
         CommandSpec {
+            id: "results.record_view",
+            title: "Toggle Record View",
+            keywords: &["expanded", "\\x", "vertical", "fields"],
+            shortcut: Some("\\x"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ToggleRecordView),
+        },
+        CommandSpec {
             id: "editor.find",
             title: "Find",
             keywords: &["search", "match", "next"],

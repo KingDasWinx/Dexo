@@ -190,6 +190,10 @@ impl Destructive {
 /// `SELECT INTO`, `FOR UPDATE`, `set_config()`, a data-modifying CTE -- does not, nor
 /// does anything sqlparser cannot parse.
 pub fn is_read(sql: &str, dialect: Dialect) -> bool {
+    // Dexo answers these from the catalog; nothing reaches the server.
+    if crate::statement::is_backslash_command(sql) {
+        return true;
+    }
     let keyword = keyword_in(sql, dialect);
     let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"));
     match inspect_read(sql, dialect) {

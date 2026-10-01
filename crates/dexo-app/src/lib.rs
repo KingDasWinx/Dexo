@@ -11,6 +11,7 @@ pub mod error;
 pub mod event;
 pub mod explain_service;
 pub mod mcp;
+pub mod meta_command;
 pub mod password_command;
 pub mod project;
 pub mod query_service;

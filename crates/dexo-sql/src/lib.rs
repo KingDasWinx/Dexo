@@ -34,8 +34,8 @@ pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
 pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
 pub use statement::{
-    StatementEffect, StatementSpan, split_statements, split_statements_in, statement_at,
-    statement_at_in,
+    StatementEffect, StatementSpan, is_backslash_command, split_statements, split_statements_in,
+    statement_at, statement_at_in,
 };
 pub use statement_guard::{
     Destructive, GuardRejection, Inspection, destructive, inspect_data_write, inspect_read,

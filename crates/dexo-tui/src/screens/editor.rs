@@ -647,6 +647,14 @@ pub fn merge_completion_objects(
 fn suggest_live(model: &mut Model) {
     let sql = model.active_document().text();
     let byte_cursor = model.active_document().byte_cursor();
+    // `\dt` is a command name, not something to complete; its argument (`\d orders`)
+    // is a table, and completes like one.
+    let line_start = sql[..byte_cursor].rfind('\n').map_or(0, |at| at + 1);
+    let typed = &sql[line_start..byte_cursor];
+    if typed.trim_start().starts_with('\\') && !typed.trim_start().contains(char::is_whitespace) {
+        close_completion(model);
+        return;
+    }
     apply_completions(model, &sql, byte_cursor, true);
 }
 

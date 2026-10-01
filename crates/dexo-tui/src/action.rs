@@ -379,6 +379,8 @@ pub enum Action {
     },
     OpenExplain,
     CycleResultsView,
+    /// `\x`: rows one field per line, or back to the grid.
+    ToggleRecordView,
     DismissToast,
     ToastTick,
     ConfirmExplainAnalyze,
