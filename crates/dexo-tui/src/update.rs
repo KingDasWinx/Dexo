@@ -6497,6 +6497,19 @@ fn apply_saved_settings(model: &mut Model) {
 }
 
 fn run_transfer(model: &mut Model) -> Vec<Effect> {
+    // Import and Restore write into the database, Restore through a native tool whose
+    // connection never gets the session's read-only setting, so Dexo refuses first.
+    if model.connection.read_only
+        && matches!(
+            model.transfer.mode,
+            crate::screens::transfer::TransferMode::Import
+                | crate::screens::transfer::TransferMode::Restore
+        )
+    {
+        model.transfer.error =
+            Some("The connection is read-only; import and restore write into it.".into());
+        return Vec::new();
+    }
     let path = std::path::PathBuf::from(model.transfer.path.trim());
     if path.as_os_str().is_empty() {
         open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);

@@ -378,3 +378,40 @@ fn explain_effect_carries_second_statement_cursor() {
         [Effect::RunExplain { cursor, .. }] if *cursor > 0
     ));
 }
+
+/// Import and Restore write into the database, through the driver and through native
+/// tools whose connections never get the read-only setting; a read-only connection
+/// refuses them before anything starts.
+#[test]
+fn a_read_only_connection_refuses_import_and_restore() {
+    use dexo_tui::screens::transfer::TransferMode;
+    let dir = tempfile::tempdir().unwrap();
+    let source = dir.path().join("rows.csv");
+    std::fs::write(&source, b"id\n1\n").unwrap();
+    let started = |read_only: bool, mode: TransferMode| {
+        let mut model = transfer_ready_model();
+        model.connection.read_only = read_only;
+        choose(
+            &mut model,
+            match mode {
+                TransferMode::Import => "transfer.import",
+                _ => "backup.restore",
+            },
+        );
+        model.transfer.path = source.display().to_string();
+        model.transfer.confirm_restore = true;
+        press(&mut model, crossterm::event::KeyCode::Enter)
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::RunTransfer(_)))
+    };
+    for mode in [TransferMode::Import, TransferMode::Restore] {
+        assert!(
+            started(false, mode),
+            "{mode:?} does not start even when writable"
+        );
+        assert!(
+            !started(true, mode),
+            "{mode:?} started on a read-only connection"
+        );
+    }
+}
