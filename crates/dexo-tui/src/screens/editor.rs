@@ -1110,10 +1110,12 @@ fn shift_snippet_stops(model: &mut Model, mark: (usize, usize)) {
 /// way turned the next tab in the text into an accepted suggestion instead of
 /// indentation.
 pub fn paste(model: &mut Model, text: &str) -> bool {
-    // With the find bar open, a paste is for the bar.
+    // With the find bar open, a paste is for the bar; with Vim's `:` or `/` open, for
+    // that line.
     if model.focus != crate::model::Focus::Editor
         || model.active_document().kind.is_table()
         || model.find.open
+        || (crate::screens::vim::active(model) && model.vim.prompt.is_some())
     {
         return false;
     }

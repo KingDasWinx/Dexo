@@ -3594,10 +3594,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     let revision = model.active_document().sql.revision();
     // Vim mode has the keys the keymap left, before the plain editor does.
+    // On "nothing open" too: `i` and the typing after it make the document there.
     if crate::screens::vim::active(model)
         && model.effective_focus() == Focus::Editor
         && !model.active_document().kind.is_table()
-        && !model.active_document().kind.is_placeholder()
         && !model.find.open
     {
         match crate::screens::vim::handle_key(model, key) {

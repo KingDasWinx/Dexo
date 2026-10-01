@@ -119,8 +119,9 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
                 history(model, count, false);
                 Outcome::Done
             }
-            // Ctrl chords the keymap did not take are not Vim's either.
-            _ => Outcome::Pass,
+            // Ctrl chords the keymap did not take are not Vim's either -- and Normal mode
+            // does not hand them to the plain editor, where Ctrl+Backspace would delete.
+            _ => Outcome::Done,
         };
     }
     match key.code {
@@ -872,6 +873,11 @@ fn substitute(model: &mut Model, spec: &str, whole: bool) {
 }
 
 fn replace(model: &mut Model, range: Range<usize>, text: &str) {
+    // `x` on an empty line, `dh` at the start of one: nothing to change, and no undo
+    // step or unsaved mark for it.
+    if range.is_empty() && text.is_empty() {
+        return;
+    }
     let doc = model.active_document_mut();
     doc.anchor = None;
     let _ = doc.sql.replace_chars(range, text);
@@ -1043,6 +1049,38 @@ mod tests {
 
     fn text(model: &Model) -> String {
         model.active_document().text()
+    }
+
+    /// Keys the keymap leaves -- Ctrl+Backspace, Ctrl+Delete -- do not edit in Normal
+    /// mode, an empty change marks nothing, and "nothing open" takes `i` like a document.
+    #[test]
+    fn normal_mode_edits_only_through_its_commands() {
+        let mut model = vim("select name from t");
+        model.active_document_mut().sql.set_cursor(10).unwrap();
+        for code in [KeyCode::Backspace, KeyCode::Delete] {
+            update(
+                &mut model,
+                Action::Key(KeyEvent::new(code, KeyModifiers::CONTROL)),
+            );
+        }
+        assert_eq!(text(&model), "select name from t");
+
+        let mut model = vim("a\n\nb");
+        model.active_document_mut().sql.set_cursor(2).unwrap();
+        let revision = model.active_document().sql.revision();
+        keys(&mut model, "x");
+        assert_eq!(model.active_document().sql.revision(), revision);
+
+        let mut model = Model {
+            focus: Focus::Editor,
+            keymap: crate::keymap::Keymap::vim_profile(),
+            ..Model::default()
+        };
+        model.documents = vec![crate::model::EditorDocument::placeholder()];
+        model.active_document = 0;
+        keys(&mut model, "iselect 1\u{1b}");
+        assert_eq!(text(&model), "SELECT 1");
+        assert!(!model.active_document().kind.is_placeholder());
     }
 
     #[test]
