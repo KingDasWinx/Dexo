@@ -227,6 +227,9 @@ impl Visitor for DestructiveFinder {
 
     fn pre_visit_statement(&mut self, statement: &Statement) -> ControlFlow<()> {
         self.found = match statement {
+            // Also found by their first keyword, but a MySQL `#` comment hides that.
+            Statement::Drop { .. } => Some(Destructive::Drop),
+            Statement::Truncate(_) => Some(Destructive::Truncate),
             Statement::Delete(delete) if delete.selection.is_none() => {
                 Some(Destructive::DeleteWithoutWhere)
             }
@@ -663,5 +666,20 @@ mod tests {
             assert!(!is_read(sql, Dialect::Postgres), "{sql}");
             assert!(inspect_read(sql, Dialect::Postgres).is_err(), "{sql}");
         }
+    }
+
+    /// A MySQL `#` comment hides the first keyword from the splitter's view, so DROP
+    /// and TRUNCATE are found in the parsed statement too.
+    #[test]
+    fn drop_and_truncate_are_found_after_a_mysql_hash_comment() {
+        let mysql = |sql: &str| destructive(sql, Dialect::Mysql);
+        assert_eq!(
+            mysql("# drop the customer's old table\nDROP TABLE customers_old"),
+            Some(Destructive::Drop)
+        );
+        assert_eq!(
+            mysql("# empty it\nTRUNCATE TABLE customers_old"),
+            Some(Destructive::Truncate)
+        );
     }
 }
