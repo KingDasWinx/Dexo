@@ -1,6 +1,6 @@
 use dexo_driver_api::{
     DriverError, DriverErrorCategory, ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics,
-    PlanNode,
+    PlanNode, TransactionControl, TransactionState,
 };
 use mysql_async::prelude::Queryable;
 
@@ -276,6 +276,17 @@ impl ExplainProvider for MysqlSession {
         };
         let format = select_format(request.analyze, caps)?;
         let sql = wrap_explain(&request.sql, format, request.analyze);
+        if request.analyze {
+            let raw = self.fetch_explain_analyzed(&sql).await?;
+            // MySQL answers this, instead of an error, for a statement ANALYZE cannot run
+            // (a single-table UPDATE or DELETE, for one); it is not a plan to draw.
+            if raw.contains("<not executable by iterator executor>") {
+                return Err(DriverError::unsupported(
+                    "MySQL can only EXPLAIN ANALYZE SELECT, TABLE and multi-table UPDATE or DELETE statements; use the estimated plan for this one",
+                ));
+            }
+            return parse_tree(&raw);
+        }
         let raw = self.fetch_explain_text(&sql).await;
         let raw = match raw {
             Ok(raw) => raw,
@@ -297,13 +308,46 @@ impl ExplainProvider for MysqlSession {
 impl MysqlSession {
     async fn fetch_explain_text(&self, sql: &str) -> Result<String, DriverError> {
         let mut conn = self.conn.lock().await;
-        let rows: Vec<(String,)> = conn.query(sql).await.map_err(map_error)?;
-        Ok(rows
-            .into_iter()
-            .map(|row| row.0)
-            .collect::<Vec<_>>()
-            .join("\n"))
+        explain_text(&mut conn, sql).await
     }
+
+    /// EXPLAIN ANALYZE executes the statement to time it, and what it changed used to stay
+    /// committed. It runs inside a transaction, or a savepoint when the user has one open
+    /// (`START TRANSACTION` there would commit their work), and is always rolled back. The
+    /// connection stays locked throughout, so nothing else runs inside the fence.
+    async fn fetch_explain_analyzed(&self, sql: &str) -> Result<String, DriverError> {
+        let (open, close): (&str, &[&str]) = if self.state() == TransactionState::Idle {
+            ("START TRANSACTION", &["ROLLBACK"])
+        } else {
+            (
+                "SAVEPOINT dexo_explain",
+                &[
+                    "ROLLBACK TO SAVEPOINT dexo_explain",
+                    "RELEASE SAVEPOINT dexo_explain",
+                ],
+            )
+        };
+        let mut conn = self.conn.lock().await;
+        conn.query_drop(open).await.map_err(map_error)?;
+        let result = explain_text(&mut conn, sql).await;
+        for statement in close {
+            if let Err(error) = conn.query_drop(*statement).await {
+                // A plan from a fence that did not close is not worth the doubt about
+                // what it left behind.
+                return Err(result.err().unwrap_or_else(|| map_error(error)));
+            }
+        }
+        result
+    }
+}
+
+async fn explain_text(conn: &mut mysql_async::Conn, sql: &str) -> Result<String, DriverError> {
+    let rows: Vec<(String,)> = conn.query(sql).await.map_err(map_error)?;
+    Ok(rows
+        .into_iter()
+        .map(|row| row.0)
+        .collect::<Vec<_>>()
+        .join("\n"))
 }
 
 #[cfg(test)]

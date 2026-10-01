@@ -1,7 +1,8 @@
 use dexo_driver_api::{
     DriverError, DriverErrorCategory, ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics,
-    PlanNode,
+    PlanNode, TransactionControl, TransactionState,
 };
+use tokio_postgres::SimpleQueryMessage;
 
 use crate::error::map_error;
 use crate::session::PostgresSession;
@@ -83,10 +84,57 @@ fn number(value: &serde_json::Value, key: &str) -> Option<f64> {
     value.get(key).and_then(serde_json::Value::as_f64)
 }
 
+/// The statements around an EXPLAIN ANALYZE that undo what it ran. ANALYZE executes the
+/// statement to time it, and an UPDATE or DELETE explained that way used to commit. Inside
+/// the user's own transaction a savepoint does it, so their work is left as it was;
+/// `BEGIN` there would only warn, and the `ROLLBACK` would take their transaction with it.
+fn analyze_fence(state: TransactionState) -> (&'static str, &'static str) {
+    if state == TransactionState::Idle {
+        ("BEGIN", "ROLLBACK")
+    } else {
+        (
+            "SAVEPOINT dexo_explain",
+            "ROLLBACK TO SAVEPOINT dexo_explain; RELEASE SAVEPOINT dexo_explain",
+        )
+    }
+}
+
+impl PostgresSession {
+    async fn explain_analyzed(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
+        let (open, close) = analyze_fence(self.state());
+        // One simple query, so nothing else sent on this shared connection lands inside
+        // the fence.
+        let fenced = format!("{open}; {}; {close}", wrap_explain(sql, true));
+        match self.client.simple_query(&fenced).await {
+            Ok(messages) => {
+                let text = messages
+                    .iter()
+                    .find_map(|message| match message {
+                        SimpleQueryMessage::Row(row) => row.get(0).map(str::to_string),
+                        _ => None,
+                    })
+                    .ok_or_else(|| {
+                        DriverError::new(DriverErrorCategory::Internal, "explain returned no plan")
+                    })?;
+                parse_json(&text)
+            }
+            Err(error) => {
+                // The server skips the rest of the string after an error, so the fence is
+                // still open; closing it keeps the session out of an aborted transaction.
+                let _ = self.client.batch_execute(close).await;
+                Err(map_error(error))
+            }
+        }
+    }
+}
+
 #[async_trait::async_trait]
 impl ExplainProvider for PostgresSession {
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
-        let sql = wrap_explain(&request.sql, request.analyze);
+        if request.analyze {
+            return self.explain_analyzed(&request.sql).await;
+        }
+        let sql = wrap_explain(&request.sql, false);
         let row = self.client.query_one(&sql, &[]).await.map_err(map_error)?;
         if let Ok(value) = row.try_get::<_, serde_json::Value>(0) {
             return parse_value(&value, &value.to_string());
