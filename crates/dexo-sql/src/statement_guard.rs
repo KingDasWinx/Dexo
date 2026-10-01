@@ -104,8 +104,10 @@ pub fn inspect_read(sql: &str, dialect: Dialect) -> Result<Inspection, GuardReje
             options,
             ..
         } => {
+            // Postgres also takes the British spelling, and runs the statement either way.
             let analyze_option = options.iter().flatten().any(|option| {
-                option.name.value.eq_ignore_ascii_case("analyze")
+                (option.name.value.eq_ignore_ascii_case("analyze")
+                    || option.name.value.eq_ignore_ascii_case("analyse"))
                     && !matches!(&option.arg, Some(Expr::Value(value)) if value.to_string().eq_ignore_ascii_case("false"))
             });
             if *analyze || analyze_option {
@@ -646,6 +648,20 @@ mod tests {
             "show tables",
         ] {
             assert_eq!(destructive(sql, Dialect::Postgres), None, "{sql}");
+        }
+    }
+
+    /// Postgres takes the British spelling in the option list and runs the statement.
+    #[test]
+    fn explain_analyse_is_not_a_read() {
+        for sql in [
+            "explain (analyse) delete from items",
+            "explain analyse delete from items",
+            "EXPLAIN (ANALYSE true) DELETE FROM items",
+            "explain (analyze, format json) delete from items",
+        ] {
+            assert!(!is_read(sql, Dialect::Postgres), "{sql}");
+            assert!(inspect_read(sql, Dialect::Postgres).is_err(), "{sql}");
         }
     }
 }
