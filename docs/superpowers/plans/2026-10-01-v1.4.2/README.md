@@ -8,8 +8,8 @@ The spec ships as one release in nine sections. Each section gets its own plan h
 |---|---|---|---|
 | 1 | [01-safety.md](01-safety.md) | A1, A4, A5 | done |
 | 2 | [02-try-it-in-seconds.md](02-try-it-in-seconds.md) | D2, D4, A2, D1, D7 | done |
-| 3 | [03-editor.md](03-editor.md) | B1, B2, B3, B6, B5, B4 | written |
-| 4 | 04-results.md | C1, C2, A3, C3, C4 | after 3 |
+| 3 | [03-editor.md](03-editor.md) | B1, B2, B3, B6, B5, B4 | done |
+| 4 | [04-results.md](04-results.md) | C1, C2, A3, C3, C4 | written |
 | 5 | 05-connecting-and-personalising.md | D5, D8, D6 | after 4 |
 | 6 | 06-agents.md | E3, E1, E2, E4, E5 | after 5 |
 | 7 | 07-duckdb.md | D3 | after 6 |
