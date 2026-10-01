@@ -406,7 +406,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             // A new profile with the temporary one's settings: saved through the normal
             // path, so the password goes to the keychain like any other.
             form.editing = None;
-            form.saving_temporary = true;
+            form.saving_temporary = Some((*profile).clone());
             if let Some(password) = password {
                 form.set_value("password", password.expose());
             }
@@ -455,14 +455,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ProfileSaved(profile) => {
             let mut effects = Vec::new();
-            // A temporary connection saved under its own name: its documents are bound
-            // to its id, and follow it to the saved one's.
-            if let Some(temporary) = model
+            // The name this profile's sessions went by: the temporary connection the form
+            // saved, or the profile itself before an edit renamed it.
+            let mut previous_name = model
                 .connections
-                .temporary
+                .profiles
                 .iter()
-                .find(|temporary| temporary.name == profile.name && temporary.id != profile.id)
-            {
+                .find(|row| row.profile.id == profile.id)
+                .map(|row| row.profile.name.clone());
+            if let Some(temporary) = model.connection_form.saving_temporary.take() {
+                // Its documents are bound to its id, and follow it to the saved one's.
                 let (from, to) = (temporary.id.0.to_string(), profile.id.0.to_string());
                 for document in &mut model.documents {
                     if document.connection_id.as_deref() == Some(from.as_str()) {
@@ -470,10 +472,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     }
                 }
                 effects.push(flush_documents_effect(model));
-            }
-            // Saving a temporary connection dials nothing, so nothing else closes it.
-            if model.connection_form.saving_temporary {
+                model
+                    .connections
+                    .temporary
+                    .retain(|open| open.id != temporary.id);
+                previous_name = Some(temporary.name);
+                // Saving a temporary connection dials nothing, so nothing else closes it.
                 model.connection_form.close();
+            }
+            if let Some(from) = previous_name.filter(|from| *from != profile.name) {
+                effects.extend(rename_sessions(model, &from, &profile.name));
             }
             model.connections.load_profiles(
                 model
@@ -1425,6 +1433,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::FormatSql => {
             crate::screens::editor::apply_format(model);
+            Vec::new()
+        }
+        Action::Notice(message) => {
+            model.messages.info(message);
             Vec::new()
         }
         Action::ToggleRecordView => {
@@ -3979,6 +3991,30 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
     connect_to(model, profile)
 }
 
+/// Sessions are found by the connection's name: when it changes, its open sessions go
+/// with it -- here, in the runtime, and on the status line -- instead of being left
+/// under a name nothing has any more.
+fn rename_sessions(model: &mut Model, from: &str, to: &str) -> Vec<Effect> {
+    let mut renamed = false;
+    for row in &mut model.connections.sessions {
+        if row.connection == from {
+            row.connection = to.to_string();
+            renamed = true;
+        }
+    }
+    if model.connection.name == from {
+        model.connection.name = to.to_string();
+    }
+    if renamed {
+        vec![Effect::RenameSessions {
+            from: from.to_string(),
+            to: to.to_string(),
+        }]
+    } else {
+        Vec::new()
+    }
+}
+
 /// `dexo <url>`: listed beside the saved connections, selected and dialled. A saved
 /// connection already going by the same name keeps it; sessions are found by name.
 fn open_temporary_connection(
@@ -4129,10 +4165,24 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
                     }
                 }
             } else {
+                // Sessions are found by name: a second connection called what an open
+                // temporary one is called would take its session over.
+                let saving = model.connection_form.saving_temporary.as_ref();
+                let clashes = model.connections.temporary.iter().any(|temporary| {
+                    temporary.name == input.name.trim()
+                        && saving.is_none_or(|saving| saving.id != temporary.id)
+                });
+                if clashes {
+                    model.connection_form.set_error(format!(
+                        "{} is the name of an open temporary connection; pick another",
+                        input.name.trim()
+                    ));
+                    return Vec::new();
+                }
                 vec![Effect::CreateConnection {
                     input,
                     password,
-                    connect: !model.connection_form.saving_temporary,
+                    connect: saving.is_none(),
                 }]
             }
         }
@@ -8116,7 +8166,7 @@ mod tests {
         model.active_document_mut().connection_id = Some(temporary.id.0.to_string());
         let mut saved = temporary.clone();
         saved.id = ConnectionId(uuid::Uuid::from_u128(8));
-        model.connection_form.saving_temporary = true;
+        model.connection_form.saving_temporary = Some(temporary.clone());
         update(&mut model, Action::ProfileSaved(saved.clone()));
         assert!(model.connections.temporary.is_empty());
         assert!(!model.connections.profiles[0].temporary);
@@ -8125,6 +8175,68 @@ mod tests {
             model.active_document().connection_id.as_deref(),
             Some(saved.id.0.to_string().as_str())
         );
+    }
+
+    /// Saved under another name, a temporary connection's session goes by the new one;
+    /// and no other connection may take a temporary one's name while it is open.
+    #[test]
+    fn a_temporary_connection_saved_under_another_name_keeps_its_session() {
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+
+        let temporary = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(7)),
+            None,
+            "demo",
+            "sqlite",
+            "local",
+            serde_json::json!({"path": "/tmp/demo.db"}),
+            SecretRef::new("memory-only".into()),
+        );
+        let mut model = Model::default();
+        update(
+            &mut model,
+            Action::OpenTemporaryConnection(Box::new(temporary.clone())),
+        );
+        let session = crate::runtime::SessionId(uuid::Uuid::from_u128(1));
+        model
+            .connections
+            .upsert_session(crate::screens::connections::SessionRow {
+                id: session,
+                connection: "demo".into(),
+                transaction: dexo_driver_api::TransactionState::Idle,
+                generation: 1,
+                environment: "local".into(),
+                read_only: false,
+                driver: "sqlite".into(),
+            });
+        model.connection.name = "demo".into();
+
+        // A new connection may not be called "demo" while the demo is open.
+        model.connection_form = crate::screens::connection::ConnectionForm::open();
+        for (label, value) in [
+            ("name", "demo"),
+            ("host", "db"),
+            ("database", "shop"),
+            ("username", "ana"),
+            ("password", "secret"),
+        ] {
+            model.connection_form.set_value(label, value);
+        }
+        assert!(update(&mut model, Action::SaveConnection).is_empty());
+        assert!(!model.connection_form.errors.is_empty());
+
+        model.connection_form.saving_temporary = Some(temporary.clone());
+        let mut saved = temporary.clone();
+        saved.id = ConnectionId(uuid::Uuid::from_u128(8));
+        saved.name = "shop".into();
+        let effects = update(&mut model, Action::ProfileSaved(saved));
+        assert!(effects.iter().any(|effect| matches!(
+            effect,
+            Effect::RenameSessions { from, to } if from == "demo" && to == "shop"
+        )));
+        assert!(model.connections.temporary.is_empty());
+        assert_eq!(model.connection.name, "shop");
+        assert_eq!(model.connections.sessions[0].connection, "shop");
     }
 
     #[test]

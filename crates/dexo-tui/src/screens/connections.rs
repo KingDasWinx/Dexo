@@ -82,10 +82,6 @@ impl ConnectionsScreen {
             .into_iter()
             .filter(|profile| self.temporary.iter().all(|other| other.id != profile.id))
             .collect();
-        // Saved under its own name, a temporary connection is that saved one from now on;
-        // its open session already goes by the name.
-        self.temporary
-            .retain(|profile| saved.iter().all(|other| other.name != profile.name));
         let rows: Vec<(ConnectionProfile, bool)> = saved
             .into_iter()
             .map(|profile| (profile, false))

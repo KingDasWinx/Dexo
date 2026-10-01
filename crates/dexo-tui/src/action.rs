@@ -74,6 +74,8 @@ pub enum Action {
     MoveDocumentTabCursor(i32),
     /// A bracketed paste, arriving whole rather than as the keys it resembles.
     Paste(String),
+    /// A line for the messages from the runtime, outside any query.
+    Notice(String),
     /// Ctrl+V. The terminal did not paste, so the clipboard is read here instead.
     PasteFromClipboard,
     /// The selection, or the line under the cursor when nothing is selected.
@@ -693,6 +695,11 @@ pub enum Effect {
     ConnectProfile {
         profile: ConnectionProfile,
         token: u64,
+    },
+    /// A connection was renamed: its open sessions go by the new name.
+    RenameSessions {
+        from: String,
+        to: String,
     },
     /// Reads a temporary connection's password from the session's memory, for the form.
     RevealTemporarySecret {

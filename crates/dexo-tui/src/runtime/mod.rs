@@ -247,6 +247,7 @@ impl WorkbenchRuntime {
                 password,
                 connect,
             } => self.create_connection(input, password, connect).await,
+            crate::Effect::RenameSessions { from, to } => self.sessions.rename(&from, &to),
             crate::Effect::RevealTemporarySecret { profile } => {
                 let password = self
                     .secrets
@@ -850,6 +851,19 @@ impl WorkbenchRuntime {
                 if connect {
                     self.connect_profile(profile, 0).await;
                 }
+            }
+            // A temporary connection saved while the keychain is unavailable: saved all
+            // the same, with the password kept for this session, as it already was.
+            Ok((profile, SecretPersist::SessionOnly)) if !connect => {
+                let _ = self
+                    .secrets
+                    .put_memory(profile.secret_ref.as_str(), &password);
+                self.emit(Action::ProfileSaved(profile.clone())).await;
+                self.emit(Action::Notice(format!(
+                    "The keychain is unavailable: {} will ask for its password next time.",
+                    profile.name
+                )))
+                .await;
             }
             Ok((profile, SecretPersist::SessionOnly)) => {
                 self.emit(Action::SecretRequired {
