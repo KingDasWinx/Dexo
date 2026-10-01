@@ -274,7 +274,10 @@ pub enum ConnectionsCommand {
         #[arg(long, default_value = "", required_unless_present = "path")]
         username: String,
         /// The database file, for a driver that opens one (sqlite).
-        #[arg(long, conflicts_with_all = ["host", "port", "database", "username"])]
+        #[arg(
+            long,
+            conflicts_with_all = ["host", "port", "database", "username", "password_command", "password_stdin"]
+        )]
         path: Option<String>,
         #[arg(long, default_value = "local")]
         environment: String,
@@ -283,7 +286,7 @@ pub enum ConnectionsCommand {
         #[arg(long)]
         password_stdin: bool,
         /// Read the password from this command at every connect (`op read …`, `pass show …`).
-        #[arg(long)]
+        #[arg(long, conflicts_with = "password_stdin")]
         password_command: Option<String>,
         #[arg(long)]
         test: bool,

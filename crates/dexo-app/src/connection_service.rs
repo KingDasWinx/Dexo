@@ -112,6 +112,13 @@ pub fn set_secret(
             format!("'{name}' opens a file and has no password"),
         ));
     }
+    // Its password command answers every connect; a keychain entry would never be read.
+    if let Some(command) = profile.password_command() {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("'{name}' takes its password from `{command}`; nothing to set"),
+        ));
+    }
     let persist = put_secret(secrets, profile.secret_ref.as_str(), password)?;
     Ok((profile, persist))
 }
@@ -319,6 +326,19 @@ mod tests {
         let error = create(input(), "pw", &store, &repo).unwrap_err();
         assert_eq!(error.category(), ErrorCategory::Configuration);
         assert!(error.to_string().contains("already exists"));
+    }
+
+    /// A connection whose password comes from a command has no keychain secret to set.
+    #[test]
+    fn set_secret_refuses_a_password_command_connection() {
+        let repo = MemoryRepo::default();
+        let store = MemorySecretStore::default();
+        let mut with_command = input();
+        with_command.extra_config = serde_json::json!({ "password_command": "pass show db" });
+        let (profile, _) = create(with_command, "", &store, &repo).unwrap();
+        let error = set_secret("local-pg", "pw", &store, &repo).unwrap_err();
+        assert!(error.to_string().contains("pass show db"), "{error}");
+        assert!(store.get(profile.secret_ref.as_str()).unwrap().is_none());
     }
 
     #[test]

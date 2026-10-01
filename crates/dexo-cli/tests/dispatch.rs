@@ -55,3 +55,37 @@ fn bare_dexo_invokes_tui_runner() {
     .unwrap();
     assert!(started.load(Ordering::SeqCst));
 }
+
+/// Options that cannot go together are refused rather than one of them dropped.
+#[test]
+fn connections_add_refuses_options_that_cannot_go_together() {
+    let add = |extra: &[&str]| {
+        let mut argv = vec![
+            "dexo",
+            "connections",
+            "add",
+            "--name",
+            "n",
+            "--driver",
+            "sqlite",
+        ];
+        argv.extend_from_slice(extra);
+        Args::try_parse_from(argv)
+    };
+    assert!(add(&["--path", "x.db"]).is_ok());
+    assert!(add(&["--path", "x.db", "--password-command", "pass x"]).is_err());
+    assert!(
+        add(&[
+            "--host",
+            "h",
+            "--database",
+            "d",
+            "--username",
+            "u",
+            "--password-command",
+            "pass x",
+            "--password-stdin"
+        ])
+        .is_err()
+    );
+}
