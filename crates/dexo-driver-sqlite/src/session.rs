@@ -25,6 +25,10 @@ type Events = Sender<Result<QueryEvent, DriverError>>;
 pub struct SqliteSession {
     conn: Arc<Mutex<Connection>>,
     interrupt: Arc<InterruptHandle>,
+    /// Which query holds the connection, and one cancelled before it got there. The
+    /// interrupt reaches whatever is running -- a catalog load the query waits behind,
+    /// say -- so it is only sent when that is the query being cancelled.
+    live: Arc<Mutex<Live>>,
     read_only: bool,
     capabilities: Vec<CapabilityState>,
     tx_state: Mutex<TransactionState>,
@@ -38,6 +42,7 @@ impl SqliteSession {
         Self {
             conn: Arc::new(Mutex::new(conn)),
             interrupt,
+            live: Arc::new(Mutex::new(Live::default())),
             read_only,
             capabilities: capabilities(),
             tx_state: Mutex::new(TransactionState::Idle),
@@ -97,6 +102,23 @@ impl SqliteSession {
     }
 }
 
+#[derive(Default)]
+struct Live {
+    running: Option<QueryId>,
+    cancelled: Option<QueryId>,
+}
+
+/// Stops `query`: interrupts it if it is the statement running, or marks it so it
+/// never starts if it is still waiting for the connection.
+fn stop(live: &Mutex<Live>, interrupt: &InterruptHandle, query: QueryId) {
+    let mut live = live.lock().unwrap_or_else(PoisonError::into_inner);
+    if live.running == Some(query) {
+        interrupt.interrupt();
+    } else {
+        live.cancelled = Some(query);
+    }
+}
+
 #[async_trait::async_trait]
 impl Session for SqliteSession {
     fn capabilities(&self) -> &[CapabilityState] {
@@ -107,8 +129,10 @@ impl Session for SqliteSession {
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         let conn = Arc::clone(&self.conn);
         let interrupt = Arc::clone(&self.interrupt);
+        let live = Arc::clone(&self.live);
         let read_only = self.read_only;
         let QueryRequest {
+            id,
             sql,
             parameters,
             row_limit,
@@ -116,12 +140,30 @@ impl Session for SqliteSession {
             ..
         } = request;
         let events = tx.clone();
+        let running = Arc::clone(&live);
         tokio::spawn(async move {
             let mut run = tokio::task::spawn_blocking(move || {
                 let conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
-                if let Err(error) =
-                    run_statements(&conn, &sql, &parameters, row_limit, read_only, &events)
                 {
+                    let mut live = running.lock().unwrap_or_else(PoisonError::into_inner);
+                    if live.cancelled == Some(id) {
+                        live.cancelled = None;
+                        drop(live);
+                        let _ = events.blocking_send(Err(DriverError::new(
+                            DriverErrorCategory::Cancelled,
+                            "query cancelled",
+                        )));
+                        return;
+                    }
+                    live.running = Some(id);
+                }
+                let outcome =
+                    run_statements(&conn, &sql, &parameters, row_limit, read_only, &events);
+                running
+                    .lock()
+                    .unwrap_or_else(PoisonError::into_inner)
+                    .running = None;
+                if let Err(error) = outcome {
                     let _ = events.blocking_send(Err(error));
                 }
             });
@@ -136,7 +178,7 @@ impl Session for SqliteSession {
                         "query timed out",
                     )))
                     .await;
-                interrupt.interrupt();
+                stop(&live, &interrupt, id);
             }
         });
         Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
@@ -144,10 +186,10 @@ impl Session for SqliteSession {
         })))
     }
 
-    /// Interrupts whatever statement the connection is running; a connection runs one
-    /// at a time, so that is the query asked about or none.
-    async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
-        self.interrupt.interrupt();
+    /// Interrupts the query asked about if it is the one running, or stops it from
+    /// starting if it is still queued; never whatever else holds the connection.
+    async fn cancel(&self, query: QueryId) -> Result<(), DriverError> {
+        stop(&self.live, &self.interrupt, query);
         Ok(())
     }
 

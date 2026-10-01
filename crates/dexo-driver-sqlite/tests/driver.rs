@@ -674,3 +674,32 @@ async fn odd_names_keep_their_ids_and_their_keys() {
     assert_eq!(page.rows[0][0], DbValue::I64(1));
     assert_eq!(page.rows[1][0], DbValue::I64(2));
 }
+
+/// Cancelling one query never interrupts another that holds the connection; a query
+/// cancelled while it waits behind it never runs.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancel_reaches_only_the_query_it_names() {
+    let (_dir, path) = seeded().await;
+    let session = open(&path, false).await;
+    let slow = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 3000000) \
+                select count(*) from n";
+    let first = session.execute(QueryRequest::read(slow, 0)).await.unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let queued = QueryRequest::read("select 1", 0);
+    let queued_id = queued.id;
+    let second = session.execute(queued).await.unwrap();
+    session.cancel(queued_id).await.unwrap();
+
+    let first: Vec<_> = first.collect().await;
+    assert!(
+        first.iter().all(Result::is_ok),
+        "the running query was interrupted"
+    );
+    let second: Vec<_> = second.collect().await;
+    assert!(
+        second
+            .iter()
+            .any(|event| matches!(event, Err(error) if error.category() == DriverErrorCategory::Cancelled)),
+        "the queued query ran"
+    );
+}
