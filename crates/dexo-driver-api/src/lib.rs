@@ -33,7 +33,7 @@ pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, Pla
 pub use identifier::QualifiedName;
 pub use mutation::{
     ColumnId, ColumnKeyInfo, DataMutator, DataPage, DataRequest, Filter, Mutation,
-    MutationConflict, Page, RemoteValueRef, Sort,
+    MutationConflict, Page, RawClauses, RemoteValueRef, Sort,
 };
 pub use query::{
     ColumnMeta, QueryEvent, QueryId, QueryRequest, QueryStream, RowBatch, SessionEvent,

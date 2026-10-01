@@ -515,3 +515,65 @@ fn a_mysql_filter_rerun_uses_mysql_placeholders() {
     assert!(sql.contains('?') && !sql.contains("$1"), "{sql}");
     assert!(sql.contains("`name`"), "{sql}");
 }
+
+/// The WHERE and ORDER BY bars run the statement again with their text, once it reads;
+/// a clause that writes is refused and nothing is sent. When the server turns the run
+/// down, the rows it had come back.
+#[test]
+fn the_bars_run_the_result_again_only_with_a_read() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        ..Model::default()
+    };
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id, name from users".into());
+    model.results.tabs = vec![tab];
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int8".into(),
+        nullable: false,
+    }]);
+    model.results.append_rows(vec![vec![DbValue::I64(7)]]);
+
+    update(
+        &mut model,
+        Action::FocusClauseBar {
+            bar: dexo_tui::screens::data::ClauseBar::Where,
+        },
+    );
+    for ch in "1=1; delete from users".chars() {
+        update(&mut model, key(KeyCode::Char(ch)));
+    }
+    assert!(update(&mut model, key(KeyCode::Enter)).is_empty());
+
+    model.data.bars.where_input.set_text("id > 5");
+    let effects = update(&mut model, key(KeyCode::Enter));
+    let request = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::StartScript(request) => Some(request.clone()),
+            _ => None,
+        })
+        .expect("ran again");
+    assert!(
+        request.statements[0].contains("WHERE (id > 5)"),
+        "{}",
+        request.statements[0]
+    );
+
+    update(
+        &mut model,
+        Action::QueryFailed {
+            key: request.key,
+            index: 0,
+            message: "column \"id\" is ambiguous".into(),
+            details: Vec::new(),
+            position: None,
+        },
+    );
+    assert_eq!(model.results.rows().len(), 1, "the last good rows are back");
+    assert!(model.data.bars.applied.where_sql.is_none());
+    assert_eq!(model.data.bars.where_input.as_str(), "id > 5");
+}

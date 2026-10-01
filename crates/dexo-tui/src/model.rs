@@ -1596,6 +1596,13 @@ impl EditorDocument {
     }
 }
 
+#[derive(Clone, Debug, PartialEq)]
+pub struct DerivedBackup {
+    pub operation: crate::runtime::OperationId,
+    pub tabs: Vec<ResultTab>,
+    pub active: usize,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ExternalEdit {
     pub document: String,
@@ -1692,6 +1699,8 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
+    /// The result a sort or clause re-run replaced, until the run answers.
+    pub derived_backup: Option<DerivedBackup>,
     /// The completion catalog holds the whole database, so a table it does not list
     /// is one the database does not have.
     pub catalog_complete: bool,
@@ -1826,6 +1835,7 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
+            derived_backup: None,
             catalog_complete: false,
             vim: crate::screens::vim::VimState::default(),
             startup_warning: None,
@@ -2131,7 +2141,7 @@ impl Model {
         // The toolbar row used to be drawn only for multiple result sets, and this
         // counted it the same way. It is unconditional now.
         let height = inner_h
-            .saturating_sub(crate::widgets::grid::CHROME_ROWS)
+            .saturating_sub(crate::widgets::grid::chrome_rows(self))
             .max(1);
         self.results.set_viewport_size(width, height);
     }

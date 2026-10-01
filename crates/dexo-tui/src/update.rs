@@ -233,6 +233,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
+            if model
+                .derived_backup
+                .as_ref()
+                .is_some_and(|backup| backup.operation == key.operation)
+            {
+                model.derived_backup = None;
+                model.data.bars.good = model.data.bars.applied.clone();
+            }
             // A run that went through answers with rows, so a pane left on Messages by the
             // previous error comes back to them.
             if operation_matches(model, &key) {
@@ -254,6 +262,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 tab.status = crate::model::OperationStatus::Failed;
             }
             point_at_failure(model, &key, index, &message, position);
+            // A sort or a clause the server would not run leaves the rows it had.
+            if let Some(backup) = model
+                .derived_backup
+                .take_if(|backup| backup.operation == key.operation)
+            {
+                model.results.tabs = backup.tabs;
+                model.results.active = backup.active;
+                model.data.bars.applied = model.data.bars.good.clone();
+            }
             model.messages.error_with(message, details);
             // The grid of a failed statement is empty; the reason is in Messages, so the
             // pane goes there and puts the new entry at the top.
@@ -902,6 +919,18 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ChangeDataPage { offset } => change_data_page(model, offset),
+        Action::FocusClauseBar { bar } => {
+            if clause_bars_shown(model) {
+                model.focus = Focus::Results;
+                model.data.bars.focus = Some(bar);
+            } else {
+                model.messages.warn(
+                    "WHERE and ORDER BY apply to a table's rows or a query's result; run one first."
+                        .into(),
+                );
+            }
+            Vec::new()
+        }
         Action::ApplyRemoteSort | Action::ApplyRemoteFilter => apply_remote_query(model),
         Action::DataPageLoaded {
             generation,
@@ -909,6 +938,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             page,
         } => {
             if catalog_generation_matches(model, &session, generation) {
+                model.data.bars.good = model.data.bars.applied.clone();
                 model.data.apply_page(page.clone());
                 model.results.clear();
                 model.results.set_columns(page.columns.clone());
@@ -927,6 +957,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.data.loading = false;
                 model.data.last_error = Some(message.clone());
                 model.messages.error(message);
+                // The next page asks with what last worked; the bars keep the text.
+                model.data.bars.applied = model.data.bars.good.clone();
             }
             Vec::new()
         }
@@ -2143,7 +2175,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::SecretPrompt) => mouse_secret(model, hit),
         Some(OverlayKind::TransactionPrompt) => mouse_transaction(model, hit),
         Some(OverlayKind::DocumentNamePrompt) => mouse_document_name(model, hit),
-        Some(OverlayKind::DataQueryPrompt) => mouse_data_query(model, hit),
         Some(OverlayKind::InsertRow) => mouse_insert_row(model, hit),
         Some(OverlayKind::ConnectionForm) => mouse_connection_form(model, hit),
         Some(OverlayKind::Settings) => mouse_settings(model, hit),
@@ -2270,32 +2301,6 @@ fn mouse_document_name(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect>
         Some(HitTarget::FooterCancel) => {
             model.document_name_prompt.open = false;
             model.document_name_prompt.error = None;
-            Vec::new()
-        }
-        _ => Vec::new(),
-    }
-}
-
-fn mouse_data_query(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    match hit {
-        Some(HitTarget::FormField(0)) => {
-            model.data.query_prompt.focus_value = false;
-            model.data.query_prompt.footer = crate::widgets::form::FooterFocus::Input;
-            Vec::new()
-        }
-        Some(HitTarget::FormField(_)) => {
-            model.data.query_prompt.focus_value = true;
-            model.data.query_prompt.footer = crate::widgets::form::FooterFocus::Input;
-            Vec::new()
-        }
-        Some(HitTarget::Button(HitButton::ToggleDescending)) => {
-            model.data.query_prompt.descending = !model.data.query_prompt.descending;
-            Vec::new()
-        }
-        Some(HitTarget::FooterSubmit) => submit_data_query_prompt(model),
-        Some(HitTarget::FooterCancel) => {
-            model.data.query_prompt.open = false;
-            model.data.query_prompt.error = None;
             Vec::new()
         }
         _ => Vec::new(),
@@ -3197,9 +3202,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.document_name_prompt.open {
         return handle_document_name_prompt_key(model, key);
     }
-    if model.data.query_prompt.open {
-        return handle_data_query_prompt_key(model, key);
-    }
     if model.schema_editor.open {
         return match key.code {
             KeyCode::Esc => {
@@ -3548,6 +3550,11 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Char('r') => update(model, Action::RevokeAllMcpGrants),
             _ => Vec::new(),
         };
+    }
+    if model.effective_focus() == Focus::Results
+        && let Some(effects) = clause_bar_key(model, key)
+    {
+        return effects;
     }
     if model.find.open
         && model.effective_focus() == Focus::Editor
@@ -4313,60 +4320,6 @@ fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effe
     }
 }
 
-fn handle_data_query_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::widgets::form::{FooterKey, footer_key};
-    // Tab already belongs to this prompt -- it flips the sort direction, or moves
-    // between the filter's column and value -- so it is answered before the footer is.
-    if key.code != KeyCode::Tab {
-        match footer_key(&mut model.data.query_prompt.footer, &key) {
-            FooterKey::Cancel => {
-                model.data.query_prompt.open = false;
-                model.data.query_prompt.error = None;
-                return Vec::new();
-            }
-            FooterKey::Submit => return submit_data_query_prompt(model),
-            FooterKey::Moved => return Vec::new(),
-            FooterKey::Pass => {}
-        }
-    }
-    match key.code {
-        KeyCode::Tab => {
-            match model.data.query_prompt.intent {
-                Some(crate::screens::data::DataQueryIntent::Sort) => {
-                    model.data.query_prompt.descending = !model.data.query_prompt.descending;
-                }
-                Some(crate::screens::data::DataQueryIntent::Filter) => {
-                    model.data.query_prompt.focus_value = !model.data.query_prompt.focus_value;
-                }
-                None => {}
-            }
-            Vec::new()
-        }
-        KeyCode::Backspace
-            if model.data.query_prompt.footer == crate::widgets::form::FooterFocus::Input =>
-        {
-            if model.data.query_prompt.focus_value {
-                model.data.query_prompt.value.pop();
-            } else {
-                model.data.query_prompt.column.pop();
-            }
-            Vec::new()
-        }
-        KeyCode::Char(ch)
-            if model.data.query_prompt.footer == crate::widgets::form::FooterFocus::Input
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            if model.data.query_prompt.focus_value {
-                model.data.query_prompt.value.push(ch);
-            } else {
-                model.data.query_prompt.column.push(ch);
-            }
-            Vec::new()
-        }
-        _ => Vec::new(),
-    }
-}
-
 fn open_palette(model: &mut Model) {
     if !model.palette.open {
         model.palette.origin_focus = Some(model.focus);
@@ -5068,6 +5021,7 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         })
         .collect();
     model.editor.server_diagnostic = None;
+    model.data.bars = crate::screens::data::ClauseBars::default();
     model.results.tabs = statements
         .iter()
         .enumerate()
@@ -5731,6 +5685,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
         model.data.sort.clone(),
         model.data.page_offset,
         model.data.page_limit,
+        model.data.bars.applied.clone(),
     ) {
         Ok(request) => {
             model.documents[index].console_log.push(format!(
@@ -5834,6 +5789,60 @@ fn reload_would_orphan_edits(model: &mut Model) -> bool {
     pending
 }
 
+/// Whether the grid can run again with a WHERE and an ORDER BY: a table's rows, or the
+/// result of a statement Dexo knows.
+pub(crate) fn clause_bars_shown(model: &Model) -> bool {
+    model.active_document().kind.is_table()
+        || model
+            .results
+            .tabs
+            .get(model.results.active)
+            .is_some_and(|tab| tab.source_sql.is_some())
+}
+
+/// The keys the bars own while one has the focus: typing, Enter to run with them, Esc
+/// to go back to what last ran, Tab to the other bar. Ctrl and Alt chords go on to the
+/// keymap.
+fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
+    use crate::screens::data::ClauseBar;
+    let bar = model.data.bars.focus?;
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    match key.code {
+        KeyCode::Esc => model.data.bars.revert(),
+        KeyCode::Enter => return Some(apply_clauses(model)),
+        KeyCode::Tab | KeyCode::BackTab => {
+            model.data.bars.focus = Some(match bar {
+                ClauseBar::Where => ClauseBar::Order,
+                ClauseBar::Order => ClauseBar::Where,
+            });
+        }
+        _ => {
+            model.data.bars.input_mut(bar).handle_key(key);
+        }
+    }
+    Some(Vec::new())
+}
+
+/// Runs the grid again with the bars' text, once it is known to only read. Refused text
+/// stays in the bar to be fixed, and nothing is sent.
+fn apply_clauses(model: &mut Model) -> Vec<Effect> {
+    let clauses = model.data.bars.typed();
+    let dialect = crate::screens::editor::editor_dialect(model);
+    if let Err(reason) = dexo_sql::clauses_read(&clauses, dialect) {
+        model.messages.error(format!("Not applied: {reason}"));
+        return Vec::new();
+    }
+    model.data.bars.applied = clauses;
+    model.data.bars.focus = None;
+    model.data.page_offset = 0;
+    apply_remote_query(model)
+}
+
 fn apply_remote_query(model: &mut Model) -> Vec<Effect> {
     let source = model
         .results
@@ -5866,7 +5875,14 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
         }
     };
     let dialect = crate::screens::editor::editor_dialect(model);
-    match dexo_sql::derive_page_in(&sql, &model.data.sort, &model.data.filter, page, dialect) {
+    match dexo_sql::derive_page_in(
+        &sql,
+        &model.data.sort,
+        &model.data.filter,
+        &model.data.bars.applied,
+        page,
+        dialect,
+    ) {
         Ok(derived) => {
             if let Some(tab) = model.results.tabs.get_mut(model.results.active) {
                 tab.local_only = None;
@@ -5908,6 +5924,13 @@ fn postgres_placeholders(sql: &str) -> String {
 
 fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>) -> Vec<Effect> {
     let operation = crate::runtime::OperationId::new();
+    // Until the new run answers with rows, the result it replaces is kept: a clause the
+    // server turns down puts it back.
+    model.derived_backup = Some(crate::model::DerivedBackup {
+        operation,
+        tabs: model.results.tabs.clone(),
+        active: model.results.active,
+    });
     let session = model
         .active_session
         .map(|id| id.0.to_string())
@@ -5948,6 +5971,8 @@ fn reload_object_data(model: &mut Model) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
+    // The console says how long this page took, not how long since the table opened.
+    model.data.request_started = Some(std::time::Instant::now());
     match crate::runtime::data_manager::table_request(
         model.data.target.clone(),
         Vec::new(),
@@ -5955,6 +5980,7 @@ fn reload_object_data(model: &mut Model) -> Vec<Effect> {
         model.data.sort.clone(),
         model.data.page_offset,
         model.data.page_limit,
+        model.data.bars.applied.clone(),
     ) {
         Ok(request) => vec![Effect::LoadTableData {
             request,
@@ -6506,55 +6532,6 @@ fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
         None => {}
     }
     Vec::new()
-}
-
-fn open_data_query_prompt(
-    model: &mut Model,
-    intent: crate::screens::data::DataQueryIntent,
-) -> Vec<Effect> {
-    model.data.query_prompt = crate::screens::data::DataQueryPrompt {
-        open: true,
-        intent: Some(intent),
-        ..crate::screens::data::DataQueryPrompt::default()
-    };
-    Vec::new()
-}
-
-fn submit_data_query_prompt(model: &mut Model) -> Vec<Effect> {
-    let column = model.data.query_prompt.column.trim().to_string();
-    if column.is_empty()
-        || !model
-            .data
-            .table
-            .columns
-            .iter()
-            .any(|col| col.name == column)
-    {
-        model.data.query_prompt.error = Some("unknown column".into());
-        return Vec::new();
-    }
-    if model.data.has_pending_edits() {
-        model.data.query_prompt.error = Some("apply or discard the pending changes first".into());
-        return Vec::new();
-    }
-    match model.data.query_prompt.intent {
-        Some(crate::screens::data::DataQueryIntent::Sort) => {
-            model.data.sort = vec![dexo_driver_api::Sort {
-                column: dexo_driver_api::ColumnId(column),
-                descending: model.data.query_prompt.descending,
-            }];
-        }
-        Some(crate::screens::data::DataQueryIntent::Filter) => {
-            model.data.filter = Some(dexo_driver_api::Filter::Eq(
-                dexo_driver_api::ColumnId(column),
-                dexo_driver_api::DbValue::Text(model.data.query_prompt.value.clone()),
-            ));
-        }
-        None => return Vec::new(),
-    }
-    model.data.query_prompt.open = false;
-    model.data.query_prompt.error = None;
-    apply_remote_query(model)
 }
 
 /// The output pane of the document with this id: the one on screen when it is that
@@ -7922,12 +7899,6 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
             model,
             crate::screens::transaction_prompt::SavepointIntent::Release,
         ),
-        PaletteInvocation::OpenFlow(FlowIntent::DataSort) => {
-            open_data_query_prompt(model, crate::screens::data::DataQueryIntent::Sort)
-        }
-        PaletteInvocation::OpenFlow(FlowIntent::DataFilter) => {
-            open_data_query_prompt(model, crate::screens::data::DataQueryIntent::Filter)
-        }
         PaletteInvocation::OpenFlow(FlowIntent::DataReview) => update(model, Action::OpenReview),
         PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
             update(model, Action::OpenDdlPreview)

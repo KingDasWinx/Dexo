@@ -97,43 +97,48 @@ impl InsertRowForm {
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
-pub enum DataQueryIntent {
-    Sort,
-    Filter,
+pub enum ClauseBar {
+    Where,
+    Order,
 }
 
+/// The WHERE and ORDER BY bars over the grid: what is typed, what was last sent, and
+/// what last came back with rows -- which a failed clause falls back to.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct DataQueryPrompt {
-    pub open: bool,
-    pub intent: Option<DataQueryIntent>,
-    pub column: String,
-    pub value: String,
-    pub descending: bool,
-    pub error: Option<String>,
-    pub focus_value: bool,
-    pub footer: FooterFocus,
+pub struct ClauseBars {
+    pub where_input: crate::widgets::text_input::TextInput,
+    pub order_input: crate::widgets::text_input::TextInput,
+    pub focus: Option<ClauseBar>,
+    pub applied: dexo_driver_api::RawClauses,
+    pub good: dexo_driver_api::RawClauses,
 }
 
-impl DataQueryPrompt {
-    pub fn lines(&self) -> Vec<String> {
-        let mut lines = match self.intent {
-            Some(DataQueryIntent::Sort) => vec![
-                "sort column".into(),
-                format!("column: {}", self.column),
-                format!("descending: {}", self.descending),
-            ],
-            Some(DataQueryIntent::Filter) => vec![
-                "filter column".into(),
-                format!("column: {}", self.column),
-                format!("value: {}", self.value),
-            ],
-            None => Vec::new(),
+impl ClauseBars {
+    /// What the bars hold now, as clauses: blank text is no clause.
+    pub fn typed(&self) -> dexo_driver_api::RawClauses {
+        let text = |input: &crate::widgets::text_input::TextInput| {
+            Some(input.trim().to_string()).filter(|text| !text.is_empty())
         };
-        if let Some(error) = &self.error {
-            lines.push(error.clone());
+        dexo_driver_api::RawClauses {
+            where_sql: text(&self.where_input),
+            order_by: text(&self.order_input),
         }
-        lines.push(footer_line("Submit", self.footer));
-        lines
+    }
+
+    pub fn input_mut(&mut self, bar: ClauseBar) -> &mut crate::widgets::text_input::TextInput {
+        match bar {
+            ClauseBar::Where => &mut self.where_input,
+            ClauseBar::Order => &mut self.order_input,
+        }
+    }
+
+    /// Esc: the bars read what last ran again, and let go of the keys.
+    pub fn revert(&mut self) {
+        self.where_input
+            .set_text(self.applied.where_sql.clone().unwrap_or_default());
+        self.order_input
+            .set_text(self.applied.order_by.clone().unwrap_or_default());
+        self.focus = None;
     }
 }
 
@@ -179,7 +184,8 @@ pub struct DataScreen {
     pub filter: Option<dexo_driver_api::Filter>,
     pub sort: Vec<dexo_driver_api::Sort>,
     pub last_error: Option<String>,
-    pub query_prompt: DataQueryPrompt,
+    /// The WHERE and ORDER BY bars over the grid.
+    pub bars: ClauseBars,
     pub target_document: Option<String>,
     pub request_started: Option<std::time::Instant>,
     pub row_changes: std::collections::BTreeMap<usize, RowEditState>,
@@ -211,7 +217,7 @@ impl Default for DataScreen {
             filter: None,
             sort: Vec::new(),
             last_error: None,
-            query_prompt: DataQueryPrompt::default(),
+            bars: ClauseBars::default(),
             target_document: None,
             request_started: None,
             row_changes: std::collections::BTreeMap::new(),
@@ -242,6 +248,7 @@ impl DataScreen {
         swap(&mut self.target_document, &mut parked.target_document);
         swap(&mut self.request_started, &mut parked.request_started);
         swap(&mut self.row_changes, &mut parked.row_changes);
+        swap(&mut self.bars, &mut parked.bars);
     }
 
     pub fn has_pending_edits(&self) -> bool {

@@ -12,10 +12,19 @@ use crate::theme::Role;
 /// Rows the grid spends on chrome inside its border: the toolbar, then the column
 /// header. `Model::sync_grid_viewport` sizes the row viewport against this, and the two
 /// must agree -- believing in one row more than the pane draws walks the cursor off the
-/// bottom, where the selection is invisible.
-pub const CHROME_ROWS: u16 = TOOLBAR_ROWS + HEADER_ROWS;
+/// bottom, where the selection is invisible. The WHERE / ORDER BY row is one more when
+/// the grid shows it.
+pub fn chrome_rows(model: &Model) -> u16 {
+    TOOLBAR_ROWS + HEADER_ROWS + u16::from(bars_row(model))
+}
+
 const TOOLBAR_ROWS: u16 = 1;
 const HEADER_ROWS: u16 = 1;
+
+/// The WHERE / ORDER BY row is over the grid of anything that can run again.
+fn bars_row(model: &Model) -> bool {
+    model.results.view == ResultsView::Grid && crate::update::clause_bars_shown(model)
+}
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     if area.width == 0 || area.height == 0 {
@@ -74,7 +83,69 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             frame.render_widget(Paragraph::new(record_lines(model, body)), body);
         }
         ResultsView::Grid => {
+            let body = if bars_row(model) {
+                render_clause_bars(frame, Rect { height: 1, ..body }, model);
+                Rect {
+                    y: body.y + 1,
+                    height: body.height.saturating_sub(1),
+                    ..body
+                }
+            } else {
+                body
+            };
             frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
+        }
+    }
+}
+
+/// `WHERE [...]  ORDER BY [...]`: the text typed, or what the key is when there is none,
+/// and the terminal cursor in the bar that has the keys.
+fn render_clause_bars(frame: &mut Frame, area: Rect, model: &Model) {
+    use crate::screens::data::ClauseBar;
+    let bars = &model.data.bars;
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let label = |bar: ClauseBar| {
+        if bars.focus == Some(bar) {
+            model
+                .theme
+                .style(Role::Focus, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::BOLD)
+        } else {
+            muted
+        }
+    };
+    let where_width = (area.width as usize * 3 / 5).max(16);
+    let field = |input: &crate::widgets::text_input::TextInput, hint: &str, width: usize| {
+        if input.is_empty() {
+            return ratatui::text::Span::styled(format!("{hint:<width$}"), muted);
+        }
+        // The end of a long clause is where the typing is.
+        let chars: Vec<char> = input.as_str().chars().collect();
+        let shown: String = chars[chars.len().saturating_sub(width)..].iter().collect();
+        ratatui::text::Span::raw(format!("{shown:<width$}"))
+    };
+    let where_field = where_width.saturating_sub(7);
+    let order_field = (area.width as usize).saturating_sub(where_width + 11);
+    let line = ratatui::text::Line::from(vec![
+        ratatui::text::Span::styled("WHERE ", label(ClauseBar::Where)),
+        field(&bars.where_input, "w to filter", where_field),
+        ratatui::text::Span::raw(" "),
+        ratatui::text::Span::styled("ORDER BY ", label(ClauseBar::Order)),
+        field(&bars.order_input, "o to sort", order_field),
+    ]);
+    frame.render_widget(Paragraph::new(line), area);
+    if let Some(bar) = bars.focus {
+        let (start, input, width) = match bar {
+            ClauseBar::Where => (6, &bars.where_input, where_field),
+            ClauseBar::Order => (where_width + 10, &bars.order_input, order_field),
+        };
+        // The field shows the text's last `width` characters; the cursor counts from
+        // the first of them.
+        let hidden = input.len().saturating_sub(width);
+        let typed = input.cursor().saturating_sub(hidden).min(width);
+        let x = area.x + start as u16 + typed as u16;
+        if x < area.x + area.width {
+            frame.set_cursor_position(ratatui::layout::Position::new(x, area.y));
         }
     }
 }

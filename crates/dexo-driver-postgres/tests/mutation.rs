@@ -68,6 +68,7 @@ async fn postgres_paging_and_typed_filter() {
     let data = fixture.session.data().unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: QualifiedName::new(None::<String>, Some("public"), "items"),
             columns: vec![ColumnId("id".into()), ColumnId("n".into())],
             filter: Some(Filter::Gt(ColumnId("n".into()), DbValue::I64(10))),
@@ -113,6 +114,7 @@ async fn postgres_mutation_conflict_commits_zero() {
     assert_eq!(error.category(), DriverErrorCategory::Conflict);
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("n".into())],
             filter: Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(1))),
@@ -152,6 +154,7 @@ async fn postgres_batch_insert_update_delete() {
     .unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into())],
             filter: None,
@@ -192,6 +195,7 @@ async fn postgres_partial_failure_rolls_back() {
     assert_eq!(error.category(), DriverErrorCategory::Conflict);
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into())],
             filter: Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(4))),
@@ -211,6 +215,7 @@ async fn postgres_empty_apply_is_cancel() {
     data.apply(&[]).await.unwrap();
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: QualifiedName::new(None::<String>, Some("public"), "items"),
             columns: vec![ColumnId("id".into())],
             filter: None,
@@ -241,6 +246,7 @@ async fn postgres_bulk_insert_batch() {
         .data()
         .unwrap()
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table,
             columns: vec![ColumnId("id".into())],
             filter: Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(20))),

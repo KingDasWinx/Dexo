@@ -154,8 +154,10 @@ pub fn table_request(
     sort: Vec<Sort>,
     offset: u64,
     limit: u32,
+    clauses: dexo_driver_api::RawClauses,
 ) -> Result<DataRequest, String> {
     Ok(DataRequest {
+        clauses,
         object,
         columns,
         filter,

@@ -240,6 +240,30 @@ pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
     finder.found
 }
 
+/// Whether the text of the workbench's WHERE and ORDER BY bars only reads, checked as
+/// the statement they become: `SELECT * FROM t WHERE <where> ORDER BY <order>`. One
+/// statement and no more, so a `;` is refused outright, and the side-effecting
+/// functions `inspect_read` refuses are refused here too.
+pub fn clauses_read(clauses: &dexo_driver_api::RawClauses, dialect: Dialect) -> Result<(), String> {
+    let where_sql = clauses.where_sql.as_deref().map(str::trim).unwrap_or("");
+    let order = clauses.order().unwrap_or("");
+    if where_sql.contains(';') || order.contains(';') {
+        return Err("a clause is one part of one statement: no `;`".into());
+    }
+    let mut probe = "SELECT * FROM _dexo_clauses".to_string();
+    if !where_sql.is_empty() {
+        probe.push_str(&format!(" WHERE ({where_sql})"));
+    }
+    if !order.is_empty() {
+        probe.push_str(&format!(" ORDER BY {order}"));
+    }
+    match inspect_read(&probe, dialect) {
+        Ok(_) => Ok(()),
+        Err(GuardRejection::Unparsed(reason)) => Err(format!("not valid SQL: {reason}")),
+        Err(rejection) => Err(format!("not a read: {rejection:?}")),
+    }
+}
+
 /// Whether a SQLite PRAGMA only reads. `PRAGMA name = value` sets, and so does
 /// `PRAGMA journal_mode(WAL)`: the parenthesised form reads only for the pragmas that
 /// take an argument to look at (`table_info(t)`). Bare, a pragma reports its value --
@@ -466,6 +490,27 @@ mod tests {
         inspect_schema_write, is_read,
     };
     use crate::Dialect;
+
+    /// The bars' text runs only as a read: a write, a second statement or a
+    /// side-effecting function in it is refused before anything is sent.
+    #[test]
+    fn bar_clauses_only_read() {
+        let check = |where_sql: &str, order: &str| {
+            super::clauses_read(
+                &dexo_driver_api::RawClauses {
+                    where_sql: Some(where_sql.into()),
+                    order_by: Some(order.into()),
+                },
+                Dialect::Postgres,
+            )
+        };
+        assert!(check("total > 10 and name ilike 'a%'", "total desc, id").is_ok());
+        assert!(check("id in (select id from t)", "").is_ok());
+        assert!(check("1=1; delete from t", "").is_err());
+        assert!(check("", "id; drop table t").is_err());
+        assert!(check("pg_terminate_backend(42)", "").is_err());
+        assert!(check("id = (", "").is_err());
+    }
 
     /// A PRAGMA that only reports is a read; one that sets or acts is a write, and
     /// none of them is destructive.

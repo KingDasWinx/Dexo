@@ -40,6 +40,6 @@ pub use statement::{
     statement_at, statement_at_in,
 };
 pub use statement_guard::{
-    Destructive, GuardRejection, Inspection, destructive, inspect_data_write, inspect_read,
-    inspect_schema_write, is_read,
+    Destructive, GuardRejection, Inspection, clauses_read, destructive, inspect_data_write,
+    inspect_read, inspect_schema_write, is_read,
 };

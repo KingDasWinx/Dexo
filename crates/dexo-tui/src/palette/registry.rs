@@ -354,19 +354,23 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "data.sort",
-            title: "Apply Remote Sort",
-            keywords: &["order", "query"],
-            shortcut: None,
+            title: "Sort Rows (ORDER BY)",
+            keywords: &["order", "query", "order by"],
+            shortcut: Some("o"),
             requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::DataSort),
+            invocation: PaletteInvocation::Dispatch(Action::FocusClauseBar {
+                bar: crate::screens::data::ClauseBar::Order,
+            }),
         },
         CommandSpec {
             id: "data.filter",
-            title: "Apply Remote Filter",
-            keywords: &["where", "query"],
-            shortcut: None,
+            title: "Filter Rows (WHERE)",
+            keywords: &["where", "query", "condition"],
+            shortcut: Some("w"),
             requirements: &[],
-            invocation: PaletteInvocation::OpenFlow(FlowIntent::DataFilter),
+            invocation: PaletteInvocation::Dispatch(Action::FocusClauseBar {
+                bar: crate::screens::data::ClauseBar::Where,
+            }),
         },
         CommandSpec {
             id: "data.review",

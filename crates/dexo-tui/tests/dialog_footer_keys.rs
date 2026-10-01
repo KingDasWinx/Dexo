@@ -54,12 +54,6 @@ fn dialogs() -> Vec<Dialog> {
             footer: |m| m.document_name_prompt.footer,
         },
         Dialog {
-            name: "data query prompt",
-            open: |m| m.data.query_prompt.open = true,
-            is_open: |m| m.data.query_prompt.open,
-            footer: |m| m.data.query_prompt.footer,
-        },
-        Dialog {
             name: "project name",
             open: |m| {
                 m.projects.open = true;

@@ -297,6 +297,7 @@ async fn rows_are_paged_filtered_and_edited_by_their_key() {
 
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table("customers"),
             columns: vec![],
             filter: Some(Filter::Gt(ColumnId("id".into()), DbValue::I64(1))),
@@ -393,6 +394,7 @@ async fn rows_are_paged_filtered_and_edited_by_their_key() {
     assert!(keys[0].primary_key);
     let notes = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table("notes"),
             columns: vec![],
             filter: None,
@@ -664,6 +666,7 @@ async fn odd_names_keep_their_ids_and_their_keys() {
     assert_eq!(keys[0].name, "_rowid_");
     let page = data
         .fetch(DataRequest {
+            clauses: Default::default(),
             object: table("logs"),
             columns: vec![],
             filter: None,

@@ -250,6 +250,7 @@ impl McpService {
         let page =
             Page::new(offset, limit.unwrap_or(100).clamp(1, cap)).map_err(map_driver_error)?;
         let request = DataRequest {
+            clauses: Default::default(),
             object: connection.qualified_name(target),
             columns: Vec::new(),
             filter: None,

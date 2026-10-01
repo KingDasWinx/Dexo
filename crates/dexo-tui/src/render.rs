@@ -131,9 +131,6 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.document_name_prompt.open {
         render_document_name_prompt(frame, model, hits);
     }
-    if model.data.query_prompt.open {
-        render_data_query(frame, model, hits);
-    }
     if model.connection_form.open {
         render_connection_form(frame, model, hits);
     }
@@ -1716,33 +1713,6 @@ fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitM
                 line,
                 model.document_name_prompt.submit_label(),
             );
-        }
-    });
-}
-
-fn render_data_query(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 56, 8);
-    let lines = model.data.query_prompt.lines();
-    paint_popup(
-        frame,
-        model,
-        popup,
-        Block::bordered().title("Query"),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
-        if line.starts_with("column:") {
-            hits.register(HitTarget::FormField(0), rect);
-        }
-        if line.starts_with("value:") {
-            hits.register(HitTarget::FormField(1), rect);
-        }
-        if line.starts_with("descending:") {
-            hits.register(HitTarget::Button(HitButton::ToggleDescending), rect);
-        }
-        if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Submit");
         }
     });
 }

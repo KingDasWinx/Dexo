@@ -111,11 +111,18 @@ fn render_fetch(request: &DataRequest) -> Result<(String, Binder), DriverError> 
             .join(", ")
     };
     let mut sql = format!("SELECT {cols} FROM {}", qualify(&request.object));
-    if let Some(filter) = &request.filter {
+    let typed = request
+        .filter
+        .as_ref()
+        .map(|filter| render_filter(filter, &mut binder));
+    if let Some(condition) = request.clauses.condition(typed) {
         sql.push_str(" WHERE ");
-        sql.push_str(&render_filter(filter, &mut binder));
+        sql.push_str(&condition);
     }
-    if !request.sort.is_empty() {
+    if let Some(order) = request.clauses.order() {
+        sql.push_str(" ORDER BY ");
+        sql.push_str(order);
+    } else if !request.sort.is_empty() {
         sql.push_str(" ORDER BY ");
         sql.push_str(
             &request

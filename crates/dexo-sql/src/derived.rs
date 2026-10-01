@@ -1,4 +1,4 @@
-use dexo_driver_api::{Filter, Page, Sort};
+use dexo_driver_api::{Filter, Page, RawClauses, Sort};
 
 use crate::Dialect;
 use crate::statement::{StatementEffect, split_statements_in};
@@ -9,7 +9,14 @@ pub fn derive_page(
     filter: &Option<Filter>,
     page: Page,
 ) -> Result<String, String> {
-    derive_page_in(sql, sort, filter, page, Dialect::Postgres)
+    derive_page_in(
+        sql,
+        sort,
+        filter,
+        &RawClauses::default(),
+        page,
+        Dialect::Postgres,
+    )
 }
 
 /// [`derive_page`] with `dialect`'s identifier quoting. It always used double quotes,
@@ -19,6 +26,7 @@ pub fn derive_page_in(
     sql: &str,
     sort: &[Sort],
     filter: &Option<Filter>,
+    clauses: &RawClauses,
     page: Page,
     dialect: Dialect,
 ) -> Result<String, String> {
@@ -41,11 +49,18 @@ pub fn derive_page_in(
         return Err("locking queries are local-only".into());
     }
     let mut wrapped = format!("SELECT * FROM ({body}) AS _dexo_derived");
-    if let Some(filter) = filter {
+    let typed = filter
+        .as_ref()
+        .map(|filter| render_filter(filter, &quote))
+        .transpose()?;
+    if let Some(condition) = clauses.condition(typed) {
         wrapped.push_str(" WHERE ");
-        wrapped.push_str(&render_filter(filter, &quote)?);
+        wrapped.push_str(&condition);
     }
-    if !sort.is_empty() {
+    if let Some(order) = clauses.order() {
+        wrapped.push_str(" ORDER BY ");
+        wrapped.push_str(order);
+    } else if !sort.is_empty() {
         wrapped.push_str(" ORDER BY ");
         wrapped.push_str(
             &sort

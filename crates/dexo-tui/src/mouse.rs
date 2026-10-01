@@ -106,7 +106,6 @@ pub enum OverlayKind {
     SecretPrompt,
     TransactionPrompt,
     DocumentNamePrompt,
-    DataQueryPrompt,
     ConnectionForm,
     Settings,
     Recovery,
@@ -227,7 +226,6 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.recovery.open, OverlayKind::Recovery),
         (model.settings.open, OverlayKind::Settings),
         (model.connection_form.open, OverlayKind::ConnectionForm),
-        (model.data.query_prompt.open, OverlayKind::DataQueryPrompt),
         (model.data.insert_form.open, OverlayKind::InsertRow),
         (
             model.transaction_prompt.open,

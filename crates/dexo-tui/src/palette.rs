@@ -9,8 +9,6 @@ pub enum FlowIntent {
     SavepointCreate,
     SavepointRollback,
     SavepointRelease,
-    DataSort,
-    DataFilter,
     DataReview,
     SchemaPreview,
     SchemaRaw,

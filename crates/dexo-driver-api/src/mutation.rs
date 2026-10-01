@@ -51,6 +51,39 @@ pub struct DataRequest {
     pub filter: Option<Filter>,
     pub sort: Vec<Sort>,
     pub page: Page,
+    /// SQL text typed into the workbench's WHERE and ORDER BY bars. Only the TUI sets
+    /// it, after checking it reads; MCP builds requests from typed filters alone.
+    pub clauses: RawClauses,
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct RawClauses {
+    pub where_sql: Option<String>,
+    pub order_by: Option<String>,
+}
+
+impl RawClauses {
+    /// The WHERE condition: the raw text, the typed filter, or both together.
+    pub fn condition(&self, typed: Option<String>) -> Option<String> {
+        let raw = self
+            .where_sql
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty());
+        match (raw, typed) {
+            (Some(raw), Some(typed)) => Some(format!("({raw}) AND ({typed})")),
+            (Some(raw), None) => Some(format!("({raw})")),
+            (None, typed) => typed,
+        }
+    }
+
+    /// The ORDER BY text, which takes the place of a typed sort.
+    pub fn order(&self) -> Option<&str> {
+        self.order_by
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    }
 }
 
 impl DataRequest {
