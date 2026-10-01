@@ -971,6 +971,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::CopyDdl => copy_ddl(model),
         Action::CopyGrid(format) => copy_grid(model, format),
         Action::OpenReview => {
+            // The review asks on production only if it knows it is on production, and
+            // nothing outside a test told it.
+            model.data.environment =
+                dexo_app::Environment::parse_strict(&model.connection.environment);
             model.data.open_review();
             Vec::new()
         }
@@ -5864,6 +5868,10 @@ fn open_ddl_preview(model: &mut Model) -> Vec<Effect> {
 }
 
 fn apply_ddl(model: &mut Model) -> Vec<Effect> {
+    if model.connection.read_only {
+        model.messages.warn("connection is read-only".into());
+        return Vec::new();
+    }
     let Some(preview) = &model.schema_editor.preview else {
         return Vec::new();
     };
