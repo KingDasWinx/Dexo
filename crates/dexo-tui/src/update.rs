@@ -5409,6 +5409,17 @@ fn apply_remote_query(model: &mut Model) -> Vec<Effect> {
 }
 
 fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
+    // Sorting or filtering runs the statement again. One that is not a plain read -- a
+    // side-effecting function, a locking read -- was confirmed once, if at all, and is
+    // sorted from the rows already loaded instead.
+    if !dexo_sql::is_read(&sql, crate::screens::editor::editor_dialect(model)) {
+        let reason = "the statement is not read-only, so Dexo does not run it again".to_string();
+        if let Some(tab) = model.results.tabs.get_mut(model.results.active) {
+            tab.local_only = Some(reason.clone());
+        }
+        model.messages.warn(format!("local-only: {reason}"));
+        return Vec::new();
+    }
     let page = match dexo_driver_api::Page::new(model.data.page_offset, model.data.page_limit) {
         Ok(page) => page,
         Err(error) => {

@@ -259,6 +259,29 @@ fn arbitrary_select_marks_unsupported_tabs_local_only() {
     );
 }
 
+/// Sorting re-runs the statement behind the grid. One that is not a plain read --
+/// a side-effecting function, a locking read -- is sorted locally instead of run again.
+#[test]
+fn sorting_never_runs_a_statement_that_is_not_a_read_again() {
+    for sql in [
+        "select pg_terminate_backend(42)",
+        "select * from users for update",
+    ] {
+        let mut model = Model::default();
+        let mut tab = ResultTab::new(result_key(0), "r0");
+        tab.source_sql = Some(sql.into());
+        model.results.tabs = vec![tab];
+        let effects = update(&mut model, Action::ApplyRemoteSort);
+        assert!(
+            !effects
+                .iter()
+                .any(|effect| matches!(effect, dexo_tui::Effect::StartScript(_))),
+            "{sql} ran again"
+        );
+        assert!(model.results.tabs[0].local_only.is_some(), "{sql}");
+    }
+}
+
 #[test]
 fn arbitrary_select_emits_derived_script() {
     let mut model = Model::default();
