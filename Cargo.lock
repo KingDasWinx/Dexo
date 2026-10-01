@@ -1683,6 +1683,7 @@ dependencies = [
  "dexo-driver-api",
  "dexo-driver-mysql",
  "dexo-driver-postgres",
+ "dexo-driver-sqlite",
  "dexo-mcp",
  "dexo-secrets",
  "dexo-sql",
@@ -1799,6 +1800,20 @@ dependencies = [
  "tokio-postgres",
  "tokio-postgres-rustls",
  "uuid",
+]
+
+[[package]]
+name = "dexo-driver-sqlite"
+version = "1.4.1"
+dependencies = [
+ "async-trait",
+ "dexo-driver-api",
+ "futures-util",
+ "rusqlite",
+ "secrecy",
+ "serde_json",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

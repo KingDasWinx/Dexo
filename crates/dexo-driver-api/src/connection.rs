@@ -22,6 +22,8 @@ pub struct DriverDescriptor {
     pub display_name: &'static str,
     pub default_port: u16,
     pub options: ConnectionOptions,
+    /// Opens a file instead of dialling a host: no port, user, password or transport.
+    pub file: bool,
 }
 
 impl DriverDescriptor {
@@ -36,6 +38,7 @@ impl DriverDescriptor {
                 ssh: true,
                 proxy: true,
             },
+            file: false,
         }
     }
 
@@ -50,6 +53,22 @@ impl DriverDescriptor {
                 ssh: true,
                 proxy: true,
             },
+            file: false,
+        }
+    }
+
+    pub fn sqlite() -> Self {
+        Self {
+            id: "sqlite",
+            display_name: "SQLite",
+            default_port: 0,
+            options: ConnectionOptions {
+                tls: false,
+                client_certificate: false,
+                ssh: false,
+                proxy: false,
+            },
+            file: true,
         }
     }
 
@@ -71,9 +90,14 @@ impl DriverDescriptor {
     }
 
     pub fn for_id(id: &str) -> Option<Self> {
-        [Self::postgres(), Self::mysql(), Self::mariadb()]
-            .into_iter()
-            .find(|descriptor| descriptor.id == id)
+        [
+            Self::postgres(),
+            Self::mysql(),
+            Self::mariadb(),
+            Self::sqlite(),
+        ]
+        .into_iter()
+        .find(|descriptor| descriptor.id == id)
     }
 }
 

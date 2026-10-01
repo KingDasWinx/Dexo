@@ -7,6 +7,7 @@ use dexo_cli::args::TuiStart;
 use dexo_cli::run::{TuiRunner, run_dispatch, temporary_connection};
 use dexo_driver_mysql::{MariadbFactory, MysqlFactory};
 use dexo_driver_postgres::PostgresFactory;
+use dexo_driver_sqlite::SqliteFactory;
 
 fn main() -> anyhow::Result<()> {
     init_tracing();
@@ -14,6 +15,7 @@ fn main() -> anyhow::Result<()> {
     registry.register(Arc::new(PostgresFactory));
     registry.register(Arc::new(MysqlFactory));
     registry.register(Arc::new(MariadbFactory));
+    registry.register(Arc::new(SqliteFactory));
     let tui_registry = registry.clone();
     run_dispatch(Args::parse(), registry, Workbench(tui_registry))
 }

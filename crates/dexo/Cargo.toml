@@ -5,7 +5,7 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
-description = "A local-first database workbench for PostgreSQL and MySQL in the terminal"
+description = "A local-first database workbench for PostgreSQL, MySQL and SQLite in the terminal"
 homepage = "https://github.com/kingdaswinx/Dexo"
 authors = ["KingDasWinx"]
 
@@ -16,6 +16,7 @@ dexo-app = { path = "../dexo-app" }
 dexo-cli = { path = "../dexo-cli" }
 dexo-driver-mysql = { path = "../dexo-driver-mysql" }
 dexo-driver-postgres = { path = "../dexo-driver-postgres" }
+dexo-driver-sqlite = { path = "../dexo-driver-sqlite" }
 dexo-tui = { path = "../dexo-tui" }
 dexo-storage = { path = "../dexo-storage" }
 tracing-subscriber.workspace = true
