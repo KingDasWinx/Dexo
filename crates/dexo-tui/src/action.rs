@@ -83,6 +83,9 @@ pub enum Action {
     EditorCut,
     /// The answer to the unsaved-changes prompt.
     ResolveClose(crate::model::CloseChoice),
+    /// Vim's `:wq` and `:q!`: the unsaved-close answer, for the active document, given
+    /// without asking.
+    ResolveCloseActive(crate::model::CloseChoice),
     DuplicateConnection,
     TestConnection,
     DeleteConnection,

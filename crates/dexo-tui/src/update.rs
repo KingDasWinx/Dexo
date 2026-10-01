@@ -820,6 +820,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::CloseDocument => close_active_document(model),
         Action::ResolveClose(choice) => resolve_close(model, choice),
+        Action::ResolveCloseActive(choice) => {
+            let document = model.active_document();
+            model.close_prompt = Some(crate::model::ClosePrompt {
+                document: document.id.clone(),
+                title: document.title.clone(),
+                choice,
+            });
+            resolve_close(model, choice)
+        }
         Action::NewDocument => {
             open_new_document_prompt(model);
             Vec::new()

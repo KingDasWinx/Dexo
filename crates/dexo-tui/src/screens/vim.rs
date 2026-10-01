@@ -49,6 +49,9 @@ pub struct VimState {
     visual_anchor: usize,
     /// `:` or `/` being typed on the status line.
     pub prompt: Option<Prompt>,
+    /// The document all of this is about. Another one becoming active starts afresh: an
+    /// Insert session's undo depth or a Visual anchor means nothing in it.
+    document: Option<String>,
     last_search: Option<(String, bool)>,
     replaying: bool,
 }
@@ -86,7 +89,8 @@ pub fn block_cursor(model: &Model) -> bool {
 /// What Visual mode has selected, as the operators will take it: both ends included,
 /// whichever way it was made -- and whole lines in Visual-line mode.
 pub fn display_selection(model: &Model) -> Option<Range<usize>> {
-    if !active(model) {
+    if !active(model) || model.vim.document.as_deref() != Some(model.active_document().id.as_str())
+    {
         return None;
     }
     let chars: Vec<char> = model.active_document().text().chars().collect();
@@ -100,6 +104,20 @@ pub fn display_selection(model: &Model) -> Option<Range<usize>> {
 }
 
 pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
+    let document = model.active_document().id.clone();
+    if model.vim.document.as_deref() != Some(document.as_str()) {
+        let register = model.vim.register.take();
+        let last_change = std::mem::take(&mut model.vim.last_change);
+        let last_search = model.vim.last_search.take();
+        model.vim = VimState {
+            register,
+            last_change,
+            last_search,
+            document: Some(document),
+            ..VimState::default()
+        };
+        model.active_document_mut().anchor = None;
+    }
     if model.vim.prompt.is_some() {
         return prompt_key(model, key);
     }
@@ -818,8 +836,15 @@ fn ex(model: &mut Model, command: &str) -> Outcome {
     match command {
         "" => Outcome::Done,
         "w" => Outcome::Then(vec![Action::SaveActiveDocument]),
-        "q" | "q!" => Outcome::Then(vec![Action::CloseDocument]),
-        "wq" | "x" => Outcome::Then(vec![Action::SaveActiveDocument, Action::CloseDocument]),
+        // `:q` asks about unsaved work the way closing a tab does; `:q!` drops it.
+        "q" => Outcome::Then(vec![Action::CloseDocument]),
+        "q!" => Outcome::Then(vec![Action::ResolveCloseActive(
+            crate::model::CloseChoice::Discard,
+        )]),
+        // Saved first, closed once the save lands -- or kept, if it does not.
+        "wq" | "x" => Outcome::Then(vec![Action::ResolveCloseActive(
+            crate::model::CloseChoice::Save,
+        )]),
         line if line.chars().all(|ch| ch.is_ascii_digit()) => {
             let line: usize = line.parse().unwrap_or(1);
             move_cursor(model, Motion::FileStart, line.max(1));
@@ -1140,6 +1165,38 @@ mod tests {
         keys(&mut model, "vlX");
         assert_eq!(text(&model), "c");
         assert_eq!(model.vim.mode, Mode::Normal);
+    }
+
+    /// Switching documents starts Vim afresh there: an Insert session in one never
+    /// merges the other's undo steps, and a Visual anchor never selects in it.
+    #[test]
+    fn vim_state_stays_with_its_document() {
+        let mut model = vim("first");
+        keys(&mut model, "V");
+        let mut other = crate::model::EditorDocument::with_text("second\nlines");
+        other.id = "other".into();
+        model.documents.push(other);
+        model.active_document = 1;
+        assert_eq!(super::display_selection(&model), None);
+        keys(&mut model, "d");
+        assert_eq!(text(&model), "second\nlines");
+        assert_eq!(model.vim.mode, Mode::Normal);
+    }
+
+    /// `:wq` saves and closes once the save lands; `:q!` closes without asking.
+    #[test]
+    fn write_quit_and_quit_bang() {
+        let mut model = vim("select 1");
+        model.active_document_mut().path = Some(std::path::PathBuf::from("/tmp/q.sql"));
+        keys(&mut model, ":wq\n");
+        assert!(model.close_prompt.is_none());
+        assert!(model.pending_document_close.is_some());
+
+        let mut model = vim("select 2");
+        model.active_document_mut().id = "dirty".into();
+        keys(&mut model, ":q!\n");
+        assert!(model.close_prompt.is_none());
+        assert!(model.documents.iter().all(|doc| doc.id != "dirty"));
     }
 
     #[test]
