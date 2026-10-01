@@ -486,7 +486,8 @@ async fn explain_draws_the_query_plan_and_refuses_analyze() {
         [
             Capability::Ddl,
             Capability::ExplainAnalyze,
-            Capability::Admin
+            Capability::Admin,
+            Capability::Backup,
         ]
     );
     assert!(session.ddl().is_none() && session.admin().is_none());

@@ -531,3 +531,27 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         }
     }
 }
+
+/// A driver that cannot back up says so in the palette, before anything is tried.
+#[test]
+fn backup_and_restore_carry_the_drivers_reason() {
+    let mut model = dexo_tui::Model::default();
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(9));
+    model.active_session = Some(session);
+    model.unavailable.insert(
+        session,
+        vec![(
+            dexo_driver_api::Capability::Backup,
+            "copy the file to back it up".into(),
+        )],
+    );
+    let entries = dexo_tui::palette::palette_entries(&model);
+    for id in ["backup.dump", "backup.restore"] {
+        let entry = entries.iter().find(|entry| entry.id == id).expect(id);
+        assert_eq!(
+            entry.disabled_reason.as_deref(),
+            Some("copy the file to back it up"),
+            "{id}"
+        );
+    }
+}

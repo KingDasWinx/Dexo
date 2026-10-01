@@ -1365,6 +1365,7 @@ fn capability_for(id: &str) -> Option<dexo_driver_api::Capability> {
         "schema.preview" | "schema.raw" => Some(Capability::Ddl),
         "schema.security" | "admin.sessions" => Some(Capability::Admin),
         "explain.analyze" => Some(Capability::ExplainAnalyze),
+        "backup.dump" | "backup.restore" => Some(Capability::Backup),
         _ => None,
     }
 }
