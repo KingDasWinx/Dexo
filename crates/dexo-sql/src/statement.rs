@@ -212,7 +212,9 @@ pub fn statement_at(sql: &str, byte_index: usize) -> Option<StatementSpan> {
 /// every statement after it.
 pub fn split_statements_in(sql: &str, dialect: Dialect) -> Vec<StatementSpan> {
     match dialect {
-        Dialect::Postgres => split_statements(sql),
+        // ponytail: a trigger's BEGIN ... END body splits at its inner `;`; teach the
+        // splitter BEGIN/END depth once triggers are written in the editor.
+        Dialect::Postgres | Dialect::Sqlite => split_statements(sql),
         Dialect::Mysql => split_statements(&mysql_mask(sql)),
     }
 }

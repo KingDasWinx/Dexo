@@ -17,6 +17,7 @@ pub enum CopyFormat {
 pub enum SqlDialect {
     Postgres,
     Mysql,
+    Sqlite,
 }
 
 pub fn copy_selection(
@@ -145,7 +146,9 @@ fn markdown(columns: &[String], rows: &[Vec<DbValue>]) -> String {
 
 fn sql(columns: &[String], rows: &[Vec<DbValue>], dialect: SqlDialect) -> String {
     let ident = |name: &str| match dialect {
-        SqlDialect::Postgres => format!("\"{}\"", name.replace('"', "\"\"")),
+        SqlDialect::Postgres | SqlDialect::Sqlite => {
+            format!("\"{}\"", name.replace('"', "\"\""))
+        }
         SqlDialect::Mysql => format!("`{}`", name.replace('`', "``")),
     };
     let cols = columns
@@ -171,7 +174,7 @@ fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(v) => match dialect {
             SqlDialect::Postgres => if *v { "TRUE" } else { "FALSE" }.into(),
-            SqlDialect::Mysql => if *v { "1" } else { "0" }.into(),
+            SqlDialect::Mysql | SqlDialect::Sqlite => if *v { "1" } else { "0" }.into(),
         },
         DbValue::I64(v) => v.to_string(),
         DbValue::U64(v) => v.to_string(),
@@ -181,7 +184,7 @@ fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
         }
         DbValue::Bytes(v) => match dialect {
             SqlDialect::Postgres => format!("'\\x{}'", hex(v)),
-            SqlDialect::Mysql => format!("X'{}'", hex(v)),
+            SqlDialect::Mysql | SqlDialect::Sqlite => format!("X'{}'", hex(v)),
         },
     }
 }

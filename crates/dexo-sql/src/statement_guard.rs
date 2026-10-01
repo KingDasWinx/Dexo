@@ -1,7 +1,7 @@
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Query, Select, Statement, Visit, Visitor};
-use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect};
+use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
 use crate::Dialect;
@@ -9,7 +9,8 @@ use crate::statement::{first_keyword, mysql_mask};
 
 /// What a statement touches, as identifier paths such as `["db", "public", "orders"]`.
 /// Unquoted Postgres identifiers are folded to lowercase, as the server folds them, so
-/// the allowlist compares the name the server will actually resolve.
+/// the allowlist compares the name the server will actually resolve. SQLite ignores ASCII
+/// case in every name, quoted or not, so all of its are folded.
 #[derive(Clone, Debug, Default, Eq, PartialEq)]
 pub struct Inspection {
     pub relations: Vec<Vec<String>>,
@@ -232,7 +233,7 @@ pub fn destructive(sql: &str, dialect: Dialect) -> Option<Destructive> {
 /// The first keyword past the comments `dialect` has: MySQL's `#` too.
 fn keyword_in(sql: &str, dialect: Dialect) -> Option<String> {
     match dialect {
-        Dialect::Postgres => first_keyword(sql),
+        Dialect::Postgres | Dialect::Sqlite => first_keyword(sql),
         Dialect::Mysql => first_keyword(&mysql_mask(sql)),
     }
 }
@@ -277,6 +278,7 @@ fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
     let mut statements = match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
         Dialect::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
+        Dialect::Sqlite => Parser::parse_sql(&SQLiteDialect {}, sql),
     }
     .map_err(|error| GuardRejection::Unparsed(error.to_string()))?;
     if statements.len() != 1 {
@@ -319,6 +321,9 @@ impl Guard {
                     if ident.quote_style.is_none() && self.dialect == Dialect::Postgres =>
                 {
                     ident.value.to_lowercase()
+                }
+                ObjectNamePart::Identifier(ident) if self.dialect == Dialect::Sqlite => {
+                    ident.value.to_ascii_lowercase()
                 }
                 ObjectNamePart::Identifier(ident) => ident.value.clone(),
                 ObjectNamePart::Function(function) => function.name.value.clone(),
@@ -748,5 +753,47 @@ mod tests {
         }
         assert_eq!(destructive("optimize table items", Dialect::Mysql), None);
         assert_eq!(destructive("analyze table items", Dialect::Mysql), None);
+    }
+
+    /// On a read-only SQLite file the server refuses writes too; these are what the
+    /// editor must not send it as reads: a PRAGMA that lifts `query_only`, an ATTACH of
+    /// another file, a VACUUM INTO that writes one.
+    #[test]
+    fn sqlite_reads_writes_and_destructive_statements() {
+        let sqlite = |sql: &str| is_read(sql, Dialect::Sqlite);
+        for sql in [
+            "select * from items",
+            "with t as (select 1 as n) select n from t",
+            "explain query plan select * from items where id = 1",
+        ] {
+            assert!(sqlite(sql), "{sql}");
+        }
+        for sql in [
+            "pragma query_only = 0",
+            "attach database 'other.db' as other",
+            "vacuum into '/tmp/copy.db'",
+            "insert or replace into items values (1)",
+            "begin immediate",
+        ] {
+            assert!(!sqlite(sql), "{sql}");
+        }
+        assert_eq!(
+            destructive("delete from items", Dialect::Sqlite),
+            Some(Destructive::DeleteWithoutWhere)
+        );
+        assert_eq!(
+            destructive("drop table items", Dialect::Sqlite),
+            Some(Destructive::Drop)
+        );
+        assert_eq!(
+            destructive("delete from items where id = 1", Dialect::Sqlite),
+            None
+        );
+        assert_eq!(
+            inspect_read("select * from \"Items\"", Dialect::Sqlite)
+                .unwrap()
+                .relations,
+            [["items"]]
+        );
     }
 }

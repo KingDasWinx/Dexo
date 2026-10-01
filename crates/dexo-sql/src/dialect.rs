@@ -2,6 +2,7 @@
 pub enum Dialect {
     Postgres,
     Mysql,
+    Sqlite,
 }
 
 impl Dialect {
@@ -9,12 +10,13 @@ impl Dialect {
         match self {
             Self::Postgres => "postgres",
             Self::Mysql => "mysql",
+            Self::Sqlite => "sqlite",
         }
     }
 
     pub fn quote(self) -> char {
         match self {
-            Self::Postgres => '"',
+            Self::Postgres | Self::Sqlite => '"',
             Self::Mysql => '`',
         }
     }

@@ -67,7 +67,7 @@ fn format_statement(text: &str, dialect: Dialect) -> Option<String> {
         lines_between_queries: 1,
         dialect: match dialect {
             Dialect::Postgres => sqlformat::Dialect::PostgreSql,
-            Dialect::Mysql => sqlformat::Dialect::Generic,
+            Dialect::Mysql | Dialect::Sqlite => sqlformat::Dialect::Generic,
         },
         ..Default::default()
     };

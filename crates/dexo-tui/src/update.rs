@@ -103,6 +103,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             // the dialect stayed Postgres whatever the connection was.
             model.data.dialect = match dexo_driver_api::DriverDescriptor::family(&driver) {
                 "mysql" => dexo_app::data::SqlDialect::Mysql,
+                "sqlite" => dexo_app::data::SqlDialect::Sqlite,
                 _ => dexo_app::data::SqlDialect::Postgres,
             };
             model.connection.ready = ready;
@@ -5587,7 +5588,7 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
             }
             let derived = match dialect {
                 dexo_sql::Dialect::Postgres => postgres_placeholders(&derived),
-                dexo_sql::Dialect::Mysql => derived,
+                dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite => derived,
             };
             start_derived_script(model, derived, parameters)
         }

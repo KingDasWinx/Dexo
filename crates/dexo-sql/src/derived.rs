@@ -67,7 +67,7 @@ pub fn derive_page_in(
 
 fn quote(ident: &str, dialect: Dialect) -> String {
     match dialect {
-        Dialect::Postgres => format!("\"{}\"", ident.replace('"', "\"\"")),
+        Dialect::Postgres | Dialect::Sqlite => format!("\"{}\"", ident.replace('"', "\"\"")),
         Dialect::Mysql => format!("`{}`", ident.replace('`', "``")),
     }
 }
