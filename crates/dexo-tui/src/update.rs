@@ -397,6 +397,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 }
             }
         }
+        Action::TemporarySaveForm { profile, .. }
+            if profile.config.get("demo") == Some(&serde_json::Value::Bool(true)) =>
+        {
+            model.messages.warn(
+                "The demo is rebuilt on every `dexo --demo`: there is nothing to keep. \
+                 Copy its file and open that to keep a store."
+                    .into(),
+            );
+            Vec::new()
+        }
         Action::TemporarySaveForm { profile, password } => {
             let mut form = crate::screens::connection::ConnectionForm::open_edit(&profile);
             // A new profile with the temporary one's settings: saved through the normal
@@ -5234,6 +5244,7 @@ fn catalog_followup_effects(model: &Model, capture: bool) -> Vec<Effect> {
             session,
             generation: model.session_generation,
             include_system: model.explorer.include_system,
+            persist: !model.connections.is_temporary(&model.connection.name),
         });
     }
     if !model.project_id.is_empty() && !model.connection.name.is_empty() {

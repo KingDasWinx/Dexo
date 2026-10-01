@@ -24,6 +24,8 @@ pub fn create() -> anyhow::Result<UrlConnection> {
     rusqlite::Connection::open(&path)?.execute_batch(SEED)?;
     let mut connection = dexo_app::connection_url::file("sqlite", &path)?;
     connection.profile.name = "demo".into();
+    // Rebuilt on every run: the workbench will not save it as a connection of its own.
+    connection.profile.config["demo"] = true.into();
     Ok(connection)
 }
 

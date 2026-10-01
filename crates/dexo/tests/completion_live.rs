@@ -53,7 +53,7 @@ async fn completes_live_columns(session: Box<dyn Session>) {
         "c1".into(),
         "dexo".into(),
         false,
-        dir.path().join("dexo.db"),
+        Some(dir.path().join("dexo.db")),
         1,
         tx,
     )

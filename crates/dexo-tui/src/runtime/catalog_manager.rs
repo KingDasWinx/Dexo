@@ -129,7 +129,7 @@ pub async fn capture_snapshot(
     connection_id: String,
     database_name: String,
     include_system: bool,
-    db_path: std::path::PathBuf,
+    db_path: Option<std::path::PathBuf>,
     generation: u64,
     action_tx: tokio::sync::mpsc::Sender<Action>,
 ) {
@@ -152,7 +152,9 @@ pub async fn capture_snapshot(
             objects.push(object);
         }
     }
-    if let Ok(db) = dexo_storage::Database::open(&db_path) {
+    if let Some(db_path) = db_path
+        && let Ok(db) = dexo_storage::Database::open(&db_path)
+    {
         let _ = dexo_storage::CatalogCache::new(db.connection()).replace_snapshot(
             &connection_id,
             &database_name,

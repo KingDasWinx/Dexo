@@ -675,6 +675,7 @@ impl WorkbenchRuntime {
                 session,
                 generation,
                 include_system,
+                persist,
             } => {
                 // Spawned: the walk visits every object in the database, and awaiting it
                 // here froze the screen for as long as that took.
@@ -686,7 +687,7 @@ impl WorkbenchRuntime {
                         connection_id,
                         database_name,
                         include_system,
-                        paths.database,
+                        persist.then_some(paths.database),
                         generation,
                         self.action_tx.clone(),
                     ));

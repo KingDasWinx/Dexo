@@ -164,8 +164,7 @@ pub fn file(driver: &str, path: &std::path::Path) -> Result<UrlConnection, AppEr
 }
 
 /// The id comes from what the URL points at, its password left out: the same URL opened
-/// again is the same connection, so its catalog cache is reused rather than piled up
-/// under a fresh id each run, and documents bound to it last time find it.
+/// again is the same connection, so documents bound to it last time find it.
 fn temporary(name: String, driver: &str, config: serde_json::Value) -> ConnectionProfile {
     let target = format!("dexo-temporary:{driver}:{config}");
     ConnectionProfile::new(

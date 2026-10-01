@@ -930,6 +930,9 @@ pub enum Effect {
         session: SessionId,
         generation: u64,
         include_system: bool,
+        /// Kept in storage for the next session. A temporary connection's is not: it
+        /// is gone when Dexo closes, and nothing could find or delete it afterwards.
+        persist: bool,
     },
     /// The last captured snapshot, for completion: the sidebar only loads what is
     /// expanded, so without this a table's columns were on offer only once its node had
