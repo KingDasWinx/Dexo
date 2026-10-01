@@ -51,9 +51,13 @@ impl russh::client::Handler for HostKeyHandler {
 
     async fn check_server_key(
         &mut self,
-        server_public_key: &russh::keys::PublicKey,
+        server_key: &russh::keys::PublicKeyOrCertificate,
     ) -> Result<bool, Self::Error> {
-        match verify_host_key(self.known.as_ref(), &ssh_fingerprint(server_public_key)) {
+        // A host certificate is pinned by the key it certifies; the CA is not consulted.
+        match verify_host_key(
+            self.known.as_ref(),
+            &ssh_fingerprint(&server_key.public_key()),
+        ) {
             HostKeyDecision::Trusted => Ok(true),
             HostKeyDecision::New { fingerprint } => Err(TransportError::HostKeyNew { fingerprint }),
             HostKeyDecision::Changed => Err(TransportError::HostKeyChanged),

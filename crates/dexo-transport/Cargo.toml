@@ -13,7 +13,7 @@ dangerous-tls = []
 [dependencies]
 rustls = "0.23.43"
 rustls-platform-verifier = "0.7"
-russh = "0.62.6"
+russh = "0.63.3"
 secrecy.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
@@ -24,7 +24,7 @@ tokio-socks = "0.5"
 [dev-dependencies]
 rand = "0.10"
 rcgen = "0.14"
-russh = "0.62.6"
+russh = "0.63.3"
 rustls = "0.23.43"
 tempfile.workspace = true
 tokio = { workspace = true, features = ["io-util", "macros", "net", "rt-multi-thread"] }
