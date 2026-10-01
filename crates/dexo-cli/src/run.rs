@@ -957,6 +957,7 @@ async fn execute_script(
         .execute_script(
             Arc::from(session),
             &sql,
+            dexo_app::dialect_for_driver(&profile.driver),
             ExecutionTarget::Document,
             0,
             None,

@@ -29,6 +29,15 @@ pub fn statements_for(
     statements_for_dialect(sql, target, cursor, selection, Dialect::Postgres)
 }
 
+/// The SQL dialect a driver speaks: MariaDB's is MySQL's.
+pub fn dialect_for_driver(driver: &str) -> Dialect {
+    match dexo_driver_api::DriverDescriptor::family(driver) {
+        "mysql" => Dialect::Mysql,
+        "sqlite" => Dialect::Sqlite,
+        _ => Dialect::Postgres,
+    }
+}
+
 /// [`statements_for`] split the way `dialect` reads comments and strings, so a MySQL
 /// `#` comment is a comment and not a statement of its own.
 pub fn statements_for_dialect(
@@ -78,6 +87,7 @@ impl QueryService {
         &self,
         session: Arc<dyn Session>,
         sql: &str,
+        dialect: Dialect,
         target: ExecutionTarget,
         cursor: usize,
         selection: Option<Range<usize>>,
@@ -87,7 +97,7 @@ impl QueryService {
         parameters: Vec<dexo_driver_api::DbValue>,
         timeout: std::time::Duration,
     ) -> Vec<Result<Vec<QueryEvent>, AppError>> {
-        let statements = statements_for(sql, target, cursor, selection);
+        let statements = statements_for_dialect(sql, target, cursor, selection, dialect);
         let mut out = Vec::new();
         for statement in statements {
             let mut request = if mutating {

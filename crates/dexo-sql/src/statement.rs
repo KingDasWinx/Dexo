@@ -40,6 +40,12 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
             continue;
         }
         match bytes[i] {
+            // Inside a trigger's or routine's BEGIN ... END, a `;` ends a statement of
+            // the body.
+            b';' if scan.block > 0 => {
+                scan.last = Last::Other;
+                i += 1;
+            }
             b';' => {
                 if start < i {
                     spans.push(classify_span(sql, start..i));
@@ -168,6 +174,11 @@ struct Scan {
     insert_awaits_rows: bool,
     /// A WITH at the top level: after its `)` the main query follows on its own line.
     cte: bool,
+    /// A CREATE of a trigger, function, procedure or event: its body is a block.
+    routine: bool,
+    /// `BEGIN`/`CASE` blocks open inside a routine's body. While one is open, `;` ends
+    /// a statement of the body, not the CREATE.
+    block: u32,
 }
 
 impl Scan {
@@ -188,13 +199,37 @@ impl Scan {
         if self.depth == 0 && upper == "WITH" {
             self.cte = true;
         }
+        if self.first.as_deref() == Some("CREATE")
+            && self.depth == 0
+            && matches!(
+                upper.as_str(),
+                "TRIGGER" | "FUNCTION" | "PROCEDURE" | "EVENT"
+            )
+        {
+            self.routine = true;
+        }
+        if self.routine {
+            // `END IF`, `END LOOP`, ... close what was never counted as opening, so the
+            // END before them gives its count back; `END CASE` closes a counted CASE.
+            let after_end = self.last == Last::Word && self.last_word == "END";
+            match upper.as_str() {
+                "BEGIN" | "CASE" if !after_end => self.block += 1,
+                "END" => self.block = self.block.saturating_sub(1),
+                "IF" | "LOOP" | "WHILE" | "REPEAT" if after_end => self.block += 1,
+                _ => {}
+            }
+        }
         self.last = Last::Word;
         self.last_word = upper;
     }
 
     fn starts_new(&self, word: &str) -> bool {
         let upper = word.to_ascii_uppercase();
-        if self.first.is_none() || self.depth > 0 || !STARTERS.contains(&upper.as_str()) {
+        if self.first.is_none()
+            || self.depth > 0
+            || self.block > 0
+            || !STARTERS.contains(&upper.as_str())
+        {
             return false;
         }
         match self.last {
@@ -229,9 +264,54 @@ pub fn split_statements_in(sql: &str, dialect: Dialect) -> Vec<StatementSpan> {
     match dialect {
         // ponytail: a trigger's BEGIN ... END body splits at its inner `;`; teach the
         // splitter BEGIN/END depth once triggers are written in the editor.
-        Dialect::Postgres | Dialect::Sqlite => split_statements(sql),
+        Dialect::Postgres => split_statements(sql),
+        Dialect::Sqlite => split_statements(&sqlite_mask(sql)),
         Dialect::Mysql => split_statements(&mysql_mask(sql)),
     }
+}
+
+/// `sql` with every `;` inside a SQLite `[bracketed identifier]` replaced, byte for
+/// byte, so `[a;b]` stays one name and offsets into the mask are offsets into `sql`.
+fn sqlite_mask(sql: &str) -> String {
+    let bytes = sql.as_bytes();
+    let mut out = bytes.to_vec();
+    let mut i = 0;
+    while i < bytes.len() {
+        match bytes[i] {
+            quote @ (b'\'' | b'"' | b'`') => {
+                i += 1;
+                while i < bytes.len() && bytes[i] != quote {
+                    i += 1;
+                }
+                i += 1;
+            }
+            b'-' if bytes.get(i + 1) == Some(&b'-') => {
+                while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+            }
+            b'[' => {
+                // A name never spans lines; a `[` with no `]` on its line masks nothing.
+                let close = bytes[i..]
+                    .iter()
+                    .position(|byte| *byte == b']' || *byte == b'\n')
+                    .map(|at| i + at)
+                    .filter(|at| bytes[*at] == b']');
+                if let Some(close) = close {
+                    for byte in &mut out[i..close] {
+                        if *byte == b';' {
+                            *byte = b'_';
+                        }
+                    }
+                    i = close;
+                }
+                i += 1;
+            }
+            _ => i += 1,
+        }
+    }
+    // Only ASCII bytes were written, over ASCII ones.
+    String::from_utf8(out).unwrap_or_else(|_| sql.to_string())
 }
 
 /// [`statement_at`] for `dialect`, as [`split_statements_in`] splits it.
@@ -581,6 +661,37 @@ pub(crate) fn segments(sql: &str, statements: &[StatementSpan]) -> Vec<Range<usi
 #[cfg(test)]
 mod tests {
     use super::{StatementEffect, split_statements, split_statements_in, statement_at};
+
+    /// A trigger's or routine's body is one statement with the CREATE, however many
+    /// `;` it holds -- and nothing in it runs on its own.
+    #[test]
+    fn routine_bodies_stay_with_their_create() {
+        let sql = "CREATE TRIGGER t AFTER INSERT ON x BEGIN\n  DELETE FROM u;\n  UPDATE v SET x = CASE WHEN 1 THEN 2 END;\nEND;\nselect 1;";
+        let texts: Vec<&str> = split_statements(sql)
+            .iter()
+            .map(|span| &sql[span.byte_range.clone()])
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].ends_with("END"), "{texts:?}");
+        assert_eq!(texts[1], "select 1");
+
+        let mysql = "CREATE PROCEDURE p() BEGIN\n  IF 1 THEN SELECT 1; END IF;\n  WHILE 0 DO SELECT 2; END WHILE;\nEND;\nselect 3;";
+        assert_eq!(
+            split_statements_in(mysql, crate::Dialect::Mysql).len(),
+            2,
+            "{mysql}"
+        );
+
+        // A table may have a column called begin; that is not a block.
+        let table = "CREATE TABLE log (\"begin\" int, note text); select 4;";
+        assert_eq!(split_statements(table).len(), 2);
+
+        let brackets = "select [a;b] from t; select 5";
+        assert_eq!(
+            split_statements_in(brackets, crate::Dialect::Sqlite).len(),
+            2
+        );
+    }
 
     /// A backslash command is its own statement, ending at its line, and a read; with
     /// a `;` on the line it is not one, and counts against the run like unknown SQL.

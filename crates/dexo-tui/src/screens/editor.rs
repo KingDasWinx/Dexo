@@ -177,11 +177,7 @@ impl Default for EditorState {
 }
 
 pub(crate) fn editor_dialect(model: &Model) -> Dialect {
-    match model.connection.driver.as_str() {
-        "sqlite" => Dialect::Sqlite,
-        driver if dexo_driver_api::DriverDescriptor::family(driver) == "mysql" => Dialect::Mysql,
-        _ => Dialect::Postgres,
-    }
+    dexo_app::dialect_for_driver(&model.connection.driver)
 }
 
 /// Rows and columns of text the editor pane shows, from the layout the frame is drawn
