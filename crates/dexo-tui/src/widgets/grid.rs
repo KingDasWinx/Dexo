@@ -51,7 +51,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     );
     match model.results.view {
         ResultsView::Explain => {
-            let plan = model.explain.lines();
+            let plan = model.results.explain.lines();
             let max_scroll = plan.len().saturating_sub((body.height as usize).max(1));
             hits.set_scroll_limit(crate::mouse::ScrollArea::Explain, max_scroll);
             let scroll = (model.results.explain_scroll as usize).min(max_scroll) as u16;
@@ -106,7 +106,7 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
     if model.results.view == ResultsView::Explain {
         // cycling the sub-view used to be invisible; the divider keeps it from reading
         // as a fourth view now that Messages sits next to it
-        out.push_str(&format!(" │ {:?}", model.explain.view));
+        out.push_str(&format!(" │ {:?}", model.results.explain.view));
     } else if model.results.view == ResultsView::Grid && model.results.tabs.len() > 1 {
         out.push_str(" │");
         x = x.saturating_add(2);

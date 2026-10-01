@@ -294,11 +294,13 @@ impl WorkbenchRuntime {
                 cursor,
                 analyze,
                 session,
+                document,
                 operation,
                 generation: _,
             } => {
                 let Some(active) = self.sessions.get(session) else {
                     self.emit(Action::ExplainFailed {
+                        document,
                         operation,
                         message: "session is closed".into(),
                     })
@@ -319,8 +321,13 @@ impl WorkbenchRuntime {
                 let registry = Arc::clone(self.query.registry());
                 let action_tx = self.action_tx.clone();
                 tokio::spawn(async move {
-                    explain_manager::run_live(session, &sql, cursor, analyze, operation, action_tx)
-                        .await;
+                    let request = explain_manager::ExplainRun {
+                        cursor,
+                        analyze,
+                        document,
+                        operation,
+                    };
+                    explain_manager::run_live(session, &sql, request, action_tx).await;
                     let mut slot = live.lock().await;
                     if slot.as_ref().is_some_and(|live| live.task == task) {
                         *slot = None;

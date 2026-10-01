@@ -8,22 +8,35 @@ pub fn statement_sql(document: &str, cursor: usize) -> Option<String> {
     (!sql.is_empty()).then(|| sql.to_string())
 }
 
+/// What one explain was asked for, and where its plan goes.
+pub struct ExplainRun {
+    pub cursor: usize,
+    pub analyze: bool,
+    pub document: String,
+    pub operation: crate::runtime::OperationId,
+}
+
 pub async fn run_live(
     session: std::sync::Arc<dyn Session>,
-    document: &str,
-    cursor: usize,
-    analyze: bool,
-    operation: crate::runtime::OperationId,
+    text: &str,
+    run: ExplainRun,
     tx: tokio::sync::mpsc::Sender<crate::action::Action>,
 ) {
-    let outcome = match (statement_sql(document, cursor), session.explain()) {
+    let ExplainRun {
+        cursor,
+        analyze,
+        document,
+        operation,
+    } = run;
+    let statement = statement_sql(text, cursor);
+    let outcome = match (&statement, session.explain()) {
         (None, _) => Err("there is no statement under the cursor to explain".to_string()),
         (Some(_), None) => Err("explain is unavailable for this connection".into()),
         (Some(sql), Some(provider)) => {
             let request = if analyze {
-                ExplainRequest::analyzed(sql)
+                ExplainRequest::analyzed(sql.clone())
             } else {
-                ExplainRequest::estimated(sql)
+                ExplainRequest::estimated(sql.clone())
             };
             provider
                 .explain(request)
@@ -34,9 +47,15 @@ pub async fn run_live(
     let action = match outcome {
         Ok(plan) => crate::action::Action::ExplainLoaded {
             plan: Box::new(plan),
+            sql: statement.unwrap_or_default(),
+            document,
             operation,
         },
-        Err(message) => crate::action::Action::ExplainFailed { operation, message },
+        Err(message) => crate::action::Action::ExplainFailed {
+            document,
+            operation,
+            message,
+        },
     };
     let _ = tx.send(action).await;
 }

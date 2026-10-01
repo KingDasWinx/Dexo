@@ -1098,15 +1098,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             use crate::screens::explain::ExplainView;
             model.results.explain_scroll = 0;
             model.results.messages_scroll = 0;
-            match (model.results.view, model.explain.view) {
+            match (model.results.view, model.results.explain.view) {
                 (ResultsView::Grid, _) => {
                     model.results.view = ResultsView::Explain;
-                    model.explain.view = ExplainView::Tree;
+                    model.results.explain.view = ExplainView::Tree;
                 }
                 (ResultsView::Explain, ExplainView::Summary) => {
                     model.results.view = ResultsView::Messages;
                 }
-                (ResultsView::Explain, view) => model.explain.view = view.next(),
+                (ResultsView::Explain, view) => model.results.explain.view = view.next(),
                 (ResultsView::Messages, _) => model.results.view = ResultsView::Grid,
             }
             Vec::new()
@@ -1412,29 +1412,40 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.schema_editor.preview = None;
             Vec::new()
         }
-        Action::ExplainLoaded { plan, operation } => {
+        Action::ExplainLoaded {
+            plan,
+            sql,
+            document,
+            operation,
+        } => {
             if model.active_operation == Some(operation) {
                 model.active_operation = None;
             }
-            let previous = model.explain.plan.clone();
-            model.explain.set_plan(*plan, previous.as_ref());
-            // Show the plan where output lives; never move the user's focus for it.
-            model.results.view = crate::model::ResultsView::Explain;
-            model.results.explain_scroll = 0;
+            if let Some(results) = results_of_document(model, &document) {
+                results.explain.set_plan(*plan, sql);
+                // Show the plan where output lives; never move the user's focus for it.
+                results.view = crate::model::ResultsView::Explain;
+                results.explain_scroll = 0;
+            }
             Vec::new()
         }
-        Action::ExplainFailed { operation, message } => {
+        Action::ExplainFailed {
+            document,
+            operation,
+            message,
+        } => {
             if model.active_operation == Some(operation) {
                 model.active_operation = None;
             }
-            // The plan on screen belonged to an earlier statement; left there, it read as
-            // the answer for this one.
-            model.explain.plan = None;
-            model.explain.compare.clear();
             model.messages.error(message);
-            model.results.view = crate::model::ResultsView::Messages;
-            model.results.messages_scroll =
-                u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
+            let newest = u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
+            if let Some(results) = results_of_document(model, &document) {
+                // The plan on screen belonged to an earlier statement; left there, it
+                // read as the answer for this one.
+                results.explain.clear();
+                results.view = crate::model::ResultsView::Messages;
+                results.messages_scroll = newest;
+            }
             Vec::new()
         }
         Action::AdminSessionsLoaded {
@@ -6001,6 +6012,22 @@ fn submit_data_query_prompt(model: &mut Model) -> Vec<Effect> {
     apply_remote_query(model)
 }
 
+/// The output pane of the document with this id: the one on screen when it is that
+/// document's, or the one parked with the document otherwise.
+fn results_of_document<'a>(
+    model: &'a mut Model,
+    document: &str,
+) -> Option<&'a mut crate::model::ResultsState> {
+    if model.results_owner.as_deref() == Some(document) {
+        return Some(&mut model.results);
+    }
+    model
+        .documents
+        .iter_mut()
+        .find(|candidate| candidate.id == document)
+        .map(|candidate| &mut candidate.results)
+}
+
 /// EXPLAIN is an operation like a run: it holds the slot Ctrl+F2 cancels, and it waits
 /// for one already running instead of racing it on the same session.
 fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
@@ -6029,6 +6056,7 @@ fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
         cursor,
         analyze,
         session,
+        document: document.id.clone(),
         operation,
         generation: model.session_generation,
     }]
@@ -7907,7 +7935,7 @@ mod tests {
         let mut model = Model::default();
         let mut seen = Vec::new();
         for _ in 0..5 {
-            seen.push((model.results.view, model.explain.view));
+            seen.push((model.results.view, model.results.explain.view));
             update(&mut model, Action::CycleResultsView);
         }
 
@@ -7987,6 +8015,8 @@ mod tests {
             &mut model,
             Action::ExplainLoaded {
                 plan: Box::new(plan),
+                sql: "select 1".into(),
+                document: document.clone(),
                 operation: crate::runtime::OperationId::new(),
             },
         );

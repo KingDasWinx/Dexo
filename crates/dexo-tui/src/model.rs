@@ -629,6 +629,9 @@ pub struct ResultsState {
     /// that had nothing to do with it.
     pub explain_scroll: u16,
     pub messages_scroll: u16,
+    /// This document's plan. It lived on the model, so every tab showed the last plan
+    /// explained anywhere.
+    pub explain: ExplainScreen,
     /// Last size the output pane handed down. Kept so a tab created between two syncs
     /// is born the right size instead of with `GridViewport`'s defaults.
     viewport_size: (u16, u16),
@@ -666,6 +669,7 @@ impl Default for ResultsState {
             view: ResultsView::default(),
             explain_scroll: 0,
             messages_scroll: 0,
+            explain: ExplainScreen::default(),
             viewport_size: (empty.width as u16, empty.height as u16),
         }
     }
@@ -1657,7 +1661,6 @@ pub struct Model {
     pub schema_diff: SchemaDiffScreen,
     pub transfer: TransferScreen,
     pub security: SecurityScreen,
-    pub explain: ExplainScreen,
     pub admin: AdminScreen,
     pub mcp_profiles: McpProfilesScreen,
     pub connection_form: ConnectionForm,
@@ -1772,7 +1775,6 @@ impl Default for Model {
             schema_diff: SchemaDiffScreen::default(),
             transfer: TransferScreen::default(),
             security: SecurityScreen::default(),
-            explain: ExplainScreen::default(),
             admin: AdminScreen::default(),
             mcp_profiles: McpProfilesScreen::default(),
             connection_form: ConnectionForm::default(),

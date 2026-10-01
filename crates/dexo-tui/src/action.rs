@@ -439,9 +439,13 @@ pub enum Action {
     },
     ExplainLoaded {
         plan: Box<dexo_driver_api::ExplainPlan>,
+        /// The statement explained, so a second plan of it can be compared with the first.
+        sql: String,
+        document: String,
         operation: OperationId,
     },
     ExplainFailed {
+        document: String,
         operation: OperationId,
         message: String,
     },
@@ -749,6 +753,9 @@ pub enum Effect {
         cursor: usize,
         analyze: bool,
         session: SessionId,
+        /// The document that asked; the plan is its own even if another tab is active
+        /// by the time it arrives.
+        document: String,
         operation: OperationId,
         generation: u64,
     },

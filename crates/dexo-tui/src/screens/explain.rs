@@ -29,6 +29,9 @@ pub struct ExplainScreen {
     pub paused: bool,
     pub analyze: bool,
     pub raw: String,
+    /// The statement `plan` is for. Each new plan used to be compared with whatever came
+    /// before it, often a plan of some other query.
+    pub sql: String,
 }
 
 impl Default for ExplainScreen {
@@ -41,6 +44,7 @@ impl Default for ExplainScreen {
             paused: false,
             analyze: false,
             raw: String::new(),
+            sql: String::new(),
         }
     }
 }
@@ -105,11 +109,22 @@ impl ExplainScreen {
         lines
     }
 
-    pub fn set_plan(&mut self, plan: ExplainPlan, previous: Option<&ExplainPlan>) {
-        if let Some(previous) = previous {
-            self.compare = compare_plans(previous, &plan);
-        }
+    /// A second plan of the same statement is compared with the first -- estimated
+    /// against analyzed, or before and after an index -- and any other plan starts clean.
+    pub fn set_plan(&mut self, plan: ExplainPlan, sql: String) {
+        self.compare = match &self.plan {
+            Some(previous) if self.sql == sql => compare_plans(previous, &plan),
+            _ => Vec::new(),
+        };
         self.raw = plan.raw.clone();
         self.plan = Some(plan);
+        self.sql = sql;
+    }
+
+    pub fn clear(&mut self) {
+        self.plan = None;
+        self.compare.clear();
+        self.raw.clear();
+        self.sql.clear();
     }
 }
