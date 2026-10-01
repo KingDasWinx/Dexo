@@ -22,6 +22,7 @@ fn onboarding_explains_the_first_steps() {
     assert!(screen.contains("Ctrl+P"));
     assert!(screen.contains("Ctrl+Enter"));
     assert!(screen.contains("F1"));
+    assert!(screen.contains("adds a connection"));
 }
 
 #[test]

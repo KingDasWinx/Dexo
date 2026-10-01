@@ -388,12 +388,14 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
     let mut lines: Vec<String> = Vec::new();
     if compact {
+        // Eight rows fit inside the popup at 40x12. With the connection hint, the blank
+        // that sat under the name would push Get started out of sight.
         lines.push("DEXO".into());
-        lines.push(String::new());
         lines.push("Welcome".into());
         lines.push("Ctrl+P  palette".into());
         lines.push("Ctrl+Enter  run".into());
         lines.push("F1  help".into());
+        lines.push("n  new connection".into());
         lines.push(String::new());
         lines.push("[Get started]".into());
     } else {
@@ -410,6 +412,7 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.push("Ctrl+P opens the command palette.".into());
         lines.push("Ctrl+Enter runs the SQL under the cursor.".into());
         lines.push("F1 opens help.".into());
+        lines.push("n in the explorer adds a connection (New Connection in Ctrl+P).".into());
         lines.push(String::new());
         lines.push("[Get started]".into());
     }
