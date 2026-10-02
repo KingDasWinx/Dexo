@@ -14,13 +14,22 @@ struct Field {
 }
 
 fn fields() -> Vec<Field> {
-    vec![Field {
-        name: "command palette",
-        open: |m| {
-            update(m, Action::OpenPalette);
+    vec![
+        Field {
+            name: "command palette",
+            open: |m| {
+                update(m, Action::OpenPalette);
+            },
+            text: |m| m.palette.query.as_str().to_string(),
         },
-        text: |m| m.palette.query.as_str().to_string(),
-    }]
+        Field {
+            name: "keybindings search",
+            open: |m| {
+                update(m, Action::ToggleHelp);
+            },
+            text: |m| m.help.query.as_str().to_string(),
+        },
+    ]
 }
 
 fn press(model: &mut Model, code: KeyCode, modifiers: KeyModifiers) {
@@ -103,7 +112,7 @@ fn the_word_keys_edit_and_ctrl_letters_are_not_text() {
             "Ctrl+Left in the {}",
             field.name
         );
-        press(&mut model, KeyCode::End, KeyModifiers::NONE);
+        press(&mut model, KeyCode::Right, KeyModifiers::CONTROL);
         press(&mut model, KeyCode::Char('w'), KeyModifiers::CONTROL);
         assert_eq!((field.text)(&model), "ab ", "Ctrl+W in the {}", field.name);
         press(&mut model, KeyCode::Char('k'), KeyModifiers::CONTROL);

@@ -5157,17 +5157,16 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     .scroll(crate::mouse::ScrollArea::Help, 0, i32::from(u16::MAX));
             Vec::new()
         }
-        KeyCode::Backspace => {
-            model.help.query.pop();
-            model.help.scroll = 0;
+        // Home and End page the list; the search takes the other keys an input edits
+        // with. It took any letter, Ctrl's included: Ctrl+A typed an `a`.
+        _ => {
+            let before = model.help.query.as_str().to_string();
+            model.help.query.handle_key(key);
+            if model.help.query.as_str() != before {
+                model.help.scroll = 0;
+            }
             Vec::new()
         }
-        KeyCode::Char(ch) => {
-            model.help.query.push(ch);
-            model.help.scroll = 0;
-            Vec::new()
-        }
-        _ => Vec::new(),
     }
 }
 
@@ -9861,7 +9860,7 @@ mod tests {
             Action::Key(KeyEvent::new(KeyCode::Char('d'), KeyModifiers::NONE)),
         );
 
-        assert_eq!(model.help.query, "d");
+        assert_eq!(model.help.query.as_str(), "d");
         assert_eq!(model.help.scroll, 0);
     }
 
@@ -9869,14 +9868,14 @@ mod tests {
     fn backspace_while_help_is_open_removes_last_search_char() {
         let mut model = Model::default();
         model.help.open = true;
-        model.help.query = "disc".into();
+        model.help.query = crate::widgets::text_input::TextInput::new("disc");
 
         update(
             &mut model,
             Action::Key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE)),
         );
 
-        assert_eq!(model.help.query, "dis");
+        assert_eq!(model.help.query.as_str(), "dis");
     }
 
     #[test]
@@ -9890,14 +9889,14 @@ mod tests {
         );
 
         assert!(model.help.open);
-        assert_eq!(model.help.query, "?");
+        assert_eq!(model.help.query.as_str(), "?");
     }
 
     #[test]
     fn esc_still_closes_help_and_clears_its_search_query() {
         let mut model = Model::default();
         model.help.open = true;
-        model.help.query = "disc".into();
+        model.help.query = crate::widgets::text_input::TextInput::new("disc");
 
         update(
             &mut model,
@@ -9905,21 +9904,21 @@ mod tests {
         );
 
         assert!(!model.help.open);
-        assert_eq!(model.help.query, "");
+        assert_eq!(model.help.query.as_str(), "");
     }
 
     #[test]
     fn reopening_help_resets_a_previous_search_query() {
         let mut model = Model::default();
         model.help.open = true;
-        model.help.query = "disc".into();
+        model.help.query = crate::widgets::text_input::TextInput::new("disc");
 
         update(&mut model, Action::ToggleHelp);
         assert!(!model.help.open);
         update(&mut model, Action::ToggleHelp);
 
         assert!(model.help.open);
-        assert_eq!(model.help.query, "");
+        assert_eq!(model.help.query.as_str(), "");
     }
 
     #[test]

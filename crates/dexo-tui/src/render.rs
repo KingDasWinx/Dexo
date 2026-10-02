@@ -1109,6 +1109,7 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let scroll = (model.help.scroll as usize).min(max_scroll) as u16;
     frame.render_widget(block, popup);
     frame.render_widget(Paragraph::new(format!("Search: {query}")), search);
+    show_input(frame, search, "Search: ", &model.help.query, false);
     frame.render_widget(Paragraph::new(lines.join("\n")).scroll((scroll, 0)), list);
     register_overlay(hits, popup);
     // Over the title's own "Esc to close": on the first inner row it lay over the search.
@@ -2887,7 +2888,7 @@ mod tests {
         let mut model = Model::default();
         model.apply_size(100, 40);
         model.help.open = true;
-        model.help.query = "disc".into();
+        model.help.query = crate::widgets::text_input::TextInput::new("disc");
 
         let view = render_to_string(&model, 100, 40);
 
@@ -3033,7 +3034,7 @@ mod tests {
         let mut model = Model::default();
         model.apply_size(100, 40);
         model.help.open = true;
-        model.help.query = "disconnect".into();
+        model.help.query = crate::widgets::text_input::TextInput::new("disconnect");
 
         let view = render_to_string(&model, 100, 40);
 
@@ -3047,7 +3048,7 @@ mod tests {
         let mut model = Model::default();
         model.apply_size(100, 40);
         model.help.open = true;
-        model.help.query = "zzz-no-such-binding".into();
+        model.help.query = crate::widgets::text_input::TextInput::new("zzz-no-such-binding");
 
         let view = render_to_string(&model, 100, 40);
 

@@ -117,7 +117,7 @@ pub struct PaletteState {
 pub struct HelpState {
     pub open: bool,
     pub scroll: u16,
-    pub query: String,
+    pub query: crate::widgets::text_input::TextInput,
 }
 
 #[derive(Clone, Debug, PartialEq)]
