@@ -19,11 +19,15 @@ pub struct DocumentNamePrompt {
 }
 
 impl DocumentNamePrompt {
+    /// The suggested name starts selected, so what is typed replaces it -- it used to be
+    /// typed on the end of it.
     pub fn open_create(default_name: String) -> Self {
+        let mut name = TextInput::new(default_name.clone());
+        name.select_all();
         Self {
             open: true,
             intent: Some(DocumentNameIntent::Create),
-            name: TextInput::new(default_name.clone()),
+            name,
             default_name,
             document_index: 0,
             error: None,
@@ -32,10 +36,12 @@ impl DocumentNamePrompt {
     }
 
     pub fn open_rename(document_index: usize, current: String) -> Self {
+        let mut name = TextInput::new(current.clone());
+        name.select_all();
         Self {
             open: true,
             intent: Some(DocumentNameIntent::Rename),
-            name: TextInput::new(current.clone()),
+            name,
             default_name: current,
             document_index,
             error: None,

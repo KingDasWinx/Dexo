@@ -147,6 +147,8 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         register_overlay(hits, popup);
         for_popup_lines(popup, &lines, |_, line, rect| {
             if line.starts_with("index:") {
+                let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
+                paint_selection(frame, rect, "index: ", &prompt.input, focused);
                 hits.register(HitTarget::FormField(0), rect);
             }
             if line.contains("[Cancel]") {
@@ -167,6 +169,8 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         register_overlay(hits, popup);
         for_popup_lines(popup, &lines, |_, line, rect| {
             if line.starts_with("name:") {
+                let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
+                paint_selection(frame, rect, "name: ", &prompt.name, focused);
                 hits.register(HitTarget::FormField(0), rect);
             }
             if line.contains("[Cancel]") {
@@ -319,6 +323,8 @@ fn render_run_prompt(
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.starts_with("name:") {
+            let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
+            paint_selection(frame, rect, "name: ", &prompt.typed, focused);
             hits.register(HitTarget::FormField(0), rect);
         }
         if line.contains("[Cancel]") {
@@ -868,6 +874,32 @@ fn for_popup_lines(popup: Rect, lines: &[String], mut map: impl FnMut(usize, &st
             break;
         }
         map(i, line, crate::mouse::line_rect(inner, i));
+    }
+}
+
+/// A selected input's value in reverse video. The popups draw their lines as plain
+/// text, so the selection is painted over the line: `before` is what precedes the value.
+fn paint_selection(
+    frame: &mut Frame,
+    line: Rect,
+    before: &str,
+    input: &crate::widgets::text_input::TextInput,
+    focused: bool,
+) {
+    if !focused || !input.is_selected() {
+        return;
+    }
+    let width =
+        |text: &str| u16::try_from(unicode_width::UnicodeWidthStr::width(text)).unwrap_or(u16::MAX);
+    let start = line.x.saturating_add(width(before));
+    let end = start
+        .saturating_add(width(input.as_str()))
+        .min(line.x.saturating_add(line.width));
+    let buffer = frame.buffer_mut();
+    for x in start..end {
+        if let Some(cell) = buffer.cell_mut((x, line.y)) {
+            cell.set_style(Style::default().add_modifier(Modifier::REVERSED));
+        }
     }
 }
 
@@ -1974,17 +2006,15 @@ fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitM
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    let prompt = &model.document_name_prompt;
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.starts_with("name:") {
+            let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
+            paint_selection(frame, rect, "name: ", &prompt.name, focused);
             hits.register(HitTarget::FormField(0), rect);
         }
         if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(
-                hits,
-                rect,
-                line,
-                model.document_name_prompt.submit_label(),
-            );
+            crate::widgets::form::register_footer(hits, rect, line, prompt.submit_label());
         }
     });
 }
@@ -2158,8 +2188,15 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
     register_overlay(hits, popup);
     // [Save] and [Cancel] answer a click like every other dialog's.
-    if model.inspector.editing_note.is_some() {
+    if let Some((input, focus)) = &model.inspector.editing_note {
         let inner = crate::mouse::popup_inner(popup);
+        let focused = *focus == crate::widgets::form::FooterFocus::Input;
+        if let Some(row) = (lines.len() - 2).checked_sub(scroll as usize)
+            && row < inner.height as usize
+        {
+            let line = crate::mouse::line_rect(inner, row);
+            paint_selection(frame, line, "note: ", input, focused);
+        }
         let footer = lines.len() - 1;
         if let Some(row) = footer.checked_sub(scroll as usize)
             && row < inner.height as usize
@@ -2676,6 +2713,9 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 hits.register(HitTarget::ListRow(*index), rect);
             }
             Some(crate::screens::file_picker::FilePickerLineKind::Name) => {
+                let picker = &model.file_picker;
+                let focused = picker.focus == crate::screens::file_picker::FilePickerFocus::Name;
+                paint_selection(frame, rect, "> name: ", &picker.name, focused);
                 hits.register(HitTarget::FormField(0), rect);
             }
             Some(crate::screens::file_picker::FilePickerLineKind::Footer)
@@ -2763,6 +2803,33 @@ mod tests {
         let view = render_to_string(&model, 100, 40);
 
         assert!(view.contains("Search: disc"));
+    }
+
+    /// The suggested name is selected, and shows it.
+    #[test]
+    fn a_selected_name_is_drawn_in_reverse() {
+        use ratatui::style::Modifier;
+        let model = Model {
+            document_name_prompt:
+                crate::screens::document_name_prompt::DocumentNamePrompt::open_create(
+                    "query-1.sql".into(),
+                ),
+            ..Model::default()
+        };
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 24)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| super::render(frame, &model, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let reversed: String = buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(reversed.contains("query-1.sql"), "{reversed:?}");
     }
 
     /// PageUp and PageDown moved one line, like the arrows.

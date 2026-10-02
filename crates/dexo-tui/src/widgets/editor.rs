@@ -234,13 +234,18 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
     // Laid out in display columns, so a wide character keeps the cursor on its text.
     let window = |input: &crate::widgets::text_input::TextInput| {
         let (shown, cursor) = input.window(room);
-        (cursor, shown.trim_end().to_string())
+        let style = if input.is_selected() {
+            Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        (cursor, Span::styled(shown.trim_end().to_string(), style))
     };
     let (query_cursor, query_shown) = window(&find.query);
     let (replacement_cursor, replacement_shown) = window(&find.replacement);
     let mut rows = vec![Line::from(vec![
         Span::styled(FIND_LABEL, muted),
-        Span::raw(query_shown),
+        query_shown,
         Span::raw("  "),
         Span::raw(count),
         Span::raw("  "),
@@ -255,7 +260,7 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
     if find.replacing {
         rows.push(Line::from(vec![
             Span::styled(REPLACE_LABEL, muted),
-            Span::raw(replacement_shown),
+            replacement_shown,
             Span::styled("  Enter replace · Alt+A all · Tab switch", muted),
         ]));
     }

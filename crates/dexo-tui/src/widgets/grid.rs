@@ -136,6 +136,11 @@ fn render_clause_bars(frame: &mut Frame, area: Rect, model: &Model, hits: &mut H
             );
         }
         let (shown, cursor) = input.window(width);
+        if input.is_selected() {
+            let selected =
+                ratatui::style::Style::default().add_modifier(ratatui::style::Modifier::REVERSED);
+            return (ratatui::text::Span::styled(shown, selected), cursor);
+        }
         (ratatui::text::Span::raw(shown), cursor)
     };
     let (where_span, where_cursor) = field(&bars.where_input, "w to filter", where_field);

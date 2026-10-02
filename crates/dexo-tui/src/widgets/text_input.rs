@@ -4,24 +4,43 @@ use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 pub struct TextInput {
     text: String,
     cursor: usize,
+    /// The whole text is selected: what is typed next replaces it.
+    selected: bool,
 }
 
 impl TextInput {
     pub fn new(text: impl Into<String>) -> Self {
         let text = text.into();
         let cursor = text.chars().count();
-        Self { text, cursor }
+        Self {
+            text,
+            cursor,
+            selected: false,
+        }
     }
 
     pub fn clear(&mut self) {
         self.text.clear();
         self.cursor = 0;
+        self.selected = false;
     }
 
     pub fn set_text(&mut self, text: impl Into<String>) {
         let text = text.into();
         self.cursor = text.chars().count();
         self.text = text;
+        self.selected = false;
+    }
+
+    /// Selects the whole text, as Ctrl+A does: typing replaces it, Backspace or Delete
+    /// clears it, and a move leaves it where it was.
+    pub fn select_all(&mut self) {
+        self.selected = !self.text.is_empty();
+        self.cursor = self.len();
+    }
+
+    pub fn is_selected(&self) -> bool {
+        self.selected
     }
 
     pub fn as_str(&self) -> &str {
@@ -46,6 +65,9 @@ impl TextInput {
 
     /// Inserts `text` at the cursor, as one line: a pasted line break becomes a space.
     pub fn insert_text(&mut self, text: &str) {
+        if std::mem::take(&mut self.selected) {
+            self.clear();
+        }
         for ch in text.chars() {
             if ch == '\n' {
                 self.insert(' ');
@@ -86,6 +108,29 @@ impl TextInput {
     }
 
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
+        let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+        if key.code == KeyCode::Char('a') && key.modifiers == KeyModifiers::CONTROL {
+            self.select_all();
+            return true;
+        }
+        if std::mem::take(&mut self.selected) {
+            match key.code {
+                KeyCode::Char(_) if plain => self.clear(),
+                KeyCode::Backspace | KeyCode::Delete => {
+                    self.clear();
+                    return true;
+                }
+                KeyCode::Left | KeyCode::Home => {
+                    self.cursor = 0;
+                    return true;
+                }
+                KeyCode::Right | KeyCode::End => {
+                    self.cursor = self.len();
+                    return true;
+                }
+                _ => {}
+            }
+        }
         match key.code {
             KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 self.move_word(-1);
@@ -303,6 +348,31 @@ mod tests {
         input.handle_key(key(KeyCode::End));
         input.handle_key(ctrl(KeyCode::Left));
         assert_eq!(input.labeled_line("name:", true), "> name:my-file.█sql");
+    }
+
+    /// Ctrl+A did nothing in a single-line input.
+    #[test]
+    fn select_all_is_replaced_by_typing_and_cleared_by_backspace() {
+        let mut input = TextInput::new("query-2.sql");
+        input.handle_key(ctrl(KeyCode::Char('a')));
+        assert!(input.is_selected());
+        input.handle_key(key(KeyCode::Char('r')));
+        input.handle_key(key(KeyCode::Char('x')));
+        assert_eq!(input.as_str(), "rx");
+        assert!(!input.is_selected());
+
+        input.select_all();
+        input.handle_key(key(KeyCode::Backspace));
+        assert_eq!(input.as_str(), "");
+
+        let mut input = TextInput::new("abc");
+        input.select_all();
+        input.handle_key(key(KeyCode::Left));
+        assert_eq!((input.as_str(), input.cursor()), ("abc", 0));
+        input.select_all();
+        input.insert_text("pasted");
+        assert_eq!(input.as_str(), "pasted");
+        assert!(!TextInput::new("").is_selected());
     }
 
     #[test]
