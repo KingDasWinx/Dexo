@@ -90,3 +90,36 @@ fn a_click_on_the_arrow_opens_the_node() {
             .is_some_and(|node| node.expanded)
     );
 }
+
+/// `PRIMARY` is every MySQL table's: under the table's name it says whose.
+#[test]
+fn an_index_is_named_for_its_table() {
+    use dexo_driver_api::{CatalogList, CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    let mut model = Model::default();
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![CatalogObject::new(
+            ObjectId::new("table:orders"),
+            ObjectKind::Table,
+            QualifiedName::new(Some("qa4"), None::<String>, "orders"),
+            None,
+        )],
+        restrictions: vec![],
+    });
+    model.explorer.apply_children(
+        &ObjectId::new("table:orders"),
+        CatalogList {
+            objects: vec![CatalogObject::new(
+                ObjectId::new("index:orders:PRIMARY"),
+                ObjectKind::Index,
+                QualifiedName::new(Some("qa4"), None::<String>, "PRIMARY"),
+                Some(ObjectId::new("table:orders")),
+            )],
+            restrictions: vec![],
+        },
+    );
+    model.explorer.select(ObjectId::new("index:orders:PRIMARY"));
+    assert_eq!(
+        model.explorer.selected_node().map(|n| n.qualified.as_str()),
+        Some("qa4.orders.PRIMARY")
+    );
+}

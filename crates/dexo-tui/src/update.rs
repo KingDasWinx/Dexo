@@ -1318,6 +1318,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 if !qualified_name.is_empty() {
                     model.inspector.qualified_name = qualified_name;
                 }
+                // An index or a constraint is shown under its table's name, as the tree has it.
+                if let (Some(object), Some(node)) = (&object, model.explorer.selected_node())
+                    && matches!(
+                        object.kind,
+                        dexo_driver_api::ObjectKind::Index
+                            | dexo_driver_api::ObjectKind::Constraint
+                    )
+                {
+                    model.inspector.qualified_name = node.qualified.clone();
+                }
                 model.inspector.object = object;
                 model.inspector.ddl = ddl;
                 model.inspector.dependencies = dependencies;

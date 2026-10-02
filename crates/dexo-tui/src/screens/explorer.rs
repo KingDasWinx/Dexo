@@ -165,6 +165,17 @@ impl ExplorerNode {
     }
 }
 
+/// An index or a constraint is named for its table: every MySQL table has a `PRIMARY`, so
+/// `qa4.PRIMARY` said which of them it was to nobody.
+fn name_under_table(nodes: &mut [ExplorerNode], table: &str) {
+    for node in nodes {
+        if matches!(node.kind, ObjectKind::Index | ObjectKind::Constraint) {
+            node.qualified = format!("{table}.{}", node.label);
+        }
+        name_under_table(&mut node.children, table);
+    }
+}
+
 fn object_label(object: &CatalogObject) -> String {
     let name = object.qualified_name.object();
     if object.kind == ObjectKind::Column {
@@ -674,6 +685,12 @@ impl ExplorerState {
             if node.id == *parent {
                 let before = std::mem::take(&mut node.children);
                 node.children = group_catalog_children(&node.id, &node.kind, page.objects);
+                if matches!(
+                    node.kind,
+                    ObjectKind::Table | ObjectKind::View | ObjectKind::MaterializedView
+                ) {
+                    name_under_table(&mut node.children, &node.qualified);
+                }
                 // A reload keeps what was open under it: after a DDL run the tree used to
                 // fold up to the connection.
                 keep_expanded(&mut node.children, before);

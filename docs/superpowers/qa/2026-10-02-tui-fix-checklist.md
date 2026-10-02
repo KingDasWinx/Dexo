@@ -179,7 +179,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-18** `MINOR` Toggle System Objects gives no sign of its state, and turning it on is only half-applied
 - [x] **ES-19** `MINOR` Show Favorites Only: header is a raw filter string, and there is no way back except the palette
 - [ ] **ES-21** `MINOR` MySQL tree shows two rows `mysql.users [restricted]` and `mysql.roles [restricted]` with no explanation
-- [ ] **ES-22** `MINOR` Index / constraint names in Inspect have no table: `qa4.PRIMARY`, `qa4.customer_id`, `qa4.public.order_items_pkey`
+- [x] **ES-22** `MINOR` Index / constraint names in Inspect have no table: `qa4.PRIMARY`, `qa4.customer_id`, `qa4.public.order_items_pkey`
 - [x] **ES-23** `MINOR` DDL dialog cuts long lines and cannot scroll sideways
 - [x] **ES-27** `MINOR` The Schema form opens prefilled with the name of an existing table (`public.orders`) and Apply happily tries to create it
 - [x] **ES-28** `MINOR` DDL preview: `risk: destructive=false lock=None` is a debug dump
