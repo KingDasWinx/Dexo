@@ -19,7 +19,10 @@ pub fn map_error(error: duckdb::Error) -> DriverError {
                 .with_native_code(kind)
                 .retryable();
         }
-        "INTERNAL" | "FATAL" | "Out of Memory" | "IO" => DriverErrorCategory::Internal,
+        "INTERNAL" | "FATAL" | "Out of Memory" => DriverErrorCategory::Internal,
+        "HTTP" => DriverErrorCategory::Network,
+        // The rest is the statement's: a file it names that is not there (`IO`), a
+        // constraint it breaks -- filed as the other drivers file a server's refusal.
         _ => DriverErrorCategory::Syntax,
     };
     let mapped = DriverError::new(category, message.clone());
@@ -40,4 +43,40 @@ pub fn writes_refused() -> DriverError {
         DriverErrorCategory::Permission,
         "this statement writes, and here it may only read",
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use dexo_driver_api::DriverErrorCategory;
+
+    use super::map_error;
+
+    fn failure(message: &str) -> duckdb::Error {
+        duckdb::Error::DuckDBFailure(
+            duckdb::ffi::Error::new(duckdb::ffi::DuckDBError),
+            Some(message.into()),
+        )
+    }
+
+    #[test]
+    fn errors_are_filed_by_their_kind() {
+        let category = |message: &str| map_error(failure(message)).category();
+        assert_eq!(
+            category("IO Error: No files found that match the pattern \"nope.csv\""),
+            DriverErrorCategory::Syntax
+        );
+        assert_eq!(category("HTTP Error: 404"), DriverErrorCategory::Network);
+        assert_eq!(
+            category("INTERRUPT Error: Interrupted!"),
+            DriverErrorCategory::Cancelled
+        );
+        assert_eq!(
+            category("Invalid Input Error: Cannot execute statement in read-only mode!"),
+            DriverErrorCategory::Permission
+        );
+        assert_eq!(
+            category("Out of Memory Error: failed"),
+            DriverErrorCategory::Internal
+        );
+    }
 }
