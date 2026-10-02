@@ -2616,18 +2616,21 @@ fn create_mcp_grant(
     let grant = request
         .issue(&loaded, &saved, unix_seconds())
         .map_err(|error| error.to_string())?;
+    let lasts = crate::screens::mcp_profiles::duration_words(grant.expires_at - unix_seconds());
     let message = if grant.asks() {
         format!(
-            "Granted {} on {}: each write waits up to {}s for you in Agent Activity.",
+            "Granted {} on {} ({}): each write waits up to {} for you in Agent Activity; the grant ends in {lasts}.",
             grant.tools.join(", "),
             request.selector,
-            grant.ask_secs
+            request.connection,
+            crate::screens::mcp_profiles::duration_words(i64::from(grant.ask_secs)),
         )
     } else {
         format!(
-            "Granted {} on {} for one write.",
+            "Granted {} on {} ({}) for one write; the grant ends in {lasts}.",
             grant.tools.join(", "),
-            request.selector
+            request.selector,
+            request.connection,
         )
     };
     dexo_storage::SqliteGrantLedger::open(&paths.database)

@@ -312,9 +312,9 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-25** `MAJOR` Revoking grants denies the waiting request with the reason "a person denied this write"
 - [x] **MA-26** `MAJOR` Agent Activity: with nothing waiting, PgDn scrolls for half a second and snaps back; only the newest 20 events can ever be seen
 - [x] **MA-34** `MAJOR` MCP Profiles: with more than 11 profiles the selection scrolls out of sight, and `e`/`r` act on rows you cannot see
-- [ ] **MA-41** `MAJOR` (layout, found while testing popups) After the terminal is made 20 rows high and back to 120x36, the Sidebar and the Results pane stay hidden
+- [=] **MA-41** `MAJOR` (layout, found while testing popups) After the terminal is made 20 rows high and back to 120x36, the Sidebar and the Results pane stay hidden (see SL-16)
 - [x] **MA-01** `MINOR` MCP Profiles with no profile: empty state gives no way forward
-- [ ] **MA-03** `MINOR` Palette shows hotkey `g` for "New MCP Grant…" but it only works inside MCP Profiles; help does not list it
+- [x] **MA-03** `MINOR` Palette shows hotkey `g` for "New MCP Grant…" but it only works inside MCP Profiles; help does not list it
 - [x] **MA-04** `MINOR` Agent Activity `r revoke all grants` closes Activity and opens the MCP Profiles screen with an unexplained pending "confirm revoke all grants"
 - [x] **MA-07** `MINOR` Inconsistent revoke-all keys between screens
 - [x] **MA-08** `MINOR` CLI: `dexo mcp profile create` accepts any name, including `bad name!`, and there is no way to delete a profile
@@ -328,13 +328,13 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-17** `MINOR` New MCP Grant: first focus is `tools:`, not `connection:`; the connection is not prefilled even when the profile has one connection
 - [x] **MA-18** `MINOR` New MCP Grant: clicking the "ask before each write" checkbox only moves focus, it does not toggle it
 - [x] **MA-19** `MINOR` New MCP Grant: validation messages are terse, stale or misleading
-- [ ] **MA-21** `MINOR` Form allows several tools in one grant, the TUI success message names only the tool and selector
+- [x] **MA-21** `MINOR` Form allows several tools in one grant, the TUI success message names only the tool and selector
 - [x] **MA-23** `MINOR` Ctrl+P (palette) is swallowed inside MCP Profiles; typed text acts as hotkeys there
 - [x] **MA-24** `MINOR` "Revoke All MCP Grants" (palette) only opens MCP Profiles with a pending confirmation, shows a stale snapshot, and says `1 grants`
 - [x] **MA-27** `MINOR` Agent Activity: mouse is not supported
 - [x] **MA-28** `MINOR` Agent Activity rows are raw, contradictory and carry no time
 - [x] **MA-29** `MINOR` Agent Activity: waiting requests - only the selected one shows its SQL, the confirm line does not repeat it
-- [ ] **MA-30** `MINOR` The "waiting" notice is a short toast titled "warn"; nothing persistent shows pending requests
+- [x] **MA-30** `MINOR` The "waiting" notice is a short toast titled "warn"; nothing persistent shows pending requests
 - [x] **MA-31** `MINOR` A killed agent: the request lingers as "waiting" and a late approval says "Approved: the agent's write runs now"
 - [-] **MA-32** `MINOR` Timeout while the confirm dialog is open: the dialog just disappears (not a defect: the vanished request is announced by a warning toast and the Recent list says it timed out)
 - [x] **MA-35** `MINOR` The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing

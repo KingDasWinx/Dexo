@@ -114,6 +114,18 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
             err_style,
         ));
     }
+    // A write an agent waits to make stays on the line until it is decided: the toast that
+    // announces it is gone in seconds, and the request waits for minutes.
+    let waiting = model.mcp_audit.announced.len();
+    if waiting > 0 && !model.mcp_audit.open {
+        spans.push(Span::styled(
+            format!(
+                "{waiting} agent write{} waiting: Ctrl+Alt+A  ",
+                if waiting == 1 { "" } else { "s" }
+            ),
+            model.theme.style(Role::Warning, model.capabilities),
+        ));
+    }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
         spans.push(Span::raw(format!("{conn}  {}", doors(model))));
         if let Some(notice) = &model.update_notice {

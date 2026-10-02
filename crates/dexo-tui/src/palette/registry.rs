@@ -1207,7 +1207,9 @@ fn command_spec_list() -> Vec<CommandSpec> {
                 "approval",
                 "permission",
             ],
-            shortcut: Some("g"),
+            // `g` works only inside MCP Profiles, which says so itself; a key listed here
+            // is one that does the action wherever the palette is.
+            shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenMcpGrantForm),
         },

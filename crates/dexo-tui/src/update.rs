@@ -12697,7 +12697,10 @@ mod tests {
             .into_iter()
             .find(|entry| entry.id == "mcp.grant")
             .expect("in the palette");
-        assert_eq!(entry.shortcut.as_deref(), Some("g"));
+        assert_eq!(
+            entry.shortcut, None,
+            "`g` is not a key outside MCP Profiles"
+        );
     }
 
     /// The statement being approved is shown whole: its seventh line and the tail of a
