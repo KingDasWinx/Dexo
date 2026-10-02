@@ -145,6 +145,47 @@ pub fn stop_on_signals(interrupt: bool) {
     let _ = interrupt;
 }
 
+/// While it lives, Ctrl+C at the terminal does not end Dexo -- under an external editor,
+/// out of raw mode -- and when it goes, SIGINT does again what it did before. A handler
+/// that does nothing, not an ignore, which the editor would inherit and keep its own
+/// Ctrl+C from working. Tokio's handler, which this replaces, stays for good: after one
+/// external edit `kill -INT` was ignored for the rest of the session.
+pub struct InterruptShield {
+    #[cfg(unix)]
+    previous: libc::sigaction,
+}
+
+impl InterruptShield {
+    #[allow(clippy::new_without_default)]
+    pub fn new() -> Self {
+        #[cfg(unix)]
+        {
+            extern "C" fn nothing(_: libc::c_int) {}
+            // SAFETY: plain sigaction calls on zeroed structs; the handler does nothing.
+            unsafe {
+                let mut shield: libc::sigaction = std::mem::zeroed();
+                shield.sa_sigaction = nothing as extern "C" fn(libc::c_int) as libc::sighandler_t;
+                libc::sigemptyset(&mut shield.sa_mask);
+                let mut previous: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(libc::SIGINT, &shield, &mut previous);
+                Self { previous }
+            }
+        }
+        #[cfg(not(unix))]
+        Self {}
+    }
+}
+
+impl Drop for InterruptShield {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        // SAFETY: puts back the action read when the shield went up.
+        unsafe {
+            libc::sigaction(libc::SIGINT, &self.previous, std::ptr::null_mut());
+        }
+    }
+}
+
 /// How a command run with [`run_until`] ended.
 pub(crate) enum Ran {
     /// It exited; its stdout, unless it was still held open at the deadline (by
@@ -234,4 +275,31 @@ fn children_of(pid: u32) -> Vec<u32> {
                 .collect()
         })
         .unwrap_or_default()
+}
+
+#[cfg(all(test, unix))]
+mod tests {
+    /// The shield keeps SIGINT from ending the process while it is up, and puts the
+    /// action that was there back when it goes.
+    #[test]
+    fn the_interrupt_shield_puts_sigint_back() {
+        let action = || {
+            // SAFETY: reads the current action only.
+            unsafe {
+                let mut current: libc::sigaction = std::mem::zeroed();
+                libc::sigaction(libc::SIGINT, std::ptr::null(), &mut current);
+                current.sa_sigaction
+            }
+        };
+        let before = action();
+        {
+            let _shield = super::InterruptShield::new();
+            assert_ne!(action(), before);
+            // SAFETY: the shield's handler does nothing; the test process lives on.
+            unsafe {
+                libc::raise(libc::SIGINT);
+            }
+        }
+        assert_eq!(action(), before);
+    }
 }

@@ -251,11 +251,11 @@ async fn edit_externally(
         .unwrap_or_else(|| if cfg!(windows) { "notepad" } else { "vi" }.to_string());
     let suspended = guard.suspend();
     // Out of raw mode, Ctrl+C at the terminal is SIGINT for Dexo too, and its default
-    // would end every open session while `code --wait` sits there. A handler (not an
-    // ignore, which the editor would inherit) keeps Dexo alive and leaves the editor
-    // its own Ctrl+C.
+    // would end every open session while `code --wait` sits there.
     #[cfg(unix)]
-    let _interrupt = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::interrupt()).ok();
+    let _interrupt = dexo_app::process::InterruptShield::new();
+    // ponytail: Windows keeps Tokio's Ctrl+C handler for the session; it has no `kill -INT`
+    // for that to swallow. SetConsoleCtrlHandler with a removable handler if it matters.
     #[cfg(windows)]
     let _interrupt = tokio::signal::windows::ctrl_c().ok();
     // Through the shell, so `code --wait` and other editors with arguments work; the
