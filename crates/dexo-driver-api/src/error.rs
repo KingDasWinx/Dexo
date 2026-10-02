@@ -51,6 +51,8 @@ pub struct DriverError {
     native_code: Option<String>,
     /// 1-based character offset into the statement, where the server says it failed.
     position: Option<u32>,
+    /// 1-based place of the failing row in a batch of rows written together.
+    row: Option<u32>,
     detail: Option<String>,
     hint: Option<String>,
     retryable: bool,
@@ -63,6 +65,7 @@ impl DriverError {
             message: message.into(),
             native_code: None,
             position: None,
+            row: None,
             detail: None,
             hint: None,
             retryable: false,
@@ -110,6 +113,12 @@ impl DriverError {
         self
     }
 
+    /// Which row of a batch the write failed on, counted from 1.
+    pub fn with_row(mut self, row: u32) -> Self {
+        self.row = Some(row);
+        self
+    }
+
     pub fn retryable(mut self) -> Self {
         self.retryable = true;
         self
@@ -125,6 +134,10 @@ impl DriverError {
 
     pub fn position(&self) -> Option<u32> {
         self.position
+    }
+
+    pub fn row(&self) -> Option<u32> {
+        self.row
     }
 
     pub fn is_retryable(&self) -> bool {

@@ -237,6 +237,9 @@ async fn run_loop(
     // Agent Activity is live: the requests and the calls are read again every second.
     let mut agent_tick = tokio::time::interval(Duration::from_secs(1));
     agent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // A running statement shows how long it has run: the second hand needs a frame.
+    let mut running_tick = tokio::time::interval(Duration::from_secs(1));
+    running_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let mut hits = crate::mouse::HitMap::default();
         let mut drawn = ratatui::layout::Rect::default();
@@ -297,6 +300,7 @@ async fn run_loop(
             _ = pause_tick.tick(), if model.editor.hides_errors() => {
                 let _ = crate::update::update(&mut model, Action::DiagnosticsTick);
             }
+            _ = running_tick.tick(), if model.active_operation.is_some() || model.transfer.running => {}
             _ = agent_tick.tick(), if model.mcp_audit.open || model.mcp_profiles.open => {
                 let effects = crate::update::update(&mut model, Action::AgentActivityTick);
                 if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {

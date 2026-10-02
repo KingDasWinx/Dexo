@@ -513,10 +513,12 @@ impl BulkWriter for DuckdbSession {
                         &names,
                     )
                     .map_err(map_error)?;
-                for row in &rows {
+                for (index, row) in rows.iter().enumerate() {
+                    // The row's place in the batch goes with the error: an import says
+                    // which line.
                     appender
                         .append_row(duckdb::appender_params_from_iter(row.iter().map(to_sql)))
-                        .map_err(map_error)?;
+                        .map_err(|error| map_error(error).with_row(index as u32 + 1))?;
                 }
                 appender.flush().map_err(map_error)
             })();

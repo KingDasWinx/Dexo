@@ -209,6 +209,152 @@ fn open_admin_emits_load_when_session_ready() {
     );
 }
 
+/// A command that cannot run closes the palette and says why once; it stayed open under
+/// its reason, with the editor behind it dead to the keys. A second Begin says what to
+/// do, not "session is not idle".
+#[test]
+fn a_command_that_cannot_run_closes_the_palette_and_says_why() {
+    let mut model = Model::default();
+    choose(&mut model, "Commit Transaction");
+    assert!(!model.palette.open, "the palette stayed open");
+    assert_eq!(
+        model.messages.last().map(|line| line.message.as_str()),
+        Some("no active transaction")
+    );
+
+    let mut open = Model {
+        transaction: dexo_driver_api::TransactionState::Active,
+        ..Model::default()
+    };
+    choose(&mut open, "Begin Transaction");
+    assert!(!open.palette.open);
+    assert_eq!(
+        open.messages.last().map(|line| line.message.as_str()),
+        Some("a transaction is already open: commit or roll it back first")
+    );
+}
+
+/// A session the server ended is closed, so the connection reads offline and the next
+/// run connects by itself, instead of failing with "connection closed" for ever.
+#[test]
+fn a_session_the_server_ended_is_closed_and_said_so() {
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(7));
+    let mut model = Model::default();
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "pg-prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "production".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    let effects = update(
+        &mut model,
+        Action::SessionLost {
+            session: session.0.to_string(),
+        },
+    );
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::CloseSession { session: closing }] if *closing == session
+    ));
+    assert!(model.messages.iter().any(|message| {
+        message.message.contains("pg-prod lost its connection")
+            && message.message.contains("Run again")
+    }));
+    // A session this model does not know is nobody's to close.
+    assert!(
+        update(
+            &mut model,
+            Action::SessionLost {
+                session: "somewhere-else".into()
+            }
+        )
+        .is_empty()
+    );
+}
+
+/// A list longer than the box scrolls with Home, End and the paging keys, and the pick
+/// stays on a row that is drawn.
+#[test]
+fn the_sessions_list_scrolls_by_key() {
+    use crossterm::event::KeyCode;
+    let mut model = sessions_model(false);
+    model.height = 20;
+    model.admin.sessions = (1..=17).map(|n| session_info(&n.to_string())).collect();
+    model.admin.blocking.clear();
+    let rows = model.admin.visible_rows(model.height);
+
+    press_key(&mut model, KeyCode::End);
+    assert_eq!(model.admin.selected, 16);
+    assert!(model.admin.offset > 0);
+    press_key(&mut model, KeyCode::Home);
+    assert_eq!((model.admin.selected, model.admin.offset), (0, 0));
+    press_key(&mut model, KeyCode::PageDown);
+    assert_eq!(model.admin.selected, rows);
+    let shown = model.admin.lines(58, rows).join("\n");
+    assert!(
+        shown.contains(&format!("> {:<7}", model.admin.sessions[rows].id)),
+        "{shown}"
+    );
+    press_key(&mut model, KeyCode::PageUp);
+    assert_eq!(model.admin.selected, 0);
+}
+
+/// The list loads in the background: the dialog says so, shows why when it cannot load,
+/// and an answer that lands after Esc does not bring the dialog back.
+#[test]
+fn the_sessions_dialog_shows_loading_failures_and_ignores_a_late_answer() {
+    let mut model = Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
+    update(&mut model, Action::OpenAdmin);
+    assert!(model.admin.loading);
+    assert!(
+        model
+            .admin
+            .lines(80, 5)
+            .join("\n")
+            .contains("Loading sessions")
+    );
+
+    update(
+        &mut model,
+        Action::AdminFailed {
+            message: "connection refused".into(),
+        },
+    );
+    assert!(!model.admin.loading);
+    assert_eq!(
+        model.admin.last_error.as_deref(),
+        Some("connection refused")
+    );
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.message.contains("connection refused"))
+    );
+
+    update(&mut model, Action::OpenAdmin);
+    press_key(&mut model, crossterm::event::KeyCode::Esc);
+    assert!(!model.admin.open);
+    update(
+        &mut model,
+        Action::AdminSessionsLoaded {
+            sessions: Vec::new(),
+            captured_at: "now".into(),
+            blocking: Vec::new(),
+        },
+    );
+    assert!(!model.admin.open, "a late answer reopened the dialog");
+}
+
 fn choose(model: &mut Model, query: &str) {
     let _ = choose_effects(model, query);
 }

@@ -117,13 +117,23 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_session = session;
             model.session_generation = generation;
             model.connection_form.close();
+            // The status bar's transaction flag belongs to the connection it names: the one
+            // this session had, or none for a session that is new.
+            model.transaction = TransactionState::Idle;
             if let Some(id) = session {
+                let transaction = model
+                    .connections
+                    .sessions
+                    .iter()
+                    .find(|row| row.id == id)
+                    .map_or(TransactionState::Idle, |row| row.transaction);
+                model.transaction = transaction;
                 model
                     .connections
                     .upsert_session(crate::screens::connections::SessionRow {
                         id,
                         connection: name.clone(),
-                        transaction: TransactionState::Idle,
+                        transaction,
                         generation,
                         environment: model.connection.environment.clone(),
                         read_only,
@@ -191,10 +201,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SaveConnection => save_connection(model),
+        // A statement's answer is its document's, on screen or parked while another tab
+        // is active: the person who started a slow one and looked elsewhere finds it
+        // there when they come back.
         Action::QueryResultSetStarted { key, index } => {
-            if operation_matches(model, &key) {
-                ensure_result_tab(model, &key, index).grid.clear();
-                model.results.active = index;
+            if let Some((results, _)) = document_output(model, &key) {
+                ensure_tab_in(results, &key, index).grid.clear();
+                results.active = index;
             }
             Vec::new()
         }
@@ -203,16 +216,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             index,
             columns,
         } => {
-            if operation_matches(model, &key) {
-                ensure_result_tab(model, &key, index)
+            if let Some((results, _)) = document_output(model, &key) {
+                ensure_tab_in(results, &key, index)
                     .grid
                     .set_columns(columns);
             }
             Vec::new()
         }
         Action::QueryRows { key, index, rows } => {
-            if operation_matches(model, &key) {
-                ensure_result_tab(model, &key, index).grid.append_rows(rows);
+            if let Some((results, _)) = document_output(model, &key) {
+                ensure_tab_in(results, &key, index).grid.append_rows(rows);
             }
             Vec::new()
         }
@@ -221,8 +234,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             index,
             message,
         } => {
-            if operation_matches(model, &key) {
-                if let Some(tab) = model.results.tabs.get_mut(index) {
+            if let Some((results, _)) = document_output(model, &key) {
+                if let Some(tab) = results.tabs.get_mut(index) {
                     tab.notices.push(message.clone());
                 }
                 model.messages.info(message);
@@ -271,6 +284,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             message,
             details,
             position,
+            cancelled,
         } => {
             model.active_task = None;
             model.active_query = None;
@@ -279,7 +293,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 tab.status = crate::model::OperationStatus::Failed;
             }
             apply_sql_transactions(model, key.operation, index);
-            point_at_failure(model, &key, index, &message, position);
+            if !cancelled {
+                point_at_failure(model, &key, index, &message, position);
+            }
             // A sort or a clause the server would not run leaves the rows it had.
             let mut derived = false;
             if let Some((results, bars)) = document_output(model, &key)
@@ -295,7 +311,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             // A run the user stopped did not fail: `error query cancelled` in red said it
             // had, and the grid has nothing to explain.
-            if message.eq_ignore_ascii_case("query cancelled") {
+            if cancelled || message.eq_ignore_ascii_case("query cancelled") {
                 model.messages.info("Query cancelled.".into());
                 return finish_schema_run(model, key.operation, Some(index));
             }
@@ -359,12 +375,25 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 row.generation = generation;
             }
             if model.active_session == Some(session) && model.session_generation == generation {
+                let before = model.transaction;
                 model.transaction = state;
+                // Postgres refuses everything in an aborted transaction; say what ends it.
+                if state == TransactionState::Failed && before != TransactionState::Failed {
+                    model.messages.warn(
+                        "The transaction failed: roll it back (Rollback Transaction), or roll back to a savepoint, to go on."
+                            .into(),
+                    );
+                }
             }
+            Vec::new()
+        }
+        Action::TransactionFailed { message } => {
+            model.messages.error(message);
             Vec::new()
         }
         Action::OperationStarted(key) => {
             model.active_operation = Some(key.operation);
+            model.active_started = Some((key.operation, std::time::Instant::now()));
             Vec::new()
         }
         Action::OperationFailed { message, .. } => {
@@ -373,7 +402,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.messages.error(message);
             Vec::new()
         }
-        Action::OperationCancelled(_) => {
+        Action::OperationCancelled(key) => {
+            // A transfer's cancel is the dialog's; a query running beside it goes on.
+            if model.transfer.operation == Some(key.operation) {
+                return apply_transfer_cancelled(model, key.operation);
+            }
             model.active_operation = None;
             model.active_query = None;
             Vec::new()
@@ -678,6 +711,28 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::SessionLost { session } => {
+            let row = uuid::Uuid::parse_str(&session)
+                .ok()
+                .and_then(|id| {
+                    model
+                        .connections
+                        .sessions
+                        .iter()
+                        .find(|row| row.id == crate::runtime::SessionId(id))
+                })
+                .or_else(|| model.connections.session_for(&session))
+                .map(|row| (row.id, row.connection.clone()));
+            let Some((id, name)) = row else {
+                return Vec::new();
+            };
+            // Closed here, the connection reads as offline, and the next run connects
+            // by itself like it does after a restart.
+            model
+                .messages
+                .error(format!("{name} lost its connection. Run again to connect."));
+            vec![Effect::CloseSession { session: id }]
+        }
         Action::SessionClosed { session } => {
             model.connections.remove_session(session);
             model.unavailable.remove(&session);
@@ -717,24 +772,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             execute_on_document_connection(model, action)
         }
         Action::CancelQuery => cancel_query(model),
-        Action::BeginTransaction => {
-            if model.connection.read_only {
-                model.messages.warn("connection is read-only".into());
-                return Vec::new();
-            }
-            if model.transaction == TransactionState::Idle {
-                if let Some(session) = model.active_session {
-                    vec![Effect::BeginTransaction {
-                        session,
-                        mode: dexo_driver_api::TransactionMode::ReadWrite,
-                    }]
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
+        // An offline connection is dialled first, as a run dials it: the person asked for
+        // a transaction, and the connection is theirs to be waited for.
+        Action::BeginTransaction => execute_on_document_connection(model, action),
         Action::Savepoint => open_savepoint_prompt(
             model,
             crate::screens::transaction_prompt::SavepointIntent::Create,
@@ -747,30 +787,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model,
             crate::screens::transaction_prompt::SavepointIntent::Release,
         ),
-        Action::CommitTransaction => {
-            if model.transaction == TransactionState::Active {
-                if let Some(session) = model.active_session {
-                    vec![Effect::CommitTransaction { session }]
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
-        Action::RollbackTransaction => {
-            if model.transaction == TransactionState::Active
-                || model.transaction == TransactionState::Failed
-            {
-                if let Some(session) = model.active_session {
-                    vec![Effect::RollbackTransaction { session }]
-                } else {
-                    Vec::new()
-                }
-            } else {
-                Vec::new()
-            }
-        }
+        Action::CommitTransaction => finish_transaction(model, false),
+        Action::RollbackTransaction => finish_transaction(model, true),
         Action::Focus(target) => focus_pane(model, target),
         Action::ActivateDocumentTab => activate_document_tab(model),
         Action::Paste(text) => {
@@ -1816,17 +1834,22 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::OpenAdmin => {
             model.admin.open = true;
             model.admin.selected = 0;
+            model.admin.offset = 0;
             model.admin.terminate = None;
             model.admin.last_error = None;
+            model.admin.notice = None;
+            model.admin.read_only = model.connection.read_only;
             load_admin_sessions(model)
         }
         Action::AdminTerminated { result } => {
             match result {
                 Ok(message) => {
                     model.admin.last_error = None;
+                    model.admin.notice = Some(message.clone());
                     model.messages.info(message);
                 }
                 Err(message) => {
+                    model.admin.notice = None;
                     model.admin.last_error = Some(format!("Not terminated: {message}"));
                     model.messages.error(message);
                 }
@@ -2290,19 +2313,43 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::AdminFailed { message } => {
+            model.admin.loading = false;
+            if model.admin.open {
+                model.admin.last_error = Some(message.clone());
+            }
+            model.messages.error(message);
+            Vec::new()
+        }
         Action::AdminSessionsLoaded {
             sessions,
             captured_at,
             blocking,
         } => {
+            // Closed while it was loading: the answer is not wanted any more.
+            if !model.admin.open {
+                return Vec::new();
+            }
+            model.admin.loading = false;
+            // The pick stays on the session it was on while the list moves under it.
+            let picked = model.admin.picked().map(|session| session.id.clone());
             model.admin.sessions = sessions;
             model.admin.captured_at = captured_at;
             model.admin.blocking = blocking;
+            if let Some(index) = picked.and_then(|id| {
+                model
+                    .admin
+                    .sessions
+                    .iter()
+                    .position(|session| session.id == id)
+            }) {
+                model.admin.selected = index;
+            }
             model.admin.selected = model
                 .admin
                 .selected
                 .min(model.admin.sessions.len().saturating_sub(1));
-            model.admin.open = true;
+            admin_scrolled(model);
             Vec::new()
         }
         Action::DiagnosticsReady { preview } => {
@@ -3596,8 +3643,15 @@ fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         && index < model.admin.sessions.len()
     {
         model.admin.selected = index;
+        admin_scrolled(model);
     }
     Vec::new()
+}
+
+/// Keeps the pick in view after it moved or the list changed.
+fn admin_scrolled(model: &mut Model) {
+    let rows = model.admin.visible_rows(model.height);
+    model.admin.offset = model.admin.window_start(rows);
 }
 
 fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -3683,18 +3737,45 @@ fn mouse_diagnostics(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 fn mouse_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::screens::transfer::TransferField;
+    use crate::widgets::form::FooterFocus;
+    // Running, the one button is Cancel; asking, the form is out of reach.
+    if model.transfer.running {
+        return match hit {
+            Some(HitTarget::FooterCancel) => stop_transfer(model),
+            _ => Vec::new(),
+        };
+    }
+    if model.transfer.confirm.is_some() {
+        return match hit {
+            Some(HitTarget::FooterSubmit) => run_transfer(model),
+            Some(HitTarget::FooterCancel) => {
+                model.transfer.confirm = None;
+                model.transfer.footer = FooterFocus::Input;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
     match hit {
-        Some(HitTarget::FormField(_)) => {
-            model.transfer.footer = crate::widgets::form::FooterFocus::Input;
+        Some(HitTarget::FormField(index)) => {
+            model.transfer.footer = FooterFocus::Input;
+            model.transfer.focus = index;
+            // A choice has nothing to type: a click on it picks the next one.
+            match model.transfer.focused_field() {
+                Some(TransferField::Format) => model.transfer.cycle_format(true),
+                Some(TransferField::OnError) => model.transfer.cycle_strategy(true),
+                _ => {}
+            }
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Browse)) => {
+            open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
             Vec::new()
         }
         Some(HitTarget::FooterSubmit) => run_transfer(model),
         Some(HitTarget::FooterCancel) => {
             model.transfer.open = false;
-            Vec::new()
-        }
-        Some(HitTarget::Button(HitButton::Confirm)) => {
-            model.transfer.confirm_restore = true;
             Vec::new()
         }
         _ => Vec::new(),
@@ -4442,6 +4523,13 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
+    if overlay == Some(OverlayKind::Admin) {
+        if model.admin.terminate.is_none() {
+            model.admin.move_selection(delta > 0);
+            admin_scrolled(model);
+        }
+        return Vec::new();
+    }
     if overlay == Some(OverlayKind::Security) {
         if delta < 0 {
             model.security.select_previous();
@@ -4800,34 +4888,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.transfer.open {
-        use crate::widgets::form::{FooterKey, footer_key};
-        match footer_key(&mut model.transfer.footer, &key) {
-            FooterKey::Cancel => {
-                model.transfer.open = false;
-                return Vec::new();
-            }
-            FooterKey::Submit => return run_transfer(model),
-            FooterKey::Moved => return Vec::new(),
-            FooterKey::Pass => {}
-        }
-        return match key.code {
-            KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
-                Vec::new()
-            }
-            KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                model.transfer.format = next_transfer_format(
-                    &model.transfer.format,
-                    model.transfer.mode == crate::screens::transfer::TransferMode::Import,
-                );
-                Vec::new()
-            }
-            _ if model.transfer.footer == crate::widgets::form::FooterFocus::Input => {
-                model.transfer.path.handle_key(key);
-                Vec::new()
-            }
-            _ => Vec::new(),
-        };
+        return handle_transfer_key(model, key);
     }
     if model.data.insert_form.open {
         use crate::widgets::form::FooterFocus;
@@ -6677,6 +6738,10 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             effects.extend(open_ddl_preview(model));
             return effects;
         }
+        Action::BeginTransaction => {
+            effects.extend(begin_transaction(model));
+            return effects;
+        }
         Action::OpenExplain | Action::RunExplainAnalyze => {
             effects.extend(explain_effect(
                 model,
@@ -6703,6 +6768,51 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
     }
     effects.extend(start_query(model));
     effects
+}
+
+/// Begin Transaction on the connection that is ready: a refusal says why and what to do.
+fn begin_transaction(model: &mut Model) -> Vec<Effect> {
+    if model.connection.read_only {
+        model.messages.warn(format!(
+            "{} is read-only: it takes no transaction that writes.",
+            model.connection.name
+        ));
+        return Vec::new();
+    }
+    if model.transaction != TransactionState::Idle {
+        model
+            .messages
+            .warn("A transaction is already open: commit or roll it back first.".into());
+        return Vec::new();
+    }
+    let Some(session) = model.active_session else {
+        model.messages.warn(
+            "Connect to a database first: there is nothing to begin a transaction on.".into(),
+        );
+        return Vec::new();
+    };
+    vec![Effect::BeginTransaction {
+        session,
+        mode: dexo_driver_api::TransactionMode::ReadWrite,
+    }]
+}
+
+/// Commit or Rollback: with no transaction to end, the person is told so, not ignored.
+fn finish_transaction(model: &mut Model, rollback: bool) -> Vec<Effect> {
+    let endable = model.transaction == TransactionState::Active
+        || (rollback && model.transaction == TransactionState::Failed);
+    let session = model.active_session.filter(|_| endable);
+    let Some(session) = session else {
+        model
+            .messages
+            .warn("No transaction is open: begin one first.".into());
+        return Vec::new();
+    };
+    vec![if rollback {
+        Effect::RollbackTransaction { session }
+    } else {
+        Effect::CommitTransaction { session }
+    }]
 }
 
 fn start_query(model: &mut Model) -> Vec<Effect> {
@@ -7262,13 +7372,13 @@ fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>
     }
 }
 
-fn ensure_result_tab<'a>(
-    model: &'a mut Model,
+fn ensure_tab_in<'a>(
+    results: &'a mut crate::model::ResultsState,
     key: &crate::runtime::OperationKey,
     index: usize,
 ) -> &'a mut crate::model::ResultTab {
-    while model.results.tabs.len() <= index {
-        let next = model.results.tabs.len();
+    while results.tabs.len() <= index {
+        let next = results.tabs.len();
         let mut tab = crate::model::ResultTab::new(
             crate::model::ResultKey {
                 operation: key.clone(),
@@ -7277,9 +7387,9 @@ fn ensure_result_tab<'a>(
             format!("result {}", next + 1),
         );
         tab.status = crate::model::OperationStatus::Running;
-        model.results.push_tab(tab);
+        results.push_tab(tab);
     }
-    let tab = &mut model.results.tabs[index];
+    let tab = &mut results.tabs[index];
     tab.key = crate::model::ResultKey {
         operation: key.clone(),
         index,
@@ -7293,10 +7403,8 @@ fn result_tab_mut<'a>(
     key: &crate::runtime::OperationKey,
     index: usize,
 ) -> Option<&'a mut crate::model::ResultTab> {
-    if !operation_matches(model, key) {
-        return None;
-    }
-    model.results.tabs.get_mut(index)
+    let (results, _) = document_output(model, key)?;
+    results.tabs.get_mut(index)
 }
 
 /// The output and the clause bars of `key`'s document: on screen, or parked with it
@@ -10780,40 +10888,69 @@ fn load_user_themes(model: &mut Model, data_dir: &std::path::Path) {
 }
 
 fn run_transfer(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::transfer::{TransferConfirm, TransferMode};
+    use crate::widgets::form::FooterFocus;
+    // What the person has just agreed to, if the dialog was asking.
+    let agreed = model.transfer.confirm.take();
+    model.transfer.footer = FooterFocus::Input;
+    model.transfer.error = None;
+    model.transfer.message = None;
+    let mode = model.transfer.mode;
     // Import and Restore write into the database, Restore through a native tool whose
     // connection never gets the session's read-only setting, so Dexo refuses first.
-    if model.connection.read_only
-        && matches!(
-            model.transfer.mode,
-            crate::screens::transfer::TransferMode::Import
-                | crate::screens::transfer::TransferMode::Restore
-        )
-    {
+    if model.connection.read_only && matches!(mode, TransferMode::Import | TransferMode::Restore) {
         model.transfer.error =
             Some("The connection is read-only; import and restore write into it.".into());
         return Vec::new();
     }
-    let path = std::path::PathBuf::from(model.transfer.path.trim());
-    if path.as_os_str().is_empty() {
-        open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
+    let typed = model.transfer.path.trim().to_string();
+    if typed.is_empty() {
+        model.transfer.error = Some(match mode {
+            TransferMode::Export | TransferMode::Backup => {
+                "Enter the path of the file to write, or press Ctrl+O to browse.".to_string()
+            }
+            TransferMode::Import | TransferMode::Restore => {
+                "Enter the path of the file to read, or press Ctrl+O to browse.".to_string()
+            }
+        });
         return Vec::new();
     }
-    if model.transfer.mode == crate::screens::transfer::TransferMode::Restore
-        && !model.transfer.confirm_restore
-    {
-        model.transfer.confirm_restore = true;
-        model.transfer.error = None;
+    let path = expand_home(&typed);
+    if let Err(message) = check_transfer_path(&path, mode) {
+        model.transfer.error = Some(message);
         return Vec::new();
     }
-    let what = match model.transfer.mode {
-        crate::screens::transfer::TransferMode::Import => Some(format!(
+    let writes_file = matches!(mode, TransferMode::Export | TransferMode::Backup);
+    // Nothing is replaced without asking, however the file was named.
+    if writes_file && path.exists() && agreed != Some(TransferConfirm::Replace) {
+        model.transfer.confirm = Some(TransferConfirm::Replace);
+        model.transfer.footer = FooterFocus::Cancel;
+        return Vec::new();
+    }
+    let shown = path.display().to_string();
+    let request = match build_transfer_request(model, path) {
+        Ok(request) => request,
+        Err(message) => {
+            model.transfer.error = Some(message);
+            return Vec::new();
+        }
+    };
+    if mode == TransferMode::Restore && agreed != Some(TransferConfirm::Restore) {
+        model.transfer.confirm = Some(TransferConfirm::Restore);
+        model.transfer.footer = FooterFocus::Cancel;
+        return Vec::new();
+    }
+    // Import and restore write into the database: on production the connection's name
+    // is typed last, as for any write.
+    let what = match mode {
+        TransferMode::Import => Some(format!(
             "Import {} into {}.",
-            path.display(),
-            model.data.target.display_unquoted()
+            shown,
+            model.transfer.table.as_str()
         )),
-        crate::screens::transfer::TransferMode::Restore => Some(format!(
+        TransferMode::Restore => Some(format!(
             "Restore {} into the database of {}.",
-            path.display(),
+            shown,
             model.connection.name
         )),
         _ => None,
@@ -10821,20 +10958,65 @@ fn run_transfer(model: &mut Model) -> Vec<Effect> {
     if let Some(what) = what
         && !production_cleared(model, vec![what], Action::SubmitTransfer)
     {
+        // What was agreed in the dialog stands for the run the name confirms.
+        model.transfer.confirm = agreed;
         return Vec::new();
     }
-    match build_transfer_request(model, path) {
-        Ok(request) => {
-            model.transfer.running = true;
-            model.transfer.error = None;
-            model.transfer.operation = Some(request.operation());
-            vec![Effect::RunTransfer(request)]
+    model.transfer.running = true;
+    model.transfer.footer = FooterFocus::Cancel;
+    model.transfer.progress = dexo_app::transfer::ExportProgress { rows: 0, bytes: 0 };
+    model.transfer.started = Some(std::time::Instant::now());
+    model.transfer.operation = Some(request.operation());
+    vec![Effect::RunTransfer(request)]
+}
+
+/// `~/x.csv` is the home folder's, as a shell would read it.
+fn expand_home(typed: &str) -> std::path::PathBuf {
+    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"));
+    match (typed.strip_prefix("~/"), home) {
+        (Some(rest), Some(home)) => std::path::PathBuf::from(home).join(rest),
+        _ => std::path::PathBuf::from(typed),
+    }
+}
+
+/// Whether the file a transfer reads is there, or the folder it writes into: said in
+/// words before anything starts, not as the OS's error afterwards.
+fn check_transfer_path(
+    path: &std::path::Path,
+    mode: crate::screens::transfer::TransferMode,
+) -> Result<(), String> {
+    use crate::screens::transfer::TransferMode;
+    match mode {
+        TransferMode::Export | TransferMode::Backup => {
+            if path.is_dir() {
+                return Err(format!(
+                    "{} is a folder: add a file name to it.",
+                    path.display()
+                ));
+            }
+            let folder = path
+                .parent()
+                .filter(|folder| !folder.as_os_str().is_empty())
+                .unwrap_or_else(|| std::path::Path::new("."));
+            if !folder.is_dir() {
+                return Err(format!("The folder {} does not exist.", folder.display()));
+            }
         }
-        Err(message) => {
-            model.transfer.error = Some(message);
-            Vec::new()
+        // A directory is a backup too, in pg_dump's directory format.
+        TransferMode::Restore if path.is_dir() => {}
+        TransferMode::Import | TransferMode::Restore => {
+            if path.is_dir() {
+                return Err(format!(
+                    "{} is a folder: choose a file in it.",
+                    path.display()
+                ));
+            }
+            if !path.exists() {
+                return Err(format!("The file {} was not found.", path.display()));
+            }
         }
     }
+    Ok(())
 }
 
 fn build_transfer_request(
@@ -10854,7 +11036,14 @@ fn build_transfer_request(
     match model.transfer.mode {
         TransferMode::Export => {
             if model.results.rows().is_empty() {
-                return Err("no results available".into());
+                return Err("There is nothing to export: run a query first.".into());
+            }
+            // The INSERT statements of an SQL export go into the table it names, not
+            // into one called after the file.
+            let table = (format == dexo_app::transfer::TransferFormat::Sql)
+                .then(|| model.transfer.table.trim().to_string());
+            if table.as_deref() == Some("") {
+                return Err("Name the table the INSERT statements go into.".into());
             }
             Ok(TransferRequest::Export {
                 operation,
@@ -10868,24 +11057,26 @@ fn build_transfer_request(
                     .collect(),
                 rows: model.results.rows_snapshot(),
                 dialect: model.data.dialect,
+                table,
             })
         }
         TransferMode::Import => {
-            let session = model.active_session.ok_or("connect a session first")?;
-            if model.data.target.object().is_empty() {
-                return Err("open a table first".into());
+            let session = model.active_session.ok_or("Connect to a database first.")?;
+            let table = model.transfer.table.trim();
+            if table.is_empty() {
+                return Err("Choose the table to import into.".into());
             }
             Ok(TransferRequest::Import {
                 operation,
                 path,
                 format,
-                target: model.data.target.clone(),
+                target: dexo_app::parse_qualified(table),
                 strategy: model.transfer.strategy,
                 session,
             })
         }
         TransferMode::Backup => {
-            let session = model.active_session.ok_or("connect a session first")?;
+            let session = model.active_session.ok_or("Connect to a database first.")?;
             Ok(TransferRequest::Backup {
                 operation,
                 path,
@@ -10893,10 +11084,7 @@ fn build_transfer_request(
             })
         }
         TransferMode::Restore => {
-            let session = model.active_session.ok_or("connect a session first")?;
-            if !model.transfer.confirm_restore {
-                return Err("confirm restore first".into());
-            }
+            let session = model.active_session.ok_or("Connect to a database first.")?;
             Ok(TransferRequest::Restore {
                 operation,
                 path,
@@ -10904,6 +11092,128 @@ fn build_transfer_request(
             })
         }
     }
+}
+
+/// The keys of the Export, Import, Backup and Restore dialog. While it runs the only
+/// thing to do is stop it; while it asks a question the keys walk Yes and Cancel; else
+/// the arrows walk the fields and then the two buttons, like every dialog.
+fn handle_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::transfer::TransferField;
+    use crate::widgets::form::{FooterFocus, FooterKey, confirm_key, footer_key};
+    if model.transfer.running {
+        return match key.code {
+            KeyCode::Esc | KeyCode::Enter => stop_transfer(model),
+            _ => Vec::new(),
+        };
+    }
+    if model.transfer.confirm.is_some() {
+        return match confirm_key(&mut model.transfer.footer, &key) {
+            FooterKey::Submit => run_transfer(model),
+            // Esc or Cancel takes the question back; the form is as it was.
+            FooterKey::Cancel => {
+                model.transfer.confirm = None;
+                model.transfer.footer = FooterFocus::Input;
+                Vec::new()
+            }
+            FooterKey::Moved | FooterKey::Pass => Vec::new(),
+        };
+    }
+    let control = key.modifiers.contains(KeyModifiers::CONTROL);
+    if control && key.code == KeyCode::Char('o') {
+        open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
+        return Vec::new();
+    }
+    if control
+        && key.code == KeyCode::Char('f')
+        && model.transfer.fields().contains(&TransferField::Format)
+    {
+        model.transfer.cycle_format(true);
+        return Vec::new();
+    }
+    let last = model.transfer.fields().len().saturating_sub(1);
+    if model.transfer.footer == FooterFocus::Input {
+        let focused = model.transfer.focused_field();
+        match key.code {
+            KeyCode::Tab | KeyCode::Down if model.transfer.focus < last => {
+                model.transfer.focus += 1;
+                return Vec::new();
+            }
+            KeyCode::BackTab | KeyCode::Up if model.transfer.focus > 0 => {
+                model.transfer.focus -= 1;
+                return Vec::new();
+            }
+            KeyCode::Left | KeyCode::Right if focused == Some(TransferField::Format) => {
+                model.transfer.cycle_format(key.code == KeyCode::Right);
+                return Vec::new();
+            }
+            KeyCode::Left | KeyCode::Right if focused == Some(TransferField::OnError) => {
+                model.transfer.cycle_strategy(key.code == KeyCode::Right);
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
+    let before = model.transfer.footer;
+    match footer_key(&mut model.transfer.footer, &key) {
+        FooterKey::Submit => run_transfer(model),
+        FooterKey::Cancel => {
+            model.transfer.open = false;
+            Vec::new()
+        }
+        FooterKey::Moved => {
+            // Walking back into the fields lands on the end it came in from.
+            if model.transfer.footer == FooterFocus::Input {
+                model.transfer.focus = if before == FooterFocus::Cancel {
+                    0
+                } else {
+                    last
+                };
+            }
+            Vec::new()
+        }
+        FooterKey::Pass => {
+            if model.transfer.footer == FooterFocus::Input {
+                match model.transfer.focused_field() {
+                    Some(TransferField::File) => {
+                        if model.transfer.path.handle_key(key) {
+                            model.transfer.error = None;
+                            model.transfer.sync_format_with_path();
+                        }
+                    }
+                    Some(TransferField::Table) => {
+                        if model.transfer.table.handle_key(key) {
+                            model.transfer.error = None;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            Vec::new()
+        }
+    }
+}
+
+/// Esc or Cancel while it runs: the tool or the writer is stopped, and the dialog goes.
+fn stop_transfer(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::transfer::TransferMode;
+    // The operation stays on the dialog: its cancel comes back as an answer to it.
+    let Some(operation) = model.transfer.operation else {
+        model.transfer.running = false;
+        model.transfer.open = false;
+        return Vec::new();
+    };
+    model.transfer.running = false;
+    model.transfer.open = false;
+    model.messages.warn(
+        match model.transfer.mode {
+            TransferMode::Export => "Export stopped; no file was written.",
+            TransferMode::Import => "Import stopped; the rows already written stay in the table.",
+            TransferMode::Backup => "Backup stopped; no file was written.",
+            TransferMode::Restore => "Restore stopped; the database may be partly restored.",
+        }
+        .into(),
+    );
+    vec![Effect::CancelOperation(operation)]
 }
 
 /// Compare Schema opens on the connections that are open and the snapshots saved, to pick
@@ -10973,27 +11283,91 @@ fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
     }]
 }
 
-/// An import reads data, not SQL: an SQL file is a script, run in the editor.
-fn next_transfer_format(current: &str, import: bool) -> String {
-    match current {
-        "csv" => "tsv",
-        "tsv" => "json",
-        "json" => "jsonl",
-        "jsonl" if !import => "sql",
-        _ => "csv",
+/// Opens the dialog for `mode` with what the workbench knows filled in: the rows to
+/// export, the table to import into, the database to back up or restore.
+fn open_transfer(model: &mut Model, mode: crate::screens::transfer::TransferMode) -> Vec<Effect> {
+    use crate::screens::transfer::{TransferMode, rows_of};
+    model.transfer.reset(mode);
+    let connection = model.connection.name.clone();
+    match mode {
+        TransferMode::Export => {
+            let rows = model.results.row_count() as u64;
+            model.transfer.subject = format!("{} from the results", rows_of(rows));
+            // A result that stopped at its limit, or one page of a table, is more than
+            // what is loaded here; the dialog says only the loaded rows go.
+            model.transfer.partial = model.results.truncated()
+                || model
+                    .results
+                    .tabs
+                    .get(model.results.active)
+                    .is_some_and(|tab| tab.truncated || tab.paged)
+                || (model.active_document().kind.is_table() && model.data.has_more);
+            model.transfer.table.set_text(guess_export_table(model));
+        }
+        TransferMode::Import => {
+            model.transfer.subject = connection;
+            model.transfer.table.set_text(guess_import_table(model));
+        }
+        TransferMode::Backup | TransferMode::Restore => {
+            model.transfer.subject = match connection_database(model) {
+                Some(database) => format!("database {database} on {connection}"),
+                None => connection,
+            };
+        }
     }
-    .into()
+    Vec::new()
 }
 
-fn open_transfer(model: &mut Model, mode: crate::screens::transfer::TransferMode) -> Vec<Effect> {
-    model.transfer.open = true;
-    model.transfer.mode = mode;
-    model.transfer.running = false;
-    model.transfer.error = None;
-    model.transfer.message = None;
-    model.transfer.confirm_restore = false;
-    model.transfer.operation = None;
-    Vec::new()
+/// The database the active connection is set to, from its saved profile.
+fn connection_database(model: &Model) -> Option<String> {
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == model.connection.name)
+        .and_then(|row| {
+            ["database", "dbname"]
+                .iter()
+                .find_map(|key| row.profile.config.get(*key))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string)
+        })
+}
+
+/// The table an SQL export most likely came from: the table document's own, or the one
+/// table the statement under the cursor reads. Empty when it cannot tell.
+fn guess_export_table(model: &Model) -> String {
+    let document = model.active_document();
+    if let crate::model::DocumentKind::Table(target) = &document.kind {
+        return target.display_unquoted();
+    }
+    let context = dexo_sql::analyze(
+        &document.text(),
+        document.byte_cursor(),
+        crate::screens::editor::editor_dialect(model),
+    );
+    let mut tables = context
+        .row_sources
+        .iter()
+        .filter(|source| source.kind == dexo_sql::RowSourceKind::Table);
+    match (tables.next(), tables.next()) {
+        (Some(only), None) => only.qualified(),
+        _ => String::new(),
+    }
+}
+
+/// The table an import most likely goes into: the one open in the data browser, or the
+/// table selected in the explorer. Empty when neither is one.
+fn guess_import_table(model: &Model) -> String {
+    if let crate::model::DocumentKind::Table(target) = &model.active_document().kind {
+        return target.display_unquoted();
+    }
+    model
+        .explorer
+        .selected_node()
+        .filter(|node| matches!(node.kind, dexo_driver_api::ObjectKind::Table))
+        .map(|node| node.qualified.clone())
+        .unwrap_or_default()
 }
 
 fn apply_transfer_progress(
@@ -11018,6 +11392,18 @@ fn apply_transfer_finished(
         return Vec::new();
     }
     model.transfer.running = false;
+    model.transfer.operation = None;
+    model.transfer.footer = crate::widgets::form::FooterFocus::Input;
+    let message = if model.transfer.mode == crate::screens::transfer::TransferMode::Export
+        && model.transfer.partial
+    {
+        format!(
+            "{message} The result has more rows than were loaded, and only these were exported."
+        )
+    } else {
+        message
+    };
+    model.messages.info(message.clone());
     model.transfer.message = Some(message);
     Vec::new()
 }
@@ -11031,7 +11417,25 @@ fn apply_transfer_failed(
         return Vec::new();
     }
     model.transfer.running = false;
+    model.transfer.operation = None;
+    model.transfer.footer = crate::widgets::form::FooterFocus::Input;
+    model.messages.error(message.clone());
     model.transfer.error = Some(message);
+    Vec::new()
+}
+
+/// The run was cancelled: from the dialog's own Cancel the dialog is gone already, and
+/// from anywhere else it is told.
+fn apply_transfer_cancelled(
+    model: &mut Model,
+    operation: crate::runtime::OperationId,
+) -> Vec<Effect> {
+    if model.transfer.operation == Some(operation) {
+        model.transfer.running = false;
+        model.transfer.operation = None;
+        model.transfer.footer = crate::widgets::form::FooterFocus::Input;
+        model.transfer.message = Some("Stopped.".into());
+    }
     Vec::new()
 }
 
@@ -11081,10 +11485,32 @@ fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Up | KeyCode::Char('k') => {
             model.admin.move_selection(false);
+            admin_scrolled(model);
             Vec::new()
         }
         KeyCode::Down | KeyCode::Char('j') => {
             model.admin.move_selection(true);
+            admin_scrolled(model);
+            Vec::new()
+        }
+        KeyCode::Home => {
+            model.admin.select_first();
+            admin_scrolled(model);
+            Vec::new()
+        }
+        KeyCode::End => {
+            model.admin.select_last();
+            admin_scrolled(model);
+            Vec::new()
+        }
+        KeyCode::PageUp | KeyCode::PageDown => {
+            let page = model.admin.visible_rows(model.height).max(1) as isize;
+            model.admin.move_by(if key.code == KeyCode::PageUp {
+                -page
+            } else {
+                page
+            });
+            admin_scrolled(model);
             Vec::new()
         }
         KeyCode::Char('r') => load_admin_sessions(model),
@@ -11093,15 +11519,16 @@ fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
-fn load_admin_sessions(model: &Model) -> Vec<Effect> {
-    model
-        .active_session
-        .map(|session| Effect::LoadAdminSessions {
-            session,
-            generation: model.session_generation,
-        })
-        .into_iter()
-        .collect()
+fn load_admin_sessions(model: &mut Model) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        model.admin.loading = false;
+        return Vec::new();
+    };
+    model.admin.loading = true;
+    vec![Effect::LoadAdminSessions {
+        session,
+        generation: model.session_generation,
+    }]
 }
 
 /// Ending a session is a write on the server: the connection's policy is asked first,
@@ -11359,8 +11786,13 @@ fn file_picker_accept(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect
             effects
         }
         crate::screens::file_picker::FilePickerMode::Transfer => {
+            // Choosing a file fills the field; the dialog's own button starts the run.
             model.transfer.path.set_text(path.display().to_string());
-            run_transfer(model)
+            model.transfer.error = None;
+            model.transfer.footer = crate::widgets::form::FooterFocus::Input;
+            model.transfer.focus = 0;
+            model.transfer.sync_format_with_path();
+            Vec::new()
         }
         crate::screens::file_picker::FilePickerMode::Diagnostics => {
             model.diagnostics.path = Some(path.clone());
@@ -12255,8 +12687,12 @@ fn palette_select(model: &mut Model) -> Vec<Effect> {
     let Some(entry) = visible.get(model.palette.selected) else {
         return Vec::new();
     };
-    if let Some(reason) = &entry.disabled_reason {
-        model.messages.warn(reason.clone());
+    if let Some(reason) = entry.disabled_reason.clone() {
+        // The command was asked for and cannot run: the palette goes, with its keys, and
+        // the reason is said once. It stayed open under the reason, with the editor
+        // behind it dead to the keys.
+        close_palette(model);
+        model.messages.warn(reason);
         return Vec::new();
     }
     let invocation = entry.invocation.clone();
@@ -13292,6 +13728,7 @@ mod tests {
                 message: "no".into(),
                 details: Vec::new(),
                 position: None,
+                cancelled: false,
             },
         );
         assert!(model.results.tabs.iter().all(|tab| tab.title != "a's rows"));
@@ -14097,6 +14534,7 @@ mod tests {
                 message: "column \"nope\" does not exist".into(),
                 details: Vec::new(),
                 position: Some(14),
+                cancelled: false,
             },
         );
         let text = model.active_document().text();

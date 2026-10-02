@@ -65,7 +65,10 @@ pub fn decode_document(
 ) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
     let text = decode_text(options.encoding, bytes)?;
     match format {
-        TransferFormat::Csv | TransferFormat::Tsv => decode_delimited(&text, options),
+        TransferFormat::Csv => decode_delimited(&text, options.delimiter, options),
+        // The format says the delimiter, as it does when writing: a caller that forgot
+        // to set one read a whole header line as a single column.
+        TransferFormat::Tsv => decode_delimited(&text, b'\t', options),
         TransferFormat::Json => decode_json(&text, true),
         TransferFormat::Jsonl => decode_jsonl(&text),
         TransferFormat::Sql => Err(
@@ -82,6 +85,8 @@ pub struct StreamEncoder<'a, W: std::io::Write> {
     columns: &'a [String],
     json_rows: usize,
     finished: bool,
+    /// Bytes handed to the writer so far.
+    written: u64,
 }
 
 impl<'a, W: std::io::Write> StreamEncoder<'a, W> {
@@ -98,9 +103,18 @@ impl<'a, W: std::io::Write> StreamEncoder<'a, W> {
             columns,
             json_rows: 0,
             finished: false,
+            written: 0,
         };
         encoder.start()?;
         Ok(encoder)
+    }
+
+    fn put(&mut self, bytes: &[u8]) -> Result<(), String> {
+        self.writer
+            .write_all(bytes)
+            .map_err(|error| error.to_string())?;
+        self.written += bytes.len() as u64;
+        Ok(())
     }
 
     fn start(&mut self) -> Result<(), String> {
@@ -108,55 +122,42 @@ impl<'a, W: std::io::Write> StreamEncoder<'a, W> {
             TransferFormat::Csv | TransferFormat::Tsv if self.options.header => {
                 self.write_delimited(self.columns.iter().map(String::as_str))?;
             }
-            TransferFormat::Json => self
-                .writer
-                .write_all(b"[")
-                .map_err(|error| error.to_string())?,
+            TransferFormat::Json => self.put(b"[")?,
             _ => {}
         }
         Ok(())
     }
 
+    /// Writes one row and returns the bytes it took.
     pub fn write_row(&mut self, row: &[DbValue]) -> Result<u64, String> {
+        let before = self.written;
         match self.format {
             TransferFormat::Csv | TransferFormat::Tsv => {
                 let fields: Vec<String> =
                     row.iter().map(|value| field(value, self.options)).collect();
                 self.write_delimited(fields.iter().map(String::as_str))?;
             }
+            // One object a line, so the file reads and diffs: `[`, the objects with a
+            // comma after each but the last, `]`.
             TransferFormat::Json => {
-                if self.json_rows > 0 {
-                    self.writer
-                        .write_all(b",")
-                        .map_err(|error| error.to_string())?;
-                }
+                self.put(if self.json_rows > 0 { b",\n" } else { b"\n" })?;
                 let object = json_object(self.columns, row);
-                self.writer
-                    .write_all(object.as_bytes())
-                    .map_err(|error| error.to_string())?;
+                self.put(object.as_bytes())?;
                 self.json_rows += 1;
             }
             TransferFormat::Jsonl => {
                 let object = json_object(self.columns, row);
-                self.writer
-                    .write_all(object.as_bytes())
-                    .map_err(|error| error.to_string())?;
-                self.writer
-                    .write_all(b"\n")
-                    .map_err(|error| error.to_string())?;
+                self.put(object.as_bytes())?;
+                self.put(b"\n")?;
             }
             TransferFormat::Sql => {
                 let table = self.options.table.as_deref().unwrap_or("dest");
                 let sql = sql_insert(table, self.columns, row, self.options.dialect);
-                self.writer
-                    .write_all(sql.as_bytes())
-                    .map_err(|error| error.to_string())?;
-                self.writer
-                    .write_all(b"\n")
-                    .map_err(|error| error.to_string())?;
+                self.put(sql.as_bytes())?;
+                self.put(b"\n")?;
             }
         }
-        Ok(1)
+        Ok(self.written - before)
     }
 
     fn write_delimited<'b>(&mut self, fields: impl Iterator<Item = &'b str>) -> Result<(), String> {
@@ -171,20 +172,22 @@ impl<'a, W: std::io::Write> StreamEncoder<'a, W> {
             .write_record(fields)
             .map_err(|error| error.to_string())?;
         let bytes = writer.into_inner().map_err(|error| error.to_string())?;
-        self.writer
-            .write_all(&bytes)
-            .map_err(|error| error.to_string())
+        self.put(&bytes)
     }
 
-    pub fn finish(mut self) -> Result<(), String> {
+    /// Bytes written so far: the header and the brackets of a JSON array too.
+    pub fn bytes_written(&self) -> u64 {
+        self.written
+    }
+
+    /// Ends the document and returns the bytes it came to.
+    pub fn finish(mut self) -> Result<u64, String> {
         if self.format == TransferFormat::Json {
-            self.writer
-                .write_all(b"]")
-                .map_err(|error| error.to_string())?;
+            self.put(if self.json_rows > 0 { b"\n]\n" } else { b"]\n" })?;
         }
         self.writer.flush().map_err(|error| error.to_string())?;
         self.finished = true;
-        Ok(())
+        Ok(self.written)
     }
 }
 
@@ -212,26 +215,48 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|b| format!("{b:02x}")).collect()
 }
 
+/// One row as a JSON object with its keys in the columns' order: `serde_json`'s map sorts
+/// them, which put `id` after `b`.
 fn json_object(columns: &[String], row: &[DbValue]) -> String {
-    let mut map = serde_json::Map::new();
-    for (name, value) in columns.iter().zip(row.iter()) {
-        map.insert(name.clone(), json_value(value));
+    let mut out = String::from("{");
+    for (index, (name, value)) in columns.iter().zip(row.iter()).enumerate() {
+        if index > 0 {
+            out.push(',');
+        }
+        out.push_str(&serde_json::Value::String(name.clone()).to_string());
+        out.push(':');
+        out.push_str(&json_value(value));
     }
-    serde_json::Value::Object(map).to_string()
+    out.push('}');
+    out
 }
 
-fn json_value(value: &DbValue) -> serde_json::Value {
+/// A value as JSON text. A number stays a number and a JSON document stays a document,
+/// as they would read back; anything the format cannot hold as one is a string.
+fn json_value(value: &DbValue) -> String {
     match value {
-        DbValue::Null => serde_json::Value::Null,
-        DbValue::Bool(v) => serde_json::Value::Bool(*v),
-        DbValue::I64(v) => serde_json::json!(*v),
-        DbValue::U64(v) => serde_json::json!(*v),
-        DbValue::Decimal(v) => serde_json::Value::String(v.clone()),
-        DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => {
-            serde_json::Value::String(v.clone())
+        DbValue::Null => "null".into(),
+        DbValue::Bool(v) => v.to_string(),
+        DbValue::I64(v) => v.to_string(),
+        DbValue::U64(v) => v.to_string(),
+        DbValue::Decimal(v) if is_json_number(v) => v.clone(),
+        DbValue::Json(v) => match serde_json::from_str::<serde_json::Value>(v) {
+            // A line of JSON Lines is one line: a document with line breaks is written
+            // compact.
+            Ok(document) if v.contains(['\n', '\r']) => document.to_string(),
+            Ok(_) => v.clone(),
+            Err(_) => serde_json::Value::String(v.clone()).to_string(),
+        },
+        DbValue::Decimal(v) | DbValue::Text(v) | DbValue::Native { text: v, .. } => {
+            serde_json::Value::String(v.clone()).to_string()
         }
-        DbValue::Bytes(v) => serde_json::json!({ "$hex": hex(v) }),
+        DbValue::Bytes(v) => serde_json::json!({ "$hex": hex(v) }).to_string(),
     }
+}
+
+/// Whether `text` is a number as JSON writes one: no `+`, no `.5`, no `NaN`.
+fn is_json_number(text: &str) -> bool {
+    serde_json::from_str::<serde_json::Number>(text).is_ok()
 }
 
 pub(crate) fn sql_insert(
@@ -270,10 +295,11 @@ fn decode_text(encoding: &'static encoding_rs::Encoding, bytes: &[u8]) -> Result
 
 fn decode_delimited(
     text: &str,
+    delimiter: u8,
     options: &FormatOptions,
 ) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
     let mut reader = csv::ReaderBuilder::new()
-        .delimiter(options.delimiter)
+        .delimiter(delimiter)
         .has_headers(options.header)
         .from_reader(text.as_bytes());
     let columns = if options.header {
@@ -453,6 +479,68 @@ mod tests {
         assert!(sql.contains("NULL"));
         assert!(sql.contains("'café'"));
         assert!(decode_document(TransferFormat::Sql, &options, sql.as_bytes()).is_err());
+    }
+
+    /// Dexo reads its own TSV back with the options it is given by default: the format,
+    /// not the caller, says the delimiter.
+    #[test]
+    fn a_tsv_is_read_with_tabs_by_default() {
+        let (columns, rows) = sample();
+        let options = FormatOptions::default();
+        let encoded = encode_document(TransferFormat::Tsv, &options, &columns, &rows).unwrap();
+        let (back_columns, back_rows) =
+            decode_document(TransferFormat::Tsv, &options, &encoded).unwrap();
+        assert_eq!(back_columns, columns);
+        assert_eq!(back_rows.len(), rows.len());
+    }
+
+    /// A JSON export keeps the columns' order, numbers as numbers and JSON documents as
+    /// documents, one object to a line, with a newline at the end.
+    #[test]
+    fn json_export_reads_like_the_result() {
+        let columns: Vec<String> = ["id", "txt", "j", "num", "b"]
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        let rows = vec![vec![
+            DbValue::I64(1),
+            DbValue::Text("a,b".into()),
+            DbValue::Json("{\"a\": 1}".into()),
+            DbValue::Decimal("1.50".into()),
+            DbValue::Bool(true),
+        ]];
+        let options = FormatOptions::default();
+        let json = encode_document(TransferFormat::Json, &options, &columns, &rows).unwrap();
+        assert_eq!(
+            String::from_utf8(json).unwrap(),
+            "[\n{\"id\":1,\"txt\":\"a,b\",\"j\":{\"a\": 1},\"num\":1.50,\"b\":true}\n]\n"
+        );
+        let jsonl = encode_document(TransferFormat::Jsonl, &options, &columns, &rows).unwrap();
+        assert!(String::from_utf8(jsonl).unwrap().starts_with("{\"id\":1,"));
+        let empty = encode_document(TransferFormat::Json, &options, &columns, &[]).unwrap();
+        assert_eq!(empty, b"[]\n");
+        // A document with line breaks must not break its line.
+        let broken = vec![vec![
+            DbValue::I64(1),
+            DbValue::Text(String::new()),
+            DbValue::Json("{\n \"a\": 1\n}".into()),
+            DbValue::Null,
+            DbValue::Null,
+        ]];
+        let jsonl = encode_document(TransferFormat::Jsonl, &options, &columns, &broken).unwrap();
+        assert_eq!(String::from_utf8(jsonl).unwrap().lines().count(), 1);
+    }
+
+    /// The count of bytes the progress shows is bytes, not rows.
+    #[test]
+    fn a_row_reports_the_bytes_it_took() {
+        let mut sink = Vec::new();
+        let options = FormatOptions::default();
+        let columns = vec!["a".to_string()];
+        let mut encoder =
+            super::StreamEncoder::new(&mut sink, TransferFormat::Csv, &options, &columns).unwrap();
+        let bytes = encoder.write_row(&[DbValue::Text("hello".into())]).unwrap();
+        assert_eq!(bytes, "hello\n".len() as u64);
     }
 
     #[test]

@@ -373,14 +373,16 @@ impl DataMutator for MysqlSession {
     async fn apply(&self, mutations: &[Mutation]) -> Result<(), DriverError> {
         let mut conn = self.conn.lock().await;
         conn.query_drop("BEGIN").await.map_err(map_error)?;
-        for mutation in mutations {
+        for (index, mutation) in mutations.iter().enumerate() {
             let (sql, binder) = render_mutation(mutation);
             let result = conn.exec_iter(sql, Params::Positional(binder.values)).await;
             let result = match result {
                 Ok(result) => result,
                 Err(error) => {
                     let _ = conn.query_drop("ROLLBACK").await;
-                    return Err(map_error(error));
+                    // The row's place in the batch goes with the error: an import says
+                    // which line.
+                    return Err(map_error(error).with_row(index as u32 + 1));
                 }
             };
             let affected = result.affected_rows();

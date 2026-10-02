@@ -15,37 +15,33 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     // The sidebar already shows a connected session with a dot, so the name carries a
     // prefix only when something is wrong.
-    let conn = if model.connection.ready && model.connections.is_temporary(&model.connection.name) {
-        // Nothing saved behind it: closing Dexo forgets it, unless Save Connection… keeps it.
-        format!("{} (temporary)", model.connection.name)
-    } else if model.connection.ready {
-        model.connection.name.clone()
-    } else if model.connection.name.is_empty() {
-        "disconnected".into()
-    } else {
-        format!("offline:{}", model.connection.name)
-    };
+    let mut conn =
+        if model.connection.ready && model.connections.is_temporary(&model.connection.name) {
+            // Nothing saved behind it: closing Dexo forgets it, unless Save Connection… keeps it.
+            format!("{} (temporary)", model.connection.name)
+        } else if model.connection.ready {
+            model.connection.name.clone()
+        } else if model.connection.name.is_empty() {
+            "disconnected".into()
+        } else {
+            format!("offline:{}", model.connection.name)
+        };
+    // A connection that refuses writes says so before a write is tried.
+    if model.connection.read_only && !model.connection.name.is_empty() {
+        conn.push_str(" (read-only)");
+    }
     // Idle is the null state; a marker shown always marks nothing.
     let tx = match model.transaction {
         TransactionState::Idle => "",
-        TransactionState::Active => "tx:active",
-        TransactionState::Failed => "tx:failed",
-        TransactionState::Unknown => "tx:unknown",
+        TransactionState::Active => "Transaction",
+        TransactionState::Failed => "Transaction failed: roll back",
+        TransactionState::Unknown => "Transaction state unknown",
     };
     // Nothing else on screen changes while a statement runs, and a second run used to
     // queue behind it without a word.
-    let running = (model.active_query.is_some() && model.active_operation.is_some()).then(|| {
-        let cancel = crate::palette::shortcut_for(model, "query.cancel", Some("Ctrl+F2"))
-            .unwrap_or_default();
-        format!(
-            "running{} {cancel} cancels",
-            if model.capabilities.unicode {
-                "…"
-            } else {
-                "..."
-            }
-        )
-    });
+    // A statement waiting on a lock looks like nothing at all: the person is told it is
+    // running, for how long, and how to stop it.
+    let running = running_text(model);
     let env = environment_marker(&model.connection.environment, model.capabilities.unicode);
     let env_style = model.theme.style(
         crate::accessibility::environment_role(&model.connection.environment)
@@ -268,6 +264,17 @@ fn keyed_hint(model: &Model, parts: &[(&str, &str)]) -> String {
         .join("  ")
 }
 
+/// `Running 12s - Ctrl+F2 cancels` while a statement runs.
+fn running_text(model: &Model) -> Option<String> {
+    let elapsed = model.running_for()?;
+    let cancel = keyed_hint(model, &[("query.cancel", "cancels")]);
+    Some(if cancel.is_empty() {
+        format!("Running {}s", elapsed.as_secs())
+    } else {
+        format!("Running {}s - {cancel}", elapsed.as_secs())
+    })
+}
+
 /// The palette's and Help's keys, which bring the hint back.
 fn doors(model: &Model) -> String {
     keyed_hint(model, &[("palette.open", ""), ("help.open", "")])
@@ -357,7 +364,13 @@ fn footer_hint(model: &Model) -> Option<String> {
             };
             Some(format!(
                 "Enter actions  {edits}{}  {page}{}",
-                keyed_hint(model, &[("results.cycle_view", "view")]),
+                keyed_hint(
+                    model,
+                    &[
+                        ("results.cycle_view", "view"),
+                        ("transfer.export", "export")
+                    ]
+                ),
                 keyed_hint(model, &[("document.close", "close")])
             ))
         }
@@ -449,7 +462,7 @@ mod tests {
         model.set_active_document(1);
         assert_eq!(
             footer_hint(&model).as_deref(),
-            Some("Enter actions  i insert  Delete delete  v view  n/p page  Ctrl+W close")
+            Some("Enter actions  i insert  Delete delete  v view  e export  n/p page  Ctrl+W close")
         );
 
         model.set_active_document(0);
@@ -464,6 +477,36 @@ mod tests {
             footer_hint(&model).as_deref(),
             Some("Ctrl+J run  Ctrl+N new sql  Ctrl+W close")
         );
+    }
+
+    /// A statement waiting on a lock showed nothing: the bar says it runs, for how long
+    /// and what stops it, and the transaction and a read-only connection in words.
+    #[test]
+    fn the_status_bar_says_what_is_running_and_what_the_connection_is() {
+        use crate::render::render_to_string;
+        use dexo_driver_api::TransactionState;
+        let mut model = Model::default();
+        model.connection.name = "pg-readonly".into();
+        model.connection.ready = true;
+        model.connection.read_only = true;
+        model.transaction = TransactionState::Failed;
+        let operation = crate::runtime::OperationId::new();
+        model.active_operation = Some(operation);
+        model.active_started = Some((operation, std::time::Instant::now()));
+        let view = render_to_string(&model, 140, 30);
+        let footer = view.lines().last().unwrap().to_string();
+        for want in [
+            "pg-readonly (read-only)",
+            "Transaction failed: roll back",
+            "Running 0s - Ctrl+F2 cancels",
+        ] {
+            assert!(footer.contains(want), "{want} missing in: {footer}");
+        }
+        assert!(!footer.contains("tx:"), "{footer}");
+        // Once it ends, the bar goes quiet again.
+        model.active_operation = None;
+        let view = render_to_string(&model, 140, 30);
+        assert!(!view.lines().last().unwrap().contains("Running"));
     }
 
     #[test]

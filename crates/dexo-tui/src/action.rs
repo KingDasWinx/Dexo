@@ -115,6 +115,16 @@ pub enum Action {
     SessionClosed {
         session: crate::runtime::SessionId,
     },
+    /// A transaction command the server refused: said in Messages, and the query that may
+    /// be running beside it left alone.
+    TransactionFailed {
+        message: String,
+    },
+    /// A statement failed on the network and the session no longer answers -- the server
+    /// ended it, or it dropped. `session` is the operation key's: an id, or a name.
+    SessionLost {
+        session: String,
+    },
     SaveConnection,
     QueryResultSetStarted {
         key: crate::runtime::OperationKey,
@@ -154,6 +164,8 @@ pub enum Action {
         details: Vec<String>,
         /// Where in the statement the server says it failed: 1-based, in characters.
         position: Option<u32>,
+        /// The person stopped it: said as a line, not as an error.
+        cancelled: bool,
     },
     CheckpointTick,
     /// Typing may have paused: syntax errors held back for the cursor are looked at again.
@@ -608,6 +620,11 @@ pub enum Action {
         captured_at: String,
         blocking: Vec<dexo_driver_api::BlockingEdge>,
     },
+    /// The list of sessions could not be read: the dialog says why instead of staying
+    /// on "Loading".
+    AdminFailed {
+        message: String,
+    },
     /// What the server said to ending a session, or why it would not.
     AdminTerminated {
         result: Result<String, String>,
@@ -773,6 +790,8 @@ pub enum TransferRequest {
         rows: Arc<Vec<Vec<DbValue>>>,
         /// How an SQL export quotes names and writes values: the connection's.
         dialect: dexo_app::data::SqlDialect,
+        /// The table an SQL export inserts into, `schema.table` or `table`.
+        table: Option<String>,
     },
     Import {
         operation: OperationId,

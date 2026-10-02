@@ -11,10 +11,10 @@ demo  local  public
 │                          ││                                                                      │
 │┌Sessions on ┌Terminate session─────────────────────────────────────────────────────┐────────────┐│
 ││  ID       U│Session 11 · dexo@dexo · idle in transaction                          │            ││
-││  10       d│  lock table items                                                    │            ││
-││> 11       d│                                                                      │            ││
+││  10       d│  lock table items                                                    │lect 1      ││
+││> 11       d│                                                                      │able items  ││
 ││            │Type 11 to end this session and roll back its work.                   │            ││
-││  11 blocks │id: █                                                                 │            ││
+││  Session 11│id: █                                                                 │            ││
 ││            │ [Terminate]   [Cancel]                                               │            ││
 ││up/down pick└──────────────────────────────────────────────────────────────────────┘            ││
 │└────────────────────────────────────────────────────────────────────────────────────────────────┘│

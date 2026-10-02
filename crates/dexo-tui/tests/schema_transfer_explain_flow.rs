@@ -289,7 +289,7 @@ async fn import_and_restore_never_write_to_the_source_path() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("source.dump");
     std::fs::write(&source, b"ORIGINAL").unwrap();
-    let mut runtime = recording_transfer_runtime();
+    let runtime = recording_transfer_runtime();
     runtime
         .run(TransferRequest::restore(source.clone(), transfer_session()))
         .await
@@ -420,8 +420,14 @@ fn a_read_only_connection_refuses_import_and_restore() {
             },
         );
         model.transfer.path.set_text(source.display().to_string());
-        model.transfer.confirm_restore = true;
-        press(&mut model, crossterm::event::KeyCode::Enter)
+        model.transfer.table.set_text("rows");
+        // A restore asks once more before it writes into the database.
+        let mut effects = press(&mut model, crossterm::event::KeyCode::Enter);
+        if mode == TransferMode::Restore && model.transfer.confirm.is_some() {
+            model.transfer.footer = dexo_tui::widgets::form::FooterFocus::Submit;
+            effects = press(&mut model, crossterm::event::KeyCode::Enter);
+        }
+        effects
             .iter()
             .any(|effect| matches!(effect, dexo_tui::Effect::RunTransfer(_)))
     };
@@ -443,7 +449,7 @@ fn a_read_only_connection_refuses_import_and_restore() {
 async fn an_sql_export_speaks_the_connections_dialect() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("rows.sql");
-    let mut manager = dexo_tui::runtime::transfer_manager::TransferManager::default();
+    let manager = dexo_tui::runtime::transfer_manager::TransferManager::default();
     manager
         .run_with(
             dexo_tui::action::TransferRequest::Export {
@@ -455,6 +461,7 @@ async fn an_sql_export_speaks_the_connections_dialect() {
                     0xca, 0xfe,
                 ])]]),
                 dialect: dexo_app::data::SqlDialect::Sqlite,
+                table: Some("blobs".into()),
             },
             None,
         )
@@ -462,6 +469,8 @@ async fn an_sql_export_speaks_the_connections_dialect() {
         .unwrap();
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("X'cafe'"), "{written}");
+    // The table the request names, not one called after the file.
+    assert!(written.contains("INSERT INTO \"blobs\""), "{written}");
 }
 
 /// Ctrl+F cycles the formats; an import never lands on SQL, which is a script to run,

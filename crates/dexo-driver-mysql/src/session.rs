@@ -25,6 +25,8 @@ pub struct MysqlSession {
     opts: Opts,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
     tx_state: std::sync::Mutex<TransactionState>,
+    /// What the last COMMIT or ROLLBACK warned of, until it is taken.
+    notice: std::sync::Mutex<Option<String>>,
     /// MariaDB speaks the protocol and the catalog, not every EXPLAIN form.
     mariadb: bool,
     _lease: Option<dexo_transport::TransportLease>,
@@ -47,6 +49,7 @@ impl MysqlSession {
             opts,
             capabilities: capabilities(),
             tx_state: std::sync::Mutex::new(TransactionState::Idle),
+            notice: std::sync::Mutex::new(None),
             mariadb: false,
             _lease: lease,
         }
@@ -264,6 +267,17 @@ impl TransactionControl for MysqlSession {
         match self.exec_sql("ROLLBACK").await {
             Ok(()) => {
                 self.set_state(TransactionState::Idle);
+                // 1196: tables that are not transactional (MyISAM) kept what was written.
+                let warnings: Vec<(String, u32, String)> = {
+                    let mut conn = self.conn.lock().await;
+                    conn.query("SHOW WARNINGS").await.unwrap_or_default()
+                };
+                if warnings.iter().any(|(_, code, _)| *code == 1196) {
+                    *self.notice.lock().expect("mysql notice poisoned") = Some(
+                        "Some tables changed in this transaction cannot be rolled back (they are not InnoDB), so their changes stay."
+                            .into(),
+                    );
+                }
                 Ok(())
             }
             Err(error) => {
@@ -291,6 +305,10 @@ impl TransactionControl for MysqlSession {
 
     fn state(&self) -> TransactionState {
         *self.tx_state.lock().expect("mysql tx state poisoned")
+    }
+
+    fn take_notice(&self) -> Option<String> {
+        self.notice.lock().expect("mysql notice poisoned").take()
     }
 }
 

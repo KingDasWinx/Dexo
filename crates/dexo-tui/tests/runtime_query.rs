@@ -40,6 +40,8 @@ struct FakeSession {
     tx: Mutex<TransactionState>,
     remaining: Mutex<VecDeque<usize>>,
     catalog_parents: Mutex<Vec<Option<ObjectId>>>,
+    /// The server ended this session: every statement fails on the network.
+    dead: std::sync::atomic::AtomicBool,
 }
 
 impl Default for FakeSession {
@@ -51,6 +53,7 @@ impl Default for FakeSession {
             tx: Mutex::new(TransactionState::Idle),
             remaining: Mutex::new(VecDeque::new()),
             catalog_parents: Mutex::new(Vec::new()),
+            dead: std::sync::atomic::AtomicBool::new(false),
         }
     }
 }
@@ -72,6 +75,12 @@ impl Session for FakeSession {
 
     async fn execute(&self, _request: QueryRequest) -> Result<QueryStream, DriverError> {
         self.executions.fetch_add(1, Ordering::SeqCst);
+        if self.dead.load(Ordering::SeqCst) {
+            return Err(DriverError::new(
+                dexo_driver_api::DriverErrorCategory::Network,
+                "connection closed",
+            ));
+        }
         let count = self
             .remaining
             .lock()
@@ -410,4 +419,63 @@ async fn backslash_commands_never_reach_the_driver() {
         _ => None,
     });
     assert_eq!(databases, Some(vec![vec![DbValue::Text("db".into())]]));
+}
+
+/// A session the server ended fails every statement with "connection closed": the run
+/// says the connection is lost, so it is closed and the next run connects again.
+#[tokio::test]
+async fn a_session_that_stops_answering_is_reported_lost() {
+    let fake = Arc::new(FakeSession::default());
+    fake.dead.store(true, Ordering::SeqCst);
+    let (_dir, mut runtime, mut actions) = runtime_with_session(fake).await;
+    runtime
+        .start_script(script_request("select 1"))
+        .await
+        .unwrap();
+    let received = collect_until_finished(&mut actions).await;
+    assert!(
+        received.iter().any(
+            |action| matches!(action, Action::SessionLost { session } if session == "session-a")
+        ),
+        "{received:?}"
+    );
+}
+
+/// Ctrl+F2 stops a statement the person asked to stop: Messages says so as a line, not
+/// as an error.
+#[test]
+fn a_statement_the_person_cancelled_is_a_line_not_an_error() {
+    let mut model = dexo_tui::Model::default();
+    let key = OperationKey::new(OperationId::new(), "", "scratch", 0);
+    dexo_tui::update(
+        &mut model,
+        Action::QueryFailed {
+            key,
+            index: 0,
+            message: "query cancelled".into(),
+            details: Vec::new(),
+            position: None,
+            cancelled: true,
+        },
+    );
+    let last = model.messages.last().expect("a line");
+    assert_eq!(last.message, "Query cancelled.");
+    assert_eq!(last.severity, dexo_tui::model::Severity::Info);
+}
+
+/// A failed statement on a session that still answers is only that statement's failure.
+#[tokio::test]
+async fn a_finished_statement_on_a_live_session_is_not_a_lost_session() {
+    let fake = Arc::new(FakeSession::default());
+    let (_dir, mut runtime, mut actions) = runtime_with_session(fake).await;
+    runtime
+        .start_script(script_request("select 1"))
+        .await
+        .unwrap();
+    let received = collect_until_finished(&mut actions).await;
+    assert!(
+        !received
+            .iter()
+            .any(|action| matches!(action, Action::SessionLost { .. }))
+    );
 }

@@ -473,16 +473,17 @@ impl dexo_driver_api::BulkWriter for PostgresSession {
 }
 
 async fn apply_inner(session: &PostgresSession, mutations: &[Mutation]) -> Result<(), DriverError> {
-    for mutation in mutations {
+    for (index, mutation) in mutations.iter().enumerate() {
         let (sql, binder) = render_mutation(mutation)?;
         let boxed = binder.boxed();
         let refs: Vec<&(dyn ToSql + Sync)> =
             boxed.iter().map(|value| value.as_ref() as _).collect();
+        // The row's place in the batch goes with the error: an import says which line.
         let affected = session
             .client
             .execute(&sql, &refs)
             .await
-            .map_err(map_error)?;
+            .map_err(|error| map_error(error).with_row(index as u32 + 1))?;
         if !matches!(mutation, Mutation::Insert { .. }) && affected != 1 {
             return Err(DriverError::new(
                 DriverErrorCategory::Conflict,

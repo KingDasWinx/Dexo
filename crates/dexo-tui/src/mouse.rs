@@ -91,6 +91,8 @@ pub enum HitButton {
     /// The edit-cell dialog's NULL and Editor buttons.
     SetNull,
     OpenEditor,
+    /// The `[Browse]` button of a dialog's file field.
+    Browse,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]

@@ -1675,7 +1675,7 @@ fn contextual_reason(model: &Model, id: &str) -> Option<String> {
     }
     match id {
         "transaction.begin" if model.transaction != TransactionState::Idle => {
-            Some("session is not idle".into())
+            Some("a transaction is already open: commit or roll it back first".into())
         }
         "transaction.savepoint" | "transaction.release_savepoint" | "transaction.commit"
             if model.transaction != TransactionState::Active =>
@@ -1700,12 +1700,6 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         "query.execute_statement"
         | "query.execute_selection"
         | "query.execute_document"
-        | "transaction.begin"
-        | "transaction.savepoint"
-        | "transaction.rollback_savepoint"
-        | "transaction.release_savepoint"
-        | "transaction.commit"
-        | "transaction.rollback"
         | "schema.preview"
         | "schema.raw"
         | "schema.diff"

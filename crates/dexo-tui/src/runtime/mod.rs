@@ -386,6 +386,28 @@ struct Typed {
     keychain: bool,
 }
 
+/// A connection to open beside a session's own; see `WorkbenchRuntime::side_dial`.
+struct SideDial {
+    factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
+    profile: ConnectionProfile,
+    password: Password,
+    memory: Arc<MemorySecretStore>,
+}
+
+impl SideDial {
+    async fn open(self) -> Result<Box<dyn dexo_driver_api::Session>, String> {
+        dial(
+            self.factory,
+            &self.profile,
+            self.password,
+            &self.memory,
+            false,
+        )
+        .await
+        .map(|(session, ..)| session)
+    }
+}
+
 pub struct WorkbenchRuntime {
     action_tx: tokio::sync::mpsc::Sender<Action>,
     storage: Option<StorageWorker>,
@@ -818,20 +840,10 @@ impl WorkbenchRuntime {
                 });
             }
             crate::Effect::LoadAdminSessions { session, .. } => {
-                if let Some(active) = self.sessions.get(session) {
-                    admin_manager::load_live(Arc::clone(&active.session), self.action_tx.clone())
-                        .await;
-                }
+                self.admin_on_side_connection(session, None).await
             }
             crate::Effect::AdminTerminate { session, target } => {
-                if let Some(active) = self.sessions.get(session) {
-                    admin_manager::terminate_live(
-                        Arc::clone(&active.session),
-                        target,
-                        self.action_tx.clone(),
-                    )
-                    .await;
-                }
+                self.admin_on_side_connection(session, Some(target)).await
             }
             crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
             crate::Effect::LoadConnectionProfiles => {
@@ -1193,7 +1205,13 @@ impl WorkbenchRuntime {
                 }
             },
         };
-        let _ = self.transfer.run_with(request, Some(&access)).await;
+        // Spawned, never awaited here: an export, an import or a restore takes as long as
+        // the data does, and this arm runs on the loop that draws the frames and reads
+        // the keys, Esc among them.
+        let manager = self.transfer.clone();
+        tokio::spawn(async move {
+            let _ = manager.run_with(request, Some(&access)).await;
+        });
     }
 
     async fn list_saved_queries(&self, project_id: String) {
@@ -1324,6 +1342,68 @@ impl WorkbenchRuntime {
         {
             slot.task = Some(task.abort_handle());
         }
+    }
+
+    /// What a task needs to open a connection of its own to what `session` is on. The
+    /// session's own connection can be busy -- a statement waiting on a lock -- and
+    /// whatever it is asked then waits behind that statement.
+    fn side_dial(&self, session: SessionId) -> Result<SideDial, String> {
+        let profile = self
+            .session_profiles
+            .get(&session)
+            .cloned()
+            .ok_or_else(|| "the session is closed".to_string())?;
+        // A password command is asked again: its answer may have rotated since.
+        let password = match self.secrets.memory.get(profile.secret_ref.as_str()) {
+            Ok(Some(secret)) if profile.password_command().is_none() => Password::Ready(secret),
+            _ => Password::for_profile(&profile, &self.secrets)
+                .map_err(|_| "the password is not at hand; connect again".to_string())?,
+        };
+        let factory = self
+            .drivers
+            .get(&profile.driver)
+            .map_err(|error| error.to_string())?;
+        Ok(SideDial {
+            factory,
+            profile,
+            password,
+            memory: Arc::clone(&self.secrets.memory),
+        })
+    }
+
+    /// Lists the server's sessions, or ends `terminate`'s, on a connection dialled for
+    /// it and spawned: the list is the tool for a stuck session, so it cannot wait on
+    /// that session, and the loop that draws the screen cannot wait on either. A
+    /// connection of its own also reads outside the session's open transaction, whose
+    /// snapshot of the server's activity does not move until it ends.
+    async fn admin_on_side_connection(&self, session: SessionId, terminate: Option<String>) {
+        let failed = |message: String, terminate: &Option<String>| match terminate {
+            Some(_) => Action::AdminTerminated {
+                result: Err(message),
+            },
+            None => Action::AdminFailed { message },
+        };
+        let dial = match self.side_dial(session) {
+            Ok(dial) => dial,
+            Err(message) => return self.emit(failed(message, &terminate)).await,
+        };
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            match dial.open().await {
+                Ok(side) => {
+                    let side: Arc<dyn dexo_driver_api::Session> = Arc::from(side);
+                    match terminate {
+                        Some(target) => {
+                            admin_manager::terminate_live(side, target, action_tx).await
+                        }
+                        None => admin_manager::load_live(side, action_tx).await,
+                    }
+                }
+                Err(message) => {
+                    let _ = action_tx.send(failed(message, &terminate)).await;
+                }
+            }
+        });
     }
 
     fn transfer_access(
@@ -1940,38 +2020,55 @@ impl WorkbenchRuntime {
 
     async fn begin(&mut self, session: SessionId, mode: dexo_driver_api::TransactionMode) {
         let result = self.sessions.begin(session, mode).await;
-        self.tx_result(session, result).await;
+        self.tx_result(session, result, "Transaction started.".into())
+            .await;
     }
 
     async fn commit(&mut self, session: SessionId) {
         let result = self.sessions.commit(session).await;
-        self.tx_result(session, result).await;
+        self.tx_result(session, result, "Transaction committed.".into())
+            .await;
     }
 
     async fn rollback(&mut self, session: SessionId) {
         let result = self.sessions.rollback(session).await;
-        self.tx_result(session, result).await;
+        // A server that ended the rollback with a warning says what it did not undo.
+        let notice = self
+            .sessions
+            .get(session)
+            .and_then(|active| active.session.transactions()?.take_notice());
+        let done = match notice {
+            Some(notice) => format!("Transaction rolled back. {notice}"),
+            None => "Transaction rolled back.".into(),
+        };
+        self.tx_result(session, result, done).await;
     }
 
     async fn savepoint(&mut self, session: SessionId, name: String) {
         let result = self.sessions.savepoint(session, &name).await;
-        self.tx_result(session, result).await;
+        self.tx_result(session, result, format!("Savepoint {name} created."))
+            .await;
     }
 
     async fn rollback_to(&mut self, session: SessionId, name: String) {
         let result = self.sessions.rollback_to(session, &name).await;
-        self.tx_result(session, result).await;
+        self.tx_result(session, result, format!("Rolled back to savepoint {name}."))
+            .await;
     }
 
     async fn release_savepoint(&mut self, session: SessionId, name: String) {
         let result = self.sessions.release_savepoint(session, &name).await;
-        self.tx_result(session, result).await;
+        self.tx_result(session, result, format!("Savepoint {name} released."))
+            .await;
     }
 
+    /// What a transaction command did, as the state it left and a line that says so; or
+    /// why it could not.
     async fn tx_result(
         &self,
         session: SessionId,
         result: Result<dexo_driver_api::TransactionState, String>,
+        done: String,
     ) {
         match result {
             Ok(state) => {
@@ -1986,13 +2083,10 @@ impl WorkbenchRuntime {
                     state,
                 })
                 .await;
+                self.emit(Action::Notice(done)).await;
             }
             Err(message) => {
-                self.emit(Action::OperationFailed {
-                    key: OperationKey::new(OperationId::new(), session.0.to_string(), "", 0),
-                    message,
-                })
-                .await;
+                self.emit(Action::TransactionFailed { message }).await;
             }
         }
     }

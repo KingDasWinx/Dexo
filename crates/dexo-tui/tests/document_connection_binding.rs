@@ -169,6 +169,45 @@ fn the_queued_execution_runs_once_its_connection_lands() {
     assert!(model.pending_execute.is_none(), "the queue was not drained");
 }
 
+/// Begin Transaction in a tab of an offline connection connects by itself, as a run
+/// does, and begins once the session lands. It used to say "connect a session first".
+#[test]
+fn begin_transaction_on_an_offline_binding_dials_and_then_begins() {
+    let mut model = two_connections();
+    model.active_document = 2;
+    let effects = update(&mut model, Action::BeginTransaction);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ConnectProfile { .. })),
+        "did not dial beta: {effects:?}"
+    );
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::BeginTransaction { .. })),
+        "began on alpha"
+    );
+    let token = model.pending_execute.as_ref().expect("queued").token;
+    let effects = update(&mut model, connection_changed("beta", 2, token));
+    assert!(
+        effects.iter().any(
+            |effect| matches!(effect, Effect::BeginTransaction { session, .. } if session.0 == uuid::Uuid::from_u128(102))
+        ),
+        "the transaction never began on beta: {effects:?}"
+    );
+}
+
+/// The transaction flag in the status bar belongs to the connection the bar names:
+/// connecting to another one did not clear alpha's.
+#[test]
+fn the_transaction_flag_follows_the_connection_it_names() {
+    let mut model = two_connections();
+    model.transaction = TransactionState::Active;
+    update(&mut model, connection_changed("beta", 2, 1));
+    assert_eq!(model.transaction, TransactionState::Idle);
+}
+
 /// Connecting moves the active document to that connection's console; activating a
 /// document moves the active connection to the document's. Both sides have to settle,
 /// or switching tabs walks in a circle and the TUI stops drawing.

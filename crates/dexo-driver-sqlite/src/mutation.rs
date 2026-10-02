@@ -275,11 +275,12 @@ fn table_keys(conn: &Connection, name: &QualifiedName) -> Result<Vec<ColumnKeyIn
 /// transaction the user has open as well as outside one.
 fn apply_all(conn: &mut Connection, mutations: &[Mutation]) -> Result<(), DriverError> {
     let savepoint = conn.savepoint_with_name("dexo_apply").map_err(map_error)?;
-    for mutation in mutations {
+    for (index, mutation) in mutations.iter().enumerate() {
         let (sql, binder) = render_mutation(mutation);
+        // The row's place in the batch goes with the error: an import says which line.
         let affected = savepoint
             .execute(&sql, params_from_iter(binder.values))
-            .map_err(map_error)?;
+            .map_err(|error| map_error(error).with_row(index as u32 + 1))?;
         if !matches!(mutation, Mutation::Insert { .. }) && affected != 1 {
             return Err(DriverError::new(
                 DriverErrorCategory::Conflict,

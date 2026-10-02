@@ -746,12 +746,17 @@ fn render_pane_switcher(frame: &mut Frame, row: Rect, model: &Model, hits: &mut 
 
 fn context_line(model: &Model) -> String {
     format!(
-        "{}  {}  {}",
+        "{}  {}{}  {}",
         model.project,
         if model.connection.name.is_empty() {
             "no connection"
         } else {
             &model.connection.name
+        },
+        if model.connection.read_only && !model.connection.name.is_empty() {
+            " (read-only)"
+        } else {
+            ""
         },
         if model.schema.is_empty() {
             "—"
@@ -1889,14 +1894,16 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let popup = centered(area, 72, 16);
-    let lines = model.transfer.lines();
+    use crate::screens::transfer::{BROWSE, FIELD_HEAD, TransferField, TransferLineKind};
+    let transfer = &model.transfer;
+    let inner_width = popup_inner(centered(area, 72, 16)).width as usize;
+    let lines = transfer.layout(inner_width);
+    let caret = transfer.caret(inner_width);
+    // As tall as what it says, up to the most a terminal can spare.
+    let popup = centered(area, 72, (lines.len() as u16 + 2).min(16));
     let (body, footer) = lines.split_at(lines.len().saturating_sub(1));
     let body_rows = popup_inner(popup).height.saturating_sub(1) as usize;
-    let offset = model
-        .transfer
-        .scroll
-        .min(body.len().saturating_sub(body_rows));
+    let offset = transfer.scroll.min(body.len().saturating_sub(body_rows));
     let mut visible = body
         .iter()
         .skip(offset)
@@ -1904,29 +1911,52 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .cloned()
         .collect::<Vec<_>>();
     visible.extend(footer.iter().cloned());
+    let texts = visible
+        .iter()
+        .map(|line| line.text.clone())
+        .collect::<Vec<_>>();
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Transfer"),
-        visible.join("\n"),
+        Block::bordered().title(transfer.title()),
+        texts.join("\n"),
     );
     register_overlay(hits, popup);
-    let transfer = &model.transfer;
-    for_popup_lines(popup, &visible, |i, line, rect| {
-        if offset + i == 0 {
-            if transfer.footer == crate::widgets::form::FooterFocus::Input {
-                let before = format!("{} ", transfer.mode.as_str());
-                show_input(frame, rect, &before, &transfer.path, false);
+    let fields = transfer.fields();
+    for_popup_lines(popup, &texts, |i, line, rect| match visible[i].kind {
+        TransferLineKind::Field(index) => {
+            hits.register(HitTarget::FormField(index), rect);
+            let Some(field) = fields.get(index).copied() else {
+                return;
+            };
+            if field == TransferField::File {
+                register_label(
+                    hits,
+                    rect,
+                    line,
+                    BROWSE.trim_start(),
+                    HitTarget::Button(HitButton::Browse),
+                );
             }
-            hits.register(HitTarget::FormField(0), rect);
+            // The terminal's cursor is where the focused field's text has it, and a
+            // selection shows in reverse, as in every input.
+            if let Some(caret) = caret.filter(|caret| caret.field == index) {
+                if caret.selected > 0 {
+                    paint_reversed(frame, rect, FIELD_HEAD, caret.selected);
+                }
+                if caret.column < usize::from(rect.width) {
+                    frame.set_cursor_position(ratatui::layout::Position::new(
+                        rect.x + caret.column as u16,
+                        rect.y,
+                    ));
+                }
+            }
         }
-        if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        TransferLineKind::Footer => {
+            crate::widgets::form::register_footer(hits, rect, line, transfer.submit_label());
         }
-        if line.contains("confirm restore") {
-            hits.register(HitTarget::Button(HitButton::Confirm), rect);
-        }
+        TransferLineKind::Text => {}
     });
 }
 
@@ -1978,24 +2008,31 @@ fn render_admin(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         return;
     }
     let width = 110.min(area.width.saturating_sub(2));
-    let lines = model.admin.lines(width.saturating_sub(2) as usize);
+    let rows = model.admin.visible_rows(area.height);
+    let lines = model.admin.lines(width.saturating_sub(2) as usize, rows);
     let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
     let popup = centered(area, width, height);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title(format!("Sessions on {}", model.connection.name)),
+        Block::bordered().title(format!(
+            "Sessions on {} (every database on the server)",
+            model.connection.name
+        )),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    // Row 0 is the header; each session's row below it picks that session.
+    // Row 0 is the header; each session's row below it picks that session, from the
+    // first one the list has scrolled to.
+    let start = model.admin.window_start(rows);
+    let shown = model.admin.sessions.len().saturating_sub(start).min(rows);
     for_popup_lines(popup, &lines, |index, _, rect| {
-        if index >= 1 && index <= model.admin.sessions.len() {
-            hits.register(HitTarget::ListRow(index - 1), rect);
-        }
-        if index == model.admin.selected + 1 && !model.admin.sessions.is_empty() {
-            paint_reversed(frame, rect, 0, rect.width as usize);
+        if index >= 1 && index <= shown {
+            hits.register(HitTarget::ListRow(start + index - 1), rect);
+            if start + index - 1 == model.admin.selected {
+                paint_reversed(frame, rect, 0, rect.width as usize);
+            }
         }
     });
     if let Some(prompt) = &model.admin.terminate {
@@ -2422,17 +2459,18 @@ fn render_secret(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 56, 8);
-    let lines = model.transaction_prompt.lines();
+    let prompt = &model.transaction_prompt;
+    let lines = prompt.lines();
+    // As tall as what it says: the form used to leave rows of empty box under its buttons.
+    let popup = centered(frame.area(), 56, lines.len() as u16 + 2);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Savepoint"),
+        Block::bordered().title(prompt.title()),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    let prompt = &model.transaction_prompt;
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.starts_with("name:") {
             if prompt.footer == crate::widgets::form::FooterFocus::Input {
@@ -2441,7 +2479,7 @@ fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap
             hits.register(HitTarget::FormField(0), rect);
         }
         if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+            crate::widgets::form::register_footer(hits, rect, line, prompt.submit_label());
         }
     });
 }

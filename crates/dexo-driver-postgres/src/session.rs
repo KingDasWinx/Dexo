@@ -20,7 +20,9 @@ pub const ROW_BATCH_SIZE: usize = 256;
 pub struct PostgresSession {
     pub(crate) client: Arc<tokio_postgres::Client>,
     capabilities: Vec<dexo_driver_api::CapabilityState>,
-    tx_state: Mutex<TransactionState>,
+    /// Shared with the tasks that run statements: a statement that fails inside an open
+    /// transaction leaves it aborted, which only they see.
+    tx_state: Arc<Mutex<TransactionState>>,
     notices: tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<SessionEvent>>>,
     cancel: PostgresCancelContext,
     /// `server_version_num`, asked once, the first time something depends on it.
@@ -38,7 +40,7 @@ impl PostgresSession {
         Self {
             client: Arc::new(client),
             capabilities: capabilities(),
-            tx_state: Mutex::new(TransactionState::Idle),
+            tx_state: Arc::new(Mutex::new(TransactionState::Idle)),
             notices: tokio::sync::Mutex::new(Some(notices)),
             cancel,
             server_version: tokio::sync::OnceCell::new(),
@@ -135,6 +137,7 @@ impl Session for PostgresSession {
         let read_only = request.read_only;
         let token = client.cancel_token();
         let tls = self.cancel.tls.clone();
+        let tx_state = Arc::clone(&self.tx_state);
         tokio::spawn(async move {
             let guard = if read_only {
                 match ReadOnly::start(&client).await {
@@ -148,15 +151,22 @@ impl Session for PostgresSession {
                 None
             };
             let ended = Arc::clone(&client);
+            let wrapped = guard.is_some();
             let run = run_postgres_query(client, sql, parameters, row_limit, tx.clone());
             if timeout == Duration::ZERO {
-                run.await;
+                let failed = run.await;
                 if let Some(guard) = guard {
                     guard.end(&ended).await;
                 }
+                abort_open_transaction(&tx_state, failed && !wrapped);
                 return;
             }
             let outcome = tokio::time::timeout(timeout, run).await;
+            // A timeout stops the statement on the server, which aborts what it ran in.
+            abort_open_transaction(
+                &tx_state,
+                !wrapped && (outcome.is_err() || outcome.as_ref().is_ok_and(|failed| *failed)),
+            );
             if outcome.is_err() {
                 // Dropping the future stopped only the waiting: the server goes on with
                 // the query until it is told to stop.
@@ -236,19 +246,19 @@ async fn run_postgres_query(
     parameters: Vec<dexo_driver_api::DbValue>,
     row_limit: u64,
     tx: tokio::sync::mpsc::Sender<Result<QueryEvent, DriverError>>,
-) {
+) -> bool {
     let statement = match client.prepare(&sql).await {
         Ok(statement) => statement,
         Err(error) => {
             let _ = tx.send(Err(map_error(error))).await;
-            return;
+            return true;
         }
     };
     let params = match crate::params::bind(&statement, &parameters) {
         Ok(params) => params,
         Err(error) => {
             let _ = tx.send(Err(error)).await;
-            return;
+            return true;
         }
     };
     let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|value| value as _).collect();
@@ -262,7 +272,7 @@ async fn run_postgres_query(
         Ok(rows) => rows,
         Err(error) => {
             let _ = tx.send(Err(map_error(error))).await;
-            return;
+            return true;
         }
     };
     if tx
@@ -270,10 +280,10 @@ async fn run_postgres_query(
         .await
         .is_err()
     {
-        return;
+        return false;
     }
     if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
-        return;
+        return false;
     }
     let mut rows = Box::pin(rows);
     let mut batch = Vec::new();
@@ -297,12 +307,12 @@ async fn run_postgres_query(
                         .await
                         .is_err()
                 {
-                    return;
+                    return false;
                 }
             }
             Some(Err(error)) => {
                 let _ = tx.send(Err(map_error(error))).await;
-                return;
+                return true;
             }
             None => break,
         }
@@ -325,7 +335,7 @@ async fn run_postgres_query(
             .await
             .is_err()
         {
-            return;
+            return false;
         }
     }
     let _ = tx
@@ -336,6 +346,20 @@ async fn run_postgres_query(
         }))
         .await;
     let _ = tx.send(Ok(QueryEvent::Finished { rows_affected })).await;
+    false
+}
+
+/// A statement that fails inside an open transaction aborts it: the server refuses
+/// everything until ROLLBACK, or ROLLBACK TO a savepoint. The state says so, so the screen
+/// can tell the person what to do instead of letting every statement fail the same way.
+fn abort_open_transaction(state: &Mutex<TransactionState>, failed: bool) {
+    if !failed {
+        return;
+    }
+    let mut state = state.lock().expect("postgres tx state poisoned");
+    if *state == TransactionState::Active {
+        *state = TransactionState::Failed;
+    }
 }
 
 #[async_trait::async_trait]
@@ -389,7 +413,12 @@ impl TransactionControl for PostgresSession {
         self.client
             .batch_execute(&format!("ROLLBACK TO SAVEPOINT {name}"))
             .await
-            .map_err(map_error)
+            .map_err(map_error)?;
+        // Back to a savepoint, an aborted transaction is a working one again.
+        if self.state() == TransactionState::Failed {
+            self.set_state(TransactionState::Active);
+        }
+        Ok(())
     }
 
     async fn release_savepoint(&self, name: &str) -> Result<(), DriverError> {

@@ -28,6 +28,8 @@ pub async fn run_script(
     let _ = action_tx.send(Action::OperationStarted(key.clone())).await;
     let statements = request.statements.len();
     let mut failed = false;
+    // A statement failed on the network: the connection may be gone for good.
+    let mut network_failure = false;
     for (index, sql) in request.statements.iter().enumerate() {
         if failed && request.policy == ScriptPolicy::StopOnError {
             break;
@@ -91,6 +93,7 @@ pub async fn run_script(
                         }
                     }
                     Err(error) => {
+                        network_failure |= error.category() == DriverErrorCategory::Network;
                         report_failure(&action_tx, &key, index, sql, &error, statements).await;
                         return true;
                     }
@@ -111,6 +114,25 @@ pub async fn run_script(
             }
         }
     }
+    if network_failure && connection_is_gone(session.as_ref()).await {
+        let _ = action_tx
+            .send(Action::SessionLost {
+                session: key.session.clone(),
+            })
+            .await;
+    } else if let (Some(control), Ok(id)) =
+        (session.transactions(), uuid::Uuid::parse_str(&key.session))
+    {
+        // A statement that failed inside a transaction left it aborted, which only the
+        // session knows: the status bar says so, and what to do.
+        let _ = action_tx
+            .send(Action::TransactionChanged {
+                session: crate::runtime::SessionId(id),
+                generation: key.generation,
+                state: control.state(),
+            })
+            .await;
+    }
     if !failed {
         let _ = action_tx.send(Action::ScriptFinished { key }).await;
     }
@@ -121,6 +143,23 @@ fn timeout_message(limit: Duration) -> String {
     format!(
         "Query timed out after {} s, the limit for a statement here. Cancel stops one sooner.",
         limit.as_secs()
+    )
+}
+
+/// Whether the session answers at all. One statement can fail on the network and the
+/// next run fine -- a remote file that was not there -- but a session the server ended
+/// fails every statement with "connection closed", and only a new connection helps.
+async fn connection_is_gone(session: &dyn Session) -> bool {
+    let probe = async {
+        let mut stream = session.execute(QueryRequest::read("SELECT 1", 1)).await?;
+        while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+            event?;
+        }
+        Ok::<(), DriverError>(())
+    };
+    matches!(
+        tokio::time::timeout(Duration::from_secs(5), probe).await,
+        Ok(Err(error)) if error.category() == DriverErrorCategory::Network
     )
 }
 
@@ -149,6 +188,7 @@ async fn report_failure(
             message: error.to_string(),
             details: crate::model::describe_query_error(sql, error, (index, statements)),
             position: error.position(),
+            cancelled: error.category() == DriverErrorCategory::Cancelled,
         })
         .await;
 }

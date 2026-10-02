@@ -57,14 +57,8 @@ pub async fn load_live(
 ) {
     let Some(admin) = session.admin() else {
         let _ = tx
-            .send(crate::action::Action::OperationFailed {
-                key: crate::runtime::OperationKey::new(
-                    crate::runtime::OperationId::new(),
-                    "",
-                    "",
-                    0,
-                ),
-                message: "admin unavailable".into(),
+            .send(crate::action::Action::AdminFailed {
+                message: "This connection has no session administration.".into(),
             })
             .await;
         return;
@@ -73,13 +67,7 @@ pub async fn load_live(
         Ok(list) => list,
         Err(error) => {
             let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
+                .send(crate::action::Action::AdminFailed {
                     message: error.to_string(),
                 })
                 .await;

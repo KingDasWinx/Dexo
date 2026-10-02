@@ -15,12 +15,12 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                        ┌Sessions on local───────────────────────────────────────────────────────────────────────────────────────────┐                        │
-│                        │  ID       USER         DATABASE     STATE                   TIME  QUERY                                    │                        │
-│                        │> 10       dexo         dexo         active                  1.2s  select 1                                 │                        │
-│                        │  11       dexo         dexo         idle in transaction     4.0s  lock table items                         │                        │
+│                        ┌Sessions on local (every database on the server)────────────────────────────────────────────────────────────┐                        │
+│                        │  ID       USER         DATABASE     STATE                  TIME  QUERY                                     │                        │
+│                        │> 10       dexo         dexo         active                 1.2s  [blocked by 11] select 1                  │                        │
+│                        │  11       dexo         dexo         idle in transaction    4.0s  [blocks 10] lock table items              │                        │
 │                        │                                                                                                            │                        │
-│                        │  11 blocks 10 · AccessExclusiveLock on public.items                                                        │                        │
+│                        │  Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                            │                        │
 │                        │                                                                                                            │                        │
 │                        │up/down pick  t terminate  r refresh  esc close                                                             │                        │
 │                        └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                        │

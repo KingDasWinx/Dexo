@@ -591,6 +591,7 @@ fn the_bars_run_the_result_again_only_with_a_read() {
             message: "column \"id\" is ambiguous".into(),
             details: Vec::new(),
             position: None,
+            cancelled: false,
         },
     );
     assert_eq!(model.results.rows().len(), 1, "the last good rows are back");

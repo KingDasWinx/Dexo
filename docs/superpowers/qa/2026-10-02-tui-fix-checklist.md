@@ -244,62 +244,62 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## AT: Transactions, sessions, import, export, backup
 
-- [ ] **AT-28** `BLOCKER` Inspect Sessions on a connection whose session is busy/blocked freezes the whole UI for up to a minute and then shows nothing
-- [ ] **AT-41** `BLOCKER` Import Data always writes into a table named `tbl`; there is no way to choose the target table
-- [ ] **AT-42** `BLOCKER` Dexo cannot import its own TSV export (tab delimiter is not applied)
+- [x] **AT-28** `BLOCKER` Inspect Sessions on a connection whose session is busy/blocked freezes the whole UI for up to a minute and then shows nothing
+- [x] **AT-41** `BLOCKER` Import Data always writes into a table named `tbl`; there is no way to choose the target table
+- [x] **AT-42** `BLOCKER` Dexo cannot import its own TSV export (tab delimiter is not applied)
 - [x] **AT-50** `BLOCKER` Production guard is skipped by Import Data and Native Restore: no connection name is asked
-- [ ] **AT-51** `BLOCKER` Native Restore (and Backup) freeze the whole UI for the full duration; Cancel and Esc do nothing and the process is not stopped
+- [x] **AT-51** `BLOCKER` Native Restore (and Backup) freeze the whole UI for the full duration; Cancel and Esc do nothing and the process is not stopped
 - [x] **AT-53** `BLOCKER` Dexo's own backup cannot be restored by Dexo's own restore
-- [ ] **AT-07** `MAJOR` Transaction commands on an offline connection refuse instead of connecting
+- [x] **AT-07** `MAJOR` Transaction commands on an offline connection refuse instead of connecting
 - [x] **AT-10** `MAJOR` MySQL UPDATE/DELETE gives no feedback (Results pane stays empty), while Postgres says "1 row affected"
-- [ ] **AT-16** `MAJOR` After a session is terminated from the Sessions dialog, the document's connection stays broken: every run says "connection closed" and nothing reconnects it
-- [ ] **AT-20** `MAJOR` Sessions list is a stale snapshot while the connection has an open transaction; `r` refresh changes nothing
-- [ ] **AT-22** `MAJOR` A running (or blocked) query shows nothing: no "running" state, no elapsed time, no hint that Ctrl+F2 cancels
-- [ ] **AT-24** `MAJOR` A statement's result is thrown away if it finishes while another document tab is active
-- [ ] **AT-31** `MAJOR` Export overwrites an existing file without asking
-- [ ] **AT-32** `MAJOR` Choosing a file in the picker starts the export; Submit re-runs it onto the same file
-- [ ] **AT-33** `MAJOR` Dialog shows raw debug text instead of labelled fields
-- [ ] **AT-34** `MAJOR` SQL export names the INSERT target after the FILE name, not the table
-- [ ] **AT-35** `MAJOR` Export silently stops at the 10,000 loaded rows
-- [ ] **AT-43** `MAJOR` SQL is offered as an import format (initial value) and the on-error strategy cannot be changed
-- [ ] **AT-44** `MAJOR` Import errors name no file line, row or column; empty cells cannot be NULL
-- [ ] **AT-45** `MAJOR` Sessions list does not scroll: the selection moves onto rows that are not visible, and `t` then targets an invisible session
+- [x] **AT-16** `MAJOR` After a session is terminated from the Sessions dialog, the document's connection stays broken: every run says "connection closed" and nothing reconnects it
+- [x] **AT-20** `MAJOR` Sessions list is a stale snapshot while the connection has an open transaction; `r` refresh changes nothing
+- [x] **AT-22** `MAJOR` A running (or blocked) query shows nothing: no "running" state, no elapsed time, no hint that Ctrl+F2 cancels
+- [x] **AT-24** `MAJOR` A statement's result is thrown away if it finishes while another document tab is active
+- [x] **AT-31** `MAJOR` Export overwrites an existing file without asking
+- [x] **AT-32** `MAJOR` Choosing a file in the picker starts the export; Submit re-runs it onto the same file
+- [x] **AT-33** `MAJOR` Dialog shows raw debug text instead of labelled fields
+- [x] **AT-34** `MAJOR` SQL export names the INSERT target after the FILE name, not the table
+- [x] **AT-35** `MAJOR` Export silently stops at the 10,000 loaded rows
+- [x] **AT-43** `MAJOR` SQL is offered as an import format (initial value) and the on-error strategy cannot be changed
+- [x] **AT-44** `MAJOR` Import errors name no file line, row or column; empty cells cannot be NULL
+- [x] **AT-45** `MAJOR` Sessions list does not scroll: the selection moves onto rows that are not visible, and `t` then targets an invisible session
 - [x] **AT-52** `MAJOR` Native Restore reports `error: status=Failed pg_restore --no-password --host ...` even though the data was restored; the real error is hidden
 - [x] **AT-54** `MAJOR` MySQL Native Backup / Native Restore hang forever with `running=true` and say nothing about mysqldump
-- [ ] **AT-55** `MAJOR` Backup/Restore reuse the export dialog: irrelevant `format=` / `strategy=` / `rows=` fields, stale state, and a confirmation that carries over
-- [ ] **AT-01** `MINOR` Transaction commands succeed silently: no toast, no Messages entry
-- [ ] **AT-02** `MINOR` Status bar shows a raw `tx:active` and never changes for savepoints or an aborted transaction
-- [ ] **AT-03** `MINOR` Error in an open transaction does not say what to do
-- [ ] **AT-04** `MINOR` Transaction commands with no transaction: warning toast, but the palette stays open (and the editor loses focus)
-- [ ] **AT-06** `MINOR` "Begin Transaction" twice says "session is not idle"
-- [ ] **AT-08** `MINOR` Header and status bar keep the previous connection after Alt+Left / Alt+Right switch the document
-- [ ] **AT-09** `MINOR` Sidebar connect while a document of another connection is on screen: header/status name the new connection but `tx:active` belongs to the document's
+- [x] **AT-55** `MAJOR` Backup/Restore reuse the export dialog: irrelevant `format=` / `strategy=` / `rows=` fields, stale state, and a confirmation that carries over
+- [x] **AT-01** `MINOR` Transaction commands succeed silently: no toast, no Messages entry
+- [x] **AT-02** `MINOR` Status bar shows a raw `tx:active` and never changes for savepoints or an aborted transaction
+- [x] **AT-03** `MINOR` Error in an open transaction does not say what to do
+- [x] **AT-04** `MINOR` Transaction commands with no transaction: warning toast, but the palette stays open (and the editor loses focus)
+- [x] **AT-06** `MINOR` "Begin Transaction" twice says "session is not idle"
+- [=] **AT-08** `MINOR` Header and status bar keep the previous connection after Alt+Left / Alt+Right switch the document (fixed by PC-11)
+- [x] **AT-09** `MINOR` Sidebar connect while a document of another connection is on screen: header/status name the new connection but `tx:active` belongs to the document's
 - [x] **AT-11** `MINOR` Document tab truncates the connection name to 7 characters
-- [ ] **AT-12** `MINOR` Error toasts never go away on their own and survive later successful actions
-- [ ] **AT-14** `MINOR` Nothing on screen says a connection is read-only until a write is refused
+- [=] **AT-12** `MINOR` Error toasts never go away on their own and survive later successful actions (fixed by PC-15)
+- [x] **AT-14** `MINOR` Nothing on screen says a connection is read-only until a write is refused
 - [x] **AT-15** `MINOR` Destructive-statement guard is bypassed by a tautological WHERE
 - [x] **AT-17** `MINOR` Terminate success message is "signal sent"
 - [x] **AT-18** `MINOR` Sessions list ignores Home/End/PageUp/PageDown and the mouse wheel; ids sort as text
-- [ ] **AT-19** `MINOR` Sessions list shows every database on the server and does not mark the user's own sessions
-- [ ] **AT-21** `MINOR` Blocking line is cryptic: `419 blocks 764 · ShareLock on -`
-- [ ] **AT-23** `MINOR` Sessions: `t` on a read-only connection is refused only after the dialog is already open; fine message, but the dialog is a full admin view
-- [ ] **AT-25** `MINOR` User-pressed Cancel Query (Ctrl+F2) is reported as an error toast
+- [x] **AT-19** `MINOR` Sessions list shows every database on the server and does not mark the user's own sessions
+- [x] **AT-21** `MINOR` Blocking line is cryptic: `419 blocks 764 · ShareLock on -`
+- [x] **AT-23** `MINOR` Sessions: `t` on a read-only connection is refused only after the dialog is already open; fine message, but the dialog is a full admin view
+- [x] **AT-25** `MINOR` User-pressed Cancel Query (Ctrl+F2) is reported as an error toast
 - [x] **AT-27** `MINOR` `select pg_sleep(...)` on production asks for the name ("not a read-only statement"), `select now()` does not
 - [x] **AT-29** `MINOR` Ctrl+A in a brand-new empty document, then typing, drops the first character
 - [x] **AT-30** `MINOR` Statements Dexo cannot parse are listed as "Dexo could not read this statement"
-- [ ] **AT-36** `MINOR` File extension and format are independent: `.sql` file with JSONL inside, `.csv` re-exported as another format
-- [ ] **AT-37** `MINOR` Exporting into a directory that does not exist shows a raw OS error and keeps the previous success line
-- [ ] **AT-38** `MINOR` JSON/JSONL export loses column order, writes jsonb/numeric as strings
-- [ ] **AT-39** `MINOR` The Results hint line does not list `e` (Export) although `e` opens it
+- [x] **AT-36** `MINOR` File extension and format are independent: `.sql` file with JSONL inside, `.csv` re-exported as another format
+- [x] **AT-37** `MINOR` Exporting into a directory that does not exist shows a raw OS error and keeps the previous success line
+- [x] **AT-38** `MINOR` JSON/JSONL export loses column order, writes jsonb/numeric as strings
+- [x] **AT-39** `MINOR` The Results hint line does not list `e` (Export) although `e` opens it
 - [ ] **AT-40** `MINOR` Transfer keys are not in the keybindings help
-- [ ] **AT-46** `MINOR` Import of a file that does not exist: `error: No such file or directory (os error 2)` without the file name
-- [ ] **AT-48** `MINOR` Rollback on a non-transactional table (MySQL MyISAM) says nothing and keeps the rows
+- [x] **AT-46** `MINOR` Import of a file that does not exist: `error: No such file or directory (os error 2)` without the file name
+- [x] **AT-48** `MINOR` Rollback on a non-transactional table (MySQL MyISAM) says nothing and keeps the rows
 - [x] **AT-49** `MINOR` Sessions on MySQL: rows in no clear order, different state vocabulary
 - [x] **AT-56** `MINOR` SQLite Native Restore shows the backup text: `a SQLite database is its file: copy the file to back it up`
 - [ ] **AT-57** `MINOR` Backup/Restore/Import/Export hotkeys: none
-- [ ] **AT-58** `MINOR` After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves
-- [ ] **AT-05** `COSMETIC` Savepoint dialog: one title for three actions, lowercase action line, a lot of empty space
-- [ ] **AT-13** `COSMETIC` Long refusal toasts are cut off mid-word without an ellipsis
+- [=] **AT-58** `MINOR` After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves (fixed by SL-16)
+- [x] **AT-05** `COSMETIC` Savepoint dialog: one title for three actions, lowercase action line, a lot of empty space
+- [=] **AT-13** `COSMETIC` Long refusal toasts are cut off mid-word without an ellipsis (fixed by PC-15)
 - [x] **AT-26** `COSMETIC` `pg_sleep()` (void) shows as `\x` in the grid
 - [x] **AT-47** `COSMETIC` SQLite import errors are driver text: `UNIQUE constraint failed: tbl.id`, `datatype mismatch`
 

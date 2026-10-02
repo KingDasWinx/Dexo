@@ -1972,6 +1972,8 @@ pub struct Model {
     pub active_task: Option<TaskId>,
     pub active_query: Option<QueryId>,
     pub active_operation: Option<OperationId>,
+    /// When the running operation started, for the status bar's "running 12s".
+    pub active_started: Option<(OperationId, std::time::Instant)>,
     pub active_session: Option<SessionId>,
     pub session_generation: u64,
     pub connect_token: u64,
@@ -2138,6 +2140,7 @@ impl Default for Model {
             active_task: None,
             active_query: None,
             active_operation: None,
+            active_started: None,
             active_session: None,
             session_generation: 0,
             connect_token: 0,
@@ -2205,6 +2208,12 @@ impl From<TransactionState> for Model {
 impl Model {
     pub fn fixture(seed: impl Into<Self>) -> Self {
         seed.into()
+    }
+
+    /// How long the running statement has been running, while one is.
+    pub fn running_for(&self) -> Option<std::time::Duration> {
+        let (operation, started) = self.active_started?;
+        (self.active_operation == Some(operation)).then(|| started.elapsed())
     }
 
     /// Why the active session's driver cannot do `capability`, if it cannot.
