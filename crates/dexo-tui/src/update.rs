@@ -10319,12 +10319,10 @@ fn submit_terminate(model: &mut Model) -> Vec<Effect> {
 
 /// File rows the picker shows: the same count its layout draws.
 fn file_picker_rows(model: &Model) -> usize {
-    model
-        .height
-        .saturating_sub(2)
-        .min(22)
-        .saturating_sub(5)
-        .max(4) as usize
+    model.file_picker.browser_rows(
+        model.file_picker_mode,
+        crate::screens::file_picker::inner_rows(model.height),
+    )
 }
 
 fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
