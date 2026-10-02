@@ -61,7 +61,16 @@ mod tests {
     #[test]
     fn notes_stay_with_their_connection_and_a_blank_one_goes() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("PRAGMA foreign_keys = ON;").unwrap();
         crate::migrations::apply_pending(&conn).unwrap();
+        for connection in ["a", "b"] {
+            conn.execute(
+                "INSERT INTO connections (id, name, driver, environment, config_json, secret_ref)
+                 VALUES (?1, ?1, 'postgres', 'local', '{}', 'ref')",
+                [connection],
+            )
+            .unwrap();
+        }
         let notes = ObjectNoteRepository::new(&conn);
         notes
             .set("a", "db.public.orders", "One row per checkout.")
@@ -83,5 +92,10 @@ mod tests {
             notes.get("b", "db.public.orders").unwrap().as_deref(),
             Some("Another database.")
         );
+        // A note belongs to a saved connection, and goes with it.
+        assert!(notes.set("gone", "db.public.orders", "x").is_err());
+        conn.execute("DELETE FROM connections WHERE id = 'b'", [])
+            .unwrap();
+        assert!(notes.for_connection("b").unwrap().is_empty());
     }
 }
