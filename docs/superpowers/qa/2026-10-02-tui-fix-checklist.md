@@ -240,7 +240,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **CP-39** `MINOR` Startup: focus is in the editor, so the first `n` typed (as the Welcome text says) creates a document instead of opening New Connection
 - [x] **CP-40** `MINOR` URL / CLI temporary connections
 - [x] **CP-16** `COSMETIC` The buttons jump one row down when the error line appears; a click made where the button was lands on the error text
-- [ ] **CP-41** `COSMETIC` Layout details
+- [x] **CP-41** `COSMETIC` Layout details
 
 ## AT: Transactions, sessions, import, export, backup
 
