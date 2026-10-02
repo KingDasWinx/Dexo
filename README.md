@@ -20,7 +20,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL and SQLite. It ships a
 ## Features
 
 - **Workbench** — catalog explorer, SQL editor, results grid, inspector, and a command palette. Every document belongs to a connection, keeps its own results, and reconnects when you return to it. Layouts persist per project.
-- **Drivers** — official PostgreSQL, MySQL and SQLite drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies for the servers. A SQLite connection is just a file path.
+- **Drivers** — official PostgreSQL, MySQL and SQLite drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies for the servers. A SQLite connection is just a file path. A build with the `duckdb` feature adds DuckDB, which also opens CSV, Parquet and JSON files as tables.
 - **Query execution** — run a statement, a selection, or a whole script, with streamed pages, cancellation, and explicit transactions.
 - **Data and schema** — lazily loaded catalog, editable grids with a review step before any write, object forms, DDL preview, and schema diff across live databases, saved snapshots, and files.
 - **Data transfer** — streaming import and export, plus native backup and restore that never overwrite the source.
@@ -89,6 +89,12 @@ sudo dnf install ./dexo-*.x86_64.rpm
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
 ```
 
+The release binaries leave DuckDB out: its engine is large. Build it in with the `duckdb` feature:
+
+```sh
+cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
+```
+
 Every release also ships archives for each platform, SHA-256 checksums, and a CycloneDX SBOM. See the [install guide](docs/src/install.md) for details.
 
 ## Getting started
@@ -105,6 +111,7 @@ Try it on a sample shop, with nothing to install or connect to, or open a databa
 dexo --demo
 dexo postgres://user@localhost:5432/shop
 dexo sqlite:///path/to/file.db
+dexo duckdb:///path/to/sales.parquet   # in a build with DuckDB
 ```
 
 `dexo --password-prompt <url>` asks for the password instead of reading it from the URL, where your shell history would keep it.
@@ -162,6 +169,7 @@ Profiles start disabled and read-only. Write tools require a temporary grant cre
 | MySQL | 8.0.42, 8.4.5, 9.3.0 |
 | MariaDB | 10.11, 11.4 |
 | SQLite | 3.53.2, built into the binary |
+| DuckDB | 1.5.6, built into the binary with the `duckdb` feature |
 
 Other server versions may work but are not tested. MySQL 5.7 is end-of-life. PostgreSQL derivatives are not supported until they have a dedicated driver and test matrix.
 
@@ -186,7 +194,7 @@ The TUI, CLI, and MCP server are adapters over `dexo-app`. Drivers implement sha
 | `dexo` | Binary and official driver registry |
 | `dexo-app` | Use cases |
 | `dexo-tui`, `dexo-cli`, `dexo-mcp` | Adapters |
-| `dexo-driver-postgres`, `dexo-driver-mysql`, `dexo-driver-sqlite` | Official drivers |
+| `dexo-driver-postgres`, `dexo-driver-mysql`, `dexo-driver-sqlite`, `dexo-driver-duckdb` | Official drivers |
 | `dexo-sql`, `dexo-storage`, `dexo-secrets`, `dexo-transport` | Shared engines |
 
 Local state is a single SQLite database with versioned migrations.

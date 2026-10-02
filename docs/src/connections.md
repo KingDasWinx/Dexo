@@ -1,6 +1,6 @@
 # Connections, TLS, SSH, and keychain
 
-Dexo connects to PostgreSQL, MySQL, MariaDB and SQLite. MariaDB goes through the MySQL driver; pick `mariadb` in the form so the connection says what it is, though a MariaDB server reached as `mysql` behaves the same.
+Dexo connects to PostgreSQL, MySQL, MariaDB and SQLite, and to DuckDB in a build with it (see [DuckDB](#duckdb)). MariaDB goes through the MySQL driver; pick `mariadb` in the form so the connection says what it is, though a MariaDB server reached as `mysql` behaves the same.
 
 Connections store host, port, database, user, and driver options in SQLite. The password lives in the native keychain behind an opaque `secret_ref`.
 
@@ -43,7 +43,7 @@ Dexo only reads Docker (`docker ps`, `docker inspect`), with three seconds for a
 
 ## Temporary connections
 
-`dexo <url>` opens the workbench connected to a URL without saving it -- `postgres://user:password@host:5432/db`, `postgresql://`, `mysql://`, `mariadb://` or `sqlite:///path/to/file` -- and `dexo --demo` opens a sample shop in SQLite. The connection is marked temporary and is gone when Dexo closes; its password is kept in memory only. "Save Connection…" in the palette, or editing it, opens the connection form filled in, and saving keeps it like any other, with the password going to the keychain.
+`dexo <url>` opens the workbench connected to a URL without saving it -- `postgres://user:password@host:5432/db`, `postgresql://`, `mysql://`, `mariadb://`, `sqlite:///path/to/file` or `duckdb:///path/to/file` -- and `dexo --demo` opens a sample shop in SQLite. The connection is marked temporary and is gone when Dexo closes; its password is kept in memory only. "Save Connection…" in the palette, or editing it, opens the connection form filled in, and saving keeps it like any other, with the password going to the keychain.
 
 `sslmode` (Postgres) and `ssl-mode` (MySQL) in the URL set the TLS mode. `--password-prompt` asks for the password on the terminal, which keeps it out of your shell history.
 
@@ -57,6 +57,25 @@ dexo connections add --name shop --driver sqlite --path ./shop.db
 
 The path is stored absolute. Opening a file that does not exist creates it, except on a read-only connection, which refuses. The catalog shows `main` and any database you `ATTACH`, with tables, views, columns, indexes, foreign keys and triggers. Rows are edited by primary key, or by `rowid` when a table has none. Explain shows `EXPLAIN QUERY PLAN`; SQLite has no `EXPLAIN ANALYZE`, and the schema editor and administration screens do not apply to it.
 
+## DuckDB
+
+A DuckDB connection is a file too: a DuckDB database, or a CSV, TSV, Parquet or JSON file, which opens as an in-memory database with the file as a view named after it -- `sales.parquet` browses as the table `sales`. `:memory:` is an empty database that lasts as long as the connection. From the command line:
+
+```sh
+dexo duckdb:///data/sales.parquet
+dexo connections add --name warehouse --driver duckdb --path ./warehouse.duckdb
+```
+
+Any query can read other files itself, `SELECT * FROM 'other.csv'`. A CSV, Parquet or JSON file is only ever read: its connection refuses statements that write, so a `COPY ... TO` cannot replace it. The catalog shows each database (the file's, and any you `ATTACH`) with its schemas, tables, views, columns, indexes and keys; DuckDB's own `system` and `temp` show with system objects. Rows are edited by primary key, or by `rowid` when a table has none; a view has no key and is read-only. A table's row estimate is DuckDB's own, kept as it writes. Explain shows DuckDB's plan, and Analyze runs the statement with DuckDB's profiler for each operator's actual rows and time, inside a transaction rolled back after it; inside your own transaction DuckDB has no savepoint to undo a write with, so Analyze runs only a read there. DuckDB has no savepoints for your transactions either, and the schema editor and administration screens do not apply to it.
+
+DuckDB's engine is large, so it is built into Dexo only with the `duckdb` cargo feature:
+
+```sh
+cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
+```
+
+A build without it still knows DuckDB connections, and says how to get the driver when one is opened.
+
 ## Environments and the SQL editor
 
 Each connection has an environment: local, development, staging or production. A label Dexo does not know, such as `prod`, counts as production.
@@ -65,6 +84,6 @@ Each connection has an environment: local, development, staging or production. A
 - On production, any write asks for the connection's name, typed exactly, before it runs.
 - Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.
 
-A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`, and SQLite opens the file read-only, which covers anything it attaches, so neither `PRAGMA query_only = 0` nor an `ATTACH` can write.
+A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`, SQLite opens the file read-only, which covers anything it attaches, so neither `PRAGMA query_only = 0` nor an `ATTACH` can write, and DuckDB opens its file read-only and refuses any statement that writes elsewhere, a `COPY ... TO` or an `ATTACH`.
 
 A statement Dexo cannot read counts as a write: production asks for the name, and elsewhere it asks before running, like a destructive statement. Maintenance it knows -- `VACUUM`, `ANALYZE`, `REINDEX`, `CLUSTER`, `REFRESH MATERIALIZED VIEW`, `CHECKPOINT`, `OPTIMIZE` -- asks only on production.
