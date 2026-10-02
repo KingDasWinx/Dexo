@@ -34,7 +34,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 **Why not DataGrip or DBeaver?** Dexo starts in a terminal in a moment, runs over SSH, and is free and open source. It does not try to be an IDE for every database.
 
-**Why not rainfrog or another TUI?** See the comparison below: Dexo's grid edits, plans, schema diff, import, production guard and agent guardrails are what it adds.
+**Why not rainfrog or another TUI?** See the comparison below. In short: query plans drawn as a tree, schema diff with migrations, import, and agents that write only through grants you make, each write approved if you like, are what we did not find in the others.
 
 **Where do the passwords go?** Into the operating system's keychain, or nowhere when a connection reads it from a command such as `pass` or `op read`. Never into Dexo's database, its config files, its logs or a process's arguments.
 
@@ -48,17 +48,17 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 | --- | --- | --- | --- | --- | --- |
 | Built with | Rust, one binary | Rust, one binary | Python | Go, one binary | Python |
 | Databases | Postgres, MySQL, MariaDB, SQLite; DuckDB as a build option | Postgres, MySQL, SQLite, Redshift, DuckDB, Oracle | DuckDB, SQLite, Postgres, MySQL and more through adapters | MySQL, Postgres, SQLite, MSSQL, ClickHouse | About 30, through drivers installed on demand |
-| Passwords | OS keychain, or a command | OS keychain | Config files, which can name environment variables | Config file, or environment variables | OS keyring |
+| Passwords | OS keychain, or a command | OS keychain | Config files, which can name environment variables | Config file, or environment variables | OS keyring, or a command |
 | Edit rows in the grid | Yes, reviewed before they are written | — | — | Yes | — |
 | Query plans | Tree with estimated and actual rows; try an index before building it | — | — | — | — |
 | Schema diff | Live databases, snapshots and files | — | — | — | — |
 | Import | CSV, TSV, JSON, JSON Lines | — | — | — | — |
-| Export | CSV, TSV, JSON, JSON Lines, SQL | CSV | Yes | CSV | CSV, JSON |
-| SSH tunnels | Yes | — | — | A command run before connecting | Yes |
-| Production guard | A destructive statement waits for the connection's name | — | — | — | — |
-| AI agents | MCP server: read-only profiles, allowlists, timed write grants, approval per write | — | `hsql`, a CLI for agents | — | — |
+| Export | CSV, TSV, JSON, JSON Lines, SQL | CSV | Yes | CSV | Query output as CSV or JSON, from its CLI |
+| SSH tunnels | Yes | — | Yes (`--ssh-host`) | A command run before connecting | Yes |
+| Guarding writes | Read-only connections; on production a write waits for the connection's name; destructive statements are confirmed | Asks before a risky statement and before committing a write; F7 bypasses the check | `--read-only` | Read-only connections (`ReadOnly`, `--read-only`) | — |
+| AI agents | MCP server: read-only profiles, allowlists, timed write grants, approval per write | — | `hsql`, a CLI for agents, with `--read-only` and `--timeout` | — | — |
 
-— means the project's README does not list it, as of October 2026.
+Cells come from each project's README, documentation and changelog, and rainfrog's write checks from its code, as of October 2026; — means we did not find it there.
 
 ## Features
 
