@@ -40,7 +40,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 **Does it need Python?** No. Dexo is one binary: Homebrew, Scoop, the installer scripts, `.deb` and `.rpm`, or `cargo install`.
 
-**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid and the agents' tools, and the server refuses them too — Postgres, MySQL and MariaDB sessions start read-only, SQLite and DuckDB files open read-only.
+**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid, the command line and the agents' tools, and the server refuses them too — Postgres, MySQL and MariaDB sessions start read-only, SQLite and DuckDB files open read-only.
 
 ## How it compares
 
@@ -67,7 +67,7 @@ Cells come from each project's README, documentation and changelog, and rainfrog
 - **Query execution** — run a statement, a selection, or a whole script, with streamed pages, cancellation, and explicit transactions.
 - **Data and schema** — lazily loaded catalog, editable grids with a review step before any write, object forms, DDL preview, and schema diff across live databases, saved snapshots, and files.
 - **Data transfer** — streaming import and export, plus native backup and restore that never overwrite the source.
-- **Command line** — query, inspect, diff, export, import, explain, and diagnose without opening the TUI.
+- **Command line** — query, inspect, diff, export, import, explain, and list or cancel server sessions without opening the TUI, held to each connection's policy as the editor is.
 - **MCP server** — stdio only. Profiles start disabled and read-only; write tools appear only while a temporary grant is active.
 - **Local-first** — no telemetry, crash recovery for unsaved work, and diagnostics that are generated only on request and previewed before they are written.
 
