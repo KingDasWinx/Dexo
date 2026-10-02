@@ -618,6 +618,17 @@ async fn explain_draws_estimated_and_analyzed_plans() {
 async fn a_read_only_connection_cannot_write_the_file_or_anything_else() {
     let (dir, path) = seeded().await;
     let session = open(&path, true).await;
+    // DuckDB itself has the file read-only, whatever Dexo's own checks let through.
+    let events = run(
+        &*session,
+        QueryRequest::read(
+            "select readonly from duckdb_databases() where database_name = 'shop'",
+            0,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(texts(&events), [["true"]]);
     let out = dir.path().join("out.csv");
     for sql in [
         "insert into notes values ('x')".to_string(),
@@ -671,10 +682,28 @@ async fn a_read_only_request_cannot_write() {
     write.read_only = true;
     let error = run(&*session, write).await.unwrap_err();
     assert_eq!(error.category(), DriverErrorCategory::Permission);
-    // A function that writes is refused by DuckDB's read-only transaction.
-    let mut read = QueryRequest::read("select count(*) from notes", 0);
-    read.read_only = true;
-    assert_eq!(texts(&run(&*session, read).await.unwrap()), [["2"]]);
+    // A read runs in a read-only transaction of its own, rolled back after it: none is
+    // left open for the user's BEGIN to trip on.
+    let read = || {
+        let mut read = QueryRequest::read("select count(*) from notes", 0);
+        read.read_only = true;
+        read
+    };
+    assert_eq!(texts(&run(&*session, read()).await.unwrap()), [["2"]]);
+    let transactions = session.transactions().unwrap();
+    transactions
+        .begin(TransactionMode::ReadWrite)
+        .await
+        .unwrap();
+    // Inside the user's own, it runs as part of it, and sees what it has not committed.
+    run(
+        &*session,
+        QueryRequest::write("insert into notes values ('third')"),
+    )
+    .await
+    .unwrap();
+    assert_eq!(texts(&run(&*session, read()).await.unwrap()), [["3"]]);
+    transactions.rollback().await.unwrap();
 }
 
 #[tokio::test(flavor = "multi_thread")]
