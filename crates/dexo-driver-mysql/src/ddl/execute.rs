@@ -91,9 +91,23 @@ impl SecurityAdmin for MysqlSession {
 
     async fn effective_privileges(
         &self,
-        principal: &QualifiedName,
+        principal: Option<&QualifiedName>,
         object: &QualifiedName,
     ) -> Result<Vec<String>, DriverError> {
+        let current;
+        let principal = match principal {
+            Some(principal) => principal,
+            None => {
+                let mut conn = self.conn.lock().await;
+                let user: Option<String> = conn
+                    .query_first("SELECT SUBSTRING_INDEX(CURRENT_USER(), '@', 1)")
+                    .await
+                    .map_err(map_error)?;
+                current =
+                    QualifiedName::new(None::<String>, None::<String>, user.unwrap_or_default());
+                &current
+            }
+        };
         let grants = self.list_grants(Some(principal)).await?;
         Ok(grants
             .into_iter()

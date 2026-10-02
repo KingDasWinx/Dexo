@@ -62,9 +62,12 @@ pub trait SecurityAdmin: Send + Sync {
         principal: Option<&crate::QualifiedName>,
     ) -> Result<Vec<crate::GrantRecord>, DriverError>;
 
+    /// What `principal` may do with the table or view `object`; with no principal, the
+    /// role the session acts as now -- after a SET ROLE too, which the login it
+    /// connected with does not tell. Nothing for an object that is not a relation.
     async fn effective_privileges(
         &self,
-        principal: &crate::QualifiedName,
+        principal: Option<&crate::QualifiedName>,
         object: &crate::QualifiedName,
     ) -> Result<Vec<String>, DriverError>;
 
