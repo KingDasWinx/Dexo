@@ -112,6 +112,12 @@ sudo apt install ./dexo_*_amd64.deb
 sudo dnf install ./dexo-*.x86_64.rpm
 ```
 
+**Arch Linux** — the community-maintained [`dexo-bin`](https://aur.archlinux.org/packages/dexo-bin) package in the AUR:
+
+```sh
+yay -S dexo-bin    # or paru -S dexo-bin
+```
+
 **From source** (Rust 1.93 or later)
 
 ```sh

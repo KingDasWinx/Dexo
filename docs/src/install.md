@@ -34,6 +34,12 @@ sudo dnf install ./dexo-*.x86_64.rpm     # Fedora
 
 The packages need glibc 2.35 or later (Ubuntu 22.04, Debian 12, Fedora 36, or newer). They do not update themselves; install the next release the same way.
 
+On Arch Linux, the AUR has [`dexo-bin`](https://aur.archlinux.org/packages/dexo-bin), a package of the release binary kept by the community rather than by the Dexo project, so a new release reaches it once its maintainer updates it:
+
+```sh
+yay -S dexo-bin    # or paru -S dexo-bin, or makepkg from the AUR repository
+```
+
 ## From source
 
 Rust 1.93 or later:
