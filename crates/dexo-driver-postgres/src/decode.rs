@@ -164,6 +164,11 @@ fn decode_with(ty: &Type, raw: &[u8], names: &RegNames) -> DbValue {
                 .map(|text| native(ty, raw, text))
                 .unwrap_or_else(|| undecoded(ty, raw));
         }
+        Kind::Multirange(inner) => {
+            return multirange_text(inner, raw)
+                .map(|text| native(ty, raw, text))
+                .unwrap_or_else(|| undecoded(ty, raw));
+        }
         _ => {}
     }
     scalar(ty, raw)
@@ -302,6 +307,10 @@ fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
         }
         Type::POLYGON => format!("({})", points(4, usize::try_from(u32_at(0)?).ok()?)?),
         Type::TS_VECTOR => tsvector_text(raw)?,
+        Type::TSQUERY => tsquery_text(raw)?,
+        // Its binary form is its text.
+        Type::REFCURSOR => utf8(raw)?,
+        Type::PG_SNAPSHOT | Type::TXID_SNAPSHOT => snapshot_text(raw)?,
         _ if matches!(ty.kind(), Kind::Simple) => match ty.name() {
             "citext" => return Some(DbValue::Text(utf8(raw)?)),
             "ltree" | "lquery" | "ltxtquery" => versioned()?,
@@ -317,6 +326,21 @@ fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
                     .collect::<Option<Vec<_>>>()?;
                 format!("[{}]", values.join(","))
             }
+            // pgvector's half-precision vector: its halves are printed as the float4s
+            // they widen to.
+            "halfvec" => {
+                let dimensions = usize::from(u16::from_be_bytes(raw.get(0..2)?.try_into().ok()?));
+                let values = (0..dimensions)
+                    .map(|index| {
+                        let at = 4 + index * 2;
+                        let half = u16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+                        Some(float4_text(half_to_f32(half)))
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                format!("[{}]", values.join(","))
+            }
+            "sparsevec" => sparsevec_text(raw)?,
+            "hstore" => hstore_text(raw)?,
             _ => return None,
         },
         _ => return None,
@@ -384,6 +408,164 @@ fn tsvector_text(raw: &[u8]) -> Option<String> {
         lexemes.push(lexeme);
     }
     Some(lexemes.join(" "))
+}
+
+/// `'fat' & ( 'rat' | !'cat' ) <-> 'a':*B`, from the items in the order the server keeps
+/// them: an operator, then its right operand, then its left. Parentheses where the
+/// operators' priority asks for them, as the server's own output puts them.
+fn tsquery_text(raw: &[u8]) -> Option<String> {
+    enum Item {
+        Operand(String),
+        Not,
+        /// The operator, its priority, and for a phrase that it is one.
+        Binary(String, i32, bool),
+    }
+    fn infix(items: &[Item], at: &mut usize, parent: i32, right_of_phrase: bool) -> Option<String> {
+        let item = items.get(*at)?;
+        *at += 1;
+        match item {
+            Item::Operand(text) => Some(text.clone()),
+            // NOT binds tightest, so it never needs parentheses of its own.
+            Item::Not => Some(format!("!{}", infix(items, at, 4, false)?)),
+            Item::Binary(symbol, priority, phrase) => {
+                let right = infix(items, at, *priority, *phrase)?;
+                let left = infix(items, at, *priority, false)?;
+                Some(if *priority < parent || (*phrase && right_of_phrase) {
+                    format!("( {left} {symbol} {right} )")
+                } else {
+                    format!("{left} {symbol} {right}")
+                })
+            }
+        }
+    }
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut items = Vec::new();
+    for _ in 0..count {
+        let item = match raw.get(at..at + 2)? {
+            [1, weight] => {
+                let weight = *weight;
+                let prefix = *raw.get(at + 2)? != 0;
+                at += 3;
+                let end = at + raw.get(at..)?.iter().position(|byte| *byte == 0)?;
+                let word = std::str::from_utf8(&raw[at..end]).ok()?;
+                at = end + 1;
+                let mut operand = format!("'{}'", word.replace('\\', "\\\\").replace('\'', "''"));
+                if weight != 0 || prefix {
+                    operand.push(':');
+                    if prefix {
+                        operand.push('*');
+                    }
+                    for (bit, letter) in [(8, 'A'), (4, 'B'), (2, 'C'), (1, 'D')] {
+                        if weight & bit != 0 {
+                            operand.push(letter);
+                        }
+                    }
+                }
+                Item::Operand(operand)
+            }
+            [2, operator] => {
+                let operator = *operator;
+                at += 2;
+                match operator {
+                    1 => Item::Not,
+                    2 => Item::Binary("&".into(), 2, false),
+                    3 => Item::Binary("|".into(), 1, false),
+                    4 => {
+                        let distance = i16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+                        at += 2;
+                        let symbol = if distance == 1 {
+                            "<->".to_string()
+                        } else {
+                            format!("<{distance}>")
+                        };
+                        Item::Binary(symbol, 3, true)
+                    }
+                    _ => return None,
+                }
+            }
+            _ => return None,
+        };
+        items.push(item);
+    }
+    if items.is_empty() {
+        return Some(String::new());
+    }
+    infix(&items, &mut 0, -1, false)
+}
+
+/// `10:20:12,15`: the oldest transaction still running, the first not yet started, and
+/// the ones between them still in progress.
+fn snapshot_text(raw: &[u8]) -> Option<String> {
+    let u64_at = |at: usize| Some(u64::from_be_bytes(raw.get(at..at + 8)?.try_into().ok()?));
+    let running = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let xips = (0..running as usize)
+        .map(|index| u64_at(20 + index * 8).map(|xid| xid.to_string()))
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("{}:{}:{}", u64_at(4)?, u64_at(12)?, xips.join(",")))
+}
+
+/// `"k"=>"v", "n"=>NULL`, a quote or a backslash in either escaped.
+fn hstore_text(raw: &[u8]) -> Option<String> {
+    let quoted = |bytes: &[u8]| {
+        let text = std::str::from_utf8(bytes).ok()?;
+        Some(format!(
+            "\"{}\"",
+            text.replace('\\', "\\\\").replace('"', "\\\"")
+        ))
+    };
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut pairs = Vec::new();
+    for _ in 0..count {
+        let mut next = || {
+            let len = i32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?);
+            at += 4;
+            let Ok(len) = usize::try_from(len) else {
+                return Some(None);
+            };
+            let bytes = raw.get(at..at + len)?;
+            at += len;
+            Some(Some(bytes))
+        };
+        let key = quoted(next()??)?;
+        let value = match next()? {
+            Some(bytes) => quoted(bytes)?,
+            None => "NULL".into(),
+        };
+        pairs.push(format!("{key}=>{value}"));
+    }
+    Some(pairs.join(", "))
+}
+
+/// pgvector's `{1:0.5,3:2}/5`: the non-zero elements, counted from one, and the length.
+fn sparsevec_text(raw: &[u8]) -> Option<String> {
+    let i32_at = |at: usize| Some(i32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?));
+    let dimensions = i32_at(0)?;
+    let stored = usize::try_from(i32_at(4)?).ok()?;
+    let values_at = 12 + stored * 4;
+    let elements = (0..stored)
+        .map(|index| {
+            let position = i32_at(12 + index * 4)?;
+            let at = values_at + index * 4;
+            let value = f32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?);
+            Some(format!("{}:{}", position + 1, float4_text(value)))
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(format!("{{{}}}/{dimensions}", elements.join(",")))
+}
+
+/// An IEEE half-precision float, exactly, as the float4 it widens to.
+fn half_to_f32(bits: u16) -> f32 {
+    let sign = if bits & 0x8000 == 0 { 1.0 } else { -1.0 };
+    let exponent = i32::from((bits >> 10) & 0x1f);
+    let fraction = f32::from(bits & 0x3ff);
+    match exponent {
+        0 => sign * fraction * 2f32.powi(-24),
+        31 if fraction == 0.0 => sign * f32::INFINITY,
+        31 => f32::NAN,
+        _ => sign * (1.0 + fraction / 1024.0) * 2f32.powi(exponent - 15),
+    }
 }
 
 fn text(raw: &[u8]) -> Option<DbValue> {
@@ -502,6 +684,21 @@ fn range_text(inner: &Type, raw: &[u8]) -> Option<String> {
             ))
         }
     }
+}
+
+/// `{[1,3),[5,7)}`: a count, then each range with its length before it.
+fn multirange_text(inner: &Type, raw: &[u8]) -> Option<String> {
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut ranges = Vec::new();
+    for _ in 0..count {
+        let len =
+            usize::try_from(u32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?)).ok()?;
+        at += 4;
+        ranges.push(range_text(inner, raw.get(at..at + len)?)?);
+        at += len;
+    }
+    Some(format!("{{{}}}", ranges.join(",")))
 }
 
 fn inet_text(ty: &Type, raw: &[u8]) -> Option<String> {
@@ -776,6 +973,72 @@ mod tests {
             raw.extend(value.to_be_bytes());
         }
         assert_eq!(text_of(&decode_value(&ty, &raw)), "[1,0.5,-2]");
+    }
+
+    fn named(name: &str) -> Type {
+        Type::new(
+            name.into(),
+            99_997,
+            tokio_postgres::types::Kind::Simple,
+            "public".into(),
+        )
+    }
+
+    /// pgvector's half and sparse vectors are not in the image the live tests use.
+    #[test]
+    fn pgvector_half_and_sparse_vectors_read_as_their_values() {
+        let mut half = vec![0, 4, 0, 0];
+        for bits in [0x3C00u16, 0x3800, 0xC000, 0x2E66] {
+            half.extend(bits.to_be_bytes());
+        }
+        assert_eq!(
+            text_of(&decode_value(&named("halfvec"), &half)),
+            "[1,0.5,-2,0.099975586]"
+        );
+        let mut sparse = Vec::new();
+        for word in [5i32, 2, 0, 0, 2] {
+            sparse.extend(word.to_be_bytes());
+        }
+        for value in [1.5f32, -2.0] {
+            sparse.extend(value.to_be_bytes());
+        }
+        assert_eq!(
+            text_of(&decode_value(&named("sparsevec"), &sparse)),
+            "{1:1.5,3:-2}/5"
+        );
+    }
+
+    #[test]
+    fn hstore_tsquery_snapshots_and_cursors_read_as_postgres_prints_them() {
+        let mut hstore = vec![0, 0, 0, 2];
+        for (len, bytes) in [(1i32, &b"a"[..]), (1, b"1"), (3, b"b\"q"), (-1, b"")] {
+            hstore.extend(len.to_be_bytes());
+            hstore.extend(bytes);
+        }
+        assert_eq!(
+            text_of(&decode_value(&named("hstore"), &hstore)),
+            r#""a"=>"1", "b\"q"=>NULL"#
+        );
+        // 'fat' & ( 'rat' | 'cat' ): each operator before its right operand, then its left.
+        let mut query = vec![0, 0, 0, 5, 2, 2, 2, 3];
+        for word in ["cat", "rat", "fat"] {
+            query.extend([1, 0, 0]);
+            query.extend(word.as_bytes());
+            query.push(0);
+        }
+        assert_eq!(
+            text_of(&decode_value(&Type::TSQUERY, &query)),
+            "'fat' & ( 'rat' | 'cat' )"
+        );
+        let mut snapshot = 2u32.to_be_bytes().to_vec();
+        for xid in [10u64, 20, 12, 15] {
+            snapshot.extend(xid.to_be_bytes());
+        }
+        assert_eq!(
+            text_of(&decode_value(&Type::PG_SNAPSHOT, &snapshot)),
+            "10:20:12,15"
+        );
+        assert_eq!(text_of(&decode_value(&Type::REFCURSOR, b"cur")), "cur");
     }
 
     /// Floats read as psql prints them, in every type made of them.

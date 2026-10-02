@@ -685,19 +685,55 @@ async fn floats_read_as_the_server_writes_them() {
         ]
         .map(String::from),
     );
+    reads_as_the_server_writes(&*fixture.session, &columns).await;
+}
+
+/// Each expression in `columns` reads as the text the server itself writes for it.
+async fn reads_as_the_server_writes(session: &dyn Session, columns: &[String]) {
     let sql = columns
         .iter()
         .map(|column| format!("{column}, ({column})::text"))
         .collect::<Vec<_>>()
         .join(", ");
-    let texts = first_row_texts(
-        &*fixture.session,
-        QueryRequest::read(format!("select {sql}"), 0),
-    )
-    .await;
-    for (pair, column) in texts.chunks(2).zip(&columns) {
+    let texts = first_row_texts(session, QueryRequest::read(format!("select {sql}"), 0)).await;
+    for (pair, column) in texts.chunks(2).zip(columns) {
         assert_eq!(pair[0], pair[1], "{column}");
     }
+}
+
+/// Types that still read as hex: a cursor's name, a text search query, multiranges,
+/// snapshots, hstore.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn queries_snapshots_multiranges_and_hstore_read_as_the_server_writes_them() {
+    let fixture = connect_postgres_fixture().await;
+    let setup = QueryRequest::write("create extension if not exists hstore");
+    collect(fixture.session.execute(setup).await.unwrap()).await;
+    let columns = [
+        "'cur'::refcursor",
+        "'fat & (rat | cat)'::tsquery",
+        "'(fat | rat) & cat'::tsquery",
+        "'!cat & !(a | b)'::tsquery",
+        "'a <-> b <2> c'::tsquery",
+        "'a <-> (b <-> c)'::tsquery",
+        "'(a & b) <-> c'::tsquery",
+        "'super:*AB & it''s & back\\\\slash'::tsquery",
+        "to_tsquery('english', 'cats & rats')",
+        "array['a & b', 'c']::tsquery[]",
+        "'{[1,3),[5,7)}'::int4multirange",
+        "'{}'::int4multirange",
+        "'{(,5)}'::int8multirange",
+        "'{[1.5,2.5]}'::nummultirange",
+        "'{[2020-01-01,2020-02-01)}'::datemultirange",
+        "pg_current_snapshot()",
+        "'10:20:12,15'::pg_snapshot",
+        "'10:20:'::txid_snapshot",
+        "txid_current_snapshot()",
+        "'a=>1, \"b\\\"q\"=>NULL, \"c d\"=>\"e\\\\f\"'::hstore",
+        "''::hstore",
+    ]
+    .map(String::from);
+    reads_as_the_server_writes(&*fixture.session, &columns).await;
 }
 
 /// The first row's cells as text: what the grid shows for each.
