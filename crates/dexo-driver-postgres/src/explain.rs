@@ -197,10 +197,21 @@ impl PostgresSession {
 #[async_trait::async_trait]
 impl ExplainProvider for PostgresSession {
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
+        if !request.hypothetical_indexes.is_empty() {
+            return self
+                .explain_with_indexes(&request.sql, &request.hypothetical_indexes, request.analyze)
+                .await;
+        }
         if request.analyze {
             return self.explain_analyzed(&request.sql).await;
         }
-        let sql = wrap_explain(&request.sql, false);
+        self.explain_estimated(&request.sql).await
+    }
+}
+
+impl PostgresSession {
+    async fn explain_estimated(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
+        let sql = wrap_explain(sql, false);
         let row = self.client.query_one(&sql, &[]).await.map_err(map_error)?;
         if let Ok(value) = row.try_get::<_, serde_json::Value>(0) {
             return parse_value(&value, &value.to_string());
@@ -208,11 +219,93 @@ impl ExplainProvider for PostgresSession {
         let text: String = row.try_get(0).map_err(map_error)?;
         parse_json(&text)
     }
+
+    /// The estimated plan with `indexes` as hypopg's hypothetical ones: made on this
+    /// session, which alone sees them, used by EXPLAIN only, and dropped after it however
+    /// it went.
+    async fn explain_with_indexes(
+        &self,
+        sql: &str,
+        indexes: &[String],
+        analyze: bool,
+    ) -> Result<ExplainPlan, DriverError> {
+        if analyze {
+            return Err(DriverError::unsupported(
+                "a hypothetical index exists only for the planner: try it on an estimated plan",
+            ));
+        }
+        for index in indexes {
+            if !is_create_index(index) {
+                return Err(DriverError::new(
+                    DriverErrorCategory::Syntax,
+                    format!(
+                        "not an index definition: {index} (write CREATE INDEX ON table (columns))"
+                    ),
+                ));
+            }
+        }
+        let installed = self
+            .client
+            .query_opt("SELECT 1 FROM pg_extension WHERE extname = 'hypopg'", &[])
+            .await
+            .map_err(map_error)?
+            .is_some();
+        if !installed {
+            return Err(DriverError::unsupported(
+                "trying an index needs the hypopg extension: install its package on the server, then run CREATE EXTENSION hypopg",
+            ));
+        }
+        let mut made = Ok(());
+        for index in indexes {
+            if let Err(error) = self
+                .client
+                .query("SELECT indexrelid FROM hypopg_create_index($1)", &[index])
+                .await
+            {
+                made = Err(map_error(error));
+                break;
+            }
+        }
+        let plan = match made {
+            Ok(()) => self.explain_estimated(sql).await,
+            Err(error) => Err(error),
+        };
+        // Whatever happened, the session keeps no hypothetical index for a later plan.
+        let _ = self.client.batch_execute("SELECT hypopg_reset()").await;
+        plan
+    }
+}
+
+/// `CREATE [UNIQUE] INDEX ...`: what hypopg takes, and nothing else.
+fn is_create_index(definition: &str) -> bool {
+    let words: Vec<String> = definition
+        .split_whitespace()
+        .take(3)
+        .map(str::to_ascii_uppercase)
+        .collect();
+    !definition.contains(';')
+        && words.first().map(String::as_str) == Some("CREATE")
+        && (words.get(1).map(String::as_str) == Some("INDEX")
+            || (words.get(1).map(String::as_str) == Some("UNIQUE")
+                && words.get(2).map(String::as_str) == Some("INDEX")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::{parse_json, wrap_explain};
+
+    #[test]
+    fn only_an_index_definition_is_tried() {
+        assert!(super::is_create_index(
+            "CREATE INDEX ON orders (customer_id)"
+        ));
+        assert!(super::is_create_index("create unique index on t (a, b)"));
+        assert!(!super::is_create_index("drop table orders"));
+        assert!(!super::is_create_index(
+            "create index on t (a); drop table t"
+        ));
+        assert!(!super::is_create_index("create table t (a int)"));
+    }
 
     #[test]
     fn wrap_keeps_analyze_opt_in() {

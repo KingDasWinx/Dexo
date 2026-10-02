@@ -587,6 +587,9 @@ fn extract_actual_time(text: &str) -> Option<f64> {
 #[async_trait::async_trait]
 impl ExplainProvider for MysqlSession {
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
+        if !request.hypothetical_indexes.is_empty() {
+            return Err(dexo_driver_api::hypothetical_unsupported());
+        }
         let caps = if self.is_mariadb() {
             MysqlExplainCaps::mariadb()
         } else {

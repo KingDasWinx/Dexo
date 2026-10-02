@@ -622,6 +622,7 @@ impl WorkbenchRuntime {
                 cursor,
                 dialect,
                 analyze,
+                indexes,
                 session,
                 document,
                 operation,
@@ -654,6 +655,7 @@ impl WorkbenchRuntime {
                         cursor,
                         dialect,
                         analyze,
+                        indexes,
                         document,
                         operation,
                     };

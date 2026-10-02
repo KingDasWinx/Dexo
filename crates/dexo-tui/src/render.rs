@@ -134,6 +134,26 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.saved_queries.open {
         render_saved_queries(frame, model, hits);
     }
+    if let Some(prompt) = &model.try_index {
+        let popup = centered(frame.area(), 72, 7);
+        let lines = prompt.lines(popup_inner(popup).width as usize);
+        paint_popup(
+            frame,
+            model,
+            popup,
+            overlay_block(model, "Try an index"),
+            lines.join("\n"),
+        );
+        register_overlay(hits, popup);
+        for_popup_lines(popup, &lines, |_, line, rect| {
+            if line.starts_with("index:") {
+                hits.register(HitTarget::FormField(0), rect);
+            }
+            if line.contains("[Cancel]") {
+                crate::widgets::form::register_footer(hits, rect, line, "Try");
+            }
+        });
+    }
     if let Some(prompt) = &model.save_query_prompt {
         let popup = centered(frame.area(), 64, 9);
         let lines = prompt.lines(popup_inner(popup).width as usize);

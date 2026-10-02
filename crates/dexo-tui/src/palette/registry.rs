@@ -491,6 +491,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenExplain),
         },
         CommandSpec {
+            id: "explain.try_index",
+            title: "Try an Index…",
+            keywords: &["hypothetical", "hypopg", "what if", "index", "plan"],
+            shortcut: Some("i"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenTryIndex),
+        },
+        CommandSpec {
             id: "results.cycle_view",
             title: "Cycle Output View",
             keywords: &["grid", "explain", "messages", "output", "results"],

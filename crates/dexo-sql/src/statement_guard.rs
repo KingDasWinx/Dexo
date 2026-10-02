@@ -196,6 +196,18 @@ pub fn inspect_schema_write(sql: &str, dialect: Dialect) -> Result<Inspection, G
     guard.finish(extra)
 }
 
+/// A `CREATE INDEX` and nothing else -- a hypothetical index to plan with -- and the
+/// table it is on.
+pub fn inspect_index(sql: &str, dialect: Dialect) -> Result<Inspection, GuardRejection> {
+    let statement = parse_one(sql, dialect)?;
+    if !matches!(statement, Statement::CreateIndex(_)) {
+        return Err(GuardRejection::WrongKind);
+    }
+    let mut guard = Guard::new(dialect, 1);
+    let _ = statement.visit(&mut guard);
+    guard.finish(Vec::new())
+}
+
 /// Why the editor asks before it runs a statement.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Destructive {
@@ -637,6 +649,13 @@ mod tests {
         assert!(check("1=1; delete from t", "").is_err());
         assert!(check("", "id; drop table t").is_err());
         assert!(check("pg_terminate_backend(42)", "").is_err());
+        let index = super::inspect_index(
+            "CREATE INDEX ON shop.orders (customer_id)",
+            Dialect::Postgres,
+        )
+        .unwrap();
+        assert_eq!(index.relations, [["shop", "orders"]]);
+        assert!(super::inspect_index("DROP TABLE orders", Dialect::Postgres).is_err());
         for writes in [
             "lo_put(1, 0, 'x') is not null",
             "lo_truncate(1, 0) = 0",

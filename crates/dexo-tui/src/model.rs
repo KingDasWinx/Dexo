@@ -1764,6 +1764,8 @@ pub struct Model {
     pub transaction_prompt: TransactionPrompt,
     pub document_name_prompt: DocumentNamePrompt,
     pub save_query_prompt: Option<crate::screens::saved_queries::SaveQueryPrompt>,
+    /// The Explain view's Try index dialog, while it is open.
+    pub try_index: Option<crate::screens::explain::TryIndexPrompt>,
     pub saved_queries: crate::screens::saved_queries::SavedQueriesPicker,
     pub settings: SettingsScreen,
     pub recovery: RecoveryScreen,
@@ -1917,6 +1919,7 @@ impl Default for Model {
             transaction_prompt: TransactionPrompt::default(),
             document_name_prompt: DocumentNamePrompt::default(),
             save_query_prompt: None,
+            try_index: None,
             saved_queries: Default::default(),
             settings: SettingsScreen::default(),
             recovery: RecoveryScreen::default(),

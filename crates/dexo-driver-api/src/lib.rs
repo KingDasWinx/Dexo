@@ -29,7 +29,9 @@ pub use connection::{
 };
 pub use ddl::{DdlExecutor, DdlOutcome, DdlPlan, DdlStatement, ObjectDdl, SecurityAdmin};
 pub use error::{DriverError, DriverErrorCategory};
-pub use explain::{ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode};
+pub use explain::{
+    ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode, hypothetical_unsupported,
+};
 pub use identifier::QualifiedName;
 pub use mutation::{
     ColumnId, ColumnKeyInfo, DataMutator, DataPage, DataRequest, Filter, Mutation,

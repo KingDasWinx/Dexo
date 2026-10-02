@@ -529,8 +529,16 @@ pub enum Action {
         plan: Box<dexo_driver_api::ExplainPlan>,
         /// The statement explained, so a second plan of it can be compared with the first.
         sql: String,
+        /// The hypothetical indexes it was planned with.
+        indexes: Vec<String>,
         document: String,
         operation: OperationId,
+    },
+    /// Explain view's Try index: ask for an index definition.
+    OpenTryIndex,
+    /// Plan the statement again as if `definition` were built.
+    TryIndex {
+        definition: String,
     },
     ExplainFailed {
         document: String,
@@ -929,6 +937,8 @@ pub enum Effect {
         /// How the document is split into statements.
         dialect: dexo_sql::Dialect,
         analyze: bool,
+        /// Indexes to plan with as if they were built.
+        indexes: Vec<String>,
         session: SessionId,
         /// The document that asked; the plan is its own even if another tab is active
         /// by the time it arrives.

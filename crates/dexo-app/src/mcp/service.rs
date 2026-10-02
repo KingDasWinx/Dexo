@@ -128,6 +128,13 @@ impl McpService {
             .map(|_| ())
     }
 
+    /// A hypothetical index: a `CREATE INDEX` on a table the agent may read.
+    pub fn authorize_index(&self, connection: &McpConnection, index: &str) -> Result<(), AppError> {
+        let inspection = dexo_sql::inspect_index(index, connection.dialect).map_err(guard_error)?;
+        self.authorize_relations(connection, &inspection.relations)
+            .map(|_| ())
+    }
+
     /// Every relation a statement names must be allowed after completing it the way the
     /// server would; one denied or unknown name hides the whole statement.
     pub fn authorize_relations(
@@ -286,17 +293,23 @@ impl McpService {
         Ok(result)
     }
 
+    /// The estimated plan of `sql`, with `indexes` as if they were built: each must be a
+    /// `CREATE INDEX` on a table the grant lets the agent read, and none is built.
     pub async fn explain(
         &self,
         session: &dyn Session,
         connection: &McpConnection,
         sql: &str,
+        indexes: &[String],
     ) -> Result<ExplainPlan, AppError> {
         self.authorize_read_sql(connection, sql)?;
+        for index in indexes {
+            self.authorize_index(connection, index)?;
+        }
         session
             .explain()
             .ok_or_else(|| AppError::new(ErrorCategory::Capability, "explain is unavailable"))?
-            .explain(ExplainRequest::estimated(sql))
+            .explain(ExplainRequest::with_indexes(sql, indexes.to_vec()))
             .await
             .map_err(map_driver_error)
     }
@@ -370,6 +383,23 @@ mod tests {
     use dexo_driver_api::DbValue;
     use dexo_test_support::FakeSession;
     use tokio_util::sync::CancellationToken;
+
+    /// A hypothetical index must be an index definition on a table the agent may read.
+    #[test]
+    fn a_hypothetical_index_is_on_a_readable_table() {
+        let service = raw_service(10, 1024);
+        assert!(
+            service
+                .authorize_index(&pg(), "CREATE INDEX ON orders (customer_id)")
+                .is_ok()
+        );
+        assert!(
+            service
+                .authorize_index(&pg(), "CREATE INDEX ON secrets (owner)")
+                .is_err()
+        );
+        assert!(service.authorize_index(&pg(), "DROP TABLE orders").is_err());
+    }
 
     fn raw_service(max_rows: u64, max_bytes: u64) -> McpService {
         let mut profile = McpProfile::new("assistant");

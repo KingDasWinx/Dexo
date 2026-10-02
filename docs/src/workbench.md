@@ -68,6 +68,10 @@ The title says how many rows there are: exactly when they all came, `~4.3M` from
 
 `f` on a row opens Related rows: each foreign key from or to the table, followed in a document of its own filtered to the rows on the other end; `b` closes that document and goes back to the row. Enter on a row lists what can be done with it, with each action's key.
 
+## Explain
+
+F7 shows the estimated plan of the statement under the cursor, Shift+F7 runs it with ANALYZE after asking; `v` steps through the tree, the table and a summary, and a second plan of the same statement is compared with the first. On Postgres with the hypopg extension, `i` tries an index before anyone builds it: type its definition (`CREATE INDEX ON orders (customer_id)`) and the statement is planned as if it existed, compared with its plan without it. The index exists only for that plan, on that session; `dexo explain --index "CREATE INDEX ON …"` does the same from the command line. Without hypopg, Dexo says so: install the package on the server, then `CREATE EXTENSION hypopg`.
+
 ## Saved queries
 
 Save Query As (Alt+S) keeps the selection, or the whole document, under a name, for the project and the connection; the same name replaces that query, and says so. Open Saved Query (Alt+O) searches names and SQL, shows the query, opens it in a new document on its connection, renames it (F2) and deletes it (Delete, then confirm). A saved query belongs to a saved connection and goes with it; a temporary connection asks to be saved first.

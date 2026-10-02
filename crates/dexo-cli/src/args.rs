@@ -168,6 +168,10 @@ pub enum Command {
         analyze: bool,
         #[arg(long)]
         confirm: bool,
+        /// Plan as if this index were built (Postgres with hypopg), e.g.
+        /// "CREATE INDEX ON orders (customer_id)". Repeat for several.
+        #[arg(long = "index", value_name = "DEFINITION")]
+        indexes: Vec<String>,
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
     },

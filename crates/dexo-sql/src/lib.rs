@@ -47,5 +47,5 @@ pub use statement::{
 };
 pub use statement_guard::{
     Destructive, GuardRejection, Inspection, clauses_read, destructive, inspect_data_write,
-    inspect_read, inspect_schema_write, is_read,
+    inspect_index, inspect_read, inspect_schema_write, is_read,
 };

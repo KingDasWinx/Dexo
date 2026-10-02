@@ -210,8 +210,17 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             file,
             analyze,
             confirm,
+            indexes,
             format,
-        } => run_explain(registry, connection, sql, file, analyze, confirm, format)?,
+        } => run_explain(
+            registry,
+            connection,
+            sql,
+            file,
+            (analyze, confirm),
+            indexes,
+            format,
+        )?,
         Command::Sessions { command } => run_sessions(registry, command)?,
         Command::Mcp { command } => run_mcp(registry, command)?,
     }
@@ -1043,16 +1052,27 @@ fn run_explain(
     connection: String,
     sql: Option<String>,
     file: Option<std::path::PathBuf>,
-    analyze: bool,
-    confirm: bool,
+    (analyze, confirm): (bool, bool),
+    indexes: Vec<String>,
     format: OutputFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
     if analyze && !confirm {
         anyhow::bail!("EXPLAIN ANALYZE runs the statement, then rolls it back; pass --confirm");
     }
-    let plan = tokio::runtime::Runtime::new()?
-        .block_on(explain_live(registry, connection, sql, analyze))?;
+    let request = if indexes.is_empty() {
+        dexo_driver_api::ExplainRequest {
+            analyze,
+            ..dexo_driver_api::ExplainRequest::estimated(sql)
+        }
+    } else {
+        if analyze {
+            anyhow::bail!("--index plans with an index that is not built: drop --analyze");
+        }
+        dexo_driver_api::ExplainRequest::with_indexes(sql, indexes)
+    };
+    let plan =
+        tokio::runtime::Runtime::new()?.block_on(explain_live(registry, connection, request))?;
     let mut stdout = std::io::stdout();
     match format {
         OutputFormat::Json | OutputFormat::Jsonl => {
@@ -1069,8 +1089,7 @@ fn run_explain(
 async fn explain_live(
     registry: DriverRegistry,
     connection: String,
-    sql: String,
-    analyze: bool,
+    mut request: dexo_driver_api::ExplainRequest,
 ) -> anyhow::Result<dexo_driver_api::ExplainPlan> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
@@ -1083,8 +1102,8 @@ async fn explain_live(
             )
         })?;
     // Split as the connection's dialect writes it.
-    let sql = dexo_app::explain_service::single_statement(
-        &sql,
+    request.sql = dexo_app::explain_service::single_statement(
+        &request.sql,
         dexo_app::dialect_for_driver(&profile.driver),
     )?
     .to_string();
@@ -1092,10 +1111,7 @@ async fn explain_live(
     let provider = session
         .explain()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "explain is unavailable"))?;
-    Ok(provider
-        .explain(dexo_driver_api::ExplainRequest { sql, analyze })
-        .await
-        .map_err(map_driver_error)?)
+    Ok(provider.explain(request).await.map_err(map_driver_error)?)
 }
 
 fn run_sessions(registry: DriverRegistry, command: SessionsCommand) -> anyhow::Result<()> {

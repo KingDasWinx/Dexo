@@ -11,6 +11,9 @@ impl ExplainProvider for SqliteSession {
     /// `EXPLAIN QUERY PLAN`, which compiles the statement and never runs it, so it is as
     /// safe on a write as on a read. SQLite has no plan with actual figures.
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
+        if !request.hypothetical_indexes.is_empty() {
+            return Err(dexo_driver_api::hypothetical_unsupported());
+        }
         if request.analyze {
             return Err(DriverError::unsupported(
                 "SQLite has no EXPLAIN ANALYZE; use the estimated plan",

@@ -27,7 +27,7 @@ use crate::{prompts, resources};
 
 /// Bumped whenever a tool's name, input schema or annotations change; the snapshot test
 /// in `tests/protocol.rs` fails until it is (MCP-020).
-pub const TOOL_SCHEMA_VERSION: u32 = 2;
+pub const TOOL_SCHEMA_VERSION: u32 = 3;
 
 #[derive(Clone)]
 pub struct DexoMcpServer {

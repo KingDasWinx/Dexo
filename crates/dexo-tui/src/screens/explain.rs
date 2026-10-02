@@ -31,6 +31,11 @@ pub struct ExplainScreen {
     /// The statement `plan` is for. Each new plan used to be compared with whatever came
     /// before it, often a plan of some other query.
     pub sql: String,
+    /// The hypothetical indexes `plan` was made with, if any.
+    pub indexes: Vec<String>,
+    /// The last plan of `sql` made without them: what a tried index is compared with,
+    /// however many are tried.
+    pub baseline: Option<ExplainPlan>,
 }
 
 impl Default for ExplainScreen {
@@ -40,6 +45,8 @@ impl Default for ExplainScreen {
             compare: Vec::new(),
             view: ExplainView::Tree,
             sql: String::new(),
+            indexes: Vec::new(),
+            baseline: None,
         }
     }
 }
@@ -90,7 +97,7 @@ impl ExplainScreen {
     pub fn lines(&self, width: u16, styles: &ExplainStyles) -> Vec<Line<'static>> {
         let Some(plan) = &self.plan else {
             return vec![Line::styled(
-                "No plan yet. F7 explains the statement under the cursor; Shift+F7 runs it with ANALYZE.",
+                "No plan yet. F7 explains the statement under the cursor; Shift+F7 runs it with ANALYZE; then i tries an index.",
                 styles.muted,
             )];
         };
@@ -99,10 +106,18 @@ impl ExplainScreen {
         match self.view {
             ExplainView::Tree => {
                 let mut headline = view.headline.clone();
+                if !self.indexes.is_empty() {
+                    headline.push_str(&format!(" · as if built: {}", self.indexes.join("; ")));
+                }
                 if !self.compare.is_empty() {
                     let count = self.compare.len();
+                    let against = if self.indexes.is_empty() {
+                        "the last plan"
+                    } else {
+                        "the plan without it"
+                    };
                     headline.push_str(&format!(
-                        " · {count} {} since the last plan (Summary)",
+                        " · {count} {} since {against} (Summary)",
                         if count == 1 { "change" } else { "changes" }
                     ));
                 }
@@ -150,19 +165,34 @@ impl ExplainScreen {
 
     /// A second plan of the same statement is compared with the first -- estimated
     /// against analyzed, or before and after an index -- and any other plan starts clean.
-    pub fn set_plan(&mut self, plan: ExplainPlan, sql: String) {
-        self.compare = match &self.plan {
-            Some(previous) if self.sql == sql => compare_plans(previous, &plan),
-            _ => Vec::new(),
+    /// A plan made with hypothetical indexes is compared with the statement's last plan
+    /// made without -- the baseline -- however many indexes were tried since.
+    pub fn set_plan(&mut self, plan: ExplainPlan, sql: String, indexes: Vec<String>) {
+        if self.sql != sql {
+            self.baseline = None;
+        }
+        let against = if indexes.is_empty() {
+            self.plan.as_ref().filter(|_| self.sql == sql)
+        } else {
+            self.baseline.as_ref()
         };
+        self.compare = against
+            .map(|previous| compare_plans(previous, &plan))
+            .unwrap_or_default();
+        if indexes.is_empty() {
+            self.baseline = Some(plan.clone());
+        }
         self.plan = Some(plan);
         self.sql = sql;
+        self.indexes = indexes;
     }
 
     pub fn clear(&mut self) {
         self.plan = None;
         self.compare.clear();
         self.sql.clear();
+        self.indexes.clear();
+        self.baseline = None;
     }
 }
 
@@ -275,4 +305,34 @@ fn fit(segments: Vec<(String, Style)>, width: usize) -> Vec<Span<'static>> {
     }
     spans.push(Span::raw("…"));
     spans
+}
+
+/// Try index: the definition of an index to plan with as if it were built.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TryIndexPrompt {
+    pub input: crate::widgets::text_input::TextInput,
+    pub footer: crate::widgets::form::FooterFocus,
+}
+
+impl Default for TryIndexPrompt {
+    fn default() -> Self {
+        Self {
+            input: crate::widgets::text_input::TextInput::new("CREATE INDEX ON "),
+            footer: crate::widgets::form::FooterFocus::Input,
+        }
+    }
+}
+
+impl TryIndexPrompt {
+    pub fn lines(&self, width: usize) -> Vec<String> {
+        vec![
+            self.input.inline_line_within(
+                "index: ",
+                self.footer == crate::widgets::form::FooterFocus::Input,
+                width,
+            ),
+            "Planned as if built, on Postgres with hypopg; nothing is created.".into(),
+            crate::widgets::form::footer_line("Try", self.footer),
+        ]
+    }
 }

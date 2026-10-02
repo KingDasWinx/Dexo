@@ -17,8 +17,8 @@ use crate::error::{app_error, hidden};
 use crate::render::{RowsPage, rows_result, text_result};
 use crate::router::{ConnectionSlot, SessionLease};
 use crate::schema::{
-    AdminListInput, CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ObjectInput,
-    SqlInput,
+    AdminListInput, CatalogListInput, CatalogSearchInput, DataReadInput, DiffInput, ExplainInput,
+    ObjectInput, SqlInput,
 };
 use crate::server::DexoMcpServer;
 
@@ -360,9 +360,9 @@ impl DexoMcpServer {
         finish(&mut lease, outcome)
     }
 
-    /// Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed.
+    /// Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed. `hypothetical_indexes` plans as if those indexes were built (Postgres with hypopg), to see whether one would help before anyone builds it.
     #[tool(annotations(read_only_hint = true))]
-    async fn query_explain(&self, Parameters(input): Parameters<SqlInput>) -> CallToolResult {
+    async fn query_explain(&self, Parameters(input): Parameters<ExplainInput>) -> CallToolResult {
         let slot = match self.slot(input.connection.as_deref()) {
             Ok(slot) => slot,
             Err(result) => return result,
@@ -377,7 +377,12 @@ impl DexoMcpServer {
         let outcome = self
             .inner
             .service
-            .explain(lease.session(), lease.meta, &input.sql)
+            .explain(
+                lease.session(),
+                lease.meta,
+                &input.sql,
+                &input.hypothetical_indexes,
+            )
             .await
             .map(|plan| {
                 text_result(

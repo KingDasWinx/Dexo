@@ -37,6 +37,10 @@ pub struct ExplainPlan {
 pub struct ExplainRequest {
     pub sql: String,
     pub analyze: bool,
+    /// Indexes to plan with as if they were built -- `CREATE INDEX ON orders
+    /// (customer_id)` -- for an estimated plan only. Postgres tries them with hypopg on
+    /// this session alone and drops them after; the other drivers refuse a list.
+    pub hypothetical_indexes: Vec<String>,
 }
 
 impl ExplainRequest {
@@ -44,6 +48,7 @@ impl ExplainRequest {
         Self {
             sql: sql.into(),
             analyze: false,
+            hypothetical_indexes: Vec::new(),
         }
     }
 
@@ -51,8 +56,24 @@ impl ExplainRequest {
         Self {
             sql: sql.into(),
             analyze: true,
+            hypothetical_indexes: Vec::new(),
         }
     }
+
+    /// The estimated plan of `sql` with `indexes` as if they were built.
+    pub fn with_indexes(sql: impl Into<String>, indexes: Vec<String>) -> Self {
+        Self {
+            hypothetical_indexes: indexes,
+            ..Self::estimated(sql)
+        }
+    }
+}
+
+/// What a driver without hypothetical indexes says to a request that has some.
+pub fn hypothetical_unsupported() -> DriverError {
+    DriverError::unsupported(
+        "trying an index before building it needs Postgres with the hypopg extension",
+    )
 }
 
 #[async_trait::async_trait]

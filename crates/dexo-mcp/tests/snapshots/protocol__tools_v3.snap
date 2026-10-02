@@ -1,6 +1,5 @@
 ---
 source: crates/dexo-mcp/tests/protocol.rs
-assertion_line: 413
 expression: client.tools().await
 ---
 [
@@ -496,7 +495,7 @@ expression: client.tools().await
     "annotations": {
       "readOnlyHint": true
     },
-    "description": "Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed.",
+    "description": "Estimated plan for one read-only statement. Runs EXPLAIN without ANALYZE, so nothing is executed. `hypothetical_indexes` plans as if those indexes were built (Postgres with hypopg), to see whether one would help before anyone builds it.",
     "inputSchema": {
       "$schema": "https://json-schema.org/draft/2020-12/schema",
       "properties": {
@@ -507,8 +506,16 @@ expression: client.tools().await
             "null"
           ]
         },
+        "hypothetical_indexes": {
+          "default": [],
+          "description": "Indexes to plan with as if they were built, without building them -- each one\n`CREATE INDEX ON table (columns)`. Postgres with the hypopg extension only; they\nexist for this plan alone.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "sql": {
-          "description": "One read-only statement: SELECT, WITH … SELECT, VALUES, TABLE, or EXPLAIN without ANALYZE.",
+          "description": "One read-only statement: SELECT, WITH … SELECT, VALUES or TABLE.",
           "type": "string"
         }
       },

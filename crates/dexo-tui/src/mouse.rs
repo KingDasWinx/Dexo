@@ -121,6 +121,7 @@ pub enum OverlayKind {
     Snippets,
     Related,
     SaveQuery,
+    TryIndex,
     SavedQueries,
 }
 
@@ -222,6 +223,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.editor.snippet_open, OverlayKind::Snippets),
         (model.data.related_picker.is_some(), OverlayKind::Related),
         (model.save_query_prompt.is_some(), OverlayKind::SaveQuery),
+        (model.try_index.is_some(), OverlayKind::TryIndex),
         (model.saved_queries.open, OverlayKind::SavedQueries),
         (model.editor.history_open, OverlayKind::History),
         (model.editor.parameter_prompt, OverlayKind::Parameters),

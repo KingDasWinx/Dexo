@@ -45,7 +45,7 @@ Every database tool takes an optional `connection`; it is required only when the
 | `data_read` | One page of a table or view, without SQL | Always |
 | `schema_diff` | Differences between two snapshots saved with `dexo schema snapshot` | Always |
 | `query_validate` | Whether `query_execute_read` would accept a statement, and why not | Raw-read profiles |
-| `query_explain` | Estimated plan of one read, without ANALYZE | Raw-read profiles |
+| `query_explain` | Estimated plan of one read, without ANALYZE; `hypothetical_indexes` plans as if those indexes were built (Postgres with hypopg), each on a table the profile may read | Raw-read profiles |
 | `query_execute_read` | One read-only statement, returned as a table | Raw-read profiles |
 | `admin_list_sessions` | Server sessions, without their query text | With `--allow-tool admin_list_sessions` |
 | `data_insert`, `data_update`, `data_delete` | One row, identified by the table's real key | While a `data_write` grant is active |

@@ -314,3 +314,84 @@ async fn a_read_only_request_cannot_write() {
         Some(vec![dexo_driver_api::DbValue::Text("2,3".into())])
     );
 }
+
+/// Without hypopg a hypothetical index says how to get it; with ANALYZE, or with text
+/// that is not an index definition, it is refused before anything reaches the server.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_hypothetical_index_needs_hypopg_and_an_estimated_plan() {
+    let fixture = connect_postgres_fixture().await;
+    let explain = fixture.session.explain().unwrap();
+    let error = explain
+        .explain(dexo_driver_api::ExplainRequest::with_indexes(
+            "select 1",
+            vec!["CREATE INDEX ON pg_class (relname)".into()],
+        ))
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("CREATE EXTENSION hypopg"), "{error}");
+    let mut analyzed = dexo_driver_api::ExplainRequest::with_indexes(
+        "select 1",
+        vec!["CREATE INDEX ON t (a)".into()],
+    );
+    analyzed.analyze = true;
+    assert!(explain.explain(analyzed).await.is_err());
+    assert!(
+        explain
+            .explain(dexo_driver_api::ExplainRequest::with_indexes(
+                "select 1",
+                vec!["DROP TABLE t".into()],
+            ))
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not an index definition")
+    );
+}
+
+/// With hypopg the plan uses the index as if it were built, and the next plan on the
+/// session does not: it never outlives its EXPLAIN. Runs against a server with hypopg
+/// installed, named by DEXO_HYPOPG_ENDPOINT (user and database `dexo`, password in
+/// DEXO_HYPOPG_PASSWORD).
+#[tokio::test]
+#[ignore = "requires a Postgres with hypopg"]
+async fn a_hypothetical_index_is_planned_with_and_then_gone() {
+    let Ok(endpoint) = std::env::var("DEXO_HYPOPG_ENDPOINT") else {
+        return;
+    };
+    let password = std::env::var("DEXO_HYPOPG_PASSWORD").unwrap_or_default();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            endpoint,
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from(password),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE EXTENSION IF NOT EXISTS hypopg",
+        "DROP TABLE IF EXISTS hypo_probe",
+        "CREATE TABLE hypo_probe AS SELECT g AS a FROM generate_series(1, 100000) g",
+        "ANALYZE hypo_probe",
+    ] {
+        collect(session.execute(QueryRequest::write(sql)).await.unwrap()).await;
+    }
+    let explain = session.explain().unwrap();
+    let sql = "select * from hypo_probe where a = 42";
+    let with = explain
+        .explain(dexo_driver_api::ExplainRequest::with_indexes(
+            sql,
+            vec!["CREATE INDEX ON hypo_probe (a)".into()],
+        ))
+        .await
+        .unwrap();
+    assert!(with.raw.contains("Index"), "{}", with.raw);
+    let without = explain
+        .explain(dexo_driver_api::ExplainRequest::estimated(sql))
+        .await
+        .unwrap();
+    assert!(!without.raw.contains("Index"), "{}", without.raw);
+}

@@ -1502,6 +1502,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.explain_prompt = None;
             execute_on_document_connection(model, action)
         }
+        Action::OpenTryIndex => {
+            if model.results.explain.plan.is_none() {
+                model.messages.warn(
+                    "Try index compares with the statement's plan: explain it first (F7).".into(),
+                );
+            } else {
+                model.try_index = Some(crate::screens::explain::TryIndexPrompt::default());
+            }
+            Vec::new()
+        }
+        Action::TryIndex { .. } => {
+            model.try_index = None;
+            execute_on_document_connection(model, action)
+        }
         Action::OpenAdmin => {
             model.admin.open = true;
             model
@@ -1879,6 +1893,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ExplainLoaded {
             plan,
             sql,
+            indexes,
             document,
             operation,
         } => {
@@ -1886,7 +1901,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.active_operation = None;
             }
             if let Some(results) = results_of_document(model, &document) {
-                results.explain.set_plan(*plan, sql);
+                results.explain.set_plan(*plan, sql, indexes);
                 // Show the plan where output lives; never move the user's focus for it.
                 results.view = crate::model::ResultsView::Explain;
                 results.explain_scroll = 0;
@@ -2504,6 +2519,20 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
         Some(OverlayKind::History) => mouse_history(model, hit),
         Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
+        Some(OverlayKind::TryIndex) => match hit {
+            Some(HitTarget::FormField(0)) => {
+                if let Some(prompt) = &mut model.try_index {
+                    prompt.footer = crate::widgets::form::FooterFocus::Input;
+                }
+                Vec::new()
+            }
+            Some(HitTarget::FooterSubmit) => submit_try_index(model),
+            Some(HitTarget::FooterCancel) => {
+                model.try_index = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         Some(OverlayKind::SaveQuery) => match hit {
             Some(HitTarget::FormField(0)) => {
                 if let Some(prompt) = &mut model.save_query_prompt {
@@ -3715,6 +3744,18 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.save_query_prompt.is_some() {
         return save_query_key(model, key);
+    }
+    if model.try_index.is_some() {
+        return try_index_key(model, key);
+    }
+    // In the Explain view `i` tries an index; elsewhere in the results it inserts a row.
+    if model.effective_focus() == Focus::Results
+        && crate::mouse::top_overlay(model).is_none()
+        && model.results.view == crate::model::ResultsView::Explain
+        && key.code == KeyCode::Char('i')
+        && key.modifiers.is_empty()
+    {
+        return update(model, Action::OpenTryIndex);
     }
     if model.saved_queries.open {
         return saved_queries_key(model, key);
@@ -5430,7 +5471,12 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             effects.extend(explain_effect(
                 model,
                 matches!(action, Action::RunExplainAnalyze),
+                Vec::new(),
             ));
+            return effects;
+        }
+        Action::TryIndex { definition } => {
+            effects.extend(explain_effect(model, false, vec![definition]));
             return effects;
         }
         _ => return effects,
@@ -7206,6 +7252,39 @@ fn save_query_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+/// Try index's keys: the definition is typed, Enter tries it, Esc closes.
+fn try_index_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    let Some(prompt) = model.try_index.as_mut() else {
+        return Vec::new();
+    };
+    match footer_key(&mut prompt.footer, &key) {
+        FooterKey::Submit => submit_try_index(model),
+        FooterKey::Cancel => {
+            model.try_index = None;
+            Vec::new()
+        }
+        FooterKey::Moved => Vec::new(),
+        FooterKey::Pass => {
+            if prompt.footer == crate::widgets::form::FooterFocus::Input {
+                prompt.input.handle_key(key);
+            }
+            Vec::new()
+        }
+    }
+}
+
+fn submit_try_index(model: &mut Model) -> Vec<Effect> {
+    let Some(definition) = model
+        .try_index
+        .as_ref()
+        .map(|prompt| prompt.input.trim().to_string())
+    else {
+        return Vec::new();
+    };
+    update(model, Action::TryIndex { definition })
+}
+
 fn submit_save_query(model: &mut Model) -> Vec<Effect> {
     let Some(prompt) = model.save_query_prompt.as_mut() else {
         return Vec::new();
@@ -7838,7 +7917,7 @@ fn analyze_refused(model: &mut Model) -> bool {
 
 /// EXPLAIN is an operation like a run: it holds the slot Ctrl+F2 cancels, and it waits
 /// for one already running instead of racing it on the same session.
-fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
+fn explain_effect(model: &mut Model, analyze: bool, indexes: Vec<String>) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
@@ -7881,6 +7960,7 @@ fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
         cursor,
         dialect: crate::screens::editor::editor_dialect(model),
         analyze,
+        indexes,
         session,
         document: document.id.clone(),
         operation,
@@ -10519,6 +10599,93 @@ mod tests {
         ));
     }
 
+    /// In the Explain view `i` asks for an index, which is tried on the statement's plan;
+    /// the plan that comes back is compared with the one made without it.
+    #[test]
+    fn an_index_is_tried_against_the_plan_without_it() {
+        let session = crate::runtime::SessionId(uuid::Uuid::from_u128(1));
+        let mut model = Model {
+            active_session: Some(session),
+            session_generation: 1,
+            focus: Focus::Results,
+            ..Model::default()
+        };
+        model.set_sql("select * from orders where customer_id = 7");
+        let plan = |cost: f64| dexo_driver_api::ExplainPlan {
+            planning_ms: None,
+            execution_ms: None,
+            root: dexo_driver_api::PlanNode {
+                kind: if cost > 100.0 {
+                    "Seq Scan"
+                } else {
+                    "Index Scan"
+                }
+                .into(),
+                relation: Some("orders".into()),
+                detail: None,
+                estimates: dexo_driver_api::PlanMetrics {
+                    cost: Some(cost),
+                    ..Default::default()
+                },
+                actual: dexo_driver_api::PlanMetrics::default(),
+                loops: None,
+                children: Vec::new(),
+                native: serde_json::Value::Null,
+            },
+            raw: String::new(),
+        };
+        let document = model.active_document().id.clone();
+        let sql = "select * from orders where customer_id = 7".to_string();
+        let loaded = |model: &mut Model, cost: f64, indexes: Vec<String>| {
+            update(
+                model,
+                Action::ExplainLoaded {
+                    plan: Box::new(plan(cost)),
+                    sql: sql.clone(),
+                    indexes,
+                    document: document.clone(),
+                    operation: crate::runtime::OperationId::new(),
+                },
+            );
+        };
+        loaded(&mut model, 2084.0, Vec::new());
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
+        );
+        let prompt = model.try_index.as_mut().expect("Try index opens");
+        prompt
+            .input
+            .set_text("CREATE INDEX ON orders (customer_id)");
+        let effects = update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
+        assert!(
+            effects.iter().any(|effect| matches!(
+                effect,
+                Effect::RunExplain { indexes, analyze: false, .. }
+                    if indexes == &["CREATE INDEX ON orders (customer_id)".to_string()]
+            )),
+            "{effects:?}"
+        );
+        assert!(model.try_index.is_none());
+        model.active_operation = None;
+        let index = vec!["CREATE INDEX ON orders (customer_id)".to_string()];
+        loaded(&mut model, 8.0, index.clone());
+        loaded(&mut model, 9.0, index);
+        // Both tries are compared with the plan without the index, not with each other.
+        let explain = &model.results.explain;
+        assert!(!explain.compare.is_empty());
+        assert_eq!(
+            explain
+                .baseline
+                .as_ref()
+                .and_then(|plan| plan.root.estimates.cost),
+            Some(2084.0)
+        );
+    }
+
     /// A statement that is not a plain read keeps no statement to run again: no bars,
     /// no sort, no count.
     #[test]
@@ -11163,6 +11330,7 @@ mod tests {
             Action::ExplainLoaded {
                 plan: Box::new(plan),
                 sql: "select 1".into(),
+                indexes: Vec::new(),
                 document: document.clone(),
                 operation: crate::runtime::OperationId::new(),
             },

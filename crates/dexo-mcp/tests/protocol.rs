@@ -365,7 +365,7 @@ async fn resources_and_prompts_do_not_leak_policy_or_sql() {
 async fn tool_contract_is_versioned() {
     assert_eq!(
         dexo_mcp::TOOL_SCHEMA_VERSION,
-        2,
+        3,
         "rename the snapshot below with the new version"
     );
     let mut everything = profile();
@@ -415,7 +415,7 @@ async fn tool_contract_is_versioned() {
         ledger,
     )
     .await;
-    insta::assert_json_snapshot!("tools_v2", client.tools().await);
+    insta::assert_json_snapshot!("tools_v3", client.tools().await);
 }
 
 /// MCP-002 / MCP-003: a structured-only profile exposes no raw SQL, no write and no
