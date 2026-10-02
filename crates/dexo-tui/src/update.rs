@@ -8076,8 +8076,18 @@ fn promote_placeholder(model: &mut Model) {
     document.connection_id = connection_id;
 }
 
+/// The first `query-N.sql` no open document has. Counting the documents gave a name
+/// already open as soon as one had been closed or renamed.
 fn suggested_document_name(model: &Model) -> String {
-    format!("query-{}.sql", model.documents.len())
+    (1..)
+        .map(|n| format!("query-{n}.sql"))
+        .find(|name| {
+            !model
+                .documents
+                .iter()
+                .any(|document| document.title.eq_ignore_ascii_case(name))
+        })
+        .unwrap_or_else(|| "query.sql".into())
 }
 
 fn open_new_document_prompt(model: &mut Model) {
@@ -9714,6 +9724,23 @@ mod tests {
     use crate::model::{Focus, Model};
     use crate::runtime::{OperationId, OperationKey};
 
+    /// A closed or renamed document left a number that counting the documents gave
+    /// out again, to a name still open.
+    #[test]
+    fn a_new_document_is_offered_a_name_no_open_one_has() {
+        let mut model = crate::model::Model::default();
+        model.documents = ["query-2.sql", "Query-1.sql", "notes.sql"]
+            .into_iter()
+            .map(|title| crate::model::EditorDocument::new_unique(title, None, None))
+            .collect();
+        assert_eq!(super::suggested_document_name(&model), "query-3.sql");
+        model.documents.remove(0);
+        assert_eq!(super::suggested_document_name(&model), "query-2.sql");
+        super::open_new_document_prompt(&mut model);
+        assert!(model.document_name_prompt.name.is_selected());
+        let screen = crate::render::render_to_string(&model, 80, 24);
+        assert!(screen.contains("query-2.sql"), "{screen}");
+    }
     #[test]
     fn alt_e_hides_and_reshows_the_explorer_panel() {
         let mut model = Model::default();
