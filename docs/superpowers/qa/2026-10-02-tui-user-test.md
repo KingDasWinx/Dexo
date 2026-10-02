@@ -318,3 +318,185 @@ Decision `allow` with status `POLICY_DENIED` contradicts itself; `Succeeded Comm
 - `mcp setup` for real (Claude Desktop path comes from `XDG_CONFIG_HOME=/home/winx/.config`, not the scratch HOME, so it would touch the real config; Claude Code writes `.mcp.json` into the current directory), so only `--dry-run` was run.
 - MySQL grant flow (a grant on `mysql-dev` was created and revoked via CLI only); `ask` approvals on MySQL were not run.
 - Behaviour of the toast with a very narrow terminal (< 60 columns) and with `DEXO_NO_ANIMATION` unset.
+
+### Settings, layout and mouse (settings-layout-mouse)
+
+
+
+Binary: dev build 1.4.2. Terminal: tmux 120x36 unless stated. Findings are appended as testing goes.
+
+#### Findings
+
+##### [MINOR] Clicking an option in Settings cycles to the next value instead of choosing the clicked one
+- **Where:** settings.open / Settings popup, Accent, Keymap and Mode rows
+- **Steps:** Open Settings (Ctrl+P, "Open Settings"). With Accent on Blue, click the word `Rose` (row 11, col 83), or any other spot on the row.
+- **Expected:** (standard 1, mouse parity) clicking `Rose` selects Rose; there is a way to go backwards with the mouse.
+- **Actual:** a click anywhere on the row (label, option text, blank cell inside the popup) advances the value by one (Blue -> Violet, then Violet -> Green). Clicking `Rose` gave Violet; clicking col 45..55 on the same row gave Green, Amber, Rose, Cyan, ... one step per click. With 6 accents or 3 modes the mouse can only cycle forward; the value you click is never the value you get.
+
+##### [MINOR] Empty-editor hint `Ctrl+N  new query / Ctrl+O  open a file` is hard-coded and wrong under the Emacs keymap
+- **Where:** main screen with no document, Settings > Keymap = Emacs
+- **Steps:** Settings > Keymap: Emacs, Esc. Look at the editor placeholder; press Ctrl+N.
+- **Expected:** the hint follows the keymap (the status bar does: `Ctrl+X Ctrl+N new sql`, palette `Alt+X`).
+- **Actual:** placeholder still says `Ctrl+N  new query`; pressing Ctrl+N does nothing. Only `Ctrl+X Ctrl+N` opens the New document dialog. Also the two hints disagree in wording: `new query` (placeholder) vs `new sql` (status bar).
+
+##### [MINOR] Unicode = Off still draws non-ASCII glyphs
+- **Where:** settings.unicode / main screen with Unicode Off (also `unicode = "Ascii"` in settings.toml)
+- **Steps:** Settings > Unicode: Off, Esc. Open a document, connect, run a query. Count the non-ASCII cells on the screen.
+- **Expected:** with Unicode glyphs off the UI falls back to ASCII (the brief: box drawing, arrows, ellipsis).
+- **Actual:** the `○`/`●` markers become `o`/`*`, the focused-pane `▸` becomes `>` and `[DEV]`/`[PROD]` replace the dot badges, but still on screen: all box-drawing borders (`┌─┐│└┘`, 500+ cells), `▸` after every connection name and on schema/editor-gutter rows (`o duck-sales▸`, `   1▸SELECT ...`), `▾` for expanded connections, the `…` ellipsis in the tab label (`mysql-d…·query-1.sql`), the `·` separator, `×` on the tab close button, and the em dash in the header line (`Default  pg-dev  —`). Borders may be intended to stay, but the rest are missed spots.
+
+##### [COSMETIC] Modals sit at different heights and have different sizes
+- **Where:** Settings, New/Rename document, Open/Save file, Add connection, History, Value, Palette, Help at 120x36
+- **Steps:** Open each one in turn.
+- **Actual:** all are centred horizontally, but vertically they start at row 1-2 (Help, Row record), row 5 (Open file, Add connection), row 7-11 (Palette, depends on the list), row 8 (Settings), row 9 (History), row 10 (New/Rename document) and row 11 (Run destructive statements). Rename/New document and Add connection are 5-12 rows taller than their content (a block of blank rows under the `[Create] [Cancel]` / `[Submit] [Cancel]` buttons).
+
+##### [MAJOR] "MOUSE OFF · Ctrl+P settings.mouse" shows an internal command id and points to a palette entry that does not exist
+- **Where:** settings.mouse / status bar with the mouse switched off
+- **Steps:** Settings > Mouse: Off, Esc. Read the left of the status bar (red). Press Ctrl+P and type `settings.mouse` (or `mouse`, `toggle mouse`).
+- **Expected:** (standard 7) plain words, and a way back that works: e.g. `Mouse off - turn it on in Settings (Ctrl+P > Open Settings)`.
+- **Actual:** status bar says `MOUSE OFF · Ctrl+P settings.mouse  disconnected ...`. `settings.mouse` is an internal id and the palette does not list that command at all (it is hidden: only `Open Settings` matches, see next finding), so the only recovery hint is a dead end.
+
+##### [MAJOR] Cycle Theme / Toggle Light-Dark Mode / Cycle Accent / Cycle Keymap / Toggle Mouse / Toggle Animation / Toggle Unicode / Reset Settings and Hide Explorer / Hide Results / Grow-Shrink Results / Grow-Shrink Explorer are not in the command palette
+- **Where:** settings.theme, settings.mode, settings.accent, settings.keymap, settings.mouse, settings.animation, settings.unicode, settings.reset, layout.hide_*, layout.*_grow/shrink (palette)
+- **Steps:** Ctrl+P, type `Cycle Theme`, `Toggle Mouse`, `Unicode`, `Hide Explorer`, `Grow`, `Shrink`, `Reset Settings`; also with an empty query and scroll the whole list.
+- **Expected:** (standard 2) the palette lists every command and its hotkey; the brief and the command list expect these to run from the palette.
+- **Actual:** none of them is listed (only `Cycle Layout`, `Reset layout` and `Open Settings` exist for layout/settings; `Grow` matches only `Toggle Record View`). The settings.* commands have no default hotkey either, so they are unreachable unless the user writes a keymap.toml overlay (I bound them to Alt+T/M/G/K/U/N/Y/Z that way to test them; they then work). The layout hide/grow/shrink commands are reachable only by hotkey (Alt+E, Alt+R, Alt+=, Alt+-, Alt+], Alt+[) and Alt+[ is broken (below). The palette source marks them as hidden on purpose ("already a labelled row inside the Settings screen"), so this may be intended, but then the command list/docs that name them as palette commands are wrong, and the status-bar hint above points at one of them.
+
+##### [MAJOR] Alt+[ (Shrink Explorer Pane) does nothing and swallows the next key
+- **Where:** layout.explorer_shrink (Alt+[)
+- **Steps:** Grow the explorer (Alt+] several times, or drag). Press Alt+[ (tmux `M-[`, which sends ESC [ as every terminal does). Then press Down.
+- **Expected:** the explorer shrinks; the next key works.
+- **Actual:** nothing changes (40 presses: width stays 60). The ESC [ pair is taken as the start of a CSI sequence, so the next key is eaten: after Alt+[ the first Down did nothing, the second moved the selection. The key is bound in the Default keymap and shown in the palette list as `Alt+[`, so users will hit it. (Alt+Left in the explorer and the mouse drag do shrink it.)
+
+##### [MINOR] Alt+= / Alt+- mean different things depending on focus, but the hotkey is shown only as "Grow/Shrink Results Pane"
+- **Where:** layout.results_grow / results_shrink (Alt+=, Alt+-)
+- **Steps:** Focus the explorer (Alt+1), press Alt+= : the explorer grows. Focus the editor (Alt+2), press Alt+= : the results grow.
+- **Expected:** one key, one action, or the hint says which pane.
+- **Actual:** the command list names Alt+= as "Grow Results Pane", but with the explorer focused it grows the explorer (the [explorer] keymap section rebinds it). Not discoverable.
+
+##### [MINOR] Panes can be shrunk until they are useless
+- **Where:** layout.explorer_shrink (Alt+Left / drag), layout.results_shrink (Alt+-), layout.results_grow (Alt+=)
+- **Steps:** Focus explorer, hold Alt+Left (or drag the divider to the far left). Focus editor, hold Alt+- (results) or Alt+= (editor).
+- **Expected:** a floor that keeps the pane readable (hide commands exist for removing a pane).
+- **Actual:** explorer shrinks to 8 columns (`┌▸ Side┐`, names cut to `du`, `my`, `pg`); results shrink to a single row that holds only the `[Grid] Explain Messages` strip (no data row); with Alt+= the editor shrinks to one text line. Maximum explorer width is 50% of the screen (fine).
+
+##### [MINOR] Only one of the two border cells of a divider is draggable
+- **Where:** drag pane dividers (layout)
+- **Steps:** Between the explorer and the editor the borders sit side by side (`││`, cols 28 and 29 at 120x36). Drag from col 28 and from col 29 to col 60 with `qa.sh drag`. Same for the editor/results divider (rows 23 and 24).
+- **Expected:** either cell of the visible divider starts a resize.
+- **Actual:** only the right cell (the editor's left border, col 29) resizes; the explorer's right border (col 28) just focuses the explorer. Likewise only the results' top border row (24) drags, not the editor's bottom border (23). A user aiming at "the line" misses half of the time.
+
+##### [COSMETIC] Layout and settings commands give no feedback about what they did
+- **Where:** layout.cycle (F10), layout.reset, settings.* via keymap overlay, Settings keys
+- **Steps:** Press F10 four times; run Reset layout; with the overlay press Alt+T / Alt+K / Alt+Y.
+- **Expected:** (standard 7) success says what changed ("Layout 2 of 4", "Theme: Dracula", "Keymap: Vim").
+- **Actual:** the screen changes but no toast or status text names the new layout/theme/keymap; with F10 the user cannot tell which of the 4 layouts they are on or when the cycle wraps. (Inside the Settings popup the value is visible, so it is fine there.)
+
+##### [COSMETIC] Command name case differs: "Reset layout" vs "Cycle Layout" / "Reset Settings"
+- **Where:** palette, layout.reset
+- **Actual:** `Reset layout` (lower-case l) next to `Cycle Layout`, `Grow Results Pane`, `Reset Settings`.
+
+##### [COSMETIC] Settings footer does not list `e` (cycle theme) which the docs describe
+- **Where:** Settings popup footer `up/down field  left/right change  r reset  esc close`
+- **Steps:** Focus the Theme row, press `e`.
+- **Actual:** `e` steps to the next theme (docs/workbench.md says so) but it is not in the footer; also `Enter` on the Reset button asks `[Confirm reset]` without saying how to cancel (Esc / moving away both work).
+
+##### [COSMETIC] Explain placeholder is cut off at the pane edge instead of wrapped
+- **Where:** results view Explain, empty
+- **Steps:** Click `Explain` in the results view selector at 120x36.
+- **Actual:** `No plan yet. F7 explains the statement under the cursor; Shift+F7 runs it with ANALYZE; th` - the sentence stops mid-word at the border (no wrap, no ellipsis). Worse at narrower widths.
+
+##### [COSMETIC] Right click: grid and tree respond, editor, tabs and status bar do not
+- **Where:** right click everywhere
+- **Steps:** Right click a grid row (opens the Row actions / Record popup, good), a tree node (opens the node's Actions menu, good), then the editor text, a document tab, and the status bar.
+- **Actual:** the editor, tabs and status bar ignore the right click entirely (no copy/paste menu, no tab menu, focus does not even move). Not wrong, just uneven.
+
+
+##### [MAJOR] Running Dexo in a small terminal permanently hides the explorer and results (compact mode overwrites the saved layout)
+- **Where:** layout persistence / compact mode (terminal below 80x24)
+- **Steps:** At 120x36 run Reset layout (palette), Ctrl+Q. `qa.sh start NAME 40 12`, Ctrl+Q. `qa.sh start NAME 120 36`. (Same without restarting: `qa.sh resize NAME 60 20`, wait 2 s, `resize NAME 120 36`.)
+- **Expected:** a layout saved at one size is not rewritten by a transient small size; the 3-pane layout comes back when the terminal is large again.
+- **Actual:** the saved layout row becomes `explorer_visible:false, results_visible:false, explorer_width:20, results_height:6`; at 120x36 only the editor shows (no explorer, no results), with no message. The user has to find F10 / Reset layout / Alt+E / Alt+R. Resizing a tmux pane or a window through a narrow size, or starting once in a small split, is enough. (Compact mode starts below 80 columns OR below 24 rows: 80x24 is 3-pane, 80x23, 79x24 and 100x23 are single-pane, so an 80x24 terminal inside tmux, which has 23 rows, is already compact.)
+
+##### [MAJOR] "Inspect value" shows raw Rust Debug text for numbers and booleans
+- **Where:** results grid > right click / Enter on a row > `Inspect value` (modal `Value`)
+- **Steps:** On pg-prod (read only query) run `select 'abc' as s, 1.5::numeric as n, now() as t, true as b, null as z, '{"a":1}'::jsonb as j, 7::int4 as i4`; focus Results (Alt+3), Enter on the row, choose `Inspect value` with a click or Enter on each column (Right moves the column).
+- **Expected:** (standard 7) `1.5`, `true`, `7`.
+- **Actual:** text `abc`, timestamp `2026-10-02 15:48:21.920201+00`, json (pretty) and `NULL` are fine; numeric shows `Decimal("1.5")`, boolean `Bool(true)`, int `I64(7)` (and `I64(3)` for `select 3`). Footer of the modal is `  esc close` (lower case, two leading spaces).
+
+##### [MINOR] "Toggle Light/Dark Mode" cycles through three modes
+- **Where:** settings.mode (Alt+M in my overlay)
+- **Steps:** Bind settings.mode (keymap.toml), press it three times from Dark.
+- **Expected:** Dark <-> Light.
+- **Actual:** Dark -> Light -> Low color -> Dark. The command name says toggle Light/Dark; Low color appears unannounced (and with no feedback, see above).
+
+##### [MINOR] The terminal's colour depth (TERM / COLORTERM) is ignored; only NO_COLOR works
+- **Where:** looks / Low color mode (observed in tmux with `pipe-pane` to read the bytes Dexo sends)
+- **Steps:** Run `env -u COLORTERM TERM=xterm-16color dexo` (also `TERM=linux`, `TERM=dumb`) and count `38;2;` sequences; then `NO_COLOR=1`.
+- **Expected:** a 16-colour terminal gets ANSI colour names (the theme has an ansi16 slot for every role, and the code in capabilities.rs maps TERM/COLORTERM to a depth).
+- **Actual:** 71 24-bit RGB colour sequences are sent in all three cases (also with Settings > Mode: Low color), so Low color on a real 16-colour terminal depends on the terminal's own approximation. `NO_COLOR=1` does remove all colour and the UI stays usable through markers (`>`, `▸`, `[value]`), though also without bold/dim/reverse (selected grid row is only marked by `▸`).
+
+##### [MINOR] Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
+- **Where:** main screen at 60x20 / 40x12
+- **Steps:** `qa.sh resize NAME 60 20` (or start at that size). Try to reach the editor/results by clicking.
+- **Expected:** a clickable way to change pane, or a visible hint.
+- **Actual:** only the focused pane is drawn (explorer first). Switching needs Alt+1 / Alt+2 / Alt+3; the explorer focus hint line does not mention them (the editor focus hint does: `Alt+1 connections  Ctrl+P commands`). The status bar in compact mode also reads `pg-dev  ctrl+p  F1  Enter connect  a actions  n new  e edit` (lower-case `ctrl+p` and F1 moved to the left), cut at the width (`Enter actions  v view  n/p page  Ctrl+W` loses `close`).
+
+##### [MINOR] Help: any click closes the overlay, even a click on the Search field
+- **Where:** F1 help
+- **Steps:** F1, click the `Search:` row (or a key row, or the blank row under Search).
+- **Expected:** a click in the search field focuses it; clicking a row does not close the dialog.
+- **Actual:** every click inside or outside the popup closes Help and clears the search; text typed straight after goes into the editor. The help list has no scrollbar or "more" marker either, and the search is a loose subsequence match (`pane` lists `Duplicate Line`, `Discard All Pending Changes`, `Next Data Page`).
+
+##### [MINOR] "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling
+- **Where:** Ctrl+J on an unparseable statement
+- **Steps:** Editor: `selec nonsense from nowhere`, Ctrl+J.
+- **Expected:** a title that matches (`Statement not recognised`) and warning colour (the `Unsaved changes` dialog colours its warning line amber).
+- **Actual:** modal `Run destructive statements` / `1. selec nonsense FROM nowhere` / `Dexo could not read this statement` / `[Run]  >[Cancel]`; border and text are plain foreground (same for the `New document` and `Rename document` dialogs, while Settings, Palette, Help, Add connection, Open file and Unsaved changes use a bold accent border).
+
+##### [MINOR] "Search History" is not searchable and shows duplicates
+- **Where:** connection Actions > Search History (modal `History`)
+- **Steps:** Select a connection, `a`, `Search History`; type `SELECT 1`.
+- **Actual:** the modal is titled `History`, has no search field and no hint line; typing does nothing; the same statement is listed five times in a row.
+
+##### [MINOR] Key hints behind and inside modals are inconsistent
+- **Where:** status bar, modal footers, key names
+- **Actual:** (a) the status bar keeps showing editor hints (`Ctrl+J run  Ctrl+N new sql  Ctrl+W close`) behind Settings and Help, which ignore those keys, while the palette clears them; (b) Esc is advertised four ways: Settings footer `esc close`, Value footer `  esc close`, Actions menu footer `Enter run  Esc close`, Help title `Keybindings  Esc to close`, Row record title `Row 5  Esc to close`, and not at all in New/Rename document, Open/Save file, Add connection, Unsaved changes, History; (c) key names are `Ctrl+Shift+F10` in the palette but `ctrl+shift+f10` / `alt+down` in Help; compact status `ctrl+p` vs wide `Ctrl+P`; (d) the Add connection form uses raw field names (`password_command`, `pre_connect`, `tls_mode`, `ssh_host`) next to `name:` / `driver:`.
+
+##### [COSMETIC] Button rows differ between dialogs
+- **Where:** Unsaved changes `>[Save]   [Don't save]   [Cancel]` (three spaces, focus marker glued to the button), Run destructive `[Run]  >[Cancel]` (two spaces), New/Rename document, Open/Save file, Add connection ` [Create]   [Cancel]`, ` [Submit]   [Cancel]` (one leading space, no marker until Tab), Welcome `[Get started]`. The generic label `Submit` is used for Add/Edit connection while the other dialogs name the action (`Create`, `Rename`, `Open`, `Save`, `Run`). Titles mix sentence case (`New document`, `Open file`, `Unsaved changes`, `Add connection`) and title case (`Command Palette`); the menu item `Search History` opens `History`, `New Connection` opens `Add connection`.
+
+##### [COSMETIC] Muted text and Light-mode accents have low contrast
+- **Where:** looks (colours read with `qa.sh ansi`, WCAG ratio computed)
+- **Actual:** muted hint text such as `WHERE w to filter` / sidebar titles is 3.0:1 in Dracula and 2.8:1 in Tokyo Night (Nord 3.5, Gruvbox 4.0; Dexo dark 6.1). In Light mode the default Cyan accent on the near-white background is 2.5:1 (Amber 2.7, Green 3.3), so the focused-pane border, the active option `[Cyan]` and the unfocused (dim, 2.0:1) borders are all faint. Selected grid rows and the active tab stay clear in every mode and theme (dark-on-accent block).
+
+##### [COSMETIC] Compact status bar, 40x12 cut-offs
+- **Where:** 40x12
+- **Actual:** the palette cuts a key hint mid-token (`Execute Document Ctrl+Sh`), the Unsaved changes text is cut mid-word (`query-1.sql has changes that are not s`), the Welcome dialog repeats `DEXO` in title and first line, and the Add connection form drops the `Advanced options` row. Everything else (Settings, Help, record popup, forms, close prompt) fits and keeps its buttons reachable down to 40x12.
+
+##### [COSMETIC] F10 cycles four unnamed layouts and one of them leaves 3 inner rows for results
+- **Where:** layout.cycle
+- **Actual:** the four layouts are (explorer width / results height at 120x36) 28/12, 22/19, 22/5 and 48/10; the third leaves only 3 inner rows for results. F10 also re-shows a hidden explorer. There is no indication which one is active.
+
+
+#### Checked and fine
+
+- Welcome (first run): `[Get started]` works with the mouse; compact version fits 40x12.
+- settings.open (palette, Enter): popup opens, Esc closes, Up/Down walk the fields and the Reset button, Left/Right change the value with wrap-around on every row, `r` arms and a second `r` resets, Esc cancels a pending reset, moving off the button cancels it.
+- Every Settings field (Theme 1/6..6/6 Dexo, Dracula, Gruvbox, Nord, Catppuccin, Tokyo Night; Mode Dark/Light/Low color; Accent Cyan..Rose; Keymap Default/Vim/Emacs; Mouse; Animation; Unicode; Updates) changes at once, is shown with `[value]` brackets (readable without colour), and survives Ctrl+Q and a kill + restart (checked in settings.toml and on screen: Amber, Unicode Ascii, Gruvbox, mouse off, Vim `-- NORMAL --`, Emacs hints `Ctrl+X Ctrl+N` / `Alt+X`).
+- Mode/Accent changes go back to the Dexo theme (docs say so); the theme presets keep selected rows, focus borders and the active tab clearly visible (dark text on an accent block, bold accent border).
+- settings.reset via the Reset button with mouse (two clicks) and keyboard: every field back to default immediately.
+- settings.theme / .mode / .accent / .keymap / .mouse / .animation / .unicode / .reset via a keymap.toml overlay: each works and applies at once (they are not reachable otherwise, see findings).
+- Mouse Off: applies at once, releases terminal mouse reporting (tmux `mouse_any_flag` 1 -> 0), clicks and wheel do nothing, keys still work, persists across restart, can be turned on again with a key.
+- layout.cycle (F10, four layouts, wraps, re-shows a hidden explorer), layout.hide_explorer (Alt+E), layout.hide_results (Alt+R), layout.explorer_grow (Alt+]), layout.explorer_shrink via Alt+Left in the explorer, layout.results_grow / shrink (Alt+= / Alt- with editor focus, Alt+Up/Down), layout.reset (palette), layout stays usable at every cycle step; focusing a hidden pane (Alt+1/3) shows it again; keys do not leak behind an open Settings popup.
+- Divider drag (`qa.sh drag`): explorer divider (cell col 29) and results divider (row 24) resize live, clamp at 50% / the minimums, and the result is saved (SQLite `workbench_layouts`, written within ~1 s of the change; F10 is written within ~3 s). Layout and hidden panes survive Ctrl+Q and a kill.
+- Mouse: sidebar rows (select, single click on a connection connects), `[n]ew [e]dit [a]ctions` header items, node Actions menu (right click and click), document tabs (switch tab and connection, `×` opens Unsaved changes, `+` opens New document), Unsaved changes buttons (Save -> Save file dialog, Don't save, Cancel), New document / Add connection buttons, results view selector (Grid / Explain / Messages), result tabs (`result 1..3`), grid header click sort (asc/desc/off), grid cell click, right click on a grid row (Record + Actions popup, Copy cell click works, toast `copied to clipboard`), wheel in tree, editor, grid, palette, Help, Open file list.
+- Terminal sizes: 200x50, 120x36, 80x24 full layout; 60x20 and 40x12 compact. Palette, Help, Settings (shrinks to one value per row at 40x12), Add/Edit connection form (scrolls, buttons pinned), Unsaved changes, Row record all fit, no popup larger than the screen, resize redraws cleanly, `start` at each size works.
+- Looks: Dark, Light, Low color and NO_COLOR render every pane; PROD badge is red in all three modes; errors are red (toast, Messages); selected grid row and active tab are a solid accent block in all modes.
+
+#### Not testable
+
+- A real 16-colour terminal or Linux console (only tmux at TERM=xterm-256color / xterm-16color; observed the bytes via pipe-pane).
+- Animation On/Off (qa.sh sets DEXO_NO_ANIMATION=1) and Updates On/Off (DEXO_NO_UPDATE_CHECK=1): the settings toggle and persist, but I could not observe their effect.
+- Double-click timing and Shift/Alt/middle-click variants beyond what `qa.sh click` can send; mouse drag selection of text in the editor.
+- Quit prompt with unsaved work: Ctrl+Q quit at once with a dirty untitled document (content recovered on restart), so the asking path was not reached.
