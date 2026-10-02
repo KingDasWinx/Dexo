@@ -110,7 +110,7 @@ impl McpClient {
         args: &[String],
     ) -> Result<String, AppError> {
         match self {
-            Self::Codex => Ok(merged_toml(existing.unwrap_or(""), command, args)),
+            Self::Codex => merged_toml(existing.unwrap_or(""), command, args),
             _ => merged_json(existing, command, args),
         }
     }
@@ -173,52 +173,62 @@ fn merged_json(existing: Option<&str>, command: &str, args: &[String]) -> Result
     Ok(text)
 }
 
-/// Codex's TOML is edited as text: the `[mcp_servers.dexo]` table is replaced, or added
-/// at the end, so the user's comments and layout stay.
-fn merged_toml(existing: &str, command: &str, args: &[String]) -> String {
-    let quote = |text: &str| toml::Value::String(text.to_string()).to_string();
-    let section = format!(
-        "[mcp_servers.dexo]\ncommand = {}\nargs = [{}]\n",
-        quote(command),
-        args.iter()
-            .map(|arg| quote(arg))
-            .collect::<Vec<_>>()
-            .join(", ")
+/// Codex's TOML is parsed into a document that keeps its layout, so the user's comments
+/// and formatting stay wherever the dexo entry is, and whatever shape it was written in.
+fn merged_toml(existing: &str, command: &str, args: &[String]) -> Result<String, AppError> {
+    let left = |what: String| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("{what}, so it was left as it is"),
+        )
+    };
+    let mut document: toml_edit::DocumentMut = existing
+        .parse()
+        .map_err(|error| left(format!("it is not TOML Dexo can read ({error})")))?;
+    let servers = document.entry("mcp_servers").or_insert_with(|| {
+        let mut table = toml_edit::Table::new();
+        table.set_implicit(true);
+        toml_edit::Item::Table(table)
+    });
+    let inline = servers.is_inline_table();
+    let servers = servers
+        .as_table_like_mut()
+        .ok_or_else(|| left("its mcp_servers is not a table".into()))?;
+    let mut entry = toml_edit::Table::new();
+    entry.insert("command", toml_edit::value(command));
+    entry.insert(
+        "args",
+        toml_edit::value(args.iter().collect::<toml_edit::Array>()),
     );
-    let lines: Vec<&str> = existing.lines().collect();
-    let header = |line: &str| line.trim_start().starts_with('[');
-    let start = lines
-        .iter()
-        .position(|line| line.trim() == "[mcp_servers.dexo]");
-    let mut out = String::new();
-    match start {
-        Some(start) => {
-            let end = lines[start + 1..]
-                .iter()
-                .position(|line| header(line))
-                .map_or(lines.len(), |offset| start + 1 + offset);
-            for line in &lines[..start] {
-                out.push_str(line);
-                out.push('\n');
-            }
-            out.push_str(&section);
-            if end < lines.len() {
-                out.push('\n');
-            }
-            for line in &lines[end..] {
-                out.push_str(line);
-                out.push('\n');
-            }
-        }
-        None => {
-            out.push_str(existing.trim_end());
-            if !out.is_empty() {
-                out.push_str("\n\n");
-            }
-            out.push_str(&section);
-        }
+    servers.insert(
+        "dexo",
+        if inline {
+            toml_edit::value(entry.into_inline_table())
+        } else {
+            toml_edit::Item::Table(entry)
+        },
+    );
+    let text = document.to_string();
+    // What was written must read back as the entry it meant to write.
+    let written: toml::Table = text
+        .parse()
+        .map_err(|error| left(format!("Dexo could not write its entry into it ({error})")))?;
+    let dexo = written
+        .get("mcp_servers")
+        .and_then(|servers| servers.get("dexo"));
+    let wrote_args: Option<Vec<&str>> = dexo
+        .and_then(|dexo| dexo.get("args"))
+        .and_then(toml::Value::as_array)
+        .map(|items| items.iter().filter_map(toml::Value::as_str).collect());
+    if dexo
+        .and_then(|dexo| dexo.get("command"))
+        .and_then(toml::Value::as_str)
+        != Some(command)
+        || wrote_args != Some(args.iter().map(String::as_str).collect())
+    {
+        return Err(left("Dexo could not write its entry into it".into()));
     }
-    out
+    Ok(text)
 }
 
 /// Writes `contents` to `path`, the old file copied to `<file>.dexo-backup` first.
@@ -351,6 +361,50 @@ mod tests {
         assert_eq!(
             table["mcp_servers"]["dexo"]["command"].as_str(),
             Some("C:\\dexo\\dexo.exe")
+        );
+    }
+
+    /// However the dexo entry is written -- a commented header, an inline table, dotted
+    /// or quoted keys -- the result parses and runs Dexo; a file that does not parse is
+    /// refused rather than rewritten.
+    #[test]
+    fn a_toml_config_is_parsed_not_matched_by_line() {
+        for existing in [
+            "[mcp_servers.dexo] # mine\ncommand = \"old\"\n",
+            "[mcp_servers]\ndexo = { command = \"old\" }\nother = { command = \"y\" }\n",
+            "mcp_servers.dexo.command = \"old\"\nmcp_servers.other.command = \"y\"\n",
+            "[mcp_servers.\"dexo\"]\ncommand = \"old\"\n",
+            "[mcp_servers.dexo]\ncommand = \"old\"\n\n[tools]\nmatrix = [\n  [1, 2],\n  [3, 4],\n]\n",
+        ] {
+            let merged = McpClient::Codex
+                .merged(Some(existing), "/bin/dexo", &args())
+                .unwrap();
+            let table: toml::Table = merged
+                .parse()
+                .unwrap_or_else(|error| panic!("{error}\n{merged}"));
+            let dexo = &table["mcp_servers"]["dexo"];
+            assert_eq!(dexo["command"].as_str(), Some("/bin/dexo"), "{merged}");
+            assert_eq!(dexo["args"][3].as_str(), Some("agent"), "{merged}");
+            if existing.contains("other") {
+                assert_eq!(table["mcp_servers"]["other"]["command"].as_str(), Some("y"));
+            }
+            if existing.contains("matrix") {
+                assert_eq!(table["tools"]["matrix"][1][0].as_integer(), Some(3));
+            }
+        }
+        assert!(
+            McpClient::Codex
+                .merged(
+                    Some("[mcp_servers.dexo\ncommand = 1\n"),
+                    "/bin/dexo",
+                    &args()
+                )
+                .is_err()
+        );
+        assert!(
+            McpClient::Codex
+                .merged(Some("mcp_servers = 3\n"), "/bin/dexo", &args())
+                .is_err()
         );
     }
 }
