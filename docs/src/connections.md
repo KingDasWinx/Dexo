@@ -19,7 +19,7 @@ dexo connections add --name shop --driver postgres --host db --username ana --da
   --password-command 'op read op://dev/shop/password'
 ```
 
-Dexo runs it through `sh -c` (`cmd /C` on Windows) on every connect, off the screen's thread, and uses what it prints, without the trailing line break. The output stays in memory; nothing goes to the keychain. A command that fails, prints nothing or takes longer than 30 seconds fails the connection with a message naming the command, never its output, and what it prints to stderr is discarded.
+Dexo runs it through `sh -c` (`cmd /C` on Windows) on every connect, off the screen's thread, and uses what it prints, without the trailing line break. On the command line it can ask on the terminal (a GPG passphrase, say); in the workbench, which owns the terminal, it runs without one, so a manager that has to ask should ask in a window, or be unlocked in a shell first. The output stays in memory; nothing goes to the keychain. A command that fails, prints nothing or takes longer than 30 seconds fails the connection with a message naming the command, never its output, and what it prints to stderr is discarded.
 
 ## Pre-connect commands
 

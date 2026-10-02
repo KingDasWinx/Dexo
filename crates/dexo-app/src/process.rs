@@ -41,6 +41,34 @@ pub(crate) fn detach(command: &mut Command) {
     }
 }
 
+/// No terminal at all: a session of its own on Unix, no console on Windows. For a
+/// command run while the workbench owns the terminal: one that would prompt there fails
+/// at once instead of reading the keys the workbench is reading. Stopped as a group.
+pub(crate) fn without_terminal(command: &mut Command) {
+    command.stdin(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        // SAFETY: setsid is async-signal-safe, the only kind of call allowed between
+        // fork and exec.
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() == -1 {
+                    return Err(std::io::Error::last_os_error());
+                }
+                Ok(())
+            });
+        }
+    }
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NEW_PROCESS_GROUP: u32 = 0x0000_0200;
+        const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+        command.creation_flags(CREATE_NEW_PROCESS_GROUP | CREATE_NO_WINDOW);
+    }
+}
+
 /// The detached commands running now, by process id -- the group's id on Unix -- so a
 /// Dexo leaving on a signal, or quitting with one still starting, stops them.
 static RUNNING: [AtomicI64; 64] = [const { AtomicI64::new(0) }; 64];

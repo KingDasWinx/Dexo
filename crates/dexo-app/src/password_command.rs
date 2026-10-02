@@ -14,6 +14,21 @@ pub const TIMEOUT: Duration = Duration::from_secs(30);
 /// trailing line break. Its stdout is the secret and is held in memory only; stderr is
 /// never read, and an error names the command, never what it printed.
 pub fn run(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
+    run_with(command, timeout, false)
+}
+
+/// [`run`] for the workbench, which owns the terminal: the command gets none, so one
+/// that would prompt there fails at once instead of sharing the keyboard with Dexo.
+pub fn run_without_terminal(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
+    run_with(command, timeout, true)
+}
+
+fn run_with(command: &str, timeout: Duration, detached: bool) -> Result<SecretString, AppError> {
+    let hint = if detached {
+        " -- it cannot ask on the terminal from the workbench: unlock its agent in a shell first, or use one that asks in a window"
+    } else {
+        ""
+    };
     let fail = |reason: String| {
         AppError::new(
             ErrorCategory::Authentication,
@@ -21,22 +36,28 @@ pub fn run(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
         )
     };
     let mut shell = crate::process::shell(command);
-    // Left in the terminal's process group: a command that prompts there can read it.
     shell.stdin(Stdio::null()).stderr(Stdio::null());
+    let stop = if detached {
+        crate::process::without_terminal(&mut shell);
+        crate::process::stop_group
+    } else {
+        // Left in the terminal's process group: a command that prompts there can read it.
+        crate::process::stop_tree
+    };
     let deadline = Instant::now() + timeout;
-    let ran = crate::process::run_until(shell, deadline, crate::process::stop_tree)
+    let ran = crate::process::run_until(shell, deadline, stop)
         .map_err(|error| fail(format!("could not start: {error}")))?;
     let (status, output) = match ran {
         crate::process::Ran::TimedOut => {
             return Err(fail(format!(
-                "did not finish within {}s",
+                "did not finish within {}s{hint}",
                 timeout.as_secs()
             )));
         }
         crate::process::Ran::Exited(status, output) => (status, output),
     };
     if !status.success() {
-        return Err(fail(format!("failed ({status})")));
+        return Err(fail(format!("failed ({status}){hint}")));
     }
     // A helper the command left running can hold stdout open after it exits; the read
     // got what was left of the deadline, not forever.
@@ -112,6 +133,22 @@ mod tests {
         // SAFETY: getpgrp has no preconditions.
         let ours = unsafe { libc::getpgrp() };
         assert_eq!(group.expose_secret().trim(), ours.to_string());
+    }
+
+    /// From the workbench the command has no terminal: a session of its own, so one
+    /// that would prompt fails rather than reading Dexo's keys, and says why.
+    #[test]
+    fn the_workbench_gives_the_command_no_terminal() {
+        let session = super::run_without_terminal(
+            "[ \"$(ps -o sid= -p $$ | tr -d ' ')\" = \"$$\" ] && echo detached",
+            Duration::from_secs(5),
+        )
+        .unwrap();
+        assert_eq!(session.expose_secret(), "detached");
+        let error = super::run_without_terminal("exec < /dev/tty; read x", Duration::from_secs(5))
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("cannot ask on the terminal"), "{error}");
     }
 
     #[test]

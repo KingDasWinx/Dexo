@@ -167,7 +167,12 @@ impl Password {
         match self {
             Self::Ready(secret) => Ok(secret),
             Self::Command(command) => tokio::task::spawn_blocking(move || {
-                dexo_app::password_command::run(&command, dexo_app::password_command::TIMEOUT)
+                // The workbench owns the terminal: a command that would ask there must
+                // not share the keyboard with it.
+                dexo_app::password_command::run_without_terminal(
+                    &command,
+                    dexo_app::password_command::TIMEOUT,
+                )
             })
             .await
             .map_err(|error| error.to_string())?
