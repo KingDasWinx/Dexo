@@ -109,3 +109,22 @@ fn a_long_palette_query_scrolls_to_its_end() {
     let frame = dexo_tui::render::render_to_string(&model, 100, 30);
     assert!(frame.contains("END"), "{frame}");
 }
+
+/// Home and End did nothing in the document strip.
+#[test]
+fn home_and_end_walk_the_document_strip() {
+    use dexo_tui::model::{EditorDocument, Focus};
+    let mut model = Model::default();
+    model.documents = (1..=4)
+        .map(|n| EditorDocument::new_unique(format!("q{n}.sql"), None, None))
+        .collect();
+    model.active_document = 1;
+    model.focus = Focus::DocumentTabs;
+    let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+
+    update(&mut model, key(KeyCode::End));
+    assert_eq!(model.active_document, 3);
+    assert_eq!(model.focus, Focus::DocumentTabs);
+    update(&mut model, key(KeyCode::Home));
+    assert_eq!(model.active_document, 0);
+}

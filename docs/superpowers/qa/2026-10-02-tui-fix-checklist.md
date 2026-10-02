@@ -44,7 +44,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
 - [x] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
 - [x] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
-- [ ] **PC-27** `MINOR` Tab strip / tab focus details
+- [x] **PC-27** `MINOR` Tab strip / tab focus details
 - [x] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
 - [x] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
 - [x] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document

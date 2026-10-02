@@ -5160,6 +5160,22 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         ));
         return effects;
     }
+    // The strip's own ends: Home and End did nothing there.
+    if model.focus == Focus::DocumentTabs
+        && key.modifiers.is_empty()
+        && matches!(key.code, KeyCode::Home | KeyCode::End)
+        && !model.documents.is_empty()
+    {
+        let index = if key.code == KeyCode::Home {
+            0
+        } else {
+            model.documents.len() - 1
+        };
+        model.focus = Focus::DocumentTabs;
+        let effects = update(model, Action::SelectDocument { index });
+        model.focus = Focus::DocumentTabs;
+        return effects;
+    }
     let spec = crate::keymap::KeySpec {
         modifiers: key.modifiers,
         code: key.code,
