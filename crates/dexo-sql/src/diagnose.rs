@@ -96,16 +96,28 @@ pub fn diagnose(
 }
 
 /// [`diagnose`] for a document checked on every key: each statement's answer is kept
-/// until its text, the catalog, the dialect or the tables the document creates change,
-/// so a keystroke parses the statement it lands in and not the whole script.
+/// until its text, the catalog or the dialect change, so a keystroke parses the
+/// statement it lands in and not the whole script.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Diagnoser {
-    /// The dialect, catalog stamp and created tables the kept answers were found with.
-    against: Option<(Dialect, Option<u64>, Vec<String>)>,
-    /// Each statement's problems, offsets within it.
-    answers: HashMap<String, Vec<(String, Range<usize>)>>,
+    /// The dialect and catalog stamp the kept answers were found with.
+    against: Option<(Dialect, Option<u64>)>,
+    /// Each statement's problems.
+    answers: HashMap<String, Vec<Problem>>,
     /// The table each statement creates.
     creates: HashMap<String, Option<String>>,
+}
+
+/// One problem in a statement, offsets within it.
+#[derive(Clone, Debug, PartialEq)]
+struct Problem {
+    message: String,
+    range: Range<usize>,
+    /// The table an `unknown table` names, which the document may create. Read when the
+    /// answers are put together, not kept in them: the created tables were part of what
+    /// the kept answers depended on, and each key typed in a CREATE TABLE's name threw
+    /// them all away.
+    table: Option<String>,
 }
 
 impl Diagnoser {
@@ -124,12 +136,12 @@ impl Diagnoser {
         if self
             .against
             .as_ref()
-            .is_some_and(|(kept, _, _)| *kept != dialect)
+            .is_some_and(|(kept, _)| *kept != dialect)
         {
             self.creates.clear();
         }
         // Tables the document creates itself are known before the catalog hears of them.
-        let mut created: Vec<String> = bodies
+        let created: HashSet<String> = bodies
             .iter()
             .filter_map(|body| match self.creates.get(*body) {
                 Some(kept) => kept.clone(),
@@ -140,9 +152,7 @@ impl Diagnoser {
                 }
             })
             .collect();
-        created.sort();
-        created.dedup();
-        let against = (dialect, known.map(|known| known.stamp), created);
+        let against = (dialect, known.map(|known| known.stamp));
         if self.against.as_ref() != Some(&against) {
             self.answers.clear();
         }
@@ -151,7 +161,6 @@ impl Diagnoser {
             .retain(|body, _| present.contains(body.as_str()));
         self.creates
             .retain(|body, _| present.contains(body.as_str()));
-        let created: HashSet<String> = against.2.iter().cloned().collect();
         self.against = Some(against);
         let mut found = Vec::new();
         for (span, body) in spans.iter().zip(&bodies) {
@@ -161,16 +170,29 @@ impl Diagnoser {
             let answer = match (typing, self.answers.get(*body)) {
                 (None, Some(kept)) => kept.clone(),
                 _ => {
-                    let answer = statement_problems(body, dialect, known, &created, typing);
+                    let answer = statement_problems(body, dialect, known, typing);
                     if typing.is_none() {
                         self.answers.insert(body.to_string(), answer.clone());
                     }
                     answer
                 }
             };
-            found.extend(answer.into_iter().map(|(message, range)| {
-                Diagnostic::local(message, start + range.start..start + range.end)
-            }));
+            found.extend(
+                answer
+                    .into_iter()
+                    .filter(|problem| {
+                        problem
+                            .table
+                            .as_ref()
+                            .is_none_or(|table| !created.contains(table))
+                    })
+                    .map(|problem| {
+                        Diagnostic::local(
+                            problem.message,
+                            start + problem.range.start..start + problem.range.end,
+                        )
+                    }),
+            );
         }
         found
     }
@@ -182,9 +204,8 @@ fn statement_problems(
     body: &str,
     dialect: Dialect,
     known: Option<&KnownObjects>,
-    created: &HashSet<String>,
     typing: Option<usize>,
-) -> Vec<(String, Range<usize>)> {
+) -> Vec<Problem> {
     let checked = matches!(
         first_keyword(body).as_deref(),
         Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "VALUES")
@@ -208,7 +229,11 @@ fn statement_problems(
             if located.is_some() && !beyond_doubt(body, at, dialect) {
                 return found;
             }
-            found.push((clean(&message), at..end));
+            found.push(Problem {
+                message: clean(&message),
+                range: at..end,
+                table: None,
+            });
         }
         Ok(statements) => {
             if let Some(known) = known {
@@ -216,7 +241,7 @@ fn statement_problems(
                 for statement in &statements {
                     let _ = statement.visit(&mut refs);
                 }
-                check(&refs, known, created, body, dialect, &mut found);
+                check(&refs, known, body, dialect, &mut found);
             }
         }
     }
@@ -350,13 +375,14 @@ impl Visitor for References {
     }
 }
 
+/// The tables and columns `refs` names that the catalog does not have. A table the
+/// document itself creates is left for the caller to let pass.
 fn check(
     refs: &References,
     known: &KnownObjects,
-    created: &HashSet<String>,
     body: &str,
     dialect: Dialect,
-    found: &mut Vec<(String, Range<usize>)>,
+    found: &mut Vec<Problem>,
 ) {
     // One map for the whole statement, scopes and all: a name that stands for two
     // different tables somewhere in it -- `o` in a query and in its subquery -- stands
@@ -400,15 +426,12 @@ fn check(
             None if modifier => false,
             None => {
                 !refs.ctes.contains(&table)
-                    && !created.contains(&table)
                     && !system_name(&table)
                     && !known.has_table(None, &table)
             }
             // A schema the catalog never listed may be a system one; nothing is said.
             Some(schema) => {
-                known.schemas.contains(schema)
-                    && !created.contains(&table)
-                    && !known.has_table(Some(schema), &table)
+                known.schemas.contains(schema) && !known.has_table(Some(schema), &table)
             }
         };
         if unknown
@@ -416,7 +439,11 @@ fn check(
             && let Some(range) = span_of(body, first, last)
         {
             let shown: Vec<&str> = parts.iter().map(|ident| ident.value.as_str()).collect();
-            found.push((format!("unknown table {}", shown.join(".")), range));
+            found.push(Problem {
+                message: format!("unknown table {}", shown.join(".")),
+                range,
+                table: Some(table),
+            });
         }
     }
     for (qualifier, column) in &refs.columns {
@@ -436,7 +463,11 @@ fn check(
             && !system_column(&name, dialect)
             && let Some(range) = span_of(body, column, column)
         {
-            found.push((format!("unknown column {} in {table}", column.value), range));
+            found.push(Problem {
+                message: format!("unknown column {} in {table}", column.value),
+                range,
+                table: None,
+            });
         }
     }
 }
@@ -779,6 +810,46 @@ mod tests {
         let creates = "create table fresh (id int);\nselect * from fresh";
         assert_eq!(run(creates, &known), diagnose_all(creates, &known));
         assert!(run(creates, &known).is_empty());
+    }
+
+    /// Typing a CREATE TABLE's name changes what the document creates, and that alone
+    /// keeps every other statement's answer: it used to throw them all away.
+    #[test]
+    fn a_created_table_keeps_the_other_answers() {
+        let known = known();
+        let mut diagnoser = super::Diagnoser::default();
+        let messages = |found: Vec<crate::Diagnostic>| {
+            found
+                .into_iter()
+                .map(|found| found.message)
+                .collect::<Vec<_>>()
+        };
+        let first = "select * from ghosts;\ncreate table gh (id int)";
+        assert_eq!(
+            messages(diagnoser.diagnose(first, Dialect::Postgres, Some(&known), usize::MAX)),
+            ["unknown table ghosts"]
+        );
+        // Marked, so an answer worked out again would show.
+        diagnoser
+            .answers
+            .get_mut("select * from ghosts")
+            .unwrap()
+            .push(super::Problem {
+                message: "kept".into(),
+                range: 0..1,
+                table: None,
+            });
+        let typed = "select * from ghosts;\ncreate table gho (id int)";
+        assert!(
+            messages(diagnoser.diagnose(typed, Dialect::Postgres, Some(&known), usize::MAX))
+                .contains(&"kept".to_string())
+        );
+        // Once the document creates the table, it is not unknown.
+        let created = "select * from ghosts;\ncreate table ghosts (id int)";
+        assert_eq!(
+            messages(diagnoser.diagnose(created, Dialect::Postgres, Some(&known), usize::MAX)),
+            ["kept"]
+        );
     }
 
     fn diagnose_all(sql: &str, known: &KnownObjects) -> Vec<(String, std::ops::Range<usize>)> {
