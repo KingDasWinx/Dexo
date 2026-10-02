@@ -118,7 +118,7 @@ fn where_clause(
         bound += 1;
         match dialect {
             Dialect::Postgres => format!("${bound}"),
-            Dialect::Mysql | Dialect::Sqlite => "?".to_string(),
+            Dialect::Mysql | Dialect::Sqlite | Dialect::Duckdb => "?".to_string(),
         }
     };
     let typed = filter
@@ -154,7 +154,7 @@ pub fn table_count_in(
 pub fn table_select(name: &dexo_driver_api::QualifiedName, dialect: Dialect) -> String {
     let container = match dialect {
         Dialect::Postgres => name.schema(),
-        Dialect::Mysql | Dialect::Sqlite => name.schema().or(name.catalog()),
+        Dialect::Mysql | Dialect::Sqlite | Dialect::Duckdb => name.schema().or(name.catalog()),
     };
     let object = quote(name.object(), dialect);
     match container {
@@ -165,7 +165,9 @@ pub fn table_select(name: &dexo_driver_api::QualifiedName, dialect: Dialect) -> 
 
 fn quote(ident: &str, dialect: Dialect) -> String {
     match dialect {
-        Dialect::Postgres | Dialect::Sqlite => format!("\"{}\"", ident.replace('"', "\"\"")),
+        Dialect::Postgres | Dialect::Sqlite | Dialect::Duckdb => {
+            format!("\"{}\"", ident.replace('"', "\"\""))
+        }
         Dialect::Mysql => format!("`{}`", ident.replace('`', "``")),
     }
 }

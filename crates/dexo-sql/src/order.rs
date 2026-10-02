@@ -2,7 +2,7 @@
 //! text, and the headers read their markers from it.
 
 use sqlparser::ast::{Expr, OrderByKind, SetExpr, Statement};
-use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
 use crate::Dialect;
@@ -40,6 +40,7 @@ pub fn order_keys(text: &str, dialect: Dialect) -> Option<Vec<OrderKey>> {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, &sql),
         Dialect::Mysql => Parser::parse_sql(&MySqlDialect {}, &sql),
         Dialect::Sqlite => Parser::parse_sql(&SQLiteDialect {}, &sql),
+        Dialect::Duckdb => Parser::parse_sql(&DuckDbDialect {}, &sql),
     }
     .ok()?;
     let [Statement::Query(query)] = statements.as_slice() else {
@@ -60,7 +61,10 @@ pub fn order_keys(text: &str, dialect: Dialect) -> Option<Vec<OrderKey>> {
                         (ident.value.to_ascii_lowercase(), true)
                     }
                     Dialect::Postgres => (ident.value.clone(), true),
-                    Dialect::Mysql | Dialect::Sqlite => (ident.value.clone(), false),
+                    // DuckDB keeps a name's case and matches it without regard to it.
+                    Dialect::Mysql | Dialect::Sqlite | Dialect::Duckdb => {
+                        (ident.value.clone(), false)
+                    }
                 };
                 Some(OrderKey {
                     column,

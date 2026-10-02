@@ -228,7 +228,7 @@ fn json_value(value: &DbValue) -> serde_json::Value {
 
 fn sql_insert(columns: &[String], row: &[DbValue], dialect: SqlDialect) -> String {
     let ident = |name: &str| match dialect {
-        SqlDialect::Postgres | SqlDialect::Sqlite => {
+        SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Duckdb => {
             format!("\"{}\"", name.replace('"', "\"\""))
         }
         SqlDialect::Mysql => format!("`{}`", name.replace('`', "``")),

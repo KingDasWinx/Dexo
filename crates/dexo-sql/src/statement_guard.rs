@@ -3,7 +3,7 @@ use std::ops::ControlFlow;
 use sqlparser::ast::{
     Expr, ObjectName, ObjectNamePart, Query, Select, Statement, TableFactor, Visit, Visitor,
 };
-use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
 use crate::Dialect;
@@ -130,6 +130,9 @@ const DENIED_FUNCTIONS: &[&str] = &[
     "load_file",
     "sys_exec",
     "sys_eval",
+    "setseed",
+    "query",
+    "query_table",
 ];
 
 /// A single `SELECT`/`VALUES`/`TABLE`/`WITH … SELECT`, or a plain `EXPLAIN` of one.
@@ -248,7 +251,9 @@ pub fn is_read(sql: &str, dialect: Dialect) -> bool {
     if dialect == Dialect::Sqlite && keyword.as_deref() == Some("PRAGMA") {
         return pragma_reads(sql);
     }
-    let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"));
+    // DuckDB's SUMMARIZE profiles a table or a query, which sqlparser does not parse.
+    let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"))
+        || dialect == Dialect::Duckdb && keyword.as_deref() == Some("SUMMARIZE");
     match inspect_read(sql, dialect) {
         Ok(_) => true,
         // Parsed as exactly one statement, and EXPLAIN ANALYZE was already refused.
@@ -348,6 +353,7 @@ fn whole(
         Dialect::Postgres => &PostgreSqlDialect {},
         Dialect::Mysql => &MySqlDialect {},
         Dialect::Sqlite => &SQLiteDialect {},
+        Dialect::Duckdb => &DuckDbDialect {},
     };
     let mut parser = Parser::new(grammar)
         .try_with_sql(text)
@@ -437,7 +443,7 @@ fn pragma_reads(sql: &str) -> bool {
 /// The first keyword past the comments `dialect` has: MySQL's `#` too.
 fn keyword_in(sql: &str, dialect: Dialect) -> Option<String> {
     match dialect {
-        Dialect::Postgres | Dialect::Sqlite => first_keyword(sql),
+        Dialect::Postgres | Dialect::Sqlite | Dialect::Duckdb => first_keyword(sql),
         Dialect::Mysql => first_keyword(&mysql_mask(sql)),
     }
 }
@@ -496,6 +502,7 @@ fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
         ),
         Dialect::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
         Dialect::Sqlite => Parser::parse_sql(&SQLiteDialect {}, sql),
+        Dialect::Duckdb => Parser::parse_sql(&DuckDbDialect {}, sql),
     }
     .map_err(|error| GuardRejection::Unparsed(error.to_string()))?;
     if statements.len() != 1 {
@@ -539,7 +546,9 @@ impl Guard {
                 {
                     ident.value.to_lowercase()
                 }
-                ObjectNamePart::Identifier(ident) if self.dialect == Dialect::Sqlite => {
+                ObjectNamePart::Identifier(ident)
+                    if matches!(self.dialect, Dialect::Sqlite | Dialect::Duckdb) =>
+                {
                     ident.value.to_ascii_lowercase()
                 }
                 ObjectNamePart::Identifier(ident) => ident.value.clone(),
@@ -1193,6 +1202,46 @@ mod tests {
                 .unwrap()
                 .relations,
             [["items"]]
+        );
+    }
+
+    #[test]
+    fn duckdb_reads_its_own_syntax() {
+        let duckdb = |sql: &str| is_read(sql, Dialect::Duckdb);
+        for sql in [
+            "from orders",
+            "from orders select id",
+            "select * exclude (secret) from orders",
+            "select * from 'sales.csv'",
+            "select * from read_parquet('s.parquet')",
+            "summarize orders",
+            "describe orders",
+            "show tables",
+            "explain select 1",
+        ] {
+            assert!(duckdb(sql), "{sql}");
+        }
+        for sql in [
+            "copy orders to 'out.csv'",
+            "attach 'other.duckdb' as other",
+            "insert into orders select * from 'sales.csv'",
+            "create table t as from 'sales.csv'",
+            "select setseed(0.5)",
+            "select * from query('delete from orders')",
+            "install httpfs",
+            "export database 'dir'",
+        ] {
+            assert!(!duckdb(sql), "{sql}");
+        }
+        assert_eq!(
+            destructive("drop table orders", Dialect::Duckdb),
+            Some(Destructive::Drop)
+        );
+        assert_eq!(
+            inspect_read("select * from Shop.Main.Orders", Dialect::Duckdb)
+                .unwrap()
+                .relations,
+            [["shop", "main", "orders"]]
         );
     }
 }

@@ -306,7 +306,7 @@ pub fn statement_at(sql: &str, byte_index: usize) -> Option<StatementSpan> {
 /// every statement after it.
 pub fn split_statements_in(sql: &str, dialect: Dialect) -> Vec<StatementSpan> {
     match dialect {
-        Dialect::Postgres => split_statements(sql),
+        Dialect::Postgres | Dialect::Duckdb => split_statements(sql),
         Dialect::Sqlite => split_statements(&sqlite_mask(sql)),
         Dialect::Mysql => split_statements(&mysql_mask(sql)),
     }

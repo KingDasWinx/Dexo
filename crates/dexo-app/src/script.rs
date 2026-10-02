@@ -34,6 +34,7 @@ pub fn dialect_for_driver(driver: &str) -> Dialect {
     match dexo_driver_api::DriverDescriptor::family(driver) {
         "mysql" => Dialect::Mysql,
         "sqlite" => Dialect::Sqlite,
+        "duckdb" => Dialect::Duckdb,
         _ => Dialect::Postgres,
     }
 }

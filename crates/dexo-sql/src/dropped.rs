@@ -1,6 +1,6 @@
 //! The tables a statement drops, so the editor stops knowing what a run created.
 
-use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::Dialect;
@@ -12,6 +12,7 @@ pub fn dropped_tables(body: &str, dialect: Dialect) -> Vec<String> {
         Dialect::Postgres => Tokenizer::new(&PostgreSqlDialect {}, body).tokenize(),
         Dialect::Mysql => Tokenizer::new(&MySqlDialect {}, body).tokenize(),
         Dialect::Sqlite => Tokenizer::new(&SQLiteDialect {}, body).tokenize(),
+        Dialect::Duckdb => Tokenizer::new(&DuckDbDialect {}, body).tokenize(),
     };
     let Ok(tokens) = tokens else {
         return Vec::new();

@@ -18,6 +18,7 @@ pub enum SqlDialect {
     Postgres,
     Mysql,
     Sqlite,
+    Duckdb,
 }
 
 impl From<dexo_sql::Dialect> for SqlDialect {
@@ -26,6 +27,7 @@ impl From<dexo_sql::Dialect> for SqlDialect {
             dexo_sql::Dialect::Postgres => Self::Postgres,
             dexo_sql::Dialect::Mysql => Self::Mysql,
             dexo_sql::Dialect::Sqlite => Self::Sqlite,
+            dexo_sql::Dialect::Duckdb => Self::Duckdb,
         }
     }
 }
@@ -156,7 +158,7 @@ fn markdown(columns: &[String], rows: &[Vec<DbValue>]) -> String {
 
 fn sql(columns: &[String], rows: &[Vec<DbValue>], dialect: SqlDialect) -> String {
     let ident = |name: &str| match dialect {
-        SqlDialect::Postgres | SqlDialect::Sqlite => {
+        SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Duckdb => {
             format!("\"{}\"", name.replace('"', "\"\""))
         }
         SqlDialect::Mysql => format!("`{}`", name.replace('`', "``")),
@@ -184,7 +186,7 @@ pub(crate) fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
     match value {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(v) => match dialect {
-            SqlDialect::Postgres => if *v { "TRUE" } else { "FALSE" }.into(),
+            SqlDialect::Postgres | SqlDialect::Duckdb => if *v { "TRUE" } else { "FALSE" }.into(),
             SqlDialect::Mysql | SqlDialect::Sqlite => if *v { "1" } else { "0" }.into(),
         },
         DbValue::I64(v) => v.to_string(),
@@ -192,10 +194,14 @@ pub(crate) fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
         DbValue::Decimal(v) => v.clone(),
         DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => match dialect {
             SqlDialect::Mysql => dexo_driver_api::mysql_string_literal(v),
-            SqlDialect::Postgres | SqlDialect::Sqlite => format!("'{}'", v.replace('\'', "''")),
+            SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Duckdb => {
+                format!("'{}'", v.replace('\'', "''"))
+            }
         },
         DbValue::Bytes(v) => match dialect {
             SqlDialect::Postgres => format!("'\\x{}'", hex(v)),
+            // DuckDB reads `'\x01'` as escaped bytes, not as one hex string.
+            SqlDialect::Duckdb => format!("from_hex('{}')", hex(v)),
             SqlDialect::Mysql | SqlDialect::Sqlite => format!("X'{}'", hex(v)),
         },
     }

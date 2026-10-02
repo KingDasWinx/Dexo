@@ -7,7 +7,7 @@ use std::ops::{ControlFlow, Range};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 use sqlparser::ast::{Expr, Ident, ObjectNamePart, Query, Statement, TableFactor, Visit, Visitor};
-use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
+use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::{Token, Tokenizer};
 
@@ -286,6 +286,7 @@ fn beyond_doubt(body: &str, at: usize, dialect: Dialect) -> bool {
             &["dumpfile"],
         ],
         Dialect::Sqlite => &[&["indexed", "by"], &["not", "indexed"], &["glob"]],
+        Dialect::Duckdb => &[&["summarize"], &["pivot"], &["unpivot"], &["qualify"]],
     };
     // The statement's own words, read as the dialect reads them: one in a string, a
     // comment or a quoted name, or another dialect's construct, hid a real error.
@@ -293,6 +294,7 @@ fn beyond_doubt(body: &str, at: usize, dialect: Dialect) -> bool {
         Dialect::Postgres => Tokenizer::new(&PostgreSqlDialect {}, body).tokenize(),
         Dialect::Mysql => Tokenizer::new(&MySqlDialect {}, body).tokenize(),
         Dialect::Sqlite => Tokenizer::new(&SQLiteDialect {}, body).tokenize(),
+        Dialect::Duckdb => Tokenizer::new(&DuckDbDialect {}, body).tokenize(),
     };
     let words: Vec<String> = tokens
         .unwrap_or_default()
@@ -338,6 +340,7 @@ fn parse(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, sqlparser::parse
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
         Dialect::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
         Dialect::Sqlite => Parser::parse_sql(&SQLiteDialect {}, sql),
+        Dialect::Duckdb => Parser::parse_sql(&DuckDbDialect {}, sql),
     }
 }
 
@@ -515,6 +518,7 @@ fn system_column(name: &str, dialect: Dialect) -> bool {
         Dialect::Postgres => &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"],
         Dialect::Sqlite => &["rowid", "oid", "_rowid_"],
         Dialect::Mysql => &["_rowid"],
+        Dialect::Duckdb => &["rowid"],
     };
     names.contains(&name)
 }
@@ -535,6 +539,7 @@ pub fn created_table(body: &str, dialect: Dialect) -> Option<String> {
         Dialect::Postgres => Tokenizer::new(&PostgreSqlDialect {}, body).tokenize(),
         Dialect::Mysql => Tokenizer::new(&MySqlDialect {}, body).tokenize(),
         Dialect::Sqlite => Tokenizer::new(&SQLiteDialect {}, body).tokenize(),
+        Dialect::Duckdb => Tokenizer::new(&DuckDbDialect {}, body).tokenize(),
     }
     .ok()?;
     let mut tokens = tokens

@@ -3,6 +3,8 @@ pub enum Dialect {
     Postgres,
     Mysql,
     Sqlite,
+    /// Postgres-like, with FROM-first queries, `EXCLUDE` and files as tables.
+    Duckdb,
 }
 
 impl Dialect {
@@ -11,12 +13,13 @@ impl Dialect {
             Self::Postgres => "postgres",
             Self::Mysql => "mysql",
             Self::Sqlite => "sqlite",
+            Self::Duckdb => "duckdb",
         }
     }
 
     pub fn quote(self) -> char {
         match self {
-            Self::Postgres | Self::Sqlite => '"',
+            Self::Postgres | Self::Sqlite | Self::Duckdb => '"',
             Self::Mysql => '`',
         }
     }

@@ -7462,7 +7462,9 @@ fn related_links(
     // server folds them; Postgres's catalog names are exact.
     let name_eq = |a: &str, b: &str| match dialect {
         dexo_sql::Dialect::Postgres => a == b,
-        dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite => a.eq_ignore_ascii_case(b),
+        dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite | dexo_sql::Dialect::Duckdb => {
+            a.eq_ignore_ascii_case(b)
+        }
     };
     let same = |other: &dexo_driver_api::QualifiedName| {
         name_eq(other.object(), table.object())
