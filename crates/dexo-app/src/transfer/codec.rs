@@ -1,6 +1,6 @@
 use dexo_driver_api::DbValue;
 
-use crate::data::copy::SqlDialect;
+use crate::data::copy::{SqlDialect, sql_literal};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TransferFormat {
@@ -244,26 +244,6 @@ fn sql_insert(columns: &[String], row: &[DbValue], dialect: SqlDialect) -> Strin
         .collect::<Vec<_>>()
         .join(", ");
     format!("INSERT INTO dest ({cols}) VALUES ({values});")
-}
-
-fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
-    match value {
-        DbValue::Null => "NULL".into(),
-        DbValue::Bool(v) => match dialect {
-            SqlDialect::Postgres => if *v { "TRUE" } else { "FALSE" }.into(),
-            SqlDialect::Mysql | SqlDialect::Sqlite => if *v { "1" } else { "0" }.into(),
-        },
-        DbValue::I64(v) => v.to_string(),
-        DbValue::U64(v) => v.to_string(),
-        DbValue::Decimal(v) => v.clone(),
-        DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => {
-            format!("'{}'", v.replace('\'', "''"))
-        }
-        DbValue::Bytes(v) => match dialect {
-            SqlDialect::Postgres => format!("'\\x{}'", hex(v)),
-            SqlDialect::Mysql | SqlDialect::Sqlite => format!("X'{}'", hex(v)),
-        },
-    }
 }
 
 fn decode_text(encoding: &'static encoding_rs::Encoding, bytes: &[u8]) -> Result<String, String> {

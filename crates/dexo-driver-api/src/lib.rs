@@ -52,4 +52,4 @@ pub use transport::{
     ConnectionSecrets, ProxyMode, RouteRequest, SshRequest, TlsMode, TlsRequest, TransportRequest,
     split_endpoint,
 };
-pub use value::DbValue;
+pub use value::{DbValue, mysql_string_literal};

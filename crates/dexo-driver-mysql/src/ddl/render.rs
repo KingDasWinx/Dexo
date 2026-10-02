@@ -68,7 +68,7 @@ fn render_create_table(plan: &mut DdlPlan, target: &QualifiedName, def: &TableDe
                 .push("MySQL enums are column types, not CREATE TYPE".into());
             let values = labels
                 .iter()
-                .map(|label| format!("'{}'", label.replace('\'', "''")))
+                .map(|label| dexo_driver_api::mysql_string_literal(label))
                 .collect::<Vec<_>>()
                 .join(", ");
             plan.push(

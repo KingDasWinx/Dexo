@@ -179,7 +179,8 @@ fn sql(columns: &[String], rows: &[Vec<DbValue>], dialect: SqlDialect) -> String
         .join("\n")
 }
 
-fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
+/// `value` as a literal of `dialect`: for a copied INSERT and an exported one alike.
+pub(crate) fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
     match value {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(v) => match dialect {
@@ -189,9 +190,10 @@ fn sql_literal(value: &DbValue, dialect: SqlDialect) -> String {
         DbValue::I64(v) => v.to_string(),
         DbValue::U64(v) => v.to_string(),
         DbValue::Decimal(v) => v.clone(),
-        DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => {
-            format!("'{}'", v.replace('\'', "''"))
-        }
+        DbValue::Text(v) | DbValue::Json(v) | DbValue::Native { text: v, .. } => match dialect {
+            SqlDialect::Mysql => dexo_driver_api::mysql_string_literal(v),
+            SqlDialect::Postgres | SqlDialect::Sqlite => format!("'{}'", v.replace('\'', "''")),
+        },
         DbValue::Bytes(v) => match dialect {
             SqlDialect::Postgres => format!("'\\x{}'", hex(v)),
             SqlDialect::Mysql | SqlDialect::Sqlite => format!("X'{}'", hex(v)),
@@ -299,5 +301,36 @@ mod tests {
         assert!(json.contains("\"product_id\": \"abc\""));
         assert!(json.contains("\"quantity\": 1"));
         assert!(!json.contains("\\\"product_id\\\""));
+    }
+
+    /// MySQL reads a backslash in a literal as an escape: copied and exported INSERTs
+    /// both escape it, so `\'` cannot end the literal and run what follows.
+    #[test]
+    fn mysql_inserts_escape_backslashes() {
+        let rows = [vec![
+            DbValue::Text("a\\'); DROP TABLE victim2; -- ".into()),
+            DbValue::Text("C:\\new\\table".into()),
+        ]];
+        let columns = ["v".to_string(), "path".to_string()];
+        let want = "VALUES ('a\\\\''); DROP TABLE victim2; -- ', 'C:\\\\new\\\\table');";
+        let copied = copy_selection(&columns, &rows, CopyFormat::Sql, SqlDialect::Mysql).unwrap();
+        assert!(copied.ends_with(want), "{copied}");
+        let options = crate::transfer::codec::FormatOptions {
+            dialect: SqlDialect::Mysql,
+            ..Default::default()
+        };
+        let exported = crate::transfer::codec::encode_document(
+            crate::transfer::codec::TransferFormat::Sql,
+            &options,
+            &columns,
+            &rows,
+        )
+        .unwrap();
+        let exported = String::from_utf8(exported).unwrap();
+        assert!(exported.trim_end().ends_with(want), "{exported}");
+        // Postgres and SQLite take a backslash as itself.
+        let postgres =
+            copy_selection(&columns, &rows, CopyFormat::Sql, SqlDialect::Postgres).unwrap();
+        assert!(postgres.contains("'C:\\new\\table'"), "{postgres}");
     }
 }

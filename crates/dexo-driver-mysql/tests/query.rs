@@ -444,4 +444,81 @@ async fn a_timed_out_query_stops_on_the_server() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
+
+/// An exported INSERT replays its values as they were: a backslash is a backslash, and
+/// `\'` in a value does not end the literal and run what follows it.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn an_exported_insert_replays_backslashes_as_themselves() {
+    let fixture = connect_mysql_fixture().await;
+    for sql in [
+        "create table victim2 (id int)",
+        "create table dest (v text, path text, c text)",
+    ] {
+        drain(
+            fixture
+                .session
+                .execute(QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let values = [
+        "a\\'); DROP TABLE victim2; -- ",
+        "C:\\new\\table",
+        "O'Brien\0\n\r\x1a",
+    ];
+    let options = dexo_app::transfer::codec::FormatOptions {
+        dialect: dexo_app::data::SqlDialect::Mysql,
+        ..Default::default()
+    };
+    let exported = dexo_app::transfer::codec::encode_document(
+        dexo_app::transfer::codec::TransferFormat::Sql,
+        &options,
+        &["v".into(), "path".into(), "c".into()],
+        &[values
+            .iter()
+            .map(|value| DbValue::Text(value.to_string()))
+            .collect()],
+    )
+    .unwrap();
+    let insert = String::from_utf8(exported).unwrap();
+    drain(
+        fixture
+            .session
+            .execute(QueryRequest::write(insert))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let mut stream = fixture
+        .session
+        .execute(QueryRequest::read(
+            "select hex(v), hex(path), hex(c), \
+             (select count(*) from information_schema.tables where table_name = 'victim2') \
+             from dest",
+            10,
+        ))
+        .await
+        .unwrap();
+    let mut row = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let QueryEvent::Rows(batch) = event.unwrap() {
+            row = batch.rows.into_iter().next().unwrap();
+        }
+    }
+    let hex = |text: &str| {
+        text.bytes()
+            .map(|byte| format!("{byte:02X}"))
+            .collect::<String>()
+    };
+    for (value, want) in row.iter().zip(values) {
+        assert_eq!(value, &DbValue::Text(hex(want)), "{want:?}");
+    }
+    assert!(
+        matches!(row[3], DbValue::I64(1) | DbValue::U64(1)),
+        "{:?}",
+        row[3]
+    );
 }

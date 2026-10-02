@@ -110,9 +110,9 @@ impl SecurityAdmin for MysqlSession {
         use secrecy::ExposeSecret;
         // ponytail: MySQL ALTER USER rejects placeholders for the user ident. Escape for protocol only.
         let sql = format!(
-            "ALTER USER {} IDENTIFIED BY '{}'",
+            "ALTER USER {} IDENTIFIED BY {}",
             crate::ddl::render::MysqlDialect::quote_ident(principal.object()),
-            password.expose_secret().replace('\'', "''")
+            dexo_driver_api::mysql_string_literal(password.expose_secret())
         );
         let mut conn = self.conn.lock().await;
         conn.query_drop(sql).await.map_err(map_error)
