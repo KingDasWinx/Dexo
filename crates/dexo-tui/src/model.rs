@@ -1484,6 +1484,9 @@ pub struct EditorDocument {
     pub anchor: Option<usize>,
     pub kind: DocumentKind,
     pub console_log: Vec<String>,
+    /// The document a related row was followed from: this one is that hop's own, and
+    /// `b` closes it and goes back there.
+    pub related_from: Option<String>,
     /// The output pane as this document last left it. Parked here while another
     /// document is active, so a query run in one file cannot redraw another's grid.
     pub results: ResultsState,
@@ -1527,6 +1530,7 @@ impl EditorDocument {
             results: ResultsState::default(),
             browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
+            related_from: None,
         }
     }
 
@@ -1562,6 +1566,7 @@ impl EditorDocument {
             results: ResultsState::default(),
             browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
+            related_from: None,
         }
     }
 
@@ -1596,6 +1601,7 @@ impl EditorDocument {
             results: ResultsState::default(),
             browse: crate::screens::data::DataScreen::default(),
             console_log: Vec::new(),
+            related_from: None,
         }
     }
 

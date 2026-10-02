@@ -195,19 +195,7 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         render_snippets(frame, model, hits);
     }
     if let Some(picker) = &model.data.related_picker {
-        let labels: Vec<String> = match &picker.links {
-            Some(links) => links.iter().map(|link| link.label.clone()).collect(),
-            None => vec!["Looking for foreign keys…".into()],
-        };
-        render_list_overlay(
-            frame,
-            model,
-            "Related rows",
-            &labels,
-            picker.selected,
-            0,
-            hits,
-        );
+        render_related_picker(frame, model, picker, hits);
     }
     if model.connections.delete_target.is_some() {
         render_delete_connection(frame, model, hits);
@@ -2351,6 +2339,64 @@ fn render_list_overlay(
         }
         hits.register(HitTarget::ListRow(offset.saturating_add(i)), rect);
     });
+}
+
+/// The ways out of a row: as wide as the longest key needs (two long keys used to read
+/// the same cut at 48 columns), with the keys that work under them.
+fn render_related_picker(
+    frame: &mut Frame,
+    model: &Model,
+    picker: &crate::screens::data::RelatedPicker,
+    hits: &mut HitMap,
+) {
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
+    }
+    let labels: Vec<String> = match &picker.links {
+        Some(links) => links.iter().map(|link| link.label.clone()).collect(),
+        None => vec!["Looking for foreign keys…".into()],
+    };
+    let hint = "Enter open  Esc close";
+    let widest = labels
+        .iter()
+        .map(|label| unicode_width::UnicodeWidthStr::width(label.as_str()) + 2)
+        .chain([hint.len()])
+        .max()
+        .unwrap_or(0);
+    let width = (widest as u16 + 4).max(48);
+    let height = (labels.len() as u16 + 4).min(area.height);
+    let popup = centered(area, width, height);
+    let rows = (popup.height.saturating_sub(4) as usize).max(1);
+    let offset = scroll_to_selection(picker.selected, 0, labels.len(), rows);
+    let mut lines: Vec<String> = labels
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(rows)
+        .map(|(index, label)| {
+            let marker = if index == picker.selected { ">" } else { " " };
+            format!("{marker} {label}")
+        })
+        .collect();
+    let shown = lines.len();
+    lines.push(String::new());
+    lines.push(hint.into());
+    paint_popup(
+        frame,
+        model,
+        popup,
+        Block::bordered().title("Related rows"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    if picker.links.is_some() {
+        for_popup_lines(popup, &lines, |i, _, rect| {
+            if i < shown {
+                hits.register(HitTarget::ListRow(offset + i), rect);
+            }
+        });
+    }
 }
 
 fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

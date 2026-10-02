@@ -285,17 +285,25 @@ pub enum Action {
     DataPageLoaded {
         generation: u64,
         session: String,
+        ticket: OperationId,
         page: dexo_driver_api::DataPage,
     },
     DataPageFailed {
         generation: u64,
+        ticket: OperationId,
         message: String,
     },
     TableColumnsLoaded {
         generation: u64,
+        ticket: OperationId,
         columns: Vec<dexo_driver_api::ColumnKeyInfo>,
     },
     TableColumnsFailed {
+        generation: u64,
+        ticket: OperationId,
+        message: String,
+    },
+    ValueFetchFailed {
         generation: u64,
         message: String,
     },
@@ -360,7 +368,6 @@ pub enum Action {
     SubmitInsertRow,
     CancelInsertRow,
     InspectValue,
-    OpenRelated,
     /// The databases running in Docker, for the connections screen.
     DockerDiscovered(Vec<dexo_app::docker::DockerDatabase>),
     /// Save Query As: name what the selection or the document holds.
@@ -1004,11 +1011,13 @@ pub enum Effect {
         request: dexo_driver_api::DataRequest,
         session: SessionId,
         generation: u64,
+        ticket: OperationId,
     },
     LoadTableColumns {
         target: dexo_driver_api::QualifiedName,
         session: SessionId,
         generation: u64,
+        ticket: OperationId,
     },
     FetchValue {
         value: dexo_driver_api::RemoteValueRef,

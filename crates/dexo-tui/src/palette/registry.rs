@@ -330,8 +330,8 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "data.nav_back",
-            title: "Data Navigate Back",
-            keywords: &["crumb", "related"],
+            title: "Back from Related Rows",
+            keywords: &["back", "related", "foreign key", "return"],
             shortcut: Some("b"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::DataNavBack),
@@ -1370,7 +1370,6 @@ fn hidden(id: &str) -> bool {
             | "data.page_next"
             | "data.page_prev"
             | "data.toggle_delete"
-            | "data.nav_back"
             // listing the palette inside the palette
             | "palette.open"
             // opening the palette destroys completion state, so it is always disabled

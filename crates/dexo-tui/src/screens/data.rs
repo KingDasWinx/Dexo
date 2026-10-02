@@ -203,13 +203,8 @@ pub struct DataScreen {
     pub clipboard: String,
     pub dialect: SqlDialect,
     pub environment: Environment,
-    pub related_open: Vec<String>,
-    pub related_fk: Option<ForeignKey>,
     pub related_picker: Option<RelatedPicker>,
     pub related_row: Vec<(String, Option<DbValue>)>,
-    /// The documents a foreign-key walk came from, most recent last. Each kept its own
-    /// table state, so the way back is the document, not a copy of where it was.
-    pub crumbs: Vec<String>,
     pub page_offset: u64,
     pub page_limit: u32,
     pub has_more: bool,
@@ -223,6 +218,10 @@ pub struct DataScreen {
     /// The WHERE and ORDER BY bars over the grid.
     pub bars: ClauseBars,
     pub target_document: Option<String>,
+    /// The page and the columns last asked for: an answer to any other request -- an
+    /// older page, another document's -- is not this grid's.
+    pub page_ticket: Option<crate::runtime::OperationId>,
+    pub columns_ticket: Option<crate::runtime::OperationId>,
     pub request_started: Option<std::time::Instant>,
     pub row_changes: std::collections::BTreeMap<usize, RowEditState>,
     pub insert_form: InsertRowForm,
@@ -242,11 +241,8 @@ impl Default for DataScreen {
             clipboard: String::new(),
             dialect: SqlDialect::Postgres,
             environment: Environment::Local,
-            related_open: Vec::new(),
-            related_fk: None,
             related_picker: None,
             related_row: Vec::new(),
-            crumbs: Vec::new(),
             page_offset: 0,
             page_limit: 100,
             has_more: false,
@@ -258,6 +254,8 @@ impl Default for DataScreen {
             last_error: None,
             bars: ClauseBars::default(),
             target_document: None,
+            page_ticket: None,
+            columns_ticket: None,
             request_started: None,
             row_changes: std::collections::BTreeMap::new(),
             insert_form: InsertRowForm::default(),
@@ -274,10 +272,7 @@ impl DataScreen {
         swap(&mut self.table, &mut parked.table);
         swap(&mut self.target, &mut parked.target);
         swap(&mut self.changes, &mut parked.changes);
-        swap(&mut self.related_open, &mut parked.related_open);
-        swap(&mut self.related_fk, &mut parked.related_fk);
         swap(&mut self.related_row, &mut parked.related_row);
-        swap(&mut self.crumbs, &mut parked.crumbs);
         swap(&mut self.page_offset, &mut parked.page_offset);
         swap(&mut self.has_more, &mut parked.has_more);
         swap(&mut self.estimated_total, &mut parked.estimated_total);
@@ -287,6 +282,8 @@ impl DataScreen {
         swap(&mut self.sort, &mut parked.sort);
         swap(&mut self.last_error, &mut parked.last_error);
         swap(&mut self.target_document, &mut parked.target_document);
+        swap(&mut self.page_ticket, &mut parked.page_ticket);
+        swap(&mut self.columns_ticket, &mut parked.columns_ticket);
         swap(&mut self.request_started, &mut parked.request_started);
         swap(&mut self.row_changes, &mut parked.row_changes);
         swap(&mut self.bars, &mut parked.bars);
@@ -369,7 +366,7 @@ pub fn review_lines(modal: &ReviewModal) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ReviewStatus;
+    use super::{RelatedLink, RelatedPicker, ReviewStatus};
     use crate::action::Action;
     use crate::model::Model;
     use crate::update;
@@ -493,28 +490,48 @@ mod tests {
         assert!(model.data.changes.pending().is_empty());
     }
 
-    /// `data_nav_back` popped the crumb but never the pushed tab title, so walking
-    /// foreign keys leaked a strip entry per hop. Documents are reused by target, so
-    /// going back and forth has to stay flat.
-    #[test]
-    fn related_navigation_does_not_leak_per_hop() {
-        let mut model = Model::default();
-        model.data.related_fk = Some(ForeignKey {
+    /// Follows `fk` from the row in `related_row` as Enter in the picker does.
+    pub(crate) fn follow(model: &mut Model, fk: ForeignKey) -> Vec<crate::Effect> {
+        model.data.related_picker = Some(RelatedPicker {
+            table: model.data.target.clone(),
+            links: Some(vec![RelatedLink {
+                label: "→ users (user_id)".into(),
+                key: fk,
+            }]),
+            selected: 0,
+        });
+        update(
+            model,
+            Action::Key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Enter,
+                crossterm::event::KeyModifiers::NONE,
+            )),
+        )
+    }
+
+    fn users_key() -> ForeignKey {
+        ForeignKey {
             local: vec!["user_id".into()],
             referenced_table: QualifiedName::new(Some("db"), Some("public"), "users"),
             referenced: vec!["id".into()],
-        });
-        model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
+        }
+    }
 
-        update(&mut model, Action::OpenRelated);
-        let after_first = model.documents.len();
-        update(&mut model, Action::DataNavBack);
-        update(&mut model, Action::OpenRelated);
-        update(&mut model, Action::DataNavBack);
-
+    /// Each hop is a document of its own, and Back closes it: walking foreign keys back
+    /// and forth leaves the strip as it was.
+    #[test]
+    fn related_navigation_does_not_leak_per_hop() {
+        let mut model = Model::default();
+        let before = model.documents.len();
+        for _ in 0..2 {
+            model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
+            follow(&mut model, users_key());
+            assert_eq!(model.documents.len(), before + 1);
+            update(&mut model, Action::DataNavBack);
+        }
         assert_eq!(
             model.documents.len(),
-            after_first,
+            before,
             "each hop left something behind"
         );
     }
@@ -522,16 +539,11 @@ mod tests {
     #[test]
     fn open_related_opens_a_document() {
         let mut model = Model::default();
-        let before = model.documents.len();
-        model.data.related_fk = Some(ForeignKey {
-            local: vec!["user_id".into()],
-            referenced_table: QualifiedName::new(Some("db"), Some("public"), "users"),
-            referenced: vec!["id".into()],
-        });
+        let origin = model.active_document().id.clone();
         model.data.related_row = vec![("user_id".into(), Some(DbValue::I64(9)))];
-        update(&mut model, Action::OpenRelated);
-        assert_eq!(model.documents.len(), before + 1);
+        follow(&mut model, users_key());
         assert!(model.active_document().kind.is_table());
-        assert_eq!(model.data.related_open, vec!["db.public.users"]);
+        assert_eq!(model.active_document().related_from, Some(origin));
+        assert!(model.data.filter.is_some());
     }
 }

@@ -98,14 +98,16 @@ fn paging_refuses_while_edits_are_pending() {
 fn back_from_a_foreign_key_returns_to_the_document_it_came_from() {
     let mut model = two_tables();
     let origin = model.active_document().id.clone();
-    model.data.related_fk = Some(dexo_app::data::ForeignKey {
-        local: vec!["customer_id".into()],
-        referenced_table: customers(),
-        referenced: vec!["id".into()],
-    });
     model.data.related_row = vec![("customer_id".into(), Some(dexo_driver_api::DbValue::I64(3)))];
 
-    let effects = update(&mut model, Action::OpenRelated);
+    let effects = follow(
+        &mut model,
+        dexo_app::data::ForeignKey {
+            local: vec!["customer_id".into()],
+            referenced_table: customers(),
+            referenced: vec!["id".into()],
+        },
+    );
     assert_eq!(requests(&effects)[0].object, customers());
     assert_eq!(model.data.target, customers());
 
@@ -114,4 +116,23 @@ fn back_from_a_foreign_key_returns_to_the_document_it_came_from() {
     assert!(requests(&effects).is_empty(), "{effects:?}");
     assert_eq!(model.active_document().id, origin);
     assert_eq!(model.data.target, orders());
+}
+
+/// Follows `key` from the row in `related_row`, as Enter in the related-rows picker does.
+fn follow(model: &mut Model, key: dexo_app::data::ForeignKey) -> Vec<dexo_tui::Effect> {
+    model.data.related_picker = Some(dexo_tui::screens::data::RelatedPicker {
+        table: model.data.target.clone(),
+        links: Some(vec![dexo_tui::screens::data::RelatedLink {
+            label: "related".into(),
+            key,
+        }]),
+        selected: 0,
+    });
+    update(
+        model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
 }

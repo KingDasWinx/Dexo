@@ -21,10 +21,11 @@ impl DataScreen {
     }
 }
 
-/// `customer_id = 1 AND region = 'eu'`: the filter as a person reads it.
+/// `customer_id = 1 AND name = 'O''Brien'`: the filter as a person reads it, each text
+/// a literal as SQL writes it -- the values themselves go to the server bound.
 pub fn describe_filter(filter: &Filter) -> String {
     let value = |value: &dexo_driver_api::DbValue| match value {
-        dexo_driver_api::DbValue::Text(text) => format!("'{text}'"),
+        dexo_driver_api::DbValue::Text(text) => format!("'{}'", text.replace('\'', "''")),
         other => dexo_app::data::display_value(other),
     };
     let join = |parts: &[Filter], with: &str| {
@@ -49,5 +50,18 @@ pub fn describe_filter(filter: &Filter) -> String {
         Filter::And(parts) => join(parts, " AND "),
         Filter::Or(parts) => join(parts, " OR "),
         Filter::Not(inner) => format!("NOT ({})", describe_filter(inner)),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    /// A text value reads as the SQL literal it stands for.
+    #[test]
+    fn a_quote_in_a_value_is_doubled() {
+        let filter = dexo_driver_api::Filter::Eq(
+            dexo_driver_api::ColumnId("name".into()),
+            dexo_driver_api::DbValue::Text("O'Brien".into()),
+        );
+        assert_eq!(super::describe_filter(&filter), "name = 'O''Brien'");
     }
 }

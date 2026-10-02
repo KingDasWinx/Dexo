@@ -335,10 +335,6 @@ fn result_banner(model: &Model) -> String {
             extra.push_str(reason);
         }
     }
-    if !model.data.crumbs.is_empty() {
-        extra.push_str(" crumbs:");
-        extra.push_str(&model.data.crumbs.len().to_string());
-    }
     // The rows a foreign key led to: the WHERE bar does not hold this filter, so the
     // title says it.
     if model.active_document().kind.is_table()

@@ -337,11 +337,14 @@ fn data_page_fills_the_active_grid() {
         active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
         ..Model::default()
     };
+    let ticket = dexo_tui::runtime::OperationId::new();
+    model.data.page_ticket = Some(ticket);
     let _ = update(
         &mut model,
         Action::DataPageLoaded {
             generation: 1,
             session: Uuid::from_u128(1).to_string(),
+            ticket,
             page: dexo_driver_api::DataPage {
                 columns: vec![dexo_driver_api::ColumnMeta {
                     name: "id".into(),

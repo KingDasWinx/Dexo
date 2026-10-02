@@ -1017,9 +1017,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::DataPageLoaded {
             generation,
             session,
+            ticket,
             page,
         } => {
-            if catalog_generation_matches(model, &session, generation) {
+            // Only the page this grid last asked for: an older one, or one asked for by
+            // a document no longer on screen, would land in the wrong grid.
+            if catalog_generation_matches(model, &session, generation)
+                && model.data.page_ticket == Some(ticket)
+            {
                 model.data.bars.good = model.data.bars.applied.clone();
                 model.data.apply_page(page.clone());
                 model.results.clear();
@@ -1033,9 +1038,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::DataPageFailed {
             generation,
+            ticket,
             message,
         } => {
-            if generation == model.session_generation {
+            if generation == model.session_generation && model.data.page_ticket == Some(ticket) {
                 model.data.loading = false;
                 model.data.last_error = Some(message.clone());
                 model.messages.error(message);
@@ -1046,9 +1052,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::TableColumnsLoaded {
             generation,
+            ticket,
             columns,
         } => {
-            if generation == model.session_generation {
+            if generation == model.session_generation && model.data.columns_ticket == Some(ticket) {
                 model.data.table = dexo_app::data::TableMeta::from_keys(columns);
                 model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
                 model.data.row_changes.clear();
@@ -1056,6 +1063,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::TableColumnsFailed {
+            generation,
+            ticket,
+            message,
+        } => {
+            if generation == model.session_generation && model.data.columns_ticket == Some(ticket) {
+                model.messages.error(message);
+            }
+            Vec::new()
+        }
+        Action::ValueFetchFailed {
             generation,
             message,
         } => {
@@ -1235,7 +1252,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::SubmitInsertRow => submit_insert_row(model),
         Action::InspectValue => inspect_selected(model),
-        Action::OpenRelated => open_related(model),
         Action::OpenRelatedPicker => open_related_picker(model),
         Action::NoteLoaded { object, note } => {
             if model.inspector.note_key().as_deref() == Some(object.as_str()) {
@@ -1297,12 +1313,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 .related_picker
                 .as_ref()
                 .is_some_and(|picker| picker.table == table && picker.links.is_none());
-            if !current || generation != model.session_generation {
+            if !current {
+                return Vec::new();
+            }
+            // Asked of a session that has since been replaced: nothing will answer now.
+            if generation != model.session_generation {
+                model.data.related_picker = None;
+                model
+                    .messages
+                    .warn("The connection changed while the keys were read; press f again.".into());
                 return Vec::new();
             }
             match result {
                 Ok(keys) => {
-                    let links = related_links(&table, &keys);
+                    let dialect = crate::screens::editor::editor_dialect(model);
+                    let links = related_links(&table, &keys, dialect);
                     if links.is_empty() {
                         model.data.related_picker = None;
                         model.messages.info(format!(
@@ -6066,12 +6091,18 @@ fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
     effects
 }
 
+/// The open document of `target` on the live connection, to open it in again: every
+/// SQLite file's tables are `main.x`, so the name alone would take another
+/// connection's. A related row's hop is its own, and never reused.
 fn document_index_for_table(
     model: &Model,
     target: &dexo_driver_api::QualifiedName,
 ) -> Option<usize> {
+    let connection = active_connection_uuid(model);
     model.documents.iter().position(|document| {
         matches!(&document.kind, crate::model::DocumentKind::Table(existing) if existing == target)
+            && document.connection_id == connection
+            && document.related_from.is_none()
     })
 }
 
@@ -6151,21 +6182,35 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
             if request.page.offset > 0 {
                 shown.push_str(&format!(" OFFSET {}", request.page.offset));
             }
+            // The values a filter compares with are sent bound, not in the text.
+            let bound = if request.filter.is_some() {
+                "  -- values bound"
+            } else {
+                ""
+            };
             model.documents[index].console_log.push(format!(
-                "[{}] {}> {shown}",
+                "[{}] {}> {shown}{bound}",
                 crate::model::clock(),
                 target.display_unquoted(),
             ));
+            let (page, columns) = (
+                crate::runtime::OperationId::new(),
+                crate::runtime::OperationId::new(),
+            );
+            model.data.page_ticket = Some(page);
+            model.data.columns_ticket = Some(columns);
             vec![
                 Effect::LoadTableData {
                     request,
                     session,
                     generation: model.session_generation,
+                    ticket: page,
                 },
                 Effect::LoadTableColumns {
                     target,
                     session,
                     generation: model.session_generation,
+                    ticket: columns,
                 },
             ]
         }
@@ -6564,11 +6609,16 @@ fn reload_object_data(model: &mut Model) -> Vec<Effect> {
         model.data.page_limit,
         model.data.bars.applied.clone(),
     ) {
-        Ok(request) => vec![Effect::LoadTableData {
-            request,
-            session,
-            generation: model.session_generation,
-        }],
+        Ok(request) => {
+            let ticket = crate::runtime::OperationId::new();
+            model.data.page_ticket = Some(ticket);
+            vec![Effect::LoadTableData {
+                request,
+                session,
+                generation: model.session_generation,
+                ticket,
+            }]
+        }
         Err(message) => {
             model.messages.error(message);
             Vec::new()
@@ -7019,14 +7069,21 @@ fn open_related_picker(model: &mut Model) -> Vec<Effect> {
 fn related_links(
     table: &dexo_driver_api::QualifiedName,
     keys: &[dexo_driver_api::ForeignKeyRef],
+    dialect: dexo_sql::Dialect,
 ) -> Vec<crate::screens::data::RelatedLink> {
+    // SQLite keeps a REFERENCES as written (`Customers`), and MySQL's names are as the
+    // server folds them; Postgres's catalog names are exact.
+    let name_eq = |a: &str, b: &str| match dialect {
+        dexo_sql::Dialect::Postgres => a == b,
+        dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite => a.eq_ignore_ascii_case(b),
+    };
     let same = |other: &dexo_driver_api::QualifiedName| {
-        other.object() == table.object()
+        name_eq(other.object(), table.object())
             && match (
                 other.schema().or(other.catalog()),
                 table.schema().or(table.catalog()),
             ) {
-                (Some(a), Some(b)) => a == b,
+                (Some(a), Some(b)) => name_eq(a, b),
                 _ => true,
             }
     };
@@ -7064,77 +7121,80 @@ fn related_links(
     links
 }
 
-/// Enter in the picker: the chosen table opens, filtered to the rows on the key's other
-/// end; `b` comes back.
+/// Enter in the picker: the chosen table opens in a document of its own, filtered to
+/// the rows on the key's other end; `b` closes it and comes back.
 fn open_related_link(model: &mut Model) -> Vec<Effect> {
-    let Some(picker) = model.data.related_picker.take() else {
+    let Some(picker) = model.data.related_picker.as_ref() else {
         return Vec::new();
     };
-    let Some(link) = picker
-        .links
-        .and_then(|links| links.into_iter().nth(picker.selected))
-    else {
+    // Still asking the catalog: Enter waits with the picker.
+    let Some(links) = picker.links.as_ref() else {
         return Vec::new();
     };
-    model.data.related_fk = Some(link.key);
-    open_related(model)
+    let Some(link) = links.get(picker.selected).cloned() else {
+        return Vec::new();
+    };
+    model.data.related_picker = None;
+    open_related(model, link.key)
 }
 
-fn open_related(model: &mut Model) -> Vec<Effect> {
-    let Some(fk) = model.data.related_fk.clone() else {
-        model.messages.warn("no related foreign key".into());
+fn open_related(model: &mut Model, fk: dexo_app::data::ForeignKey) -> Vec<Effect> {
+    let table = fk.referenced_table.display_unquoted();
+    if fk.referenced.is_empty() || fk.referenced.len() != fk.local.len() {
+        model.messages.warn(format!(
+            "The key names no columns of {table}, which has no primary key to point at; there is nothing to follow."
+        ));
+        return Vec::new();
+    }
+    let Some(filter) = related_filter(&fk, &model.data.related_row) else {
+        model.messages.warn(format!(
+            "This row's {} is NULL, so it points at no row of {table}.",
+            fk.local.join(", ")
+        ));
         return Vec::new();
     };
-    let Some(filter) = related_filter(&fk, &model.data.related_row) else {
+    // Each hop is a document of its own, right after the one it came from: reusing an
+    // open document of the table overwrote it -- the way back with it -- and kept that
+    // document's own WHERE, which could hide the rows the key leads to.
+    let origin = model.active_document;
+    let mut document = crate::model::EditorDocument::new_table(
+        fk.referenced_table.clone(),
+        active_connection_uuid(model),
+    );
+    document.related_from = Some(model.documents[origin].id.clone());
+    model.documents.insert(origin + 1, document);
+    model.set_active_document(origin + 1);
+    model.data.filter = Some(filter);
+    model.focus_active_document_tab();
+    model.focus = Focus::Results;
+    load_table_document(model, origin + 1)
+}
+
+/// `b`: back to the document a related row was followed from, closing this hop's.
+fn data_nav_back(model: &mut Model) -> Vec<Effect> {
+    let Some(origin) = model.active_document().related_from.clone() else {
         model
             .messages
-            .warn("foreign key is null; navigation disabled".into());
+            .info("These rows were not opened from a related row; there is no way back.".into());
         return Vec::new();
     };
-    let title = fk.referenced_table.display_unquoted();
-    let origin = model.active_document().id.clone();
-    // This used to push a title onto the workbench strip that `data_nav_back` never
-    // popped, so walking foreign keys leaked a tab per hop. The referenced table gets
-    // a document, reusing one if it is already open.
-    let connection_id = active_connection_uuid(model);
-    let index = document_index_for_table(model, &fk.referenced_table).unwrap_or_else(|| {
-        model
-            .documents
-            .push(crate::model::EditorDocument::new_table(
-                fk.referenced_table.clone(),
-                connection_id,
-            ));
-        model.documents.len() - 1
-    });
-    // The referenced table keeps its own state, so the switch comes before any of it
-    // is written, and the way back is recorded on that table.
-    model.set_active_document(index);
     if reload_would_orphan_edits(model) {
         return Vec::new();
     }
-    model.data.crumbs.push(origin);
-    model.data.filter = Some(filter);
-    model.data.related_open.push(title);
-    load_table_document(model, index)
-}
-
-fn data_nav_back(model: &mut Model) -> Vec<Effect> {
-    let Some(origin) = model.data.crumbs.pop() else {
-        return Vec::new();
-    };
-    model.data.related_open.pop();
-    // The document walked away from kept its rows and paging; back is a switch to it.
-    // This used to load the origin table into the current document, under its table.
-    match model
+    let Some(index) = model
         .documents
         .iter()
         .position(|document| document.id == origin)
-    {
-        Some(index) => model.set_active_document(index),
-        None => model
+    else {
+        model
             .messages
-            .warn("the document this came from is closed".into()),
-    }
+            .warn("The document these rows came from is closed.".into());
+        return Vec::new();
+    };
+    let hop = model.active_document;
+    model.set_active_document(index);
+    remove_document(model, hop);
+    model.focus = Focus::Results;
     Vec::new()
 }
 
@@ -9669,6 +9729,126 @@ mod tests {
         assert_eq!(model.results.tabs[0].title, "a's rows");
         assert_eq!(model.results.rows().len(), 1);
         assert!(model.data.bars.applied.order_by.is_none());
+    }
+
+    /// A page answers only the request the grid last made: an older page, or its late
+    /// failure, neither fills the grid nor resets the WHERE that runs now.
+    #[test]
+    fn only_the_last_page_asked_for_lands() {
+        let session = crate::runtime::SessionId(uuid::Uuid::from_u128(1));
+        let mut model = Model {
+            active_session: Some(session),
+            session_generation: 1,
+            ..Model::default()
+        };
+        model.documents = vec![crate::model::EditorDocument::new_table(
+            dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders"),
+            None,
+        )];
+        model.active_document = 0;
+        super::load_table_document(&mut model, 0);
+        let first = model.data.page_ticket.expect("a page is asked for");
+        model.data.bars.where_input.set_text("id > 1");
+        assert!(!super::apply_clauses(&mut model).is_empty());
+        let second = model.data.page_ticket.unwrap();
+        assert_ne!(first, second);
+        let page = |rows: i64| {
+            dexo_driver_api::DataPage::from_fetched(
+                vec![dexo_driver_api::ColumnMeta {
+                    name: "id".into(),
+                    type_name: "int".into(),
+                    nullable: false,
+                }],
+                (0..rows).map(|row| vec![DbValue::I64(row)]).collect(),
+                0,
+                100,
+            )
+        };
+        update(
+            &mut model,
+            Action::DataPageFailed {
+                generation: 1,
+                ticket: first,
+                message: "late".into(),
+            },
+        );
+        assert_eq!(model.data.bars.applied.where_sql.as_deref(), Some("id > 1"));
+        update(
+            &mut model,
+            Action::DataPageLoaded {
+                generation: 1,
+                session: session.0.to_string(),
+                ticket: first,
+                page: page(5),
+            },
+        );
+        assert_eq!(model.results.row_count(), 0);
+        update(
+            &mut model,
+            Action::DataPageLoaded {
+                generation: 1,
+                session: session.0.to_string(),
+                ticket: second,
+                page: page(2),
+            },
+        );
+        assert_eq!(model.results.row_count(), 2);
+    }
+
+    /// SQLite keeps a REFERENCES as written: `Customers` is the `customers` table.
+    /// Postgres's names are exact.
+    #[test]
+    fn a_key_written_in_another_case_still_links_on_sqlite() {
+        let table = dexo_driver_api::QualifiedName::new(None::<String>, Some("main"), "customers");
+        let key = dexo_driver_api::ForeignKeyRef {
+            name: "orders_customer".into(),
+            from: dexo_driver_api::QualifiedName::new(None::<String>, Some("main"), "orders"),
+            from_columns: vec!["customer_id".into()],
+            to: dexo_driver_api::QualifiedName::new(None::<String>, Some("main"), "Customers"),
+            to_columns: vec!["id".into()],
+        };
+        let keys = [key];
+        assert_eq!(
+            super::related_links(&table, &keys, dexo_sql::Dialect::Sqlite).len(),
+            1
+        );
+        assert!(super::related_links(&table, &keys, dexo_sql::Dialect::Postgres).is_empty());
+    }
+
+    /// Enter while the keys are still being read waits; an answer from a replaced
+    /// session closes the picker and says so instead of waiting for ever.
+    #[test]
+    fn the_related_picker_never_waits_for_ever() {
+        let table = dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders");
+        let mut model = Model {
+            session_generation: 2,
+            ..Model::default()
+        };
+        model.data.related_picker = Some(crate::screens::data::RelatedPicker {
+            table: table.clone(),
+            links: None,
+            selected: 0,
+        });
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
+        assert!(model.data.related_picker.is_some());
+        update(
+            &mut model,
+            Action::ForeignKeysLoaded {
+                generation: 1,
+                table,
+                result: Ok(Vec::new()),
+            },
+        );
+        assert!(model.data.related_picker.is_none());
+        assert!(
+            model
+                .messages
+                .iter()
+                .any(|entry| entry.message.contains("press f again"))
+        );
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,

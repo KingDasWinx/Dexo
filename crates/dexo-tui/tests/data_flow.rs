@@ -64,11 +64,14 @@ fn paging_applies_only_matching_generation() {
         active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
         ..Model::default()
     };
+    let ticket = dexo_tui::runtime::OperationId::new();
+    model.data.page_ticket = Some(ticket);
     update(
         &mut model,
         Action::DataPageLoaded {
             generation: 1,
             session: Uuid::from_u128(1).to_string(),
+            ticket,
             page: dexo_driver_api::DataPage::from_fetched(
                 vec![dexo_driver_api::ColumnMeta {
                     name: "id".into(),
@@ -87,6 +90,7 @@ fn paging_applies_only_matching_generation() {
         Action::DataPageLoaded {
             generation: 2,
             session: Uuid::from_u128(1).to_string(),
+            ticket,
             page: dexo_driver_api::DataPage::from_fetched(
                 vec![dexo_driver_api::ColumnMeta {
                     name: "id".into(),
@@ -213,19 +217,25 @@ fn clipboard_formats_cover_cell_row_column_and_range() {
 #[test]
 fn foreign_key_null_disables_navigation() {
     let mut model = Model::default();
-    model.data.related_fk = Some(dexo_app::data::ForeignKey {
-        local: vec!["user_id".into()],
-        referenced_table: dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "users"),
-        referenced: vec!["id".into()],
-    });
     model.data.related_row = vec![("user_id".into(), None)];
-    let effects = update(&mut model, Action::OpenRelated);
+    let effects = follow(
+        &mut model,
+        dexo_app::data::ForeignKey {
+            local: vec!["user_id".into()],
+            referenced_table: dexo_driver_api::QualifiedName::new(
+                Some("db"),
+                Some("public"),
+                "users",
+            ),
+            referenced: vec!["id".into()],
+        },
+    );
     assert!(effects.is_empty());
     assert!(
         model
             .messages
             .iter()
-            .any(|message| message.message.contains("null"))
+            .any(|message| message.message.contains("is NULL"))
     );
 }
 
@@ -376,24 +386,32 @@ fn foreign_key_composite_loads_destination() {
         session_generation: 1,
         ..Model::default()
     };
-    model.data.related_fk = Some(dexo_app::data::ForeignKey {
-        local: vec!["org_id".into(), "user_id".into()],
-        referenced_table: dexo_driver_api::QualifiedName::new(Some("db"), Some("public"), "users"),
-        referenced: vec!["org".into(), "id".into()],
-    });
     model.data.related_row = vec![
         ("org_id".into(), Some(DbValue::I64(7))),
         ("user_id".into(), Some(DbValue::I64(3))),
     ];
-    let effects = update(&mut model, Action::OpenRelated);
+    let before = model.documents.len();
+    let effects = follow(
+        &mut model,
+        dexo_app::data::ForeignKey {
+            local: vec!["org_id".into(), "user_id".into()],
+            referenced_table: dexo_driver_api::QualifiedName::new(
+                Some("db"),
+                Some("public"),
+                "users",
+            ),
+            referenced: vec!["org".into(), "id".into()],
+        },
+    );
     assert!(effects.iter().any(|effect| matches!(
         effect,
         dexo_tui::Effect::LoadTableData { request, .. }
             if matches!(request.filter, Some(dexo_driver_api::Filter::And(ref parts)) if parts.len() == 2)
     )));
-    assert_eq!(model.data.crumbs.len(), 1);
+    assert!(model.active_document().related_from.is_some());
     update(&mut model, Action::DataNavBack);
-    assert!(model.data.crumbs.is_empty());
+    assert!(model.active_document().related_from.is_none());
+    assert_eq!(model.documents.len(), before);
 }
 
 #[test]
@@ -1168,4 +1186,23 @@ fn the_bars_keep_their_cursor_focus_and_paste_in_place() {
     let effects = update(&mut model, Action::Paste("st".into()));
     assert!(effects.is_empty());
     assert!(model.data.bars.applied.order_by.is_none());
+}
+
+/// Follows `key` from the row in `related_row`, as Enter in the related-rows picker does.
+fn follow(model: &mut Model, key: dexo_app::data::ForeignKey) -> Vec<dexo_tui::Effect> {
+    model.data.related_picker = Some(dexo_tui::screens::data::RelatedPicker {
+        table: model.data.target.clone(),
+        links: Some(vec![dexo_tui::screens::data::RelatedLink {
+            label: "related".into(),
+            key,
+        }]),
+        selected: 0,
+    });
+    update(
+        model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
 }

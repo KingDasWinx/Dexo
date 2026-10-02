@@ -467,6 +467,12 @@ impl WorkbenchRuntime {
                 table,
             } => {
                 let Some(active) = self.sessions.get(session) else {
+                    self.emit(Action::ForeignKeysLoaded {
+                        generation,
+                        table,
+                        result: Err("the session is closed".into()),
+                    })
+                    .await;
                     return;
                 };
                 let session = Arc::clone(&active.session);
@@ -790,12 +796,14 @@ impl WorkbenchRuntime {
                 request,
                 session,
                 generation,
+                ticket,
             } => {
                 if let Some(active) = self.sessions.get(session) {
                     data_manager::fetch_page(
                         Arc::clone(&active.session),
                         request,
                         generation,
+                        ticket,
                         session,
                         self.action_tx.clone(),
                     )
@@ -806,12 +814,14 @@ impl WorkbenchRuntime {
                 target,
                 session,
                 generation,
+                ticket,
             } => {
                 if let Some(active) = self.sessions.get(session) {
                     data_manager::fetch_table_columns(
                         Arc::clone(&active.session),
                         target,
                         generation,
+                        ticket,
                         self.action_tx.clone(),
                     )
                     .await;

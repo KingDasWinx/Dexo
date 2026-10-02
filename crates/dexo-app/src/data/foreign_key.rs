@@ -13,7 +13,17 @@ pub fn related_filter(fk: &ForeignKey, row: &[(String, Option<DbValue>)]) -> Opt
     }
     let mut parts = Vec::new();
     for (local, referenced) in fk.local.iter().zip(fk.referenced.iter()) {
-        let value = row.iter().find(|(name, _)| name == local)?.1.as_ref()?;
+        // A key may spell its columns in another case than the table does (SQLite
+        // keeps them as written); the exact name wins when both are there.
+        let value = row
+            .iter()
+            .find(|(name, _)| name == local)
+            .or_else(|| {
+                row.iter()
+                    .find(|(name, _)| name.eq_ignore_ascii_case(local))
+            })?
+            .1
+            .as_ref()?;
         parts.push(Filter::Eq(ColumnId(referenced.clone()), value.clone()));
     }
     Some(if parts.len() == 1 {
