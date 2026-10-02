@@ -33,9 +33,12 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
             format!("not a connection URL: {reason}"),
         )
     };
-    let (scheme, rest) = url
-        .split_once("://")
-        .ok_or_else(|| invalid("expected scheme://, such as postgres://user@host/db"))?;
+    let (scheme, rest) = url.split_once("://").ok_or_else(|| {
+        invalid(
+            "expected scheme://, such as postgres://user@host/db; \
+                 for a SQLite or DuckDB file, sqlite:///path/to/file or duckdb:///path/to/file",
+        )
+    })?;
     let driver = match scheme.to_ascii_lowercase().as_str() {
         "postgres" | "postgresql" => "postgres",
         "mysql" => "mysql",
@@ -71,8 +74,8 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
         .map(SecretString::from);
     let database =
         decode(database).map_err(|_| invalid("the database is not valid percent-encoding"))?;
-    let (host, port) =
-        split_host_port(hostport).ok_or_else(|| invalid("the port is not a number"))?;
+    let (host, port) = split_host_port(hostport)
+        .ok_or_else(|| invalid("the port is not a number from 0 to 65535"))?;
     // `%2Fvar%2Frun%2Fpostgresql` is a socket directory; `?host=` says the same.
     let host = decode(&host).map_err(|_| invalid("the host is not valid percent-encoding"))?;
     let host = match parameters.host {

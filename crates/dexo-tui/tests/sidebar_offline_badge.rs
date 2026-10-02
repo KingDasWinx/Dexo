@@ -122,3 +122,23 @@ fn a_container_that_is_already_saved_is_said_so() {
         "{screen}"
     );
 }
+
+/// A long name gives up its end, never the badge that says what the row is.
+#[test]
+fn a_long_name_keeps_its_badge_whole() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    let long = profile("a-very-long-connection-name-indeed", 8);
+    model.connections.load_profiles(vec![long]);
+    let profiles = model.connections.profiles.clone();
+    model
+        .explorer
+        .sync_connection_roots(&profiles, "a-very-long-connection-name-indeed");
+    model.explorer.offline = true;
+    model.connection.name = "a-very-long-connection-name-indeed".into();
+    let rows = sidebar_rows(&model);
+    assert!(
+        rows.iter().any(|line| line.contains("[offline]")),
+        "{rows:?}"
+    );
+}

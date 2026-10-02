@@ -108,7 +108,8 @@ pub fn render_sidebar(
     body.extend(
         tree.into_iter()
             .skip(layout.offset)
-            .take(layout.nodes.len()),
+            .take(layout.nodes.len())
+            .map(|line| fit_badge(line, width)),
     );
     if body.is_empty() {
         body.push(if active_connection.is_empty() {
@@ -119,6 +120,24 @@ pub fn render_sidebar(
     }
     lines.extend(body);
     lines
+}
+
+/// A row too long for the sidebar gives up the end of its name, not its badge: `[temporary]`
+/// and `[offline]` were cut to `[tempor` and `[off`, which says nothing.
+fn fit_badge(line: String, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    if width == 0 || line.width() <= width {
+        return line;
+    }
+    let Some(at) = line.rfind(" [").filter(|_| line.ends_with(']')) else {
+        return line;
+    };
+    let (head, badge) = line.split_at(at);
+    let room = width.saturating_sub(badge.width());
+    if room < 4 {
+        return line;
+    }
+    format!("{}{badge}", crate::model::truncate_cell(head, room))
 }
 
 pub fn render_visible(state: &ExplorerState, viewport_rows: Option<usize>) -> Vec<String> {

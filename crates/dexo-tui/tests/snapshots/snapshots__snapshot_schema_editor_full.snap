@@ -7,7 +7,7 @@ demo  local  public
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  ● local▾                ││   1▸select 1                                                                                                                     │
 │>   ▸ public              ││                                                                                                                                  │
-│      mysql.users [restric││                                                                                                                                  │
+│      mysql.… [restricted]││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
