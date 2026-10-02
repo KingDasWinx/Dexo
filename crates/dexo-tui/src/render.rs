@@ -233,6 +233,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(prompt) = &model.run_prompt {
         render_run_prompt(frame, model, prompt, hits);
     }
+    if let Some(prompt) = &model.production_prompt {
+        render_production_prompt(frame, model, prompt, hits);
+    }
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
@@ -363,6 +366,35 @@ fn render_quit_prompt(
     register_overlay(hits, popup);
     let footer = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
     crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], "Quit");
+}
+
+fn render_production_prompt(
+    frame: &mut Frame,
+    model: &Model,
+    prompt: &crate::screens::production_prompt::ProductionPrompt,
+    hits: &mut HitMap,
+) {
+    let width = 76.min(frame.area().width);
+    let lines = prompt.lines(width.saturating_sub(2) as usize);
+    let popup = centered(frame.area(), width, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        Block::bordered().title("Write on production"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.starts_with("name:") {
+            let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
+            paint_selection(frame, rect, "name: ", &prompt.typed, focused);
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Confirm");
+        }
+    });
 }
 
 fn render_explain_prompt(
@@ -1436,9 +1468,7 @@ fn render_review(
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |_, line, rect| {
-        if line.contains("confirm production") {
-            hits.register(HitTarget::Button(HitButton::ConfirmProduction), rect);
-        } else if line == "ready" {
+        if line == "ready" || line.starts_with("production:") {
             hits.register(HitTarget::Button(HitButton::Apply), rect);
         }
     });

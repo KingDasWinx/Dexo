@@ -288,3 +288,81 @@ fn a_mysql_hash_comment_is_a_comment() {
     let prompt = model.run_prompt.as_ref().expect("DROP ran without asking");
     assert_eq!(prompt.statements, ["DROP TABLE customers_old", "select 1"]);
 }
+
+/// Types the connection's name into the production prompt and confirms it.
+fn confirm_production(model: &mut Model, name: &str) -> Vec<Effect> {
+    for ch in name.chars() {
+        press(model, KeyCode::Char(ch));
+    }
+    press(model, KeyCode::Enter)
+}
+
+/// Every write that does not pass through the editor waits for the connection's name on
+/// production, as a statement run from the editor does: DDL from the schema form, an
+/// import, a restore, EXPLAIN ANALYZE of a write. They used to go ahead with an Enter.
+#[test]
+fn every_write_path_asks_for_the_name_on_production() {
+    use dexo_tui::screens::transfer::TransferMode;
+    // EXPLAIN ANALYZE of a write: the name is the only question asked.
+    let mut model = live("production", false, "delete from orders");
+    let analyzed = |effects: &[Effect]| {
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RunExplain { analyze: true, .. }))
+    };
+    assert!(!analyzed(&update(
+        &mut model,
+        Action::ConfirmExplainAnalyze
+    )));
+    assert!(model.explain_prompt.is_none());
+    assert!(model.production_prompt.is_some());
+    assert!(!analyzed(&confirm_production(&mut model, "sho")));
+    press(&mut model, KeyCode::Char('p'));
+    assert!(analyzed(&press(&mut model, KeyCode::Enter)));
+    // ... and of a read, as before: the analyze dialog only.
+    let mut model = live("production", false, "select * from orders");
+    update(&mut model, Action::ConfirmExplainAnalyze);
+    assert!(model.explain_prompt.is_some() && model.production_prompt.is_none());
+
+    // DDL from the schema form.
+    let mut model = live("production", false, "");
+    model.schema_editor.preview = Some(dexo_tui::screens::schema_editor::DdlPreviewState {
+        target: "public.items".into(),
+        sql: "CREATE TABLE public.items (id integer)".into(),
+        risk: String::new(),
+        confirmation: dexo_app::schema::Confirmation::None,
+        typed: Default::default(),
+        confirmed: false,
+        footer: dexo_tui::widgets::form::FooterFocus::Submit,
+        error: None,
+    });
+    let applied = |effects: &[Effect]| {
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ApplyDdlChange { .. }))
+    };
+    assert!(!applied(&update(&mut model, Action::ApplyDdl)));
+    assert!(model.production_prompt.is_some());
+    assert!(applied(&confirm_production(&mut model, "shop")));
+
+    // Import and restore.
+    for mode in [TransferMode::Import, TransferMode::Restore] {
+        let mut model = live("production", false, "");
+        model.data.target = dexo_app::parse_qualified("public.items");
+        model.transfer.open = true;
+        model.transfer.mode = mode;
+        model.transfer.path.set_text("/tmp/rows.csv");
+        model.transfer.confirm_restore = true;
+        let started = |effects: &[Effect]| {
+            effects
+                .iter()
+                .any(|effect| matches!(effect, Effect::RunTransfer(_)))
+        };
+        assert!(
+            !started(&update(&mut model, Action::SubmitTransfer)),
+            "{mode:?}"
+        );
+        assert!(model.production_prompt.is_some(), "{mode:?}");
+        assert!(started(&confirm_production(&mut model, "shop")), "{mode:?}");
+    }
+}

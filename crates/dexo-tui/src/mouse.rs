@@ -52,7 +52,6 @@ pub enum HitButton {
     Recover,
     Discard,
     Apply,
-    ConfirmProduction,
     ToggleAdded,
     ToggleRemoved,
     ToggleChanged,
@@ -88,6 +87,7 @@ pub enum OverlayKind {
     NodeMenu,
     ClosePrompt,
     RunPrompt,
+    ProductionPrompt,
     ExplainPrompt,
     QuitPrompt,
     DeleteConnection,
@@ -215,6 +215,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         // A question about losing work sits above everything else.
         (model.close_prompt.is_some(), OverlayKind::ClosePrompt),
         (model.run_prompt.is_some(), OverlayKind::RunPrompt),
+        (
+            model.production_prompt.is_some(),
+            OverlayKind::ProductionPrompt,
+        ),
         (model.explain_prompt.is_some(), OverlayKind::ExplainPrompt),
         (model.quit_prompt.is_some(), OverlayKind::QuitPrompt),
         (

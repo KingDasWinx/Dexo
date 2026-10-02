@@ -14,6 +14,7 @@ pub mod find;
 pub mod mcp_audit;
 pub mod mcp_profiles;
 pub mod object_inspector;
+pub mod production_prompt;
 pub mod projects;
 pub mod recovery;
 pub mod run_prompt;

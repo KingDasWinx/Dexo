@@ -204,7 +204,6 @@ pub struct ReviewModal {
     pub preview_sql: String,
     pub operations: usize,
     pub production: bool,
-    pub confirmed: bool,
     pub status: ReviewStatus,
     pub error: Option<String>,
 }
@@ -312,25 +311,15 @@ impl DataScreen {
             preview_sql: preview_sql(&self.target, &self.changes),
             operations: self.changes.pending().len(),
             production: self.environment == Environment::Production,
-            confirmed: false,
             status: ReviewStatus::Pending,
             error: None,
         });
-    }
-
-    pub fn confirm_production(&mut self) {
-        if let Some(review) = &mut self.review {
-            review.confirmed = true;
-        }
     }
 
     pub fn apply(&mut self) {
         let Some(review) = &mut self.review else {
             return;
         };
-        if review.production && !review.confirmed {
-            return;
-        }
         review.status = ReviewStatus::Applied;
         self.changes.discard();
     }
@@ -368,8 +357,8 @@ pub fn review_lines(modal: &ReviewModal) -> Vec<String> {
     if let Some(error) = &modal.error {
         lines.push(format!("error: {error}"));
     }
-    lines.push(if modal.production && !modal.confirmed {
-        "confirm production to apply".into()
+    lines.push(if modal.production {
+        "production: applying asks for the connection's name".into()
     } else {
         "ready".into()
     });
@@ -427,51 +416,44 @@ mod tests {
         );
     }
 
+    /// On production the review applies only once the connection's name is typed: a
+    /// click on its production line, or a hidden `y`, used to be enough.
     #[test]
     fn review_states_require_production_confirm() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let applies = |effects: &[crate::Effect]| {
+            effects
+                .iter()
+                .any(|effect| matches!(effect, crate::Effect::ApplyMutations { .. }))
+        };
         let mut model = Model::default();
         model.data.table = editable_table();
         model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
         model.data.target = QualifiedName::new(Some("db"), Some("public"), "items");
-        // The review reads production from the connection; setting the screen's own
-        // environment here used to be overwritten and test nothing.
+        model.connection.name = "shop-prod".into();
         model.connection.environment = "production".into();
+        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
         model
             .data
             .changes
             .insert(vec![("id".into(), DbValue::I64(1))]);
         update(&mut model, Action::OpenReview);
         assert!(model.data.review.as_ref().unwrap().production);
-        update(&mut model, Action::ApplyChanges);
-        assert_eq!(
-            model.data.review.as_ref().unwrap().status,
-            ReviewStatus::Pending
-        );
-        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
-        update(&mut model, Action::ConfirmProduction);
-        let effects = update(&mut model, Action::ApplyChanges);
-        assert!(
-            effects
-                .iter()
-                .any(|effect| matches!(effect, crate::Effect::ApplyMutations { .. }))
-        );
-        assert_eq!(
-            model.data.review.as_ref().unwrap().status,
-            ReviewStatus::Pending
-        );
-        let generation = model.session_generation;
-        update(
-            &mut model,
-            Action::MutationsApplied {
-                generation,
-                session: uuid::Uuid::from_u128(1).to_string(),
-            },
-        );
-        assert_eq!(
-            model.data.review.as_ref().unwrap().status,
-            ReviewStatus::Applied
-        );
-        assert!(model.data.changes.pending().is_empty());
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        assert!(!applies(&update(&mut model, key(KeyCode::Char('y')))));
+        assert!(!applies(&update(&mut model, key(KeyCode::Enter))));
+        assert!(model.production_prompt.is_some());
+        for ch in "shop".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        assert!(!applies(&update(&mut model, key(KeyCode::Enter))));
+        assert!(model.production_prompt.as_ref().unwrap().error.is_some());
+        for ch in "-prod".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        assert!(applies(&update(&mut model, key(KeyCode::Enter))));
+        assert!(model.production_prompt.is_none());
+        assert!(!model.production_cleared);
     }
 
     #[test]

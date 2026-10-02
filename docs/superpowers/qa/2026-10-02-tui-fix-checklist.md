@@ -94,7 +94,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## RD: Results grid and table data
 
-- [ ] **RD-37** `BLOCKER` Production apply confirmation can be satisfied by one mouse click, without typing the name; by keyboard it cannot be completed at all
+- [x] **RD-37** `BLOCKER` Production apply confirmation can be satisfied by one mouse click, without typing the name; by keyboard it cannot be completed at all
 - [ ] **RD-01** `MAJOR` Copy as CSV never quotes fields: commas, quotes and newlines break the file
 - [ ] **RD-10** `MAJOR` No way to jump to the first/last row or column of a result; Home/End/G/Ctrl+End do nothing; "Results Top" is unreachable
 - [ ] **RD-11** `MAJOR` After `t` (count) the title says "(20,000 rows)" but only 10,000 rows can be reached
@@ -150,7 +150,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## ES: Explorer, schema tools, explain
 
-- [ ] **ES-31** `BLOCKER` Production: the Schema form (Preview DDL > Apply) creates the table without asking for the connection's name
+- [x] **ES-31** `BLOCKER` Production: the Schema form (Preview DDL > Apply) creates the table without asking for the connection's name
 - [ ] **ES-04** `MAJOR` Postgres table DDL (Open Object DDL / Copy DDL) leaves out PK, NOT NULL, DEFAULT, UNIQUE, FKs, CHECK, indexes and comments
 - [ ] **ES-09** `MAJOR` Inspect Object offers itself on constraints, functions, types, sequences and group nodes and answers "Select an object in Explorer."
 - [ ] **ES-10** `MAJOR` Copy Object Name on a schema / database returns a doubled name
@@ -167,7 +167,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ES-34** `MAJOR` After a restart, Preview DDL ran for the explorer's last connection (MySQL) while the visible document belonged to pg-readonly
 - [ ] **ES-38** `MAJOR` Compare Schema cannot compare two different databases or a snapshot: it only ever diffs the current connection with itself
 - [ ] **ES-39** `MAJOR` Schema diff dialog is an unlabelled raw dump with hidden keys and no buttons
-- [ ] **ES-41** `MAJOR` Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused
+- [x] **ES-41** `MAJOR` Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused
 - [ ] **ES-01** `MINOR` After the welcome dialog, focus is in the empty editor, not the explorer
 - [ ] **ES-02** `MINOR` Explorer labels are cut at the pane edge with no ellipsis at the default width
 - [ ] **ES-03** `MINOR` Inspect Object on a column shows internal ids and almost no column facts
@@ -247,7 +247,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-28** `BLOCKER` Inspect Sessions on a connection whose session is busy/blocked freezes the whole UI for up to a minute and then shows nothing
 - [ ] **AT-41** `BLOCKER` Import Data always writes into a table named `tbl`; there is no way to choose the target table
 - [ ] **AT-42** `BLOCKER` Dexo cannot import its own TSV export (tab delimiter is not applied)
-- [ ] **AT-50** `BLOCKER` Production guard is skipped by Import Data and Native Restore: no connection name is asked
+- [x] **AT-50** `BLOCKER` Production guard is skipped by Import Data and Native Restore: no connection name is asked
 - [ ] **AT-51** `BLOCKER` Native Restore (and Backup) freeze the whole UI for the full duration; Cancel and Esc do nothing and the process is not stopped
 - [ ] **AT-53** `BLOCKER` Dexo's own backup cannot be restored by Dexo's own restore
 - [ ] **AT-07** `MAJOR` Transaction commands on an offline connection refuse instead of connecting

@@ -1720,6 +1720,11 @@ pub struct Model {
     pub quit_prompt: Option<crate::widgets::form::FooterFocus>,
     /// Asked before the editor runs a write on production or a destructive statement.
     pub run_prompt: Option<crate::screens::run_prompt::RunPrompt>,
+    /// Asked before any other write reaches production: grid edits, DDL, import,
+    /// restore, EXPLAIN ANALYZE of a write.
+    pub production_prompt: Option<crate::screens::production_prompt::ProductionPrompt>,
+    /// Set for exactly one dispatch once the connection's name was typed.
+    pub production_cleared: bool,
     pub layout_preset: LayoutPreset,
     pub messages: Notifications,
     pub documents: Vec<EditorDocument>,
@@ -1862,6 +1867,8 @@ impl Default for Model {
             explain_prompt: None,
             quit_prompt: None,
             run_prompt: None,
+            production_prompt: None,
+            production_cleared: false,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {
                 explorer_visible: true,

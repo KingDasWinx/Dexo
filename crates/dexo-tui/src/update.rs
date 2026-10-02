@@ -1257,10 +1257,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.data.open_review();
             Vec::new()
         }
-        Action::ConfirmProduction => {
-            model.data.confirm_production();
-            Vec::new()
-        }
+        Action::SubmitTransfer => run_transfer(model),
         Action::ApplyChanges => apply_changes(model),
         Action::FailApply => {
             model.data.fail_apply("apply failed".into());
@@ -1522,6 +1519,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.unavailable_reason(dexo_driver_api::Capability::ExplainAnalyze)
             {
                 model.messages.warn(reason.to_string());
+            } else if analyzed_write(model).is_some() && on_production(model) {
+                // The name typed is the confirmation; a second dialog before it would
+                // only be one more Enter to press out of habit.
+                return update(model, Action::RunExplainAnalyze);
             } else if !analyze_refused(model) {
                 model.explain_prompt = Some(crate::widgets::form::FooterFocus::Submit);
             }
@@ -1529,6 +1530,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::RunExplainAnalyze => {
             model.explain_prompt = None;
+            if let Some(statement) = analyzed_write(model) {
+                let what = vec![
+                    "EXPLAIN ANALYZE runs this statement, then rolls back what it changed:"
+                        .to_string(),
+                    format!("  {}", statement.lines().next().unwrap_or_default()),
+                ];
+                if !production_cleared(model, what, Action::RunExplainAnalyze) {
+                    return Vec::new();
+                }
+            }
             execute_on_document_connection(model, action)
         }
         Action::OpenTryIndex => {
@@ -2501,6 +2512,20 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             }
             _ => Vec::new(),
         },
+        Some(OverlayKind::ProductionPrompt) => match hit {
+            Some(HitTarget::FooterSubmit) => submit_production_prompt(model),
+            Some(HitTarget::FooterCancel) => {
+                model.production_prompt = None;
+                Vec::new()
+            }
+            Some(HitTarget::FormField(_)) => {
+                if let Some(prompt) = model.production_prompt.as_mut() {
+                    prompt.footer = crate::widgets::form::FooterFocus::Input;
+                }
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         Some(OverlayKind::QuitPrompt) => match hit {
             Some(HitTarget::FooterSubmit) => update(model, Action::Quit),
             Some(HitTarget::FooterCancel) => {
@@ -3064,10 +3089,6 @@ fn mouse_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 fn mouse_review(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(HitTarget::Button(HitButton::ConfirmProduction)) => {
-            model.data.confirm_production();
-            Vec::new()
-        }
         Some(HitTarget::Button(HitButton::Apply) | HitTarget::FooterSubmit) => {
             update(model, Action::ApplyChanges)
         }
@@ -3765,6 +3786,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.run_prompt.is_some() {
         return handle_run_prompt_key(model, key);
     }
+    if model.production_prompt.is_some() {
+        return handle_production_prompt_key(model, key);
+    }
     if model.explain_prompt.is_some() {
         return handle_explain_prompt_key(model, key);
     }
@@ -4047,10 +4071,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Enter => update(model, Action::ApplyChanges),
-            KeyCode::Char('y') => {
-                model.data.confirm_production();
-                Vec::new()
-            }
             _ => Vec::new(),
         };
     }
@@ -7777,30 +7797,25 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
         model.messages.warn("connection is read-only".into());
         return Vec::new();
     }
-    // Production is read from the connection, not only from an open review: the
-    // palette's Apply Changes arrives with no review, and used to apply straight away.
-    let production = dexo_app::Environment::parse_strict(&model.connection.environment)
-        == dexo_app::Environment::Production
-        || model
-            .data
-            .review
-            .as_ref()
-            .is_some_and(|review| review.production);
-    let confirmed = model
-        .data
-        .review
-        .as_ref()
-        .is_some_and(|review| review.confirmed);
-    if production && !confirmed {
+    // Production is read from the connection: the palette's Apply Changes arrives with
+    // no review, and shows the changes first. Then the connection's name is typed, as
+    // for a statement run from the editor; a click on the review used to be enough.
+    if on_production(model) {
         if model.data.review.is_none() {
             model.data.environment =
                 dexo_app::Environment::parse_strict(&model.connection.environment);
             model.data.open_review();
+            return Vec::new();
         }
-        model
-            .messages
-            .warn("type the target to confirm production apply".into());
-        return Vec::new();
+        let count = model.data.changes.pending().len();
+        let what = vec![format!(
+            "Apply {count} {} to {}.",
+            if count == 1 { "change" } else { "changes" },
+            model.data.target.display_unquoted()
+        )];
+        if !production_cleared(model, what, Action::ApplyChanges) {
+            return Vec::new();
+        }
     }
     let Some(session) = model.active_session else {
         model
@@ -7983,7 +7998,12 @@ fn apply_ddl(model: &mut Model) -> Vec<Effect> {
         preview.error = Some("The name does not match; nothing was applied.".into());
         return Vec::new();
     }
+    let mut what = vec![format!("Apply to {}:", preview.target)];
+    what.extend(preview.sql.lines().take(3).map(|line| format!("  {line}")));
     let typed = preview.typed.as_str().to_string();
+    if !production_cleared(model, what, Action::ApplyDdl) {
+        return Vec::new();
+    }
     let Ok(change) = model.schema_editor.to_change() else {
         return Vec::new();
     };
@@ -8471,6 +8491,90 @@ pub(crate) fn quit_losses(model: &Model) -> Vec<String> {
     losses
 }
 
+fn on_production(model: &Model) -> bool {
+    dexo_app::Environment::parse_strict(&model.connection.environment)
+        == dexo_app::Environment::Production
+}
+
+/// On production, a write the editor's guard does not see -- grid edits, DDL from the
+/// schema form, an import, a restore, EXPLAIN ANALYZE of a write -- waits for the
+/// connection's name, as a statement run from the editor does. True when `then` may go
+/// ahead now: off production, or in the dispatch right after the name was typed.
+/// Otherwise the prompt opens, and `then` is dispatched again once the name is typed.
+fn production_cleared(model: &mut Model, what: Vec<String>, then: Action) -> bool {
+    if !on_production(model) || std::mem::take(&mut model.production_cleared) {
+        return true;
+    }
+    model.production_prompt = Some(crate::screens::production_prompt::ProductionPrompt::new(
+        model.connection.name.clone(),
+        model.active_session,
+        what,
+        then,
+    ));
+    false
+}
+
+fn handle_production_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let Some(prompt) = model.production_prompt.as_mut() else {
+        return Vec::new();
+    };
+    match footer_key(&mut prompt.footer, &key) {
+        FooterKey::Submit => submit_production_prompt(model),
+        FooterKey::Cancel => {
+            model.production_prompt = None;
+            Vec::new()
+        }
+        FooterKey::Moved => Vec::new(),
+        FooterKey::Pass => {
+            if prompt.footer == FooterFocus::Input {
+                let _ = prompt.typed.handle_key(key);
+                prompt.error = None;
+            }
+            Vec::new()
+        }
+    }
+}
+
+fn submit_production_prompt(model: &mut Model) -> Vec<Effect> {
+    let Some(prompt) = model.production_prompt.as_mut() else {
+        return Vec::new();
+    };
+    if !prompt.accepted() {
+        prompt.error = Some("The name does not match; nothing was done.".into());
+        return Vec::new();
+    }
+    let Some(prompt) = model.production_prompt.take() else {
+        return Vec::new();
+    };
+    // What was confirmed for one connection is never done on another.
+    if prompt.connection != model.connection.name || prompt.session != model.active_session {
+        model
+            .messages
+            .warn("The connection changed under the dialog; nothing was done.".into());
+        return Vec::new();
+    }
+    model.production_cleared = true;
+    let effects = update(model, *prompt.then);
+    // One write per name typed: never left over for the next one.
+    model.production_cleared = false;
+    effects
+}
+
+/// The statement EXPLAIN ANALYZE would run, when it is not a read.
+fn analyzed_write(model: &Model) -> Option<String> {
+    let document = model.active_document();
+    let text = document.text();
+    let cursor = text
+        .chars()
+        .take(document.cursor())
+        .map(char::len_utf8)
+        .sum();
+    let dialect = crate::screens::editor::editor_dialect(model);
+    crate::runtime::explain_manager::statement_sql(&text, cursor, dialect)
+        .filter(|sql| !dexo_sql::is_read(sql, dialect))
+}
+
 fn handle_explain_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     use crate::widgets::form::{FooterKey, confirm_key};
     let Some(focus) = model.explain_prompt.as_mut() else {
@@ -8748,6 +8852,24 @@ fn run_transfer(model: &mut Model) -> Vec<Effect> {
     {
         model.transfer.confirm_restore = true;
         model.transfer.error = None;
+        return Vec::new();
+    }
+    let what = match model.transfer.mode {
+        crate::screens::transfer::TransferMode::Import => Some(format!(
+            "Import {} into {}.",
+            path.display(),
+            model.data.target.display_unquoted()
+        )),
+        crate::screens::transfer::TransferMode::Restore => Some(format!(
+            "Restore {} into the database of {}.",
+            path.display(),
+            model.connection.name
+        )),
+        _ => None,
+    };
+    if let Some(what) = what
+        && !production_cleared(model, vec![what], Action::SubmitTransfer)
+    {
         return Vec::new();
     }
     match build_transfer_request(model, path) {

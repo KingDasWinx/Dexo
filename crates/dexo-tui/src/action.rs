@@ -355,7 +355,8 @@ pub enum Action {
     ToggleSystemObjects,
     CopyGrid(dexo_app::data::CopyFormat),
     OpenReview,
-    ConfirmProduction,
+    /// Starts the transfer the dialog describes, as its Submit does.
+    SubmitTransfer,
     ApplyChanges,
     FailApply,
     RevertChanges,
