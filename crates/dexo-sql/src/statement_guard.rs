@@ -287,7 +287,27 @@ fn pragma_reads(sql: &str) -> bool {
         "wal_checkpoint",
         "shrink_memory",
     ];
-    let body = sql.trim().trim_end_matches(';').trim_end();
+    // Comments read as part of the pragma: a trailing one hid `optimize`'s name, a
+    // leading one the word PRAGMA.
+    let Ok(tokens) =
+        sqlparser::tokenizer::Tokenizer::new(&sqlparser::dialect::SQLiteDialect {}, sql).tokenize()
+    else {
+        return false;
+    };
+    let uncommented: String = tokens
+        .iter()
+        .filter(|token| {
+            !matches!(
+                token,
+                sqlparser::tokenizer::Token::Whitespace(
+                    sqlparser::tokenizer::Whitespace::SingleLineComment { .. }
+                        | sqlparser::tokenizer::Whitespace::MultiLineComment(_)
+                )
+            )
+        })
+        .map(ToString::to_string)
+        .collect();
+    let body = uncommented.trim().trim_end_matches(';').trim_end();
     let Some(rest) = body
         .get(6..)
         .filter(|_| body[..6].eq_ignore_ascii_case("pragma"))
@@ -524,6 +544,11 @@ mod tests {
         assert!(!sqlite("pragma journal_mode(WAL)"));
         assert!(!sqlite("pragma optimize"));
         assert!(!sqlite("pragma user_version; delete from t"));
+        // Comments are not part of the pragma.
+        assert!(!sqlite("pragma optimize -- tidy up"));
+        assert!(!sqlite("pragma /* x */ optimize"));
+        assert!(sqlite("-- columns\npragma table_info(t)"));
+        assert!(sqlite("/* a */ pragma journal_mode -- b"));
         for sql in [
             "pragma user_version = 3",
             "detach database x",
