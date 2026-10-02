@@ -123,3 +123,17 @@ fn an_index_is_named_for_its_table() {
         Some("qa4.orders.PRIMARY")
     );
 }
+
+/// With nothing open to type in, the welcome hands the keys to the explorer.
+#[test]
+fn the_welcome_leaves_the_focus_on_the_explorer_when_no_document_is_open() {
+    let mut model = Model::default();
+    model.apply_size(120, 30);
+    model.onboarding.open = true;
+    model.documents = vec![dexo_tui::model::EditorDocument::placeholder()];
+    model.active_document = 0;
+    model.focus = Focus::Editor;
+    press(&mut model, KeyCode::Enter);
+    assert!(!model.onboarding.open);
+    assert_eq!(model.focus, Focus::Explorer);
+}

@@ -168,7 +168,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-38** `MAJOR` Compare Schema cannot compare two different databases or a snapshot: it only ever diffs the current connection with itself
 - [x] **ES-39** `MAJOR` Schema diff dialog is an unlabelled raw dump with hidden keys and no buttons
 - [x] **ES-41** `MAJOR` Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused
-- [ ] **ES-01** `MINOR` After the welcome dialog, focus is in the empty editor, not the explorer
+- [x] **ES-01** `MINOR` After the welcome dialog, focus is in the empty editor, not the explorer
 - [ ] **ES-02** `MINOR` Explorer labels are cut at the pane edge with no ellipsis at the default width
 - [x] **ES-03** `MINOR` Inspect Object on a column shows internal ids and almost no column facts
 - [x] **ES-05** `MINOR` Tree: Left/Right/Space do nothing; clicking the disclosure arrow only selects; a double click is needed
