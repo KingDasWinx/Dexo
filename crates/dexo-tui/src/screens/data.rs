@@ -11,12 +11,25 @@ pub struct InsertRowForm {
     pub open: bool,
     pub fields: Vec<crate::screens::schema_editor::FormField>,
     pub focus: usize,
+    /// What each field's column holds, by field: the type and whether a value is needed.
+    pub columns: Vec<InsertColumn>,
+    /// Why the last Insert was refused; the form stays open for it to be fixed.
+    pub error: Option<String>,
+}
+
+/// A column as the insert form shows it beside its name.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct InsertColumn {
+    pub type_name: String,
+    /// NOT NULL: a value or a default is needed.
+    pub required: bool,
 }
 
 impl InsertRowForm {
-    pub fn open_for(&mut self, table: &TableMeta) {
+    pub fn open_for(&mut self, table: &TableMeta, columns: &[dexo_driver_api::ColumnMeta]) {
         self.open = true;
         self.focus = 0;
+        self.error = None;
         self.fields = table
             .columns
             .iter()
@@ -26,12 +39,78 @@ impl InsertRowForm {
                 secret: false,
             })
             .collect();
+        self.columns = table
+            .columns
+            .iter()
+            .map(|column| {
+                columns
+                    .iter()
+                    .find(|meta| meta.name == column.name)
+                    .map(|meta| InsertColumn {
+                        type_name: meta.type_name.clone(),
+                        required: !meta.nullable,
+                    })
+                    .unwrap_or_default()
+            })
+            .collect();
     }
 
     pub fn close(&mut self) {
         self.open = false;
         self.fields.clear();
+        self.columns.clear();
+        self.error = None;
         self.focus = 0;
+    }
+
+    /// The start of field `index`'s line, up to where its value begins: the marker, the
+    /// column, its type, and a `*` where a value is needed.
+    pub fn prefix(&self, index: usize) -> String {
+        let marker = if index == self.focus { ">" } else { " " };
+        let label = self
+            .fields
+            .get(index)
+            .map_or("", |field| field.label.as_str());
+        match self.columns.get(index) {
+            Some(column) if !column.type_name.is_empty() => format!(
+                "{marker} {label} ({}){}: ",
+                column.type_name,
+                if column.required { " *" } else { "" }
+            ),
+            _ => format!("{marker} {label}: "),
+        }
+    }
+
+    /// Refuses a value the column's type cannot take, naming the column: the server would
+    /// refuse it later, at Apply, without saying which field it was.
+    pub fn check(&self) -> Result<(), String> {
+        for (field, column) in self.fields.iter().zip(&self.columns) {
+            let text = field.value.trim();
+            if text.is_empty() {
+                continue;
+            }
+            let kind = column.type_name.to_ascii_lowercase();
+            let refuse = |what: &str| Err(format!("{}: `{text}` is not {what}.", field.label));
+            if kind.contains("bool") {
+                let words = [
+                    "true", "false", "t", "f", "1", "0", "yes", "no", "y", "n", "on", "off",
+                ];
+                if !words.contains(&text.to_ascii_lowercase().as_str()) {
+                    return refuse("true or false");
+                }
+            } else if kind.contains("int") || kind.contains("serial") {
+                if text.parse::<i128>().is_err() {
+                    return refuse("a whole number");
+                }
+            } else if ["numeric", "decimal", "float", "double", "real", "money"]
+                .iter()
+                .any(|name| kind.contains(name))
+                && text.parse::<f64>().is_err()
+            {
+                return refuse("a number");
+            }
+        }
+        Ok(())
     }
 
     /// The fields, then Insert, then Cancel: the ring Tab and the arrows walk, the same
@@ -74,12 +153,13 @@ impl InsertRowForm {
             .fields
             .iter()
             .enumerate()
-            .map(|(index, field)| {
-                let marker = if index == self.focus { ">" } else { " " };
-                format!("{marker} {}: {}", field.label, field.value.as_str())
-            })
+            .map(|(index, field)| format!("{}{}", self.prefix(index), field.value.as_str()))
             .collect();
         lines.push(String::new());
+        lines.push("A field left empty is not sent: the column's default applies.".into());
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
+        }
         lines.push(footer_line("Insert", self.footer_focus()));
         lines
     }
@@ -98,6 +178,101 @@ impl InsertRowForm {
                 )
             })
             .collect()
+    }
+}
+
+/// What has the keys in the edit-cell dialog: the value, then the four buttons.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CellFocus {
+    Value,
+    Null,
+    Editor,
+    Save,
+    Cancel,
+}
+
+impl CellFocus {
+    const RING: [Self; 5] = [
+        Self::Value,
+        Self::Null,
+        Self::Editor,
+        Self::Save,
+        Self::Cancel,
+    ];
+
+    fn at(self) -> usize {
+        Self::RING
+            .iter()
+            .position(|slot| *slot == self)
+            .unwrap_or(0)
+    }
+
+    pub fn next(self) -> Self {
+        Self::RING[(self.at() + 1) % Self::RING.len()]
+    }
+
+    pub fn prev(self) -> Self {
+        Self::RING[(self.at() + Self::RING.len() - 1) % Self::RING.len()]
+    }
+
+    /// Left and Right step among the buttons once one has the focus.
+    pub fn step_button(self, forward: bool) -> Self {
+        let buttons = &Self::RING[1..];
+        let at = buttons.iter().position(|slot| *slot == self).unwrap_or(0);
+        let next = if forward {
+            (at + 1) % buttons.len()
+        } else {
+            (at + buttons.len() - 1) % buttons.len()
+        };
+        buttons[next]
+    }
+}
+
+/// F2 on a cell: the column and its type, the value to change in one line, and the
+/// buttons -- Save, Cancel, and the two ways to set a value that typing does not: NULL,
+/// and `$EDITOR` for a long one.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CellEditForm {
+    pub row: usize,
+    pub column: usize,
+    pub table: String,
+    pub name: String,
+    pub type_name: String,
+    pub value: crate::widgets::text_input::TextInput,
+    /// The value was NULL when the dialog opened.
+    pub was_null: bool,
+    pub focus: CellFocus,
+}
+
+impl CellEditForm {
+    /// The value's text on one line, a line break as `↵`; the text itself is what is kept.
+    pub fn lines(&self) -> Vec<String> {
+        let mark = |button: &str, at: CellFocus| {
+            format!("{}[{button}]", if self.focus == at { ">" } else { " " })
+        };
+        let shown = self.value.as_str().replace(['\n', '\r'], "↵");
+        let mut lines = vec![
+            format!("{} · {} ({})", self.table, self.name, self.type_name),
+            if self.was_null && self.value.is_empty() {
+                "> value: (NULL)".to_string()
+            } else {
+                format!("> value: {shown}")
+            },
+            String::new(),
+            format!(
+                "{}  {}  {}  {}",
+                mark("Save", CellFocus::Save),
+                mark("Cancel", CellFocus::Cancel),
+                mark("NULL", CellFocus::Null),
+                mark("Editor", CellFocus::Editor),
+            ),
+            "Ctrl+N sets NULL  Ctrl+E opens $EDITOR  Esc cancels".to_string(),
+        ];
+        // Typed in a field that is drawn with its marker on the line the cursor is on.
+        if self.focus != CellFocus::Value {
+            lines[1] = lines[1].replacen("> ", "  ", 1);
+        }
+        lines
     }
 }
 
@@ -159,6 +334,9 @@ pub struct ClauseBars {
     pub focus: Option<ClauseBar>,
     pub applied: dexo_driver_api::RawClauses,
     pub good: dexo_driver_api::RawClauses,
+    /// The text typed was sent and refused: the grid shows what ran before it, and the bars
+    /// are drawn as failed until they are edited, applied or put back.
+    pub failed: bool,
 }
 
 impl ClauseBars {
@@ -187,6 +365,16 @@ impl ClauseBars {
         self.order_input
             .set_text(self.applied.order_by.clone().unwrap_or_default());
         self.focus = None;
+        self.failed = false;
+    }
+
+    /// Whether `bar`'s text is one the server refused: it differs from what last ran.
+    pub fn refused(&self, bar: ClauseBar) -> bool {
+        let (typed, ran) = match bar {
+            ClauseBar::Where => (self.where_input.trim(), &self.applied.where_sql),
+            ClauseBar::Order => (self.order_input.trim(), &self.applied.order_by),
+        };
+        self.failed && !typed.is_empty() && Some(typed) != ran.as_deref()
     }
 }
 
@@ -206,6 +394,11 @@ pub struct ReviewModal {
     pub production: bool,
     pub status: ReviewStatus,
     pub error: Option<String>,
+    /// Which button has the keys: Apply, or Cancel, which closes the review and leaves the
+    /// changes pending.
+    pub footer: FooterFocus,
+    /// Lines of the statements scrolled off the top.
+    pub scroll: u16,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -215,7 +408,11 @@ pub struct DataScreen {
     pub changes: ChangeSet,
     pub review: Option<ReviewModal>,
     pub viewer: Option<ValueView>,
+    /// Lines the value modal is scrolled down.
+    pub viewer_scroll: u16,
     pub clipboard: String,
+    /// What the grid's last copy took, for the toast once the clipboard has it.
+    pub copy_note: Option<String>,
     pub dialect: SqlDialect,
     pub environment: Environment,
     pub related_picker: Option<RelatedPicker>,
@@ -239,6 +436,8 @@ pub struct DataScreen {
     pub request_started: Option<std::time::Instant>,
     pub row_changes: std::collections::BTreeMap<usize, RowEditState>,
     pub insert_form: InsertRowForm,
+    /// The edit-cell dialog, while it is open.
+    pub cell_edit: Option<CellEditForm>,
 }
 
 impl Default for DataScreen {
@@ -252,7 +451,9 @@ impl Default for DataScreen {
             target: QualifiedName::new(None::<String>, None::<String>, "tbl"),
             review: None,
             viewer: None,
+            viewer_scroll: 0,
             clipboard: String::new(),
+            copy_note: None,
             dialect: SqlDialect::Postgres,
             environment: Environment::Local,
             related_picker: None,
@@ -272,6 +473,7 @@ impl Default for DataScreen {
             request_started: None,
             row_changes: std::collections::BTreeMap::new(),
             insert_form: InsertRowForm::default(),
+            cell_edit: None,
         }
     }
 }
@@ -308,19 +510,21 @@ impl DataScreen {
     pub fn open_review(&mut self) {
         self.review = Some(ReviewModal {
             target: self.target.display_unquoted(),
-            preview_sql: preview_sql(&self.target, &self.changes),
+            preview_sql: preview_sql(&self.target, &self.changes, self.dialect),
             operations: self.changes.pending().len(),
             production: self.environment == Environment::Production,
             status: ReviewStatus::Pending,
             error: None,
+            footer: FooterFocus::Submit,
+            scroll: 0,
         });
     }
 
     pub fn apply(&mut self) {
-        let Some(review) = &mut self.review else {
-            return;
-        };
-        review.status = ReviewStatus::Applied;
+        if let Some(review) = &mut self.review {
+            review.status = ReviewStatus::Applied;
+        }
+        // Applied from the palette, with no review open, the changes are done all the same.
         self.changes.discard();
     }
 
@@ -348,22 +552,47 @@ impl DataScreen {
     }
 }
 
-pub fn review_lines(modal: &ReviewModal) -> Vec<String> {
-    let mut lines = vec![
-        format!("target: {}", modal.target),
-        format!("ops: {}", modal.operations),
-        format!("status: {:?}", modal.status),
-    ];
-    if let Some(error) = &modal.error {
-        lines.push(format!("error: {error}"));
+/// What the review shows at `width` columns: the lines that stay on top, and the
+/// statements below them, each wrapped under itself, which scroll.
+pub struct ReviewView {
+    pub header: Vec<String>,
+    pub body: Vec<String>,
+}
+
+pub fn review_view(modal: &ReviewModal, width: usize) -> ReviewView {
+    let width = width.max(8);
+    let mut header = vec![format!(
+        "{} to {}",
+        match modal.operations {
+            1 => "1 change".to_string(),
+            count => format!("{count} changes"),
+        },
+        modal.target
+    )];
+    if modal.production {
+        header.push("On production, Apply asks for the connection's name.".into());
     }
-    lines.push(if modal.production {
-        "production: applying asks for the connection's name".into()
-    } else {
-        "ready".into()
-    });
-    lines.push(modal.preview_sql.clone());
-    lines
+    if let Some(error) = &modal.error {
+        header.extend(crate::model::wrap_display_text(
+            &format!("Not applied: {error}"),
+            width,
+        ));
+    }
+    let mut body = Vec::new();
+    for statement in modal.preview_sql.lines() {
+        // A statement continues under itself, indented, rather than off the border.
+        for (index, line) in crate::model::wrap_display_text(statement, width - 2)
+            .into_iter()
+            .enumerate()
+        {
+            body.push(if index == 0 {
+                line
+            } else {
+                format!("  {line}")
+            });
+        }
+    }
+    ReviewView { header, body }
 }
 
 #[cfg(test)]
@@ -454,6 +683,21 @@ mod tests {
         assert!(applies(&update(&mut model, key(KeyCode::Enter))));
         assert!(model.production_prompt.is_none());
         assert!(!model.production_cleared);
+        let generation = model.session_generation;
+        update(
+            &mut model,
+            Action::MutationsApplied {
+                generation,
+                session: uuid::Uuid::from_u128(1).to_string(),
+            },
+        );
+        // Applied: the review has nothing left to show and closes, saying what was done.
+        assert!(model.data.review.is_none());
+        assert!(model.data.changes.pending().is_empty());
+        assert_eq!(
+            model.messages.last().map(|entry| entry.message.as_str()),
+            Some("Applied 1 change.")
+        );
     }
 
     #[test]

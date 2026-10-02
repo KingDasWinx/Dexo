@@ -62,9 +62,14 @@ fn ctrl_tab_leaves_the_document_from_every_pane() {
     }
 }
 
+/// F2 renames the document wherever the focus is -- except in the grid of a table's
+/// rows, where it edits the cell under the cursor.
 #[test]
 fn f2_renames_the_document_from_every_pane() {
     for (table, focus) in every_pane() {
+        if table && matches!(focus, Focus::Editor | Focus::Results) {
+            continue;
+        }
         let mut model = workbench(table, focus);
         update(
             &mut model,

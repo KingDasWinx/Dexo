@@ -132,7 +132,7 @@ fn alt_up_down_resize_results_height_from_editor_or_results() {
     assert_eq!(model.panes.results_height, start);
 }
 
-/// On a table document pane 3 holds the console, so Alt+3 lands there -- and it is the
+/// On a table document pane 3 holds the console, which a click focuses -- and it is the
 /// same pane these keys resize. The console's key context used to be `Global`, where
 /// they resolve to nothing.
 #[test]
@@ -147,11 +147,15 @@ fn alt_up_down_resize_the_console_the_same_pane_it_occupies() {
     let start = model.panes.console_height;
     let editor_height = model.panes.results_height;
 
+    // A click on the console focuses it; the key that is named Focus Results focuses the
+    // results, on a table document as on any other.
+    model.focus = Focus::Console;
     update(
         &mut model,
         Action::Focus(dexo_tui::action::FocusTarget::Results),
     );
-    assert_eq!(model.focus, Focus::Console);
+    assert_eq!(model.focus, Focus::Results);
+    model.focus = Focus::Console;
 
     update(&mut model, alt_up());
     assert_eq!(model.panes.console_height, start + 2);

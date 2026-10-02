@@ -95,58 +95,58 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 ## RD: Results grid and table data
 
 - [x] **RD-37** `BLOCKER` Production apply confirmation can be satisfied by one mouse click, without typing the name; by keyboard it cannot be completed at all
-- [ ] **RD-01** `MAJOR` Copy as CSV never quotes fields: commas, quotes and newlines break the file
-- [ ] **RD-10** `MAJOR` No way to jump to the first/last row or column of a result; Home/End/G/Ctrl+End do nothing; "Results Top" is unreachable
-- [ ] **RD-11** `MAJOR` After `t` (count) the title says "(20,000 rows)" but only 10,000 rows can be reached
-- [ ] **RD-13** `MAJOR` `n` on the last page (or on a table smaller than one page) loads a nonexistent empty page and blanks the grid
-- [ ] **RD-20** `MAJOR` A failed WHERE/ORDER BY leaves the bar showing the rejected text while the grid still shows the previous filter
-- [ ] **RD-23** `MAJOR` Inspect Value shows Rust debug text for integers and decimals (`I64(198)`, `Decimal("4477.50")`)
-- [ ] **RD-26** `MAJOR` Review Changes shows placeholders, not the data: `DELETE ... WHERE id = $n`, `INSERT ... VALUES ($1)`, and long statements are cut at the modal edge
-- [ ] **RD-27** `MAJOR` Review Changes dialog has no buttons or key hints; Enter applies immediately, and the dialog stays open afterwards
-- [ ] **RD-28** `MAJOR` Closing a table-data tab with pending changes (Ctrl+W) drops them without asking
-- [ ] **RD-31** `MAJOR` There is no way to edit an existing cell's value
-- [ ] **RD-38** `MAJOR` A table opened from one connection's tree can be bound to a different connection (safety guards of the wrong connection apply)
-- [ ] **RD-39** `MAJOR` Insert on a table without key or on a view: the form opens, accepts input, closes, then says `table is read-only`; nothing is queued
-- [ ] **RD-42** `MAJOR` After switching to another tab and back, Delete says "this table has no primary key" on a table that has one (and Insert says "table is read-only")
-- [ ] **RD-43** `MAJOR` A 40-column table is unreadable in the grid at 120 columns, and its record view cannot be scrolled
-- [ ] **RD-44** `MAJOR` NULL and the text `NULL` look identical; empty string and a single space look identical
-- [ ] **RD-45** `MAJOR` Inspect Value shows only the first line, cut at the modal border: long text cannot be read
-- [ ] **RD-51** `MAJOR` After closing a document the status bar and the actions keep the closed tab's connection: the Insert form is empty and Delete says "no primary key"
-- [ ] **RD-52** `MAJOR` "Copy as CSV/JSON/Markdown/SQL/Text" from the palette copies only the cursor cell; the same names in the Enter menu copy the whole row
-- [ ] **RD-02** `MINOR` Copy as Text is space-separated; no tab-separated copy is reachable
-- [ ] **RD-03** `MINOR` Copy as JSON reorders keys alphabetically
-- [ ] **RD-04** `MINOR` Copy as SQL uses the placeholder table name `tbl`
-- [ ] **RD-05** `MINOR` Copy as Markdown does not escape a newline or a `|` inside a cell
-- [ ] **RD-06** `MINOR` "copied to clipboard" toast does not say what was copied
-- [ ] **RD-09** `MINOR` Row actions menu does not offer "Copy as Text"
-- [ ] **RD-12** `MINOR` Status bar and keybindings help advertise `n/p page` on results that cannot page (and `p` on the first page, `n` on the last, are silent)
-- [ ] **RD-14** `MINOR` Page indicator is a raw offset+limit dump: `page:100+100 more`, `page:200+100`
-- [ ] **RD-15** `MINOR` Stale `page:200+100` label stays on later, unrelated results
-- [ ] **RD-16** `MINOR` Palette shows `\x` as the hotkey of Toggle Record View, but typing `\x` in the grid does nothing
-- [ ] **RD-17** `MINOR` Record view (one field per line): no field cursor, Left/Right do nothing, "Copy cell" copies an invisible column
-- [ ] **RD-18** `MINOR` After sorting (`s`, `S`, header click) the cursor resets to the first row and first column, so pressing `s` again sorts a different column
-- [ ] **RD-21** `MINOR` Filter/sort errors expose the internal wrapper query (`_dexo_derived`) and its column offsets
-- [ ] **RD-22** `MINOR` Messages tab and "Cycle Output View" order
-- [ ] **RD-24** `MINOR` Pane hotkeys do not match their names in a table-data tab: Alt+3 "Focus Results" focuses the Console, Alt+2 "Focus Editor" focuses Results
-- [ ] **RD-29** `MINOR` Pending changes are almost invisible in the grid
-- [ ] **RD-30** `MINOR` Review Changes with nothing pending opens an empty modal; Apply/Revert in the palette say "no pending changes" but Ctrl+S does not
-- [ ] **RD-32** `MINOR` Insert form gives no type, default or nullability hints and does not validate
-- [ ] **RD-33** `MINOR` Ctrl+N does nothing in a table-data grid; the hotkey the command list gives for Insert Row is not the real one
-- [ ] **RD-35** `MINOR` Messages tab opens at the oldest message and the newest ones are off screen
-- [ ] **RD-36** `MINOR` Export dialog (`e` in table data) shows raw `key=value` text
-- [ ] **RD-40** `MINOR` Read-only connection accepts staged changes and says `ready`; only Apply refuses
-- [ ] **RD-41** `MINOR` Review lists composite-key deletes as invalid SQL, and error toasts are cut at the edge
-- [ ] **RD-46** `MINOR` Row/column "select" commands give no visible feedback
-- [ ] **RD-47** `MINOR` Ctrl+C in the grid does nothing
-- [ ] **RD-48** `MINOR` After over-shooting Alt+Up/Alt+Down on the Results pane, the grid cursor leaves the screen and the view stops following it
-- [ ] **RD-07** `COSMETIC` A newline inside a cell shifts the rest of that row one column to the left
-- [ ] **RD-08** `COSMETIC` Results actions menu truncates "Add this column to the sort"
-- [ ] **RD-19** `COSMETIC` The ORDER BY bar is only ~34 columns wide and clips the start of the text
-- [ ] **RD-25** `COSMETIC` "1 rows retrieved" in the Console and FK navigation title uses lowercase `where`
-- [ ] **RD-34** `COSMETIC` Table title after switching tabs loses the paging info
-- [ ] **RD-49** `COSMETIC` Status bar at 60x20 reorders and lower-cases hints; sidebar hides itself and does not come back
-- [ ] **RD-50** `COSMETIC` Empty result shows only the header and no "0 rows" text; Esc in the grid does not clear a multi-row selection
-- [ ] **RD-53** `COSMETIC` Palette `New Document` asks for a name; Ctrl+N does not
+- [x] **RD-01** `MAJOR` Copy as CSV never quotes fields: commas, quotes and newlines break the file
+- [x] **RD-10** `MAJOR` No way to jump to the first/last row or column of a result; Home/End/G/Ctrl+End do nothing; "Results Top" is unreachable
+- [x] **RD-11** `MAJOR` After `t` (count) the title says "(20,000 rows)" but only 10,000 rows can be reached
+- [x] **RD-13** `MAJOR` `n` on the last page (or on a table smaller than one page) loads a nonexistent empty page and blanks the grid
+- [x] **RD-20** `MAJOR` A failed WHERE/ORDER BY leaves the bar showing the rejected text while the grid still shows the previous filter
+- [x] **RD-23** `MAJOR` Inspect Value shows Rust debug text for integers and decimals (`I64(198)`, `Decimal("4477.50")`)
+- [x] **RD-26** `MAJOR` Review Changes shows placeholders, not the data: `DELETE ... WHERE id = $n`, `INSERT ... VALUES ($1)`, and long statements are cut at the modal edge
+- [x] **RD-27** `MAJOR` Review Changes dialog has no buttons or key hints; Enter applies immediately, and the dialog stays open afterwards
+- [x] **RD-28** `MAJOR` Closing a table-data tab with pending changes (Ctrl+W) drops them without asking
+- [x] **RD-31** `MAJOR` There is no way to edit an existing cell's value
+- [x] **RD-38** `MAJOR` A table opened from one connection's tree can be bound to a different connection (safety guards of the wrong connection apply)
+- [x] **RD-39** `MAJOR` Insert on a table without key or on a view: the form opens, accepts input, closes, then says `table is read-only`; nothing is queued
+- [x] **RD-42** `MAJOR` After switching to another tab and back, Delete says "this table has no primary key" on a table that has one (and Insert says "table is read-only")
+- [x] **RD-43** `MAJOR` A 40-column table is unreadable in the grid at 120 columns, and its record view cannot be scrolled
+- [x] **RD-44** `MAJOR` NULL and the text `NULL` look identical; empty string and a single space look identical
+- [x] **RD-45** `MAJOR` Inspect Value shows only the first line, cut at the modal border: long text cannot be read
+- [x] **RD-51** `MAJOR` After closing a document the status bar and the actions keep the closed tab's connection: the Insert form is empty and Delete says "no primary key"
+- [x] **RD-52** `MAJOR` "Copy as CSV/JSON/Markdown/SQL/Text" from the palette copies only the cursor cell; the same names in the Enter menu copy the whole row
+- [x] **RD-02** `MINOR` Copy as Text is space-separated; no tab-separated copy is reachable
+- [x] **RD-03** `MINOR` Copy as JSON reorders keys alphabetically
+- [x] **RD-04** `MINOR` Copy as SQL uses the placeholder table name `tbl`
+- [x] **RD-05** `MINOR` Copy as Markdown does not escape a newline or a `|` inside a cell
+- [x] **RD-06** `MINOR` "copied to clipboard" toast does not say what was copied
+- [x] **RD-09** `MINOR` Row actions menu does not offer "Copy as Text"
+- [x] **RD-12** `MINOR` Status bar and keybindings help advertise `n/p page` on results that cannot page (and `p` on the first page, `n` on the last, are silent)
+- [x] **RD-14** `MINOR` Page indicator is a raw offset+limit dump: `page:100+100 more`, `page:200+100`
+- [x] **RD-15** `MINOR` Stale `page:200+100` label stays on later, unrelated results
+- [x] **RD-16** `MINOR` Palette shows `\x` as the hotkey of Toggle Record View, but typing `\x` in the grid does nothing
+- [x] **RD-17** `MINOR` Record view (one field per line): no field cursor, Left/Right do nothing, "Copy cell" copies an invisible column
+- [x] **RD-18** `MINOR` After sorting (`s`, `S`, header click) the cursor resets to the first row and first column, so pressing `s` again sorts a different column
+- [x] **RD-21** `MINOR` Filter/sort errors expose the internal wrapper query (`_dexo_derived`) and its column offsets
+- [x] **RD-22** `MINOR` Messages tab and "Cycle Output View" order
+- [x] **RD-24** `MINOR` Pane hotkeys do not match their names in a table-data tab: Alt+3 "Focus Results" focuses the Console, Alt+2 "Focus Editor" focuses Results
+- [x] **RD-29** `MINOR` Pending changes are almost invisible in the grid
+- [x] **RD-30** `MINOR` Review Changes with nothing pending opens an empty modal; Apply/Revert in the palette say "no pending changes" but Ctrl+S does not
+- [x] **RD-32** `MINOR` Insert form gives no type, default or nullability hints and does not validate
+- [x] **RD-33** `MINOR` Ctrl+N does nothing in a table-data grid; the hotkey the command list gives for Insert Row is not the real one
+- [x] **RD-35** `MINOR` Messages tab opens at the oldest message and the newest ones are off screen
+- [=] AT-33 **RD-36** `MINOR` Export dialog (`e` in table data) shows raw `key=value` text
+- [x] **RD-40** `MINOR` Read-only connection accepts staged changes and says `ready`; only Apply refuses
+- [x] **RD-41** `MINOR` Review lists composite-key deletes as invalid SQL, and error toasts are cut at the edge
+- [x] **RD-46** `MINOR` Row/column "select" commands give no visible feedback
+- [x] **RD-47** `MINOR` Ctrl+C in the grid does nothing
+- [x] **RD-48** `MINOR` After over-shooting Alt+Up/Alt+Down on the Results pane, the grid cursor leaves the screen and the view stops following it
+- [x] **RD-07** `COSMETIC` A newline inside a cell shifts the rest of that row one column to the left
+- [x] **RD-08** `COSMETIC` Results actions menu truncates "Add this column to the sort"
+- [x] **RD-19** `COSMETIC` The ORDER BY bar is only ~34 columns wide and clips the start of the text
+- [x] **RD-25** `COSMETIC` "1 rows retrieved" in the Console and FK navigation title uses lowercase `where`
+- [x] **RD-34** `COSMETIC` Table title after switching tabs loses the paging info
+- [=] SL-16 **RD-49** `COSMETIC` Status bar at 60x20 reorders and lower-cases hints; sidebar hides itself and does not come back
+- [x] **RD-50** `COSMETIC` Empty result shows only the header and no "0 rows" text; Esc in the grid does not clear a multi-row selection
+- [x] **RD-53** `COSMETIC` Palette `New Document` asks for a name; Ctrl+N does not
 
 ## ES: Explorer, schema tools, explain
 

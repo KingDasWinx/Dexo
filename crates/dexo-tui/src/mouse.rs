@@ -76,6 +76,9 @@ pub enum HitButton {
     CycleDriver,
     ToggleAdvanced,
     GetStarted,
+    /// The edit-cell dialog's NULL and Editor buttons.
+    SetNull,
+    OpenEditor,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -102,6 +105,7 @@ pub enum OverlayKind {
     ObjectOverlay,
     SchemaForm,
     InsertRow,
+    CellEdit,
     Connections,
     Projects,
     ConfigTransfer,
@@ -143,6 +147,8 @@ pub enum ScrollArea {
     Inspector,
     Explain,
     McpAudit,
+    Value,
+    Review,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -243,6 +249,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.settings.open, OverlayKind::Settings),
         (model.connection_form.open, OverlayKind::ConnectionForm),
         (model.data.insert_form.open, OverlayKind::InsertRow),
+        (model.data.cell_edit.is_some(), OverlayKind::CellEdit),
         (
             model.transaction_prompt.open,
             OverlayKind::TransactionPrompt,

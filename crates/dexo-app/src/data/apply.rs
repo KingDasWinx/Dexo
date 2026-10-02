@@ -1,6 +1,7 @@
-use dexo_driver_api::{ColumnId, DriverError, Mutation, QualifiedName};
+use dexo_driver_api::{ColumnId, DbValue, DriverError, Mutation, QualifiedName};
 
-use super::change_set::{ChangeSet, PendingChange};
+use super::change_set::{ChangeSet, PendingChange, RowIdentity};
+use super::copy::{SqlDialect, sql_literal};
 
 pub fn mutations_for(
     table: QualifiedName,
@@ -57,79 +58,135 @@ fn zip_identity(
         .collect()
 }
 
-pub fn preview_sql(table: &QualifiedName, changes: &ChangeSet) -> String {
-    let target = table.display_unquoted();
+/// The statements `changes` stand for, one per change, with the values they carry: what
+/// the review shows. It is for reading only -- what runs is `mutations_for`'s, with every
+/// value bound, never this text -- so a value is written as the literal that reads right.
+pub fn preview_sql(table: &QualifiedName, changes: &ChangeSet, dialect: SqlDialect) -> String {
+    let target = [table.schema().or(table.catalog()), Some(table.object())]
+        .into_iter()
+        .flatten()
+        .map(|part| name(part, dialect))
+        .collect::<Vec<_>>()
+        .join(".");
+    let condition = |identity: &RowIdentity| {
+        identity
+            .columns
+            .iter()
+            .zip(&identity.values)
+            .map(|(column, value)| match value {
+                DbValue::Null => format!("{} IS NULL", name(column, dialect)),
+                value => format!(
+                    "{} = {}",
+                    name(column, dialect),
+                    sql_literal(value, dialect)
+                ),
+            })
+            .collect::<Vec<_>>()
+            .join(" AND ")
+    };
     changes
         .pending()
         .iter()
         .map(|change| match change {
             PendingChange::Insert { values } => {
-                let cols = values
+                let columns = values
                     .iter()
-                    .map(|(name, _)| name.as_str())
+                    .map(|(column, _)| name(column, dialect))
                     .collect::<Vec<_>>()
                     .join(", ");
-                let slots = (1..=values.len())
-                    .map(|index| format!("${index}"))
+                let literals = values
+                    .iter()
+                    .map(|(_, value)| sql_literal(value, dialect))
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!("INSERT INTO {target} ({cols}) VALUES ({slots})")
+                format!("INSERT INTO {target} ({columns}) VALUES ({literals});")
             }
             PendingChange::Update {
                 identity, values, ..
             } => {
                 let set = values
                     .iter()
-                    .enumerate()
-                    .map(|(index, (name, _))| format!("{name} = ${}", index + 1))
+                    .map(|(column, value)| {
+                        format!(
+                            "{} = {}",
+                            name(column, dialect),
+                            sql_literal(value, dialect)
+                        )
+                    })
                     .collect::<Vec<_>>()
                     .join(", ");
-                format!(
-                    "UPDATE {target} SET {set} WHERE {} = $n",
-                    identity.columns.join(", ")
-                )
+                format!("UPDATE {target} SET {set} WHERE {};", condition(identity))
             }
             PendingChange::Delete { identity, .. } => {
-                format!(
-                    "DELETE FROM {target} WHERE {} = $n",
-                    identity.columns.join(", ")
-                )
+                format!("DELETE FROM {target} WHERE {};", condition(identity))
             }
         })
         .collect::<Vec<_>>()
         .join("\n")
 }
 
+/// `name` as an identifier: bare when it reads as one, quoted the way `dialect` quotes
+/// otherwise.
+fn name(name: &str, dialect: SqlDialect) -> String {
+    let bare = name
+        .chars()
+        .next()
+        .is_some_and(|first| first.is_ascii_lowercase() || first == '_')
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_');
+    match (bare, dialect) {
+        (true, _) => name.to_string(),
+        (false, SqlDialect::Mysql) => format!("`{}`", name.replace('`', "``")),
+        (false, _) => format!("\"{}\"", name.replace('"', "\"\"")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{mutations_for, preview_sql};
-    use crate::data::{ChangeSet, ColumnDef, TableMeta};
+    use crate::data::{ChangeSet, ColumnDef, RowIdentity, SqlDialect, TableMeta};
     use dexo_driver_api::{DbValue, QualifiedName};
 
+    fn table(columns: &[(&str, bool)]) -> TableMeta {
+        TableMeta {
+            columns: columns
+                .iter()
+                .map(|(name, key)| ColumnDef {
+                    name: (*name).into(),
+                    primary_key: *key,
+                    unique: *key,
+                    nullable: !*key,
+                })
+                .collect(),
+        }
+    }
+
+    /// The review reads as the statements, values and all, with a quote in a value
+    /// doubled; what runs is still the bound mutations.
     #[test]
-    fn preview_uses_placeholders_not_concatenated_values() {
-        let table = TableMeta {
-            columns: vec![ColumnDef {
-                name: "id".into(),
-                primary_key: true,
-                unique: true,
-                nullable: false,
-            }],
+    fn preview_shows_the_values_and_the_rows_it_changes() {
+        let meta = table(&[("order_id", true), ("product_id", true), ("Note", false)]);
+        let mut changes = ChangeSet::for_table(&meta);
+        let identity = RowIdentity {
+            columns: vec!["order_id".into(), "product_id".into()],
+            values: vec![DbValue::I64(597), DbValue::I64(3)],
         };
-        let mut changes = ChangeSet::for_table(&table);
-        changes.insert(vec![("id".into(), DbValue::Text("'; drop".into()))]);
-        let sql = preview_sql(
-            &QualifiedName::new(Some("db"), Some("public"), "items"),
-            &changes,
+        changes.delete(identity.clone(), Vec::new());
+        changes.update(
+            identity,
+            Vec::new(),
+            vec![("Note".into(), DbValue::Text("it's".into()))],
         );
-        assert!(sql.contains("$1"));
-        assert!(!sql.contains("'; drop"));
-        assert!(
-            mutations_for(
-                QualifiedName::new(Some("db"), Some("public"), "items"),
-                &changes
-            )
-            .is_ok()
+        changes.insert(vec![("order_id".into(), DbValue::Text("'; drop".into()))]);
+        let target = QualifiedName::new(Some("db"), Some("public"), "items");
+        let sql = preview_sql(&target, &changes, SqlDialect::Postgres);
+        assert_eq!(
+            sql,
+            "DELETE FROM public.items WHERE order_id = 597 AND product_id = 3;\n\
+             UPDATE public.items SET \"Note\" = 'it''s' WHERE order_id = 597 AND product_id = 3;\n\
+             INSERT INTO public.items (order_id) VALUES ('''; drop');"
         );
+        assert!(mutations_for(target, &changes).is_ok());
     }
 }

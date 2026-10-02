@@ -47,11 +47,14 @@ fn requests(effects: &[Effect]) -> Vec<&DataRequest> {
 fn paging_after_a_tab_switch_pages_the_table_on_screen() {
     let mut model = two_tables();
     let limit = u64::from(model.data.page_limit);
+    // Both have a page after this one: on the last, `n` says so and loads nothing.
+    model.data.has_more = true;
     update(&mut model, Action::NextDataPage);
     update(&mut model, Action::NextDataPage);
     assert_eq!(model.data.page_offset, 2 * limit);
 
     model.set_active_document(2);
+    model.data.has_more = true;
     let effects = update(&mut model, Action::NextDataPage);
 
     let sent = requests(&effects);

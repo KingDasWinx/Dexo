@@ -366,6 +366,9 @@ pub enum Action {
     OpenInsertRow,
     SubmitInsertRow,
     CancelInsertRow,
+    /// F2 on a cell of a table's rows: change its value, through the review like any
+    /// other change.
+    EditCell,
     InspectValue,
     /// The databases running in Docker, for the connections screen.
     DockerDiscovered(Vec<dexo_app::docker::DockerDatabase>),
@@ -489,6 +492,11 @@ pub enum Action {
     ResultsPageUp,
     ResultsPageDown,
     ResultsTop,
+    /// Esc on the grid: the rows picked or selected shrink back to the cursor's cell.
+    ResultsCollapse,
+    ResultsBottom,
+    ResultsFirstColumn,
+    ResultsLastColumn,
     OpenResultsMenu,
     ToggleResultsPick,
     ResultsExtendUp,

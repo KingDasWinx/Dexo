@@ -3,24 +3,24 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ scratch.sql ×  local·users ×  +                                        
-│[n]ew [e]dit [a]ctions    │┌▸ Results where id = 1────────────────────────────────────────────────┐
+┌  Sidebar─────────────────┐ scratch.sql ×  local·users* ×  +                                       
+│[n]ew [e]dit [a]ctions    │┌▸ Results WHERE id = 1 · 1 pending────────────────────────────────────┐
 │  ● local▾  [offline]     ││[Grid] Explain  Messages                                              │
-│>   ▸ public              ││WHERE w to filter                          ORDER BY o to sort         │
-│      mysql.u┌Review changes────────────────────────────────────────────────────────┐             │
-│             │target: demo.public.users                                             │             │
-│             │ops: 0                                                                │             │
-│             │status: Pending                                                       │             │
-│             │ready                                                                 │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             │                                                                      │             │
-│             └──────────────────────────────────────────────────────────────────────┘             │
+│>   ▸ public              ││WHERE w to filter                  ORDER BY o to sort                 │
+│      mysql.users [restric││                                                                      │
+│                          ││                                                                      │
+│ ┌Review changes────────────────────────────────────────────────────────────────────────────────┐ │
+│ │1 change to demo.public.users                                                                 │ │
+│ │                                                                                              │ │
+│ │INSERT INTO public.users (id) VALUES (2);                                                     │ │
+│ │d discard all changes  Esc cancel: they stay pending                                          │ │
+│ │>[Apply]   [Cancel]                                                                           │ │
+│ └──────────────────────────────────────────────────────────────────────────────────────────────┘ │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
@@ -31,4 +31,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Enter actions  v view  n/p page  Ctrl+W close                                      Ctrl+P  F1
+local  Enter actions  Ctrl+S review changes  v view  n/p page  Ctrl+W close               Ctrl+P  F1

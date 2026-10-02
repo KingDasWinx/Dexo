@@ -481,6 +481,8 @@ fn copy_json_and_next_page_are_wired() {
             .iter()
             .any(|effect| matches!(effect, dexo_tui::Effect::CopyToClipboard { .. }))
     );
+    // A page after this one: on the last, `n` says so and loads nothing.
+    model.data.has_more = true;
     let effects = update(&mut model, Action::NextDataPage);
     assert!(
         effects
@@ -792,9 +794,9 @@ fn row_counts_say_whether_they_are_exact_estimated_or_open() {
     assert_eq!(title(&model), "Results (3 rows)");
     model.data.has_more = true;
     model.data.page_offset = 100;
-    assert_eq!(title(&model), "Results (103+ rows)");
+    assert_eq!(title(&model), "Results (rows 101-103 of 103+)");
     model.data.estimated_total = Some(4_321_000);
-    assert_eq!(title(&model), "Results (~4.3M rows)");
+    assert_eq!(title(&model), "Results (rows 101-103 of ~4.3M)");
 
     let effects = update(&mut model, Action::CountRows);
     let (operation, sql) = effects
@@ -806,7 +808,7 @@ fn row_counts_say_whether_they_are_exact_estimated_or_open() {
         .expect("a count started");
     // The table itself, as its page names it.
     assert_eq!(sql, "SELECT COUNT(*) FROM \"public\".\"orders\"");
-    assert_eq!(title(&model), "Results (~4.3M rows, counting…)");
+    assert_eq!(title(&model), "Results (rows 101-103 of ~4.3M, counting…)");
     // `t` again cancels it, and its late answer is dropped.
     let effects = update(&mut model, Action::CountRows);
     assert!(effects.iter().any(|effect| matches!(
@@ -840,11 +842,11 @@ fn row_counts_say_whether_they_are_exact_estimated_or_open() {
         model.data.count.as_ref().map(|count| count.state),
         Some(CountState::Exact(4_321_987))
     );
-    assert_eq!(title(&model), "Results (4,321,987 rows)");
+    assert_eq!(title(&model), "Results (rows 101-103 of 4,321,987)");
     // A WHERE that ran since makes it another count: the exact number goes.
     model.data.bars.applied.where_sql = Some("id > 2".into());
     model.data.estimated_total = None;
-    assert_eq!(title(&model), "Results (103+ rows)");
+    assert_eq!(title(&model), "Results (rows 101-103 of 103+)");
 
     // A statement's rows that stopped at the limit say so.
     let mut tab = ResultTab::new(result_key(0), "r0");
@@ -982,7 +984,7 @@ fn related_rows_open_both_ways_and_back_returns_to_the_row() {
     assert!(model.data.related_picker.is_none());
     // The filter the key brought is said, in the title and in the console's log.
     let screen = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(screen.contains("where id = 9"), "{screen}");
+    assert!(screen.contains("WHERE id = 9"), "{screen}");
     assert!(
         model
             .active_document()
@@ -1312,7 +1314,7 @@ fn a_result_run_again_with_the_bars_pages() {
     let limit = i64::from(model.data.page_limit);
     page(&mut model, limit);
     let title = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(title.contains("Results (100+ rows)"), "{title}");
+    assert!(title.contains("Results (rows 1-100 of 100+)"), "{title}");
     let effects = update(&mut model, Action::NextDataPage);
     let sql = effects
         .iter()
@@ -1324,7 +1326,7 @@ fn a_result_run_again_with_the_bars_pages() {
     assert!(sql.contains("OFFSET 100"), "{sql}");
     page(&mut model, 7);
     let title = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(title.contains("Results (107 rows)"), "{title}");
+    assert!(title.contains("Results (rows 101-107 of 107)"), "{title}");
     assert!(update(&mut model, Action::NextDataPage).is_empty());
 }
 

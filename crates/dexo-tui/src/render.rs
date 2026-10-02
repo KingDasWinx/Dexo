@@ -95,6 +95,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.data.insert_form.open {
         render_insert_row_form(frame, model, hits);
     }
+    if model.data.cell_edit.is_some() {
+        render_cell_edit(frame, model, hits);
+    }
     if let Some(preview) = &model.schema_editor.preview {
         render_ddl_preview(frame, model, preview, hits);
     }
@@ -1438,12 +1441,62 @@ fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     for_popup_lines(popup, &lines, |index, line, rect| {
         if index < form.fields.len() {
             if index == form.focus {
-                show_form_field(frame, rect, &form.fields[index]);
+                show_input(
+                    frame,
+                    rect,
+                    &form.prefix(index),
+                    &form.fields[index].value,
+                    false,
+                );
             }
             hits.register(HitTarget::FormField(index), rect);
         } else if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Insert");
         }
+    });
+}
+
+fn render_cell_edit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    let Some(form) = &model.data.cell_edit else {
+        return;
+    };
+    let area = frame.area();
+    let lines = form.lines();
+    let popup = centered(area, 72, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, "Edit cell"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |index, line, rect| match index {
+        1 => {
+            if form.focus == crate::screens::data::CellFocus::Value {
+                show_input(frame, rect, "> value: ", &form.value, false);
+            }
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        3 => {
+            register_label(hits, rect, line, "[Save]", HitTarget::FooterSubmit);
+            register_label(hits, rect, line, "[Cancel]", HitTarget::FooterCancel);
+            register_label(
+                hits,
+                rect,
+                line,
+                "[NULL]",
+                HitTarget::Button(HitButton::SetNull),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "[Editor]",
+                HitTarget::Button(HitButton::OpenEditor),
+            );
+        }
+        _ => {}
     });
 }
 
@@ -1457,19 +1510,63 @@ fn render_review(
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let popup = centered(area, 72, 14);
-    let lines = crate::screens::data::review_lines(review);
+    let width = area.width.clamp(10, 96);
+    let view = crate::screens::data::review_view(review, usize::from(width.saturating_sub(2)));
+    // The header, a blank line, the statements, then a hint and the buttons: only the
+    // statements scroll.
+    let chrome = view.header.len() + 3;
+    let wanted = chrome + view.body.len() + 2;
+    let height = u16::try_from(wanted.min(usize::from(area.height.saturating_sub(2)).max(8)))
+        .unwrap_or(u16::MAX);
+    let popup = centered(area, width, height);
+    let body_rows = usize::from(popup_inner(popup).height)
+        .saturating_sub(chrome)
+        .max(1);
+    let max_scroll = view.body.len().saturating_sub(body_rows);
+    hits.set_scroll_limit(crate::mouse::ScrollArea::Review, max_scroll);
+    let top = usize::from(review.scroll).min(max_scroll);
+    let mut lines = view.header.clone();
+    lines.push(String::new());
+    let mut shown: Vec<String> = view
+        .body
+        .iter()
+        .skip(top)
+        .take(body_rows)
+        .cloned()
+        .collect();
+    shown.resize(body_rows, String::new());
+    lines.extend(shown);
+    lines.push(if max_scroll == 0 {
+        "d discard all changes  Esc cancel: they stay pending".to_string()
+    } else {
+        format!(
+            "PageUp/PageDown scroll ({}-{} of {})  d discard all  Esc cancel",
+            top + 1,
+            (top + body_rows).min(view.body.len()),
+            view.body.len()
+        )
+    });
+    lines.push(crate::widgets::form::footer_line("Apply", review.footer));
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Review changes"),
+        overlay_block(model, "Review changes"),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
-        if line == "ready" || line.starts_with("production:") {
-            hits.register(HitTarget::Button(HitButton::Apply), rect);
+    let last = lines.len() - 1;
+    for_popup_lines(popup, &lines, |index, line, rect| {
+        if index == last {
+            crate::widgets::form::register_footer(hits, rect, line, "Apply");
+        } else if index + 1 == last {
+            register_label(
+                hits,
+                rect,
+                line,
+                "d discard all",
+                HitTarget::Button(HitButton::Discard),
+            );
         }
     });
 }
@@ -2497,18 +2594,40 @@ fn render_value_viewer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         return;
     };
     let area = frame.area();
-    let popup = centered(area, 72, area.height.saturating_sub(2).min(20));
-    let mut lines: Vec<String> = crate::widgets::viewer::describe(view)
+    let popup = centered(area, 80, area.height.saturating_sub(2).min(24));
+    let inner = popup_inner(popup);
+    // The value wraps to the popup, tabs as spaces (a tab has no width of its own), and
+    // scrolls under a footer that stays: a long text is read here, not cut at the border.
+    let width = (inner.width as usize).max(1);
+    let wrapped: Vec<String> = crate::widgets::viewer::describe(view)
         .lines()
-        .map(str::to_string)
+        .flat_map(|line| crate::model::wrap_display_text(&line.replace('\t', "    "), width))
         .collect();
+    let body_rows = (inner.height as usize).saturating_sub(2).max(1);
+    let max_scroll = wrapped.len().saturating_sub(body_rows);
+    hits.set_scroll_limit(crate::mouse::ScrollArea::Value, max_scroll);
+    let top = (model.data.viewer_scroll as usize).min(max_scroll);
+    let mut lines: Vec<String> = wrapped.iter().skip(top).take(body_rows).cloned().collect();
+    lines.resize(body_rows, String::new());
     lines.push(String::new());
-    lines.push("  esc close".into());
+    lines.push(if max_scroll == 0 {
+        "Esc close".into()
+    } else {
+        format!(
+            "Up/Down scroll  PageUp/PageDown  Esc close   lines {}-{} of {}",
+            top + 1,
+            (top + body_rows).min(wrapped.len()),
+            wrapped.len()
+        )
+    });
     paint_popup(
         frame,
         model,
         popup,
-        overlay_block(model, "Value"),
+        overlay_block(
+            model,
+            &format!("Value: {}", crate::widgets::viewer::summary(view)),
+        ),
         lines.join("\n"),
     );
     register_overlay(hits, popup);

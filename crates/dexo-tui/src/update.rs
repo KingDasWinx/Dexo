@@ -271,6 +271,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             point_at_failure(model, &key, index, &message, position);
             // A sort or a clause the server would not run leaves the rows it had.
+            let mut derived = false;
             if let Some((results, bars)) = document_output(model, &key)
                 && let Some(backup) = results
                     .derived_backup
@@ -279,11 +280,32 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 results.tabs = backup.tabs;
                 results.active = backup.active;
                 bars.applied = bars.good.clone();
+                bars.failed = true;
+                derived = true;
             }
+            // The statement that failed is Dexo's wrapper around the user's clause: its
+            // position, and the line it quotes, mean nothing in what the user typed.
+            let details = if derived {
+                details
+                    .into_iter()
+                    .filter_map(|line| {
+                        if line.starts_with("SQLSTATE") {
+                            line.split(" · ").next().map(str::to_string)
+                        } else if line.starts_with("DETAIL:") || line.starts_with("HINT:") {
+                            Some(line)
+                        } else {
+                            None
+                        }
+                    })
+                    .collect()
+            } else {
+                details
+            };
             model.messages.error_with(message, details);
             // The grid of a failed statement is empty; the reason is in Messages, so the
-            // pane goes there and puts the new entry at the top.
-            if operation_matches(model, &key) {
+            // pane goes there and puts the new entry at the top. A clause that failed left
+            // the rows it had, which stay on screen under the toast.
+            if !derived && operation_matches(model, &key) {
                 model.results.view = crate::model::ResultsView::Messages;
                 model.results.messages_scroll =
                     u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
@@ -963,6 +985,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::NextDataPage => {
+            if at_page_edge(model, true) {
+                return Vec::new();
+            }
             let offset = model
                 .data
                 .page_offset
@@ -970,6 +995,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             change_data_page(model, offset)
         }
         Action::PrevDataPage => {
+            if at_page_edge(model, false) {
+                return Vec::new();
+            }
             let offset = model
                 .data
                 .page_offset
@@ -1053,7 +1081,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             {
                 model.data.bars.good = model.data.bars.applied.clone();
                 model.data.apply_page(page.clone());
+                // A page of the same columns -- sorted, filtered, turned -- keeps the
+                // cursor's column: `s` again sorts the column it sorted.
+                let column = model
+                    .results
+                    .selection()
+                    .map(|(_, col)| col)
+                    .filter(|_| model.results.columns() == page.columns.as_slice());
                 model.results.clear();
+                model.results.home_column = column.unwrap_or(0);
                 model.results.set_columns(page.columns.clone());
                 let row_count = page.rows.len();
                 model.results.append_rows(page.rows);
@@ -1071,8 +1107,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.data.loading = false;
                 model.data.last_error = Some(message.clone());
                 model.messages.error(message);
-                // The next page asks with what last worked; the bars keep the text.
+                // The next page asks with what last worked; the bars keep the text, drawn
+                // as refused.
                 model.data.bars.applied = model.data.bars.good.clone();
+                model.data.bars.failed = true;
             }
             Vec::new()
         }
@@ -1109,8 +1147,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ValueFetched { generation, bytes } => {
             if generation == model.session_generation {
-                model.data.viewer =
-                    Some(crate::screens::value_viewer::view(&DbValue::Bytes(bytes)));
+                show_value(
+                    model,
+                    crate::screens::value_viewer::view(&bytes_or_text(bytes)),
+                );
             }
             Vec::new()
         }
@@ -1119,11 +1159,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             session,
         } => {
             if catalog_generation_matches(model, &session, generation) {
+                let applied = model.data.changes.pending().len();
                 model.data.apply();
                 model.data.row_changes.clear();
-                // The rows changed: a count of them no longer holds.
+                // Done: the review has nothing left to show, and the user is told what
+                // changed instead.
+                model.data.review = None;
+                model.messages.info(match applied {
+                    1 => "Applied 1 change.".to_string(),
+                    count => format!("Applied {count} changes."),
+                });
+                // The rows changed: a count of them no longer holds. The page they were
+                // on is read again, filter and sort kept, not the first.
                 let mut effects = drop_count(model);
-                effects.extend(load_table_document(model, model.active_document));
+                effects.extend(reload_object_data(model));
                 return effects;
             }
             Vec::new()
@@ -1191,16 +1240,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             // Said out loud: a copy that went nowhere used to look exactly like one that
             // worked.
             let lines = text.lines().count().max(1);
-            model.messages.info(if lines == 1 {
-                "copied to clipboard".into()
-            } else {
-                format!("copied {lines} lines to clipboard")
+            model.messages.info(match model.data.copy_note.take() {
+                Some(note) => note,
+                None if lines == 1 => "copied to clipboard".into(),
+                None => format!("copied {lines} lines to clipboard"),
             });
             model.explorer.copied = Some(text.clone());
             model.data.clipboard = text;
             Vec::new()
         }
         Action::ClipboardFailed { message } => {
+            model.data.copy_note = None;
             model.messages.error(message);
             Vec::new()
         }
@@ -1250,6 +1300,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::CopyDdl => copy_ddl(model),
         Action::CopyGrid(format) => copy_grid(model, format),
         Action::OpenReview => {
+            // The same answer the palette gives -- from a key too -- instead of an empty
+            // dialog.
+            if model.data.changes.pending().is_empty() {
+                model.messages.warn("No pending changes.".into());
+                return Vec::new();
+            }
             // The review asks on production only if it knows it is on production, and
             // nothing outside a test told it.
             model.data.environment =
@@ -1264,6 +1320,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::RevertChanges => {
+            discard_all_pending(model);
             model.data.revert();
             Vec::new()
         }
@@ -1275,7 +1332,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::RefreshTableData => execute_on_document_connection(model, action),
         Action::ToggleRowDelete => toggle_row_delete(model),
         Action::OpenInsertRow => {
-            model.data.insert_form.open_for(&model.data.table);
+            if !edits_refused(model, "Insert") {
+                let columns = model.results.columns().to_vec();
+                model.data.insert_form.open_for(&model.data.table, &columns);
+            }
             Vec::new()
         }
         Action::CancelInsertRow => {
@@ -1283,6 +1343,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SubmitInsertRow => submit_insert_row(model),
+        Action::EditCell => open_cell_edit(model),
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelatedPicker => open_related_picker(model),
         Action::NoteLoaded { object, note } => {
@@ -1500,6 +1561,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.results.explain_scroll = 0;
             model.results.messages_scroll = 0;
             match (model.results.view, model.results.explain.view) {
+                // No plan to show: Explain is not a stop on the way, and the log is one
+                // press from the grid instead of four.
+                (ResultsView::Grid, _) if model.results.explain.plan.is_none() => {
+                    model.results.view = ResultsView::Messages;
+                }
                 (ResultsView::Grid, _) => {
                     model.results.view = ResultsView::Explain;
                     model.results.explain.view = ExplainView::Tree;
@@ -1510,6 +1576,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 (ResultsView::Explain, view) => model.results.explain.view = view.next(),
                 (ResultsView::Messages, _) => model.results.view = ResultsView::Grid,
             }
+            scroll_results_view_to_start(model);
             Vec::new()
         }
         // ANALYZE runs the statement, so it asks first; it used to run straight from the
@@ -1784,6 +1851,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 Action::SetRecordView(on) => *on,
                 _ => !model.expanded_records,
             };
+            record_follow_field(model);
             model.messages.info(
                 if model.expanded_records {
                     "Expanded display is on: one field per line."
@@ -1831,6 +1899,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ExternalEditFinished { document, text } => {
+            if document == CELL_EDIT_DOCUMENT {
+                finish_cell_edit_externally(model, text);
+                return Vec::new();
+            }
             match text {
                 Ok(text) => crate::screens::editor::replace_document(model, &document, &text),
                 Err(message) => model.messages.error(message),
@@ -2141,6 +2213,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 crate::model::ResultsView::Messages => {
                     model.results.messages_scroll = model.results.messages_scroll.saturating_sub(1);
                 }
+                crate::model::ResultsView::Grid if record_view_shown(model) => {
+                    record_move_field(model, -1)
+                }
                 crate::model::ResultsView::Grid => model.results.move_cursor_row(-1, false),
             }
             Vec::new()
@@ -2163,8 +2238,46 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                         .saturating_add(1)
                         .min(model.messages.line_count().saturating_sub(1) as u16);
                 }
+                crate::model::ResultsView::Grid if record_view_shown(model) => {
+                    record_move_field(model, 1)
+                }
                 crate::model::ResultsView::Grid => model.results.move_cursor_row(1, false),
             }
+            Vec::new()
+        }
+        // On the plan or the log the same keys move the text: a page, the start, the end.
+        Action::ResultsPageUp
+        | Action::ResultsPageDown
+        | Action::ResultsTop
+        | Action::ResultsBottom
+        | Action::ResultsFirstColumn
+        | Action::ResultsLastColumn
+            if model.results.view != crate::model::ResultsView::Grid =>
+        {
+            let page = (record_capacity(model) as i32 - 1).max(1);
+            scroll_output_view(
+                model,
+                match action {
+                    Action::ResultsPageUp => -page,
+                    Action::ResultsPageDown => page,
+                    Action::ResultsTop | Action::ResultsFirstColumn => i32::MIN / 2,
+                    _ => i32::MAX / 2,
+                },
+            );
+            Vec::new()
+        }
+        // In the record view the fields run down the screen and the records side by side:
+        // Left and Right turn records, Up and Down walk the fields.
+        Action::ResultsLeft if record_view_shown(model) => {
+            model.results.move_cursor_row(-1, false);
+            model.results.record_scroll = 0;
+            record_follow_field(model);
+            Vec::new()
+        }
+        Action::ResultsRight if record_view_shown(model) => {
+            model.results.move_cursor_row(1, false);
+            model.results.record_scroll = 0;
+            record_follow_field(model);
             Vec::new()
         }
         Action::ResultsLeft => {
@@ -2173,6 +2286,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ResultsRight => {
             model.results.move_cursor_col(1);
+            Vec::new()
+        }
+        Action::ResultsPageUp if record_view_shown(model) => {
+            record_move_field(model, -(record_capacity(model) as i32 - 1).max(1));
+            Vec::new()
+        }
+        Action::ResultsPageDown if record_view_shown(model) => {
+            record_move_field(model, (record_capacity(model) as i32 - 1).max(1));
             Vec::new()
         }
         Action::ResultsPageUp => {
@@ -2192,6 +2313,46 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             let offset = model.results.viewport().row_offset as i32;
             model.results.scroll_rows(-offset);
+            model.results.record_scroll = 0;
+            record_follow_field(model);
+            Vec::new()
+        }
+        Action::ResultsCollapse => {
+            model.results.picked_rows.clear();
+            if let Some((row, col)) = model.results.selection() {
+                model.results.select_cell(row, col);
+            }
+            Vec::new()
+        }
+        // As far as there are rows: the move clamps at the last.
+        Action::ResultsBottom => {
+            let rows = i32::try_from(model.results.row_count()).unwrap_or(i32::MAX);
+            model.results.move_cursor_row(rows, false);
+            model.results.record_scroll = 0;
+            record_follow_field(model);
+            Vec::new()
+        }
+        Action::ResultsFirstColumn | Action::ResultsLastColumn if record_view_shown(model) => {
+            let last = model.results.columns().len().saturating_sub(1);
+            let row = model.results.cursor_row().unwrap_or(0);
+            let col = if matches!(action, Action::ResultsFirstColumn) {
+                0
+            } else {
+                last
+            };
+            model.results.select_cell(row, col);
+            record_follow_field(model);
+            Vec::new()
+        }
+        Action::ResultsFirstColumn | Action::ResultsLastColumn => {
+            let columns = i32::try_from(model.results.columns().len()).unwrap_or(i32::MAX);
+            model
+                .results
+                .move_cursor_col(if matches!(action, Action::ResultsFirstColumn) {
+                    -columns
+                } else {
+                    columns
+                });
             Vec::new()
         }
         Action::ResultsExtendUp => {
@@ -2429,10 +2590,8 @@ fn activate_document_tab(model: &mut Model) -> Vec<Effect> {
 fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
     crate::screens::editor::end_typing(model);
     let leaving_editor = model.focus == Focus::Editor && !matches!(target, FocusTarget::Editor);
-    // A table document shifts everything down a pane: the grid takes the editor's slot
-    // and the console takes the grid's. These keys name a position, not a widget, and
-    // only pane 3 needs saying here -- `effective_focus` already reads pane 2 correctly.
-    let table = model.active_document().kind.is_table();
+    // A table document puts the grid in the editor's slot: `effective_focus` reads pane 2
+    // as the grid there, and pane 3 is the grid too, by its name.
     model.focus = match target {
         FocusTarget::Explorer => {
             model.panes.explorer_visible = true;
@@ -2443,13 +2602,11 @@ fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
             model.sync_document_tab_focus();
             Focus::DocumentTabs
         }
+        // Alt+3 is Focus Results: on a table document too, where the rows are the grid in
+        // the editor's slot -- not the log beneath them, which only a click reaches.
         FocusTarget::Results => {
             model.panes.results_visible = true;
-            if table {
-                Focus::Console
-            } else {
-                Focus::Results
-            }
+            Focus::Results
         }
     };
     model.panes = model.panes.clamp(model.width, model.height);
@@ -2568,8 +2725,11 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             }
             _ => Vec::new(),
         },
+        // A click on the value is a click on text to read; one away from it dismisses.
         Some(OverlayKind::ValueViewer) => {
-            model.data.viewer = None;
+            if hit != Some(HitTarget::Overlay) {
+                model.data.viewer = None;
+            }
             Vec::new()
         }
         Some(OverlayKind::Connections) => mouse_connections(model, hit, doubled),
@@ -2579,6 +2739,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::TransactionPrompt) => mouse_transaction(model, hit),
         Some(OverlayKind::DocumentNamePrompt) => mouse_document_name(model, hit),
         Some(OverlayKind::InsertRow) => mouse_insert_row(model, hit),
+        Some(OverlayKind::CellEdit) => mouse_cell_edit(model, hit),
         Some(OverlayKind::ConnectionForm) => mouse_connection_form(model, hit),
         Some(OverlayKind::Settings) => mouse_settings(model, hit),
         Some(OverlayKind::Recovery) => mouse_recovery(model, hit),
@@ -3092,7 +3253,56 @@ fn mouse_review(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::Button(HitButton::Apply) | HitTarget::FooterSubmit) => {
             update(model, Action::ApplyChanges)
         }
+        Some(HitTarget::FooterCancel) => {
+            model.data.review = None;
+            Vec::new()
+        }
+        Some(HitTarget::Button(HitButton::Discard)) => discard_from_review(model),
         _ => Vec::new(),
+    }
+}
+
+/// `d` in the review, or its button: every pending change goes, and the review with them.
+fn discard_from_review(model: &mut Model) -> Vec<Effect> {
+    discard_all_pending(model);
+    model.data.review = None;
+    model.messages.info("Pending changes discarded.".into());
+    Vec::new()
+}
+
+/// The review's keys, those of every Submit/Cancel dialog: the arrows and Tab walk Apply
+/// and Cancel, Esc and Cancel close it with the changes still pending, Enter takes the
+/// button that has the focus. PageUp, PageDown, Home and End scroll the statements, and
+/// `d` discards everything.
+fn review_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, confirm_key};
+    let Some(review) = model.data.review.as_mut() else {
+        return Vec::new();
+    };
+    let page = i32::from((model.height / 2).max(1));
+    let delta = match key.code {
+        KeyCode::PageUp => Some(-page),
+        KeyCode::PageDown => Some(page),
+        KeyCode::Home => Some(-i32::from(u16::MAX)),
+        KeyCode::End => Some(i32::from(u16::MAX)),
+        _ => None,
+    };
+    if let Some(delta) = delta {
+        review.scroll = model
+            .hits
+            .scroll(crate::mouse::ScrollArea::Review, review.scroll, delta);
+        return Vec::new();
+    }
+    if key.code == KeyCode::Char('d') && key.modifiers.is_empty() {
+        return discard_from_review(model);
+    }
+    match confirm_key(&mut review.footer, &key) {
+        FooterKey::Submit => update(model, Action::ApplyChanges),
+        FooterKey::Cancel => {
+            model.data.review = None;
+            Vec::new()
+        }
+        FooterKey::Moved | FooterKey::Pass => Vec::new(),
     }
 }
 
@@ -3254,8 +3464,7 @@ fn mouse_workbench(
         Some(HitTarget::ResultsView(index)) => {
             if let Some(view) = crate::model::ResultsView::ALL.get(index).copied() {
                 model.results.view = view;
-                model.results.explain_scroll = 0;
-                model.results.messages_scroll = 0;
+                scroll_results_view_to_start(model);
             }
             model.focus = Focus::Results;
             Vec::new()
@@ -3344,7 +3553,7 @@ fn mouse_workbench(
             crate::screens::editor::end_typing(model);
             close_palette(model);
             model.focus = Focus::Results;
-            model.results.select_column(col);
+            select_header_column(model, col);
             // A grid that cannot run again keeps its rows; the click only selects.
             if clause_bars_shown(model) {
                 sort_by_column(model, col, extend)
@@ -3364,7 +3573,11 @@ fn mouse_workbench(
             } else {
                 model.results.select_cell(row, col);
             }
-            if doubled {
+            if doubled && model.active_document().kind.is_table() && !extend {
+                // A table's cell is edited where it is double-clicked, as in any grid;
+                // the menu is Enter's, and a right click's.
+                update(model, Action::EditCell)
+            } else if doubled {
                 update(model, Action::OpenResultsMenu)
             } else if pick {
                 update(model, Action::ToggleResultsPick)
@@ -3396,7 +3609,13 @@ fn mouse_workbench(
             update(model, Action::Focus(target))
         }
         // Only a table document gives the console a pane of its own, in pane 3's place.
-        Some(HitTarget::Console) => update(model, Action::Focus(FocusTarget::Results)),
+        Some(HitTarget::Console) => {
+            let effects = update(model, Action::Focus(FocusTarget::Results));
+            if model.active_document().kind.is_table() {
+                model.focus = Focus::Console;
+            }
+            effects
+        }
         _ => Vec::new(),
     }
 }
@@ -3452,7 +3671,7 @@ fn handle_mouse_right_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> 
         // where the terminal leaves Shift alone.
         Some(HitTarget::GridHeader(col)) => {
             model.focus = Focus::Results;
-            model.results.select_column(col);
+            select_header_column(model, col);
             if clause_bars_shown(model) {
                 sort_by_column(model, col, true)
             } else {
@@ -3590,6 +3809,23 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             model.editor.history_selected = (model.editor.history_selected + 1)
                 .min(model.editor.history.len().saturating_sub(1));
         }
+        return Vec::new();
+    }
+    if overlay == Some(OverlayKind::Review) {
+        if let Some(review) = model.data.review.as_mut() {
+            review.scroll =
+                model
+                    .hits
+                    .scroll(crate::mouse::ScrollArea::Review, review.scroll, delta * 3);
+        }
+        return Vec::new();
+    }
+    if overlay == Some(OverlayKind::ValueViewer) {
+        model.data.viewer_scroll = model.hits.scroll(
+            crate::mouse::ScrollArea::Value,
+            model.data.viewer_scroll,
+            delta,
+        );
         return Vec::new();
     }
     if overlay == Some(OverlayKind::Related) {
@@ -3863,9 +4099,25 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.data.viewer.is_some() {
-        if matches!(key.code, KeyCode::Esc | KeyCode::Enter) {
-            model.data.viewer = None;
-        }
+        let page = i32::from((model.height / 2).max(1));
+        let delta = match key.code {
+            KeyCode::Esc | KeyCode::Enter => {
+                model.data.viewer = None;
+                return Vec::new();
+            }
+            KeyCode::Up => -1,
+            KeyCode::Down => 1,
+            KeyCode::PageUp => -page,
+            KeyCode::PageDown => page,
+            KeyCode::Home => -i32::from(u16::MAX),
+            KeyCode::End => i32::from(u16::MAX),
+            _ => 0,
+        };
+        model.data.viewer_scroll = model.hits.scroll(
+            crate::mouse::ScrollArea::Value,
+            model.data.viewer_scroll,
+            delta,
+        );
         return Vec::new();
     }
     if model.file_picker.open {
@@ -4064,15 +4316,11 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         return Vec::new();
     }
+    if model.data.cell_edit.is_some() {
+        return cell_edit_key(model, key);
+    }
     if model.data.review.is_some() {
-        return match key.code {
-            KeyCode::Esc => {
-                model.data.review = None;
-                Vec::new()
-            }
-            KeyCode::Enter => update(model, Action::ApplyChanges),
-            _ => Vec::new(),
-        };
+        return review_key(model, key);
     }
     if model.mcp_profiles.open {
         if model.mcp_profiles.grant_form.is_some() {
@@ -5145,6 +5393,105 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+/// Scrolls the plan or the log by `delta` lines, to its start or end for a very large one;
+/// the end of the log leaves its newest entry at the bottom of the pane.
+fn scroll_output_view(model: &mut Model, delta: i32) {
+    match model.results.view {
+        crate::model::ResultsView::Explain => {
+            model.results.explain_scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::Explain,
+                model.results.explain_scroll,
+                delta,
+            );
+        }
+        crate::model::ResultsView::Messages => {
+            let rows = crate::widgets::grid::record_rows(model);
+            let last = model.messages.line_count().saturating_sub(rows) as i32;
+            let next = i32::from(model.results.messages_scroll).saturating_add(delta);
+            model.results.messages_scroll = next.clamp(0, last.max(0)) as u16;
+        }
+        crate::model::ResultsView::Grid => {}
+    }
+}
+
+/// A view just switched to starts where it is read from: a plan at its top, the log at its
+/// end -- the entries that matter are the newest, and it opened on the oldest, off screen
+/// the others.
+fn scroll_results_view_to_start(model: &mut Model) {
+    model.results.explain_scroll = 0;
+    model.results.messages_scroll = if model.results.view == crate::model::ResultsView::Messages {
+        let rows = crate::widgets::grid::record_rows(model);
+        u16::try_from(model.messages.line_count().saturating_sub(rows)).unwrap_or(u16::MAX)
+    } else {
+        0
+    };
+}
+
+/// Whether the pane shows the record view: one field per line, a field cursor, the
+/// records turned with Left and Right.
+fn record_view_shown(model: &Model) -> bool {
+    model.results.view == crate::model::ResultsView::Grid
+        && model.expanded_records
+        && model.results.row_count() > 0
+}
+
+fn record_capacity(model: &Model) -> usize {
+    crate::widgets::grid::record_rows(model).max(1)
+}
+
+/// Moves the field cursor `delta` fields, on into the next record past its last field and
+/// back into the previous before its first.
+fn record_move_field(model: &mut Model, delta: i32) {
+    model.results.ensure_cursor();
+    let Some((row, col)) = model.results.selection() else {
+        return;
+    };
+    let fields = model.results.columns().len();
+    if fields == 0 {
+        return;
+    }
+    let next = col as i64 + i64::from(delta);
+    let (to_row, to_col) = if next < 0 {
+        match row {
+            0 => (0, 0),
+            _ => (row - 1, fields - 1),
+        }
+    } else if next >= fields as i64 {
+        if row + 1 >= model.results.row_count() {
+            (row, fields - 1)
+        } else {
+            (row + 1, 0)
+        }
+    } else {
+        (row, next as usize)
+    };
+    if to_row != row {
+        model.results.record_scroll = 0;
+    }
+    model.results.select_cell(to_row, to_col);
+    // The row viewport follows too, for when the grid comes back.
+    model.results.move_cursor_row(0, false);
+    record_follow_field(model);
+}
+
+/// Scrolls the record so the field under the cursor is on screen: the rule is line 0,
+/// field `n` is line `n + 1`.
+fn record_follow_field(model: &mut Model) {
+    let Some((_, col)) = model.results.selection() else {
+        return;
+    };
+    let capacity = record_capacity(model);
+    let line = col + 1;
+    let scroll = &mut model.results.record_scroll;
+    if col == 0 {
+        *scroll = 0;
+    } else if line < *scroll {
+        *scroll = line;
+    } else if line >= *scroll + capacity {
+        *scroll = line + 1 - capacity;
+    }
+}
+
 fn open_results_menu(model: &mut Model) {
     model.results.ensure_cursor();
     if model.results.row_count() == 0 {
@@ -5288,36 +5635,17 @@ fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     model.results_menu.open = false;
-    match *id {
-        // The value itself: it copied as a one-column table, header and trailing
-        // newline included, so pasting `2` gave `n` and `2` on two lines.
-        "copy-cell" => {
-            if let Some((row, col)) = model.results.selection() {
-                model.results.select_cell(row, col);
-            }
-            copy_grid(model, dexo_app::data::CopyFormat::Value)
-        }
-        other => {
-            if other.starts_with("data.copy") && model.results.picked_rows.is_empty() {
-                match model.results.kind {
-                    crate::model::GridSelection::Range { start, end } => {
-                        let last_col = model.results.columns().len().saturating_sub(1);
-                        model.results.select_range((start.0, 0), (end.0, last_col));
-                    }
-                    _ => {
-                        if let Some((row, _)) = model.results.selection() {
-                            model.results.select_row(row);
-                        }
-                    }
-                }
-            }
-            if let Some(invocation) = crate::palette::invocation_by_id(model, other) {
-                invoke_palette(model, invocation)
-            } else {
-                Vec::new()
-            }
-        }
+    match crate::palette::invocation_by_id(model, id) {
+        Some(invocation) => invoke_palette(model, invocation),
+        None => Vec::new(),
     }
+}
+
+/// A click on a header puts the cursor in that column, on the row it was on: it sorts,
+/// it does not select the column for the next copy.
+fn select_header_column(model: &mut Model, col: usize) {
+    let row = model.results.cursor_row().unwrap_or(0);
+    model.results.select_cell(row, col);
 }
 
 fn click_results_row(model: &mut Model, row: usize, extend: bool) {
@@ -5357,6 +5685,12 @@ fn bottom_pane_height(model: &Model) -> u16 {
 }
 
 fn set_bottom_pane_height(model: &mut Model, value: u16) {
+    // Dragged or keyed, the results pane keeps room for a row (see `adjust_results_height`).
+    let value = if model.active_document().kind.is_table() {
+        value
+    } else {
+        value.max(6)
+    };
     if model.active_document().kind.is_table() {
         model.panes.console_height = value;
     } else {
@@ -5365,7 +5699,19 @@ fn set_bottom_pane_height(model: &mut Model, value: u16) {
 }
 
 fn adjust_results_height(model: &mut Model, delta: i16) {
-    let next = (bottom_pane_height(model) as i16 + delta).max(3) as u16;
+    // The results pane keeps room for its border, toolbar, bars, header and a row: below
+    // that the grid had no rows, and its bars were drawn over the border. The console of
+    // a table document is a log and may be as short as three lines.
+    let floor: i16 = if model.active_document().kind.is_table() {
+        3
+    } else {
+        6
+    };
+    let current = bottom_pane_height(model) as i16;
+    if delta < 0 && current <= floor {
+        return;
+    }
+    let next = (current + delta).max(floor) as u16;
     model.panes.results_visible = true;
     set_bottom_pane_height(model, next);
     model.panes = model.panes.clamp(model.width, model.height);
@@ -5792,6 +6138,20 @@ fn finish_schema_run(
 }
 
 fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
+    // `\x` alone only turns the record view on or off: nothing runs, and the result on
+    // screen is left where it is instead of being emptied for an answer that has no rows.
+    if let [only] = statements.as_slice()
+        && let Ok(dexo_app::meta_command::MetaCommand::RecordView(on)) =
+            dexo_app::meta_command::parse(only)
+    {
+        return update(
+            model,
+            match on {
+                Some(on) => Action::SetRecordView(on),
+                None => Action::ToggleRecordView,
+            },
+        );
+    }
     let operation = crate::runtime::OperationId::new();
     let dialect = crate::screens::editor::editor_dialect(model);
     let created: Vec<Option<String>> = statements
@@ -6240,18 +6600,25 @@ fn open_selected_table(model: &mut Model) -> Vec<Effect> {
             .warn("Select a table or view to open its data.".into());
         return Vec::new();
     }
+    let node_connection = model.explorer.selected_connection_name().map(str::to_owned);
     let mut effects = open_object_data(model);
-    effects.extend(load_inspector(model));
-    if let Some(id) = model.explorer.selected.clone() {
-        let operation = crate::runtime::OperationId::new();
-        if model.explorer.expand_with(&id, operation) {
-            effects.extend(catalog_load_effect(model, Some(id), operation, false));
+    // The table's own details are asked of the session it lives on: while that one is
+    // still being dialled, the live session is another connection's.
+    if node_connection.is_none_or(|name| name == model.connection.name) {
+        effects.extend(load_inspector(model));
+        if let Some(id) = model.explorer.selected.clone() {
+            let operation = crate::runtime::OperationId::new();
+            if model.explorer.expand_with(&id, operation) {
+                effects.extend(catalog_load_effect(model, Some(id), operation, false));
+            }
         }
     }
-    if effects
-        .iter()
-        .any(|effect| matches!(effect, Effect::LoadTableData { .. }))
-    {
+    if effects.iter().any(|effect| {
+        matches!(
+            effect,
+            Effect::LoadTableData { .. } | Effect::ConnectProfile { .. }
+        )
+    }) {
         model.focus = Focus::Results;
         model.panes.results_visible = true;
     }
@@ -6291,6 +6658,17 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
 }
 
 fn discard_all_pending(model: &mut Model) {
+    // Edited cells show the old values again.
+    let edited: Vec<usize> = model
+        .data
+        .row_changes
+        .iter()
+        .filter(|(_, state)| matches!(state, dexo_app::data::RowEditState::Edited))
+        .map(|(&index, _)| index)
+        .collect();
+    for index in edited {
+        undo_row_edit(model, index);
+    }
     let mut inserted_rows: Vec<usize> = model
         .data
         .row_changes
@@ -6306,7 +6684,306 @@ fn discard_all_pending(model: &mut Model) {
     model.data.changes.discard();
 }
 
+/// Says why the grid's rows cannot be changed, when they cannot: the same answer, before
+/// anything is typed or staged, for an insert, a delete and an edit. A connection's
+/// read-only policy comes first -- a change staged on one could only be refused later.
+fn edits_refused(model: &mut Model, verb: &str) -> bool {
+    let target = model.data.target.clone();
+    let name = target.object();
+    let reason = if !model.active_document().kind.is_table() {
+        format!("{verb} works on a table's rows: open one from the sidebar first.")
+    } else if model.connection.read_only {
+        format!(
+            "{} is read-only: its rows cannot be changed here.",
+            model.connection.name
+        )
+    } else if model.data.table.columns.is_empty() {
+        format!("The columns of {name} are still loading; try again in a moment.")
+    } else if model.data.changes.mode() == dexo_app::data::EditMode::ReadOnly {
+        let is_view = model.catalog_objects.iter().any(|object| {
+            object.qualified_name == target
+                && matches!(
+                    object.kind,
+                    dexo_driver_api::ObjectKind::View
+                        | dexo_driver_api::ObjectKind::MaterializedView
+                )
+        });
+        if is_view {
+            format!("{name} is a view, so its rows cannot be changed here.")
+        } else {
+            format!(
+                "{name} has no primary key or unique column, so its rows cannot be changed here."
+            )
+        }
+    } else {
+        return false;
+    };
+    model.messages.warn(reason);
+    true
+}
+
+/// Stands in for a document's id while `$EDITOR` holds a cell's value instead of a SQL
+/// file: the finished edit comes back under it.
+const CELL_EDIT_DOCUMENT: &str = "\u{0}cell-edit";
+
+/// F2: the dialog to change the cell under the cursor. Every refusal says why, before
+/// anything is typed: a connection that is read-only, a table whose rows have no key, a
+/// column the row is found by, a row already going away.
+fn open_cell_edit(model: &mut Model) -> Vec<Effect> {
+    // F2 is Rename on a document's own panes, and only a table's cells are edited: on the
+    // results of a statement it renames, as it does from everywhere else.
+    if !model.active_document().kind.is_table() {
+        return update(model, Action::RenameDocument);
+    }
+    if edits_refused(model, "Edit") {
+        return Vec::new();
+    }
+    let Some((row, col)) = model.results.selection() else {
+        return Vec::new();
+    };
+    let Some(column) = model.results.columns().get(col).cloned() else {
+        return Vec::new();
+    };
+    match model.data.row_changes.get(&row) {
+        Some(dexo_app::data::RowEditState::Deleted) => {
+            model.messages.warn(
+                "This row is marked for deletion; restore it with Delete to change it.".into(),
+            );
+            return Vec::new();
+        }
+        Some(dexo_app::data::RowEditState::Inserted) => {
+            model.messages.warn(
+                "This row is new and not applied yet: delete it and insert it again to change it."
+                    .into(),
+            );
+            return Vec::new();
+        }
+        _ => {}
+    }
+    if dexo_app::data::RowIdentity::from_table(&model.data.table)
+        .is_some_and(|identity| identity.contains(&column.name))
+    {
+        model.messages.warn(format!(
+            "{} is what finds this row, so it cannot be changed here; change it with an UPDATE in the editor.",
+            column.name
+        ));
+        return Vec::new();
+    }
+    // A value too big to hold in the grid is not edited from a prefix of it.
+    if model.results.cell_at(row, col).is_some() {
+        model.messages.warn(
+            "This value is too large to edit here; change it with an UPDATE in the editor.".into(),
+        );
+        return Vec::new();
+    }
+    let value = model
+        .results
+        .rows()
+        .get(row)
+        .and_then(|cells| cells.get(col))
+        .cloned()
+        .unwrap_or(DbValue::Null);
+    let was_null = matches!(value, DbValue::Null);
+    let mut input = crate::widgets::text_input::TextInput::new(if was_null {
+        String::new()
+    } else {
+        dexo_app::data::display_value(&value)
+    });
+    // Typing replaces the old value; an arrow key keeps it to be changed.
+    input.select_all();
+    model.data.cell_edit = Some(crate::screens::data::CellEditForm {
+        row,
+        column: col,
+        table: model.data.target.object().to_string(),
+        name: column.name,
+        type_name: column.type_name,
+        value: input,
+        was_null,
+        focus: crate::screens::data::CellFocus::Value,
+    });
+    Vec::new()
+}
+
+fn cell_edit_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::data::CellFocus;
+    let Some(form) = model.data.cell_edit.as_mut() else {
+        return Vec::new();
+    };
+    // The two accelerators work from anywhere in the dialog.
+    if key.modifiers == KeyModifiers::CONTROL {
+        match key.code {
+            KeyCode::Char('n') => return stage_cell_edit(model, DbValue::Null),
+            KeyCode::Char('e') => return cell_edit_externally(model),
+            _ => {}
+        }
+    }
+    match key.code {
+        KeyCode::Esc => model.data.cell_edit = None,
+        KeyCode::Tab | KeyCode::Down => form.focus = form.focus.next(),
+        KeyCode::BackTab | KeyCode::Up => form.focus = form.focus.prev(),
+        KeyCode::Left | KeyCode::Right if form.focus != CellFocus::Value => {
+            form.focus = form.focus.step_button(key.code == KeyCode::Right);
+        }
+        KeyCode::Enter => match form.focus {
+            CellFocus::Cancel => model.data.cell_edit = None,
+            CellFocus::Null => return stage_cell_edit(model, DbValue::Null),
+            CellFocus::Editor => return cell_edit_externally(model),
+            CellFocus::Value | CellFocus::Save => return submit_cell_edit(model),
+        },
+        _ if form.focus == CellFocus::Value => {
+            form.value.handle_key(key);
+        }
+        _ => {}
+    }
+    Vec::new()
+}
+
+fn mouse_cell_edit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::screens::data::CellFocus;
+    let Some(form) = model.data.cell_edit.as_mut() else {
+        return Vec::new();
+    };
+    match hit {
+        Some(HitTarget::FormField(_)) => form.focus = CellFocus::Value,
+        Some(HitTarget::FooterSubmit) => return submit_cell_edit(model),
+        Some(HitTarget::FooterCancel) => model.data.cell_edit = None,
+        Some(HitTarget::Button(HitButton::SetNull)) => {
+            return stage_cell_edit(model, DbValue::Null);
+        }
+        Some(HitTarget::Button(HitButton::OpenEditor)) => return cell_edit_externally(model),
+        _ => {}
+    }
+    Vec::new()
+}
+
+/// Hands the value to `$EDITOR`; what it saves comes back into the dialog's field.
+fn cell_edit_externally(model: &mut Model) -> Vec<Effect> {
+    let Some(form) = &model.data.cell_edit else {
+        return Vec::new();
+    };
+    model.external_edit = Some(crate::model::ExternalEdit {
+        document: CELL_EDIT_DOCUMENT.into(),
+        text: form.value.as_str().to_string(),
+    });
+    Vec::new()
+}
+
+/// What `$EDITOR` saved, into the dialog's field. An editor ends a file with a line break
+/// the value did not have: one is dropped, as a commit message's is.
+fn finish_cell_edit_externally(model: &mut Model, saved: Result<String, String>) {
+    let Some(form) = model.data.cell_edit.as_mut() else {
+        return;
+    };
+    match saved {
+        Ok(text) => {
+            let had_break = form.value.as_str().ends_with('\n');
+            let text = match text.strip_suffix('\n') {
+                Some(stripped) if !had_break => stripped.to_string(),
+                _ => text,
+            };
+            form.value.set_text(text);
+            form.focus = crate::screens::data::CellFocus::Save;
+        }
+        Err(message) => model.messages.error(message),
+    }
+}
+
+fn submit_cell_edit(model: &mut Model) -> Vec<Effect> {
+    let Some(form) = &model.data.cell_edit else {
+        return Vec::new();
+    };
+    // An empty field is the empty string; NULL is its own button.
+    let value = if form.was_null && form.value.is_empty() {
+        DbValue::Null
+    } else {
+        DbValue::Text(form.value.as_str().to_string())
+    };
+    stage_cell_edit(model, value)
+}
+
+/// Stages `value` as the new content of the cell the dialog is on: an UPDATE in the change
+/// set, for the review to show and apply. The row keeps one UPDATE however many of its
+/// cells change, and a cell put back to what it was loaded with leaves none.
+fn stage_cell_edit(model: &mut Model, value: DbValue) -> Vec<Effect> {
+    let Some(form) = model.data.cell_edit.take() else {
+        return Vec::new();
+    };
+    let (row, col) = (form.row, form.column);
+    let Some(identity) = row_identity_at(model, row) else {
+        model.messages.warn(
+            "A column that identifies this row is not in the result, so it cannot be changed."
+                .into(),
+        );
+        return Vec::new();
+    };
+    let existing = find_pending_index(
+        &model.data.changes,
+        |change| matches!(change, dexo_app::data::PendingChange::Update { identity: other, .. } if other == &identity),
+    );
+    // The row as it was loaded, and what this row's UPDATE sets so far.
+    let (loaded, mut set) = match existing.and_then(|at| model.data.changes.pending().get(at)) {
+        Some(dexo_app::data::PendingChange::Update {
+            original, values, ..
+        }) => (original.clone(), values.clone()),
+        _ => match row_original_at(model, row) {
+            Some(original) => (original, Vec::new()),
+            None => return Vec::new(),
+        },
+    };
+    let name = form.name;
+    let before = loaded
+        .iter()
+        .find(|(column, _)| *column == name)
+        .map(|(_, value)| value.clone());
+    set.retain(|(column, _)| *column != name);
+    // Typed text that reads as the value already there is no change: `5` over 5.
+    let same = match (&value, &before) {
+        (DbValue::Null, Some(DbValue::Null)) => true,
+        (DbValue::Null, _) | (_, Some(DbValue::Null)) | (_, None) => false,
+        (value, Some(before)) => {
+            dexo_app::data::display_value(value) == dexo_app::data::display_value(before)
+        }
+    };
+    if !same {
+        set.push((name, value.clone()));
+    }
+    if let Some(at) = existing {
+        model.data.changes.revert(at);
+    }
+    if set.is_empty() {
+        model.data.row_changes.remove(&row);
+    } else {
+        model.data.changes.update(identity, loaded, set);
+        model
+            .data
+            .row_changes
+            .insert(row, dexo_app::data::RowEditState::Edited);
+    }
+    model.results.set_cell(row, col, value);
+    note_staged(model);
+    Vec::new()
+}
+
+/// Tells the user a change is waiting, and how to send it: staging used to be silent.
+fn note_staged(model: &mut Model) {
+    let pending = model.data.changes.pending().len();
+    if pending == 0 {
+        return;
+    }
+    let key = crate::palette::shortcut_for(model, "data.review", None).unwrap_or("Ctrl+S".into());
+    model.messages.info(format!(
+        "{pending} pending {}: {key} to review and apply.",
+        if pending == 1 { "change" } else { "changes" }
+    ));
+}
+
 fn submit_insert_row(model: &mut Model) -> Vec<Effect> {
+    // A value the column cannot take keeps the form open with the reason: it used to close
+    // and queue a row that Apply refused, naming no column.
+    if let Err(reason) = model.data.insert_form.check() {
+        model.data.insert_form.error = Some(reason);
+        return Vec::new();
+    }
     let values = model.data.insert_form.values();
     model.data.insert_form.close();
     if model.data.table.columns.is_empty() {
@@ -6337,6 +7014,11 @@ fn submit_insert_row(model: &mut Model) -> Vec<Effect> {
         .data
         .row_changes
         .insert(row_index, dexo_app::data::RowEditState::Inserted);
+    // The new row is at the end of the page; the cursor goes to it, so it is seen.
+    let col = model.results.selection().map_or(0, |(_, col)| col);
+    model.results.select_cell(row_index, col);
+    model.results.move_cursor_row(0, false);
+    note_staged(model);
     Vec::new()
 }
 
@@ -6344,6 +7026,12 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
     let Some(row_index) = model.results.cursor_row() else {
         return Vec::new();
     };
+    // A row going away is not also a row changed: its edit is taken back first, the
+    // grid showing the row as it was loaded.
+    if model.data.row_changes.get(&row_index).copied() == Some(dexo_app::data::RowEditState::Edited)
+    {
+        undo_row_edit(model, row_index);
+    }
     match model.data.row_changes.get(&row_index).copied() {
         Some(dexo_app::data::RowEditState::Deleted) => {
             if let Some(identity) = row_identity_at(model, row_index)
@@ -6383,9 +7071,12 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
             model.data.row_changes = shifted;
         }
         _ => {
+            if edits_refused(model, "Delete") {
+                return Vec::new();
+            }
             let Some(identity) = row_identity_at(model, row_index) else {
                 model.messages.warn(
-                    "this table has no primary key or unique column, so rows cannot be deleted"
+                    "A column that identifies this row is not in the result, so it cannot be deleted."
                         .into(),
                 );
                 return Vec::new();
@@ -6398,9 +7089,39 @@ fn toggle_row_delete(model: &mut Model) -> Vec<Effect> {
                 .data
                 .row_changes
                 .insert(row_index, dexo_app::data::RowEditState::Deleted);
+            note_staged(model);
         }
     }
     Vec::new()
+}
+
+/// Takes back the changes staged on a row's cells: the UPDATE goes, and the grid shows the
+/// values the row was loaded with.
+fn undo_row_edit(model: &mut Model, row_index: usize) {
+    let Some(identity) = row_identity_at(model, row_index) else {
+        return;
+    };
+    let existing = find_pending_index(
+        &model.data.changes,
+        |change| matches!(change, dexo_app::data::PendingChange::Update { identity: other, .. } if other == &identity),
+    );
+    if let Some(at) = existing
+        && let Some(dexo_app::data::PendingChange::Update { original, .. }) =
+            model.data.changes.pending().get(at).cloned()
+    {
+        model.data.changes.revert(at);
+        for (name, value) in original {
+            if let Some(col) = model
+                .results
+                .columns()
+                .iter()
+                .position(|column| column.name == name)
+            {
+                model.results.set_cell(row_index, col, value);
+            }
+        }
+    }
+    model.data.row_changes.remove(&row_index);
 }
 
 fn row_identity_at(model: &Model, row_index: usize) -> Option<dexo_app::data::RowIdentity> {
@@ -6455,15 +7176,16 @@ fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
     if index >= model.documents.len() {
         return Vec::new();
     }
-    model.active_document = index;
-    let mut effects = match switch_to_document_connection(model, index) {
+    // Through the model, not by assignment: the output pane and the table's paging move to
+    // the document now, so what the load below writes is its own and no other's.
+    model.set_active_document(index);
+    if model.documents[index].kind.is_table() {
+        return load_table_on_its_connection(model, index, false);
+    }
+    match switch_to_document_connection(model, index) {
         Switch::Ready => Vec::new(),
         Switch::Activated(effects) | Switch::Dialling(effects) => effects,
-    };
-    if model.documents[index].kind.is_table() {
-        effects.extend(load_table_document(model, index));
     }
-    effects
 }
 
 /// The open document of `target` on the live connection, to open it in again: every
@@ -6472,30 +7194,45 @@ fn activate_document(model: &mut Model, index: usize) -> Vec<Effect> {
 fn document_index_for_table(
     model: &Model,
     target: &dexo_driver_api::QualifiedName,
+    connection: &Option<String>,
 ) -> Option<usize> {
-    let connection = active_connection_uuid(model);
     model.documents.iter().position(|document| {
         matches!(&document.kind, crate::model::DocumentKind::Table(existing) if existing == target)
-            && document.connection_id == connection
+            && &document.connection_id == connection
             && document.related_from.is_none()
     })
 }
 
+/// The connection a sidebar node belongs to, as a document records it: the one whose
+/// tree the node hangs in, which is not always the live one.
+fn node_connection_uuid(model: &Model) -> Option<String> {
+    let name = model.explorer.selected_connection_name()?;
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == name)
+        .map(|row| row.profile.id.0.to_string())
+}
+
+/// Opens the selected table's rows on the connection of the node it was picked in: the
+/// guards -- read-only, production -- are that connection's, and so is the session the
+/// rows come from.
 fn open_object_data(model: &mut Model) -> Vec<Effect> {
     let Some(node) = model.explorer.selected_node() else {
         return Vec::new();
     };
-    if model.active_session.is_none() {
+    let target = dexo_app::parse_qualified(&node.qualified);
+    let connection_id = node_connection_uuid(model).or_else(|| active_connection_uuid(model));
+    if model.active_session.is_none() && connection_id.is_none() {
         model
             .messages
             .warn("connect a session to browse table data".into());
         return Vec::new();
     }
-    let target = dexo_app::parse_qualified(&node.qualified);
-    let index = match document_index_for_table(model, &target) {
+    let index = match document_index_for_table(model, &target, &connection_id) {
         Some(index) => index,
         None => {
-            let connection_id = active_connection_uuid(model);
             model
                 .documents
                 .push(crate::model::EditorDocument::new_table(
@@ -6505,9 +7242,39 @@ fn open_object_data(model: &mut Model) -> Vec<Effect> {
             model.documents.len() - 1
         }
     };
+    // Bringing the session over re-selects the connection in the tree; the table the
+    // user picked stays the selected node.
+    let picked = model.explorer.selected.clone();
     model.set_active_document(index);
     model.data.last_error = None;
-    load_table_document(model, index)
+    let effects = load_table_on_its_connection(model, index, true);
+    if let Some(picked) = picked {
+        model.explorer.select(picked);
+    }
+    effects
+}
+
+/// Loads a table document's rows on its own connection: the live session moves there
+/// first, or is dialled, in which case the load runs once the dial has landed.
+/// `reload` loads rows already on screen again; without it a document that has rows
+/// keeps them.
+fn load_table_on_its_connection(model: &mut Model, index: usize, reload: bool) -> Vec<Effect> {
+    let mut effects = match switch_to_document_connection(model, index) {
+        Switch::Ready => Vec::new(),
+        Switch::Activated(effects) => effects,
+        Switch::Dialling(effects) => {
+            model.pending_execute = Some(crate::model::PendingExecute {
+                document: model.documents[index].id.clone(),
+                action: Action::RefreshTableData,
+                token: model.connect_token,
+            });
+            return effects;
+        }
+    };
+    if reload || model.results.columns().is_empty() {
+        effects.extend(load_table_document(model, index));
+    }
+    effects
 }
 
 fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
@@ -6614,10 +7381,42 @@ fn log_rows_retrieved(model: &mut Model, row_count: usize) {
         return;
     };
     document.console_log.push(format!(
-        "[{}] {row_count} rows retrieved starting from {} in {elapsed_ms} ms",
+        "[{}] {row_count} {} retrieved starting from {} in {elapsed_ms} ms",
         crate::model::clock(),
+        if row_count == 1 { "row" } else { "rows" },
         offset + 1
     ));
+}
+
+/// Whether the grid pages at all, and whether there is a page the way `n` or `p` goes. It
+/// says so when there is not: a key that does nothing looks like one that is broken.
+/// Only a table's rows, or a result run again with the bars, are in pages.
+fn at_page_edge(model: &mut Model, forward: bool) -> bool {
+    if model.active_session.is_none() {
+        return false;
+    }
+    let tab = model.results.tabs.get(model.results.active);
+    let paged = tab.is_some_and(|tab| tab.paged);
+    if !model.active_document().kind.is_table() && !paged {
+        let message = if tab.is_some_and(|tab| tab.truncated) {
+            "Only the first rows of this result are loaded. Narrow it with a WHERE (w) to reach the rest."
+        } else {
+            "This result is not in pages: every row it returned is loaded."
+        };
+        model.messages.info(message.into());
+        return true;
+    }
+    if !forward && model.data.page_offset == 0 {
+        model.messages.info("This is the first page.".into());
+        return true;
+    }
+    // A paged result says it is on its last page in `change_data_page`, which knows how
+    // many rows the page came back with.
+    if forward && model.active_document().kind.is_table() && !model.data.has_more {
+        model.messages.info("This is the last page.".into());
+        return true;
+    }
+    false
 }
 
 fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
@@ -6677,7 +7476,13 @@ fn refresh_table_data(model: &mut Model) -> Vec<Effect> {
     }
     // Read again, the rows may be others: a count of the old ones no longer holds.
     let mut effects = drop_count(model);
-    effects.extend(change_data_page(model, model.data.page_offset));
+    // A table whose columns never arrived -- opened while its connection was still being
+    // dialled, or restored at launch -- is opened whole, not just paged.
+    if model.data.table.columns.is_empty() {
+        effects.extend(load_table_document(model, model.active_document));
+    } else {
+        effects.extend(change_data_page(model, model.data.page_offset));
+    }
     effects
 }
 
@@ -6752,6 +7557,7 @@ fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         _ => {
             model.data.bars.input_mut(bar).handle_key(key);
+            model.data.bars.failed = false;
         }
     }
     Some(Vec::new())
@@ -6966,6 +7772,7 @@ fn apply_clauses(model: &mut Model) -> Vec<Effect> {
     }
     model.data.bars.applied = clauses;
     model.data.bars.focus = None;
+    model.data.bars.failed = false;
     model.data.page_offset = 0;
     apply_remote_query(model)
 }
@@ -7065,6 +7872,8 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
     tab.source_sql = source_sql;
     tab.status = crate::model::OperationStatus::Running;
     tab.paged = true;
+    // The same statement, run again: the cursor stays in its column.
+    tab.grid.home_column = model.results.selection().map_or(0, |(_, col)| col);
     model.results.replace_tabs(tab);
     model.active_operation = Some(operation);
     vec![Effect::StartScript(crate::action::ScriptRequest {
@@ -7286,15 +8095,14 @@ fn inspect_selected(model: &mut Model) -> Vec<Effect> {
             crate::model::GridCell::Spool { path, total, .. } => {
                 let bytes = std::fs::read(&path).unwrap_or_default();
                 let loaded = bytes.len() as u64;
-                model.data.viewer = Some(inspect_value(
-                    &DbValue::Bytes(bytes),
-                    loaded.min(total),
-                    total,
-                ));
+                show_value(
+                    model,
+                    inspect_value(&bytes_or_text(bytes), loaded.min(total), total),
+                );
                 return Vec::new();
             }
             crate::model::GridCell::Inline(value) => {
-                model.data.viewer = Some(crate::screens::value_viewer::view(&value));
+                show_value(model, crate::screens::value_viewer::view(&value));
                 return Vec::new();
             }
         }
@@ -7307,8 +8115,30 @@ fn inspect_selected(model: &mut Model) -> Vec<Effect> {
     else {
         return Vec::new();
     };
-    model.data.viewer = Some(crate::screens::value_viewer::view(value));
+    let view = crate::screens::value_viewer::view(value);
+    show_value(model, view);
     Vec::new()
+}
+
+fn show_value(model: &mut Model, view: dexo_app::data::ValueView) {
+    model.data.viewer = Some(view);
+    model.data.viewer_scroll = 0;
+}
+
+/// A value fetched or spooled arrives as bytes; text that reads as text is shown as text,
+/// not as the hex of its bytes.
+fn bytes_or_text(bytes: Vec<u8>) -> DbValue {
+    match String::from_utf8(bytes) {
+        Ok(text)
+            if !text
+                .chars()
+                .any(|ch| ch.is_control() && !matches!(ch, '\n' | '\r' | '\t')) =>
+        {
+            DbValue::Text(text)
+        }
+        Ok(text) => DbValue::Bytes(text.into_bytes()),
+        Err(error) => DbValue::Bytes(error.into_bytes()),
+    }
 }
 
 fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMeta]) {
@@ -7776,19 +8606,74 @@ fn data_nav_back(model: &mut Model) -> Vec<Effect> {
     effects
 }
 
+/// The grid's copy, from the palette, a key or the Enter menu alike: "Copy as ..." takes
+/// the cursor's row (or the rows selected) whole, and "Copy cell" the value alone.
 fn copy_grid(model: &mut Model, format: dexo_app::data::CopyFormat) -> Vec<Effect> {
-    match model.results.copy(format, model.data.dialect) {
-        Ok(text) if text.len() > 8 * 1024 * 1024 => {
+    use dexo_app::data::CopyFormat;
+    if format == CopyFormat::Value {
+        if let Some((row, col)) = model.results.selection() {
+            model.results.select_cell(row, col);
+        }
+    } else {
+        model.results.widen_selection_to_rows();
+    }
+    // The rows of an opened table insert back into it; a query's have no table to name.
+    let table = model.active_document().kind.is_table().then(|| {
+        let target = &model.data.target;
+        match target.schema().or(target.catalog()) {
+            Some(scope) => format!("{scope}.{}", target.object()),
+            None => target.object().to_string(),
+        }
+    });
+    match model
+        .results
+        .copy_of(format, model.data.dialect, table.as_deref())
+    {
+        Ok(copied) if copied.text.len() > 8 * 1024 * 1024 => {
             model
                 .messages
                 .warn("selection too large for clipboard; export to a file".into());
             Vec::new()
         }
-        Ok(text) => vec![Effect::CopyToClipboard { text }],
+        Ok(copied) => {
+            model.data.copy_note = Some(copy_note(format, copied.rows, copied.columns));
+            vec![Effect::CopyToClipboard { text: copied.text }]
+        }
         Err(message) => {
             model.messages.error(message);
             Vec::new()
         }
+    }
+}
+
+/// What the toast says went to the clipboard: `copied the cell`, `copied 3 rows, 2
+/// columns as CSV`.
+fn copy_note(format: dexo_app::data::CopyFormat, rows: usize, columns: usize) -> String {
+    use dexo_app::data::CopyFormat;
+    let name = match format {
+        CopyFormat::Value => None,
+        CopyFormat::Text => Some("text"),
+        CopyFormat::Csv => Some("CSV"),
+        CopyFormat::Tsv => Some("TSV"),
+        CopyFormat::Json => Some("JSON"),
+        CopyFormat::Markdown => Some("Markdown"),
+        CopyFormat::Sql => Some("SQL"),
+    };
+    let plural = |count: usize, noun: &str| {
+        if count == 1 {
+            format!("1 {noun}")
+        } else {
+            format!("{count} {noun}s")
+        }
+    };
+    let what = if (rows, columns) == (1, 1) && name.is_none() {
+        "the cell".to_string()
+    } else {
+        format!("{}, {}", plural(rows, "row"), plural(columns, "column"))
+    };
+    match name {
+        Some(name) => format!("copied {what} as {name}"),
+        None => format!("copied {what}"),
     }
 }
 
@@ -8308,7 +9193,10 @@ fn save_active_document(model: &mut Model) -> Vec<Effect> {
 fn close_active_document(model: &mut Model) -> Vec<Effect> {
     // Unsaved changes are the user's to keep or let go. Closing used to save on its own
     // or, with no file to save to, refuse -- there was no way to discard them.
-    if model.active_document().is_dirty() {
+    // A table's rows staged for the database are as unsaved as typed text: closing the tab
+    // would drop them without a word.
+    let staged = model.active_document().kind.is_table() && model.data.has_pending_edits();
+    if model.active_document().is_dirty() || staged {
         let document = model.active_document();
         model.close_prompt = Some(crate::model::ClosePrompt {
             document: document.id.clone(),
@@ -8340,6 +9228,12 @@ fn resolve_close(model: &mut Model, choice: crate::model::CloseChoice) -> Vec<Ef
                 document: prompt.document,
             });
             effects
+        }
+        // The changes staged in a table go to the database through the review, which asks
+        // what a write there asks, and the tab stays until they are in.
+        CloseChoice::Save if model.documents[index].kind.is_table() => {
+            model.set_active_document(index);
+            update(model, Action::OpenReview)
         }
         CloseChoice::Save => {
             model.active_document = index;
@@ -8620,6 +9514,7 @@ fn remove_document(model: &mut Model, index: usize) -> Vec<Effect> {
             _ => Vec::new(),
         }
     };
+    let was_active = index == model.active_document;
     model.documents.remove(index);
     if model.documents.is_empty() {
         model
@@ -8634,6 +9529,16 @@ fn remove_document(model: &mut Model, index: usize) -> Vec<Effect> {
     }
     model.focus_active_document_tab();
     model.focus = Focus::Editor;
+    let mut effects = effects;
+    // The tab that comes up is on its own connection, and the status bar and the table
+    // actions answer for the live session: the closed tab's must not outlive it.
+    if was_active && !model.active_document().kind.is_placeholder() {
+        let landed = model.active_document;
+        match switch_to_document_connection(model, landed) {
+            Switch::Ready => {}
+            Switch::Activated(more) | Switch::Dialling(more) => effects.extend(more),
+        }
+    }
     effects
 }
 
@@ -11921,6 +12826,16 @@ mod tests {
             ));
         model.active_document = model.documents.len() - 1;
         model.data.target = orders;
+        // The columns arrived with the first page: only a table whose never did is
+        // opened whole again.
+        model.data.table = dexo_app::data::TableMeta {
+            columns: vec![dexo_app::data::ColumnDef {
+                name: "id".into(),
+                primary_key: true,
+                unique: true,
+                nullable: false,
+            }],
+        };
         model.data.target_document = Some(model.active_document().id.clone());
         model.data.page_offset = u64::from(model.data.page_limit);
         model.focus = Focus::Results;
@@ -12077,15 +12992,18 @@ mod tests {
             "pane 2 is the grid here:\n{view}"
         );
 
+        // Focus Results is what it says on a table document too: the console under the
+        // grid is reached by a click, not by a key named for something else.
+        model.focus = Focus::Console;
         update(&mut model, Action::Focus(FocusTarget::Results));
         let view = crate::render::render_to_string(&model, 160, 50);
         assert!(
-            view.contains("▸ Console"),
-            "pane 3 is the console here:\n{view}"
+            view.contains("▸ Results"),
+            "Focus Results did not focus the results:\n{view}"
         );
         assert!(
-            !view.contains("▸ Results"),
-            "the grid kept the highlight:\n{view}"
+            !view.contains("▸ Console"),
+            "the console kept the highlight:\n{view}"
         );
 
         // The same slip happens without touching Alt at all: sit in the editor, open a
@@ -12112,6 +13030,7 @@ mod tests {
         use crate::screens::explain::ExplainView;
 
         let mut model = Model::default();
+        model.results.explain = crate::screens::explain::ExplainScreen::fixture();
         let mut seen = Vec::new();
         for _ in 0..5 {
             seen.push((model.results.view, model.results.explain.view));
@@ -12129,6 +13048,18 @@ mod tests {
             ]
         );
         assert_eq!(model.results.view, ResultsView::Grid, "the ring must close");
+    }
+
+    /// With nothing explained there is no plan to stop on: the log is one press away.
+    #[test]
+    fn output_view_skips_explain_when_there_is_no_plan() {
+        use crate::model::ResultsView;
+
+        let mut model = Model::default();
+        update(&mut model, Action::CycleResultsView);
+        assert_eq!(model.results.view, ResultsView::Messages);
+        update(&mut model, Action::CycleResultsView);
+        assert_eq!(model.results.view, ResultsView::Grid);
     }
 
     /// A plan used to arrive and force `tabs.active = 4`, yanking the user out of the

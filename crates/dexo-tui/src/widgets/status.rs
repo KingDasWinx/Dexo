@@ -279,15 +279,43 @@ fn footer_hint(model: &Model) -> Option<String> {
             ],
         )),
         crate::model::Focus::Results => {
+            // Only what this grid does: `n` and `p` turn the pages of a table's rows or of
+            // a paged result, and the rows are changed in a table's.
+            let table = model.active_document().kind.is_table();
+            let paged = table
+                || model
+                    .results
+                    .tabs
+                    .get(model.results.active)
+                    .is_some_and(|tab| tab.paged);
             let page = match (
                 crate::palette::shortcut_for(model, "data.page_next", None),
                 crate::palette::shortcut_for(model, "data.page_prev", None),
             ) {
-                (Some(next), Some(previous)) => format!("{next}/{previous} page  "),
+                (Some(next), Some(previous)) if paged => format!("{next}/{previous} page  "),
                 _ => String::new(),
             };
+            let edits = if !table {
+                String::new()
+            } else if model.data.has_pending_edits() {
+                format!(
+                    "{}  ",
+                    keyed_hint(model, &[("data.review", "review changes")])
+                )
+            } else {
+                format!(
+                    "{}  ",
+                    keyed_hint(
+                        model,
+                        &[
+                            ("data.insert_row", "insert"),
+                            ("data.toggle_delete", "delete")
+                        ],
+                    )
+                )
+            };
             Some(format!(
-                "Enter actions  {}  {page}{}",
+                "Enter actions  {edits}{}  {page}{}",
                 keyed_hint(model, &[("results.cycle_view", "view")]),
                 keyed_hint(model, &[("document.close", "close")])
             ))
@@ -383,7 +411,7 @@ mod tests {
         model.set_active_document(1);
         assert_eq!(
             footer_hint(&model).as_deref(),
-            Some("Enter actions  v view  n/p page  Ctrl+W close")
+            Some("Enter actions  i insert  Delete delete  v view  n/p page  Ctrl+W close")
         );
 
         model.set_active_document(0);
@@ -525,6 +553,14 @@ mod tests {
             keymap: crate::keymap::Keymap::vim_profile(),
             ..Model::default()
         };
+        // Only a table's rows are in pages, so only there is `n/p` a hint.
+        model
+            .documents
+            .push(crate::model::EditorDocument::new_table(
+                dexo_app::parse_qualified("public.orders"),
+                None,
+            ));
+        model.set_active_document(1);
         let hint = footer_hint(&model).unwrap();
         assert!(!hint.contains("page"), "{hint}");
         assert!(hint.contains("Ctrl+W close"), "{hint}");

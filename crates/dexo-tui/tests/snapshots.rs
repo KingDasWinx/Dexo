@@ -152,6 +152,20 @@ fn snapshot_review_and_related_tab() {
             referenced: vec!["id".into()],
         },
     );
+    // The related rows are a document of their own: the change reviewed is theirs.
+    model.data.table = TableMeta {
+        columns: vec![ColumnDef {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+            nullable: false,
+        }],
+    };
+    model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
+    model
+        .data
+        .changes
+        .insert(vec![("id".into(), DbValue::I64(2))]);
     update(&mut model, Action::OpenReview);
     insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }

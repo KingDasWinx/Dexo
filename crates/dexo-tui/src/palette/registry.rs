@@ -231,6 +231,16 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ShrinkExplorer),
         },
         CommandSpec {
+            id: "data.copy.cell",
+            title: "Copy Cell",
+            keywords: &["clipboard", "grid", "value"],
+            shortcut: Some("Ctrl+C"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CopyGrid(
+                dexo_app::data::CopyFormat::Value,
+            )),
+        },
+        CommandSpec {
             id: "data.copy.csv",
             title: "Copy as CSV",
             keywords: &["clipboard", "grid"],
@@ -243,7 +253,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         CommandSpec {
             id: "data.copy.text",
             title: "Copy as Text",
-            keywords: &["clipboard", "grid"],
+            keywords: &["clipboard", "grid", "tsv", "tab"],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::CopyGrid(
@@ -324,9 +334,17 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "data.insert_row",
             title: "Insert Row",
             keywords: &["new", "create", "row"],
-            shortcut: Some("Ctrl+N"),
+            shortcut: Some("i"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenInsertRow),
+        },
+        CommandSpec {
+            id: "data.edit_cell",
+            title: "Edit Cell",
+            keywords: &["update", "change", "value", "set", "null"],
+            shortcut: Some("F2"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditCell),
         },
         CommandSpec {
             id: "data.nav_back",
@@ -945,10 +963,42 @@ fn command_spec_list() -> Vec<CommandSpec> {
         CommandSpec {
             id: "results.top",
             title: "Results Top",
-            keywords: &["grid", "home"],
-            shortcut: None,
+            keywords: &["grid", "first", "row"],
+            shortcut: Some("Ctrl+Home"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ResultsTop),
+        },
+        CommandSpec {
+            id: "results.collapse",
+            title: "Clear Results Selection",
+            keywords: &["grid", "deselect", "escape"],
+            shortcut: Some("Esc"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ResultsCollapse),
+        },
+        CommandSpec {
+            id: "results.bottom",
+            title: "Results Bottom",
+            keywords: &["grid", "last", "row"],
+            shortcut: Some("Ctrl+End"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ResultsBottom),
+        },
+        CommandSpec {
+            id: "results.first_column",
+            title: "Results First Column",
+            keywords: &["grid", "home", "left"],
+            shortcut: Some("Home"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ResultsFirstColumn),
+        },
+        CommandSpec {
+            id: "results.last_column",
+            title: "Results Last Column",
+            keywords: &["grid", "end", "right"],
+            shortcut: Some("End"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ResultsLastColumn),
         },
         CommandSpec {
             id: "results.extend_up",
@@ -1181,7 +1231,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
             id: "results.record_view",
             title: "Toggle Record View",
             keywords: &["expanded", "\\x", "vertical", "fields"],
-            shortcut: Some("\\x"),
+            shortcut: Some("x"),
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::ToggleRecordView),
         },
@@ -1362,6 +1412,10 @@ fn hidden(id: &str) -> bool {
             | "results.pageup"
             | "results.pagedown"
             | "results.top"
+            | "results.bottom"
+            | "results.collapse"
+            | "results.first_column"
+            | "results.last_column"
             | "results.extend_up"
             | "results.extend_down"
             | "results.toggle_pick"
@@ -1647,7 +1701,8 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "results.sort_add_column"
         | "results.count" => &[ActiveSession, Results],
         "data.apply" => &[ActiveSession, PendingChanges],
-        "data.copy.csv"
+        "data.copy.cell"
+        | "data.copy.csv"
         | "data.copy.text"
         | "data.copy.json"
         | "data.copy.markdown"
@@ -1664,9 +1719,14 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "results.pageup"
         | "results.pagedown"
         | "results.top"
+        | "results.bottom"
+        | "results.collapse"
+        | "results.first_column"
+        | "results.last_column"
         | "results.extend_up"
         | "results.extend_down" => &[Results],
         "data.inspect"
+        | "data.edit_cell"
         | "data.related"
         | "results.actions"
         | "results.toggle_pick"

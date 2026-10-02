@@ -70,6 +70,8 @@ Above a table's rows, or the result of a statement that only reads, two bars tak
 
 The title says how many rows there are: exactly when they all came, `~4.3M` from the server's statistics for a table's first page, `100+` when more may follow. `t` counts them exactly -- a table's on a connection of its own, a result's on its session -- and `t` again stops the count; the count stays while the grid shows the rows it counted.
 
+The grid keeps every column at the width its values need and scrolls sideways: Left and Right move the current column, Home and End go to the first and last, Ctrl+Home and Ctrl+End to the first and last row. `x` shows one record at a time, a field to a line, with a cursor you move with Up and Down (Left and Right turn records); a record taller than the pane scrolls. NULL is drawn dim and slanted, apart from the text `NULL`, and an empty string as `""`. Enter on a cell, or Ctrl+C, copies: "Copy as ..." takes the row (or the rows selected), "Copy cell" the value; CSV is quoted as an export is, and an INSERT names the table the rows came from. Inspect Value reads a whole value, wrapped, and scrolls it.
+
 `f` on a row opens Related rows: each foreign key from or to the table, followed in a document of its own filtered to the rows on the other end; `b` closes that document and goes back to the row. Enter on a row lists what can be done with it, with each action's key.
 
 ## Explain

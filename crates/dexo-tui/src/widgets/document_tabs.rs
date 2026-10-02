@@ -44,8 +44,13 @@ pub fn labels(model: &Model) -> Vec<String> {
     model
         .documents
         .iter()
-        .map(|document| {
-            let dirty = if document.is_dirty() { "*" } else { "" };
+        .enumerate()
+        .map(|(index, document)| {
+            let dirty = if document.is_dirty() || model.staged_edits(index) {
+                "*"
+            } else {
+                ""
+            };
             format!(
                 " {}{}{dirty} ",
                 connection_prefix(model, document),
@@ -110,7 +115,11 @@ fn tab_items(model: &Model, max_title_width: usize) -> Vec<TabItem> {
         .enumerate()
         .filter(|(_, document)| !document.kind.is_placeholder())
         .map(|(index, document)| {
-            let dirty = if document.is_dirty() { "*" } else { "" };
+            let dirty = if document.is_dirty() || model.staged_edits(index) {
+                "*"
+            } else {
+                ""
+            };
             let prefix = connection_prefix(model, document);
             // The prefix is spent first; the title lives on what is left, down to
             // `MIN_TITLE_WIDTH`.

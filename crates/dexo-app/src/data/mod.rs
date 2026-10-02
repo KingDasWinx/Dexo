@@ -11,7 +11,7 @@ pub use change_set::{
     ChangeSet, ColumnDef, EditMode, EditableRow, PendingChange, RowEditState, RowIdentity,
     TableMeta,
 };
-pub use copy::{CopyFormat, SqlDialect, copy_selection, display_value};
+pub use copy::{CopyFormat, SqlDialect, copy_selection, copy_selection_of, display_value};
 pub use filter::assert_typed_filter;
 pub use foreign_key::{ForeignKey, related_filter};
 pub use source::DataSource;

@@ -6,7 +6,7 @@ demo  local  public
 ┌  Sidebar─────────────────┐ scratch.sql ×  orders ×  +                                                                                                         
 │[n]ew [e]dit [a]ctions    │┌▸ Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  ● local▾  [offline]     ││[Grid] Explain  Messages                                                                                                          │
-│>   ▸ public              ││WHERE w to filter                                                              ORDER BY o to sort                                 │
+│>   ▸ public              ││WHERE w to filter                                                ORDER BY o to sort                                               │
 │      mysql.users [restric││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
@@ -51,4 +51,4 @@ demo  local  public
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-local  Enter actions  v view  n/p page  Ctrl+W close                                                                                                  Ctrl+P  F1
+local  Enter actions  i insert  Delete delete  v view  n/p page  Ctrl+W close                                                                         Ctrl+P  F1

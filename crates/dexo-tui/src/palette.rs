@@ -166,7 +166,9 @@ pub fn node_menu_entries(model: &Model, kind: NodeMenuKind) -> Vec<PaletteEntry>
 
 pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
     &[
-        ("copy-cell", "Copy cell"),
+        ("data.edit_cell", "Edit cell"),
+        ("data.copy.cell", "Copy cell"),
+        ("data.copy.text", "Copy as Text"),
         ("data.copy.json", "Copy as JSON"),
         ("data.copy.csv", "Copy as CSV"),
         ("data.copy.markdown", "Copy as Markdown"),
@@ -175,7 +177,7 @@ pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
         ("data.filter", "Filter rows (WHERE)"),
         ("data.sort", "Sort rows (ORDER BY)"),
         ("results.sort_column", "Sort by this column"),
-        ("results.sort_add_column", "Add this column to the sort"),
+        ("results.sort_add_column", "Add column to sort"),
         ("results.count", "Count rows"),
         ("data.related", "Related rows…"),
         ("data.nav_back", "Back from related rows"),
@@ -473,8 +475,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 109);
-        assert_eq!(ids.len(), 109);
+        assert_eq!(entries.len(), 111);
+        assert_eq!(ids.len(), 111);
     }
 
     #[test]

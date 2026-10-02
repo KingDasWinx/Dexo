@@ -298,6 +298,16 @@ impl ResultBuffer {
             .estimated_bytes
             .saturating_sub(estimated_row_bytes(&removed));
     }
+
+    pub fn set_cell(&mut self, row: usize, col: usize, value: DbValue) {
+        let storage = Arc::make_mut(&mut self.rows);
+        if let Some(cell) = storage.get_mut(row).and_then(|cells| cells.get_mut(col)) {
+            let old = estimated_row_bytes(std::slice::from_ref(cell));
+            let new = estimated_row_bytes(std::slice::from_ref(&value));
+            self.estimated_bytes = self.estimated_bytes.saturating_sub(old).saturating_add(new);
+            *cell = value;
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -324,6 +334,13 @@ impl Default for GridSelection {
     }
 }
 
+/// Rows put on the clipboard, with how many rows and columns they are.
+pub struct Copied {
+    pub text: String,
+    pub rows: usize,
+    pub columns: usize,
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct GridModel {
     buffer: ResultBuffer,
@@ -335,6 +352,11 @@ pub struct GridModel {
     pub frozen_columns: usize,
     pub hidden_columns: Vec<usize>,
     pub cells: std::collections::BTreeMap<(usize, usize), GridCell>,
+    /// Lines of the record view scrolled off the top, for a record taller than the pane.
+    pub record_scroll: usize,
+    /// The column the cursor starts in when rows arrive: the one it was in before the grid
+    /// was run again, so `s` on a column sorts it again and not the first.
+    pub home_column: usize,
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -778,6 +800,8 @@ impl GridModel {
             frozen_columns: 0,
             hidden_columns: Vec::new(),
             cells: std::collections::BTreeMap::new(),
+            record_scroll: 0,
+            home_column: 0,
         }
     }
 
@@ -847,6 +871,10 @@ impl GridModel {
         self.viewport.row_offset = 0;
         self.viewport.column_offset = 0;
         self.selection = None;
+        // A column or a range picked in the last result is not one in this.
+        self.kind = GridSelection::default();
+        self.home_column = 0;
+        self.record_scroll = 0;
         self.picked_rows.clear();
         self.column_widths.clear();
     }
@@ -875,6 +903,12 @@ impl GridModel {
             })
             .collect();
         self.ensure_cursor();
+    }
+
+    /// Shows `value` in a cell: an edit not applied yet, drawn where it will be.
+    pub fn set_cell(&mut self, row: usize, col: usize, value: DbValue) {
+        self.buffer.set_cell(row, col, value);
+        self.recompute_column_widths();
     }
 
     pub fn cell_at(&self, row: usize, col: usize) -> Option<&GridCell> {
@@ -917,9 +951,12 @@ impl GridModel {
         self.selection = Some((row, col));
     }
 
+    /// The row is selected whole; the column the cursor was on stays, so `s` still sorts
+    /// the column it sorted a moment ago.
     pub fn select_row(&mut self, row: usize) {
+        let col = self.selection.map_or(0, |(_, col)| col);
         self.kind = GridSelection::Row { row };
-        self.selection = Some((row, 0));
+        self.selection = Some((row, col));
     }
 
     pub fn select_column(&mut self, col: usize) {
@@ -938,7 +975,9 @@ impl GridModel {
             return;
         }
         if self.selection.is_none() {
-            self.select_cell(0, 0);
+            let last = self.buffer.columns.len().saturating_sub(1);
+            self.select_cell(0, self.home_column.min(last));
+            self.ensure_column_visible(self.home_column.min(last));
         }
     }
 
@@ -1028,20 +1067,25 @@ impl GridModel {
             self.viewport.column_offset = col;
             return;
         }
-        let width_of =
-            |index: usize| usize::from(self.column_widths.get(index).copied().unwrap_or(8)) + 1;
-        let fixed: usize = (0..frozen)
-            .filter(|index| !self.hidden_columns.contains(index))
-            .map(width_of)
-            .sum();
-        let room = self.viewport.width.saturating_sub(fixed).max(1);
+        // The grid lays its columns out with `allocate_column_widths`, so the view moves
+        // on until that layout has `col` whole: the same answer the painting will give.
         loop {
             let start = self.viewport.column_offset.max(frozen);
-            let used: usize = (start..=col)
-                .filter(|index| !self.hidden_columns.contains(index))
-                .map(width_of)
-                .sum();
-            if used <= room || start >= col {
+            let shown = self.visible_column_indices();
+            let natural: Vec<u16> = shown
+                .iter()
+                .map(|&index| self.column_widths.get(index).copied().unwrap_or(8))
+                .collect();
+            let (widths, _) = allocate_column_widths(&natural, self.viewport.width);
+            let whole = shown
+                .iter()
+                .position(|&index| index == col)
+                .is_some_and(|at| {
+                    widths.get(at).is_some_and(|&width| {
+                        usize::from(width) >= usize::from(natural[at]).min(self.viewport.width)
+                    })
+                });
+            if whole || start >= col {
                 break;
             }
             self.viewport.column_offset = start + 1;
@@ -1085,8 +1129,41 @@ impl GridModel {
         format: dexo_app::data::CopyFormat,
         dialect: dexo_app::data::SqlDialect,
     ) -> Result<String, String> {
+        self.copy_of(format, dialect, None)
+            .map(|copied| copied.text)
+    }
+
+    /// `copy` for a grid showing `table`'s rows, with what it took: an INSERT names the
+    /// table, and the toast says how many rows and columns went to the clipboard.
+    pub fn copy_of(
+        &self,
+        format: dexo_app::data::CopyFormat,
+        dialect: dexo_app::data::SqlDialect,
+        table: Option<&str>,
+    ) -> Result<Copied, String> {
         let (columns, rows) = self.selected_matrix();
-        dexo_app::data::copy_selection(&columns, &rows, format, dialect)
+        let text = dexo_app::data::copy_selection_of(&columns, &rows, format, dialect, table)?;
+        Ok(Copied {
+            text,
+            rows: rows.len(),
+            columns: columns.len(),
+        })
+    }
+
+    /// What "Copy as ..." takes: the cursor's row, or the rows of a range or of the
+    /// picked ones, with every column. A column selected as a column stays one.
+    pub fn widen_selection_to_rows(&mut self) {
+        if !self.picked_rows.is_empty() {
+            return;
+        }
+        match self.kind {
+            GridSelection::Range { start, end } => {
+                let last_col = self.buffer.columns.len().saturating_sub(1);
+                self.select_range((start.0, 0), (end.0, last_col));
+            }
+            GridSelection::Cell { row, .. } => self.select_row(row),
+            GridSelection::Row { .. } | GridSelection::Column { .. } => {}
+        }
     }
 
     fn selected_matrix(&self) -> (Vec<String>, Vec<Vec<DbValue>>) {
@@ -1215,8 +1292,9 @@ impl GridModel {
                     .map(|row| {
                         row.get(index)
                             .map(|value| {
-                                unicode_width::UnicodeWidthStr::width(format_value(value).as_str())
-                                    as u16
+                                unicode_width::UnicodeWidthStr::width(
+                                    cell_text(value, true).as_str(),
+                                ) as u16
                             })
                             .unwrap_or(0)
                     })
@@ -1243,6 +1321,26 @@ pub fn format_value(value: &DbValue) -> String {
         DbValue::Bytes(_) => "<bytes>".into(),
         DbValue::Native { text, .. } => text.clone(),
     }
+}
+
+/// What a grid cell draws for `value`: NULL and the empty string marked, a line break
+/// as `↵` (a space without Unicode) and any other control character as a space, one
+/// column each. A character that takes no column moved every cell after it one to the
+/// left, and widths counted from this are the widths that get drawn.
+pub fn cell_text(value: &DbValue, unicode: bool) -> String {
+    let text = match value {
+        DbValue::Null => "NULL".to_string(),
+        DbValue::Text(text) if text.is_empty() => "\"\"".to_string(),
+        other => format_value(other),
+    };
+    let newline = if unicode { '↵' } else { ' ' };
+    text.chars()
+        .map(|ch| match ch {
+            '\n' | '\r' => newline,
+            ch if ch.is_control() => ' ',
+            ch => ch,
+        })
+        .collect()
 }
 
 pub fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
@@ -1333,56 +1431,76 @@ pub fn truncate_cell(text: &str, width: usize) -> String {
 /// character when the row stops fitting.
 pub const COLUMN_PADDING: u16 = 2;
 
+/// How far a wide column is squeezed so that the columns after it still fit whole.
+const SQUEEZE_FLOOR: u16 = 12;
+
+/// The least a column cut by the pane's edge is worth drawing.
+const EDGE_MIN: usize = 4;
+
 /// Fits `natural` column widths into `available` terminal columns.
 ///
-/// Narrow columns keep their natural width for as long as possible: when the
-/// row doesn't fit, the widest column is shrunk one character at a time
-/// until it does, instead of greedily truncating whichever column happens to
-/// exhaust the remaining space first. If even one character per column
-/// (plus separators) doesn't fit, trailing columns are dropped and the
-/// second return value is `true`, signaling callers to render an overflow
-/// marker.
+/// Narrow columns keep their natural width for as long as possible: when the row
+/// doesn't fit, the widest column is shrunk one character at a time -- down to
+/// `SQUEEZE_FLOOR`, no further -- instead of greedily truncating whichever column
+/// happens to exhaust the remaining space first. When even that does not fit, the
+/// columns keep their natural widths and the pane shows as many as it can, from the
+/// left: the rest are reached by scrolling sideways, and the second return value is
+/// `true`, signaling callers to render an overflow marker.
 pub fn allocate_column_widths(natural: &[u16], available: usize) -> (Vec<u16>, bool) {
-    let mut widths = natural.to_vec();
-    let mut overflowed = false;
-    while !widths.is_empty() {
-        let n = widths.len();
-        let min_required = n + n.saturating_sub(1);
-        if min_required <= available {
-            break;
+    let separators = natural.len().saturating_sub(1);
+    let floors: Vec<u16> = natural
+        .iter()
+        .map(|&width| width.min(SQUEEZE_FLOOR))
+        .collect();
+    let floor_total: usize = floors.iter().map(|&w| usize::from(w)).sum();
+    if floor_total + separators <= available {
+        return (squeeze(natural, &floors, available - separators), false);
+    }
+    // Too wide for the pane. Two columns stay free for the marker and its gap.
+    let budget = available.saturating_sub(2);
+    let mut widths: Vec<u16> = Vec::new();
+    let mut used = 0usize;
+    for &width in natural {
+        let gap = usize::from(!widths.is_empty());
+        let room = budget.saturating_sub(used + gap);
+        if usize::from(width) <= room {
+            widths.push(width);
+            used += gap + usize::from(width);
+            continue;
         }
-        widths.pop();
-        overflowed = true;
+        // The column the edge cuts: drawn cut when there is room to read some of it, and
+        // always when it is the first, so a pane narrower than one column still shows one.
+        if room >= EDGE_MIN || widths.is_empty() {
+            widths.push(room.max(1) as u16);
+        }
+        break;
     }
-    let Some(&widest) = widths.iter().max() else {
-        return (widths, overflowed);
-    };
-    let separators = widths.len().saturating_sub(1);
-    let budget = available.saturating_sub(separators);
-    let total: usize = widths.iter().map(|&w| w as usize).sum();
-    if total <= budget || widest <= 1 {
-        return (widths, overflowed);
-    }
+    (widths, true)
+}
+
+/// `natural` widths shrunk, widest first, until they total `budget`; none goes below
+/// its `floor`.
+fn squeeze(natural: &[u16], floors: &[u16], budget: usize) -> Vec<u16> {
+    let mut widths = natural.to_vec();
+    let mut total: usize = widths.iter().map(|&w| usize::from(w)).sum();
     let mut heap: std::collections::BinaryHeap<(u16, std::cmp::Reverse<usize>)> = widths
         .iter()
         .enumerate()
         .map(|(index, &width)| (width, std::cmp::Reverse(index)))
         .collect();
-    let mut remaining_total = total;
-    while remaining_total > budget {
+    while total > budget {
         let Some((width, std::cmp::Reverse(index))) = heap.pop() else {
             break;
         };
-        if width <= 1 {
-            heap.push((width, std::cmp::Reverse(index)));
+        // The widest is at its floor: so is everything narrower.
+        if width <= floors[index].max(1) {
             break;
         }
-        let shrunk = width - 1;
-        widths[index] = shrunk;
-        remaining_total -= 1;
-        heap.push((shrunk, std::cmp::Reverse(index)));
+        widths[index] = width - 1;
+        total -= 1;
+        heap.push((width - 1, std::cmp::Reverse(index)));
     }
-    (widths, overflowed)
+    widths
 }
 
 fn estimated_row_bytes(row: &[DbValue]) -> usize {
@@ -2172,6 +2290,18 @@ impl Model {
         crate::screens::vim::display_selection(self)
             .or_else(|| self.active_document().selection())
             .filter(|range| range.start < range.end)
+    }
+
+    /// Whether table document `index` has rows staged for the database that are not yet
+    /// applied: the tab says so, as it does for text not saved.
+    pub fn staged_edits(&self, index: usize) -> bool {
+        match self.documents.get(index) {
+            Some(document) if document.kind.is_table() && index == self.active_document => {
+                self.data.has_pending_edits()
+            }
+            Some(document) if document.kind.is_table() => document.browse.has_pending_edits(),
+            _ => false,
+        }
     }
 
     pub fn set_active_document(&mut self, index: usize) {

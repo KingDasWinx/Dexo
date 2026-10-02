@@ -56,7 +56,7 @@ pub fn inspect_value(value: &DbValue, loaded: u64, total: u64) -> ValueView {
                 ValueView::Text(text.clone())
             }
         }
-        other => ValueView::Text(format!("{other:?}")),
+        other => ValueView::Text(super::copy::display_value(other)),
     }
 }
 
@@ -127,6 +127,20 @@ mod tests {
         save_bytes_atomic,
     };
     use dexo_driver_api::DbValue;
+
+    /// Numbers, decimals and booleans read as the database prints them, not as the
+    /// variant that carries them.
+    #[test]
+    fn plain_values_show_their_text() {
+        for (value, text) in [
+            (DbValue::I64(198), "198"),
+            (DbValue::U64(7), "7"),
+            (DbValue::Decimal("4477.50".into()), "4477.50"),
+            (DbValue::Bool(true), "true"),
+        ] {
+            assert_eq!(inspect_value(&value, 0, 0), ValueView::Text(text.into()));
+        }
+    }
 
     #[test]
     fn large_and_native_views() {

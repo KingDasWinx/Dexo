@@ -29,6 +29,7 @@ const COMMAND_IDS: &[&str] = &[
     "layout.results_shrink",
     "layout.explorer_grow",
     "layout.explorer_shrink",
+    "data.copy.cell",
     "data.copy.csv",
     "data.copy.text",
     "data.copy.json",
@@ -40,6 +41,7 @@ const COMMAND_IDS: &[&str] = &[
     "data.refresh",
     "data.toggle_delete",
     "data.insert_row",
+    "data.edit_cell",
     "data.nav_back",
     "data.page_next",
     "data.page_prev",
@@ -111,6 +113,10 @@ const COMMAND_IDS: &[&str] = &[
     "results.pageup",
     "results.pagedown",
     "results.top",
+    "results.bottom",
+    "results.collapse",
+    "results.first_column",
+    "results.last_column",
     "results.extend_up",
     "results.extend_down",
     "results.actions",
@@ -232,8 +238,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 161);
-    assert_eq!(actual.len(), 161, "duplicate command id");
+    assert_eq!(specs.len(), 167);
+    assert_eq!(actual.len(), 167, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -242,7 +248,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 109);
+    assert_eq!(visible.len(), 111);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a

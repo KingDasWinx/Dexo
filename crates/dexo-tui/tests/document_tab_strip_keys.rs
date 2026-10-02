@@ -65,6 +65,23 @@ fn the_grid_still_inserts_a_row_on_i() {
     let mut model = workbench(Focus::Results);
     model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
     model.session_generation = 1;
+    // A table's rows: only they can be inserted into, and say why when they are not.
+    model
+        .documents
+        .push(dexo_tui::model::EditorDocument::new_table(
+            dexo_app::parse_qualified("public.orders"),
+            None,
+        ));
+    model.set_active_document(1);
+    model.data.table = dexo_app::data::TableMeta {
+        columns: vec![dexo_app::data::ColumnDef {
+            name: "id".into(),
+            primary_key: true,
+            unique: true,
+            nullable: false,
+        }],
+    };
+    model.data.changes = dexo_app::data::ChangeSet::for_table(&model.data.table);
     update(&mut model, key(KeyCode::Char('i'), M::NONE));
     assert!(model.data.insert_form.open, "`i` no longer inserts a row");
 }
