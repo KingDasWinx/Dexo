@@ -265,12 +265,23 @@ fn table_keys(conn: &Connection, name: &QualifiedName) -> Result<Vec<ColumnKeyIn
 }
 
 /// Runs a SELECT Dexo wrote around the user's clauses: in a read-only transaction rolled
-/// back after it, unless the user has one open.
+/// back after it, unless the user has one open. DuckDB's own parser has to read it as the
+/// one query it was written as; clause text that ends it early is refused.
 fn read_rows(
     conn: &Connection,
     sql: &str,
     values: Vec<Value>,
 ) -> Result<(Vec<ColumnMeta>, Vec<Vec<DbValue>>), DriverError> {
+    // Text DuckDB cannot parse runs nothing; running it reports DuckDB's own error.
+    let parsed = crate::parse::statement_count(sql);
+    if parsed.is_some_and(|count| count != 1)
+        || parsed.is_some() && !crate::parse::only_queries(conn, sql)?
+    {
+        return Err(DriverError::new(
+            DriverErrorCategory::Permission,
+            "the WHERE or ORDER BY ends the query it was written into, and it may only add to it",
+        ));
+    }
     let fenced = begin_own(conn, "BEGIN TRANSACTION READ ONLY")?;
     let read = (|| {
         let mut statement = conn.prepare(sql).map_err(map_error)?;

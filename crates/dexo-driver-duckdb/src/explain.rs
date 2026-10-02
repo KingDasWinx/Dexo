@@ -9,7 +9,7 @@ use duckdb::profiling::ProfilingInfo;
 use serde_json::{Value, json};
 
 use crate::error::{map_error, writes_refused};
-use crate::session::{DuckdbSession, begin_own, is_read, statements};
+use crate::session::{DuckdbSession, begin_own, first_word, reads, split_differently, statements};
 
 #[async_trait::async_trait]
 impl ExplainProvider for DuckdbSession {
@@ -29,6 +29,9 @@ impl ExplainProvider for DuckdbSession {
                 ));
             }
         };
+        if crate::parse::statement_count(&sql).is_some_and(|count| count > 1) {
+            return Err(split_differently(&sql));
+        }
         let read_only = self.read_only();
         if request.analyze {
             return self
@@ -71,13 +74,25 @@ impl ExplainProvider for DuckdbSession {
 
 /// Runs `sql` under the profiler. Outside a transaction it runs in one rolled back after
 /// it, so a write explained this way changes nothing; inside the user's, DuckDB has no
-/// savepoint to undo it with, so only a read is run there.
+/// savepoint to undo it with, so only a read is run there. Only a query or an INSERT,
+/// UPDATE or DELETE: a COPY, an EXPORT or a SET does what it does outside any
+/// transaction, and a rollback undoes none of it.
 fn analyzed(conn: &Connection, sql: &str, read_only: bool) -> Result<ExplainPlan, DriverError> {
-    if read_only && !is_read(sql) {
+    let reads = reads(conn, sql)?;
+    let changes_rows = matches!(
+        first_word(sql).as_deref(),
+        Some("INSERT" | "UPDATE" | "DELETE")
+    );
+    if !reads && !changes_rows {
+        return Err(DriverError::unsupported(
+            "EXPLAIN ANALYZE runs queries and INSERT, UPDATE or DELETE; use the estimated plan for this one",
+        ));
+    }
+    if read_only && !reads {
         return Err(writes_refused());
     }
     let fenced = begin_own(conn, "BEGIN TRANSACTION")?;
-    if !fenced && !is_read(sql) {
+    if !fenced && !reads {
         return Err(DriverError::new(
             DriverErrorCategory::Capability,
             "EXPLAIN ANALYZE runs the statement, and inside a transaction DuckDB cannot undo it: \

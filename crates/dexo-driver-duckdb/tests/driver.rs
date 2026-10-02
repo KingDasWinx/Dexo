@@ -647,3 +647,50 @@ async fn transactions_commit_and_roll_back() {
     transactions.rollback().await.unwrap();
     assert!(transactions.savepoint("a").await.is_err());
 }
+
+/// DuckDB ends a `--` comment at a bare carriage return. Read to the next line feed, a
+/// statement after it went unchecked: a COPY replaced the CSV a read-only session had
+/// open, and an estimated EXPLAIN ran it.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_carriage_return_hides_no_statement() {
+    let dir = tempfile::tempdir().unwrap();
+    let csv = dir.path().join("sales.csv");
+    std::fs::write(&csv, "id\n1\n").unwrap();
+    let out = dir.path().join("out.csv");
+    let hidden = |target: &Path| {
+        format!(
+            "select 1 --\r; copy (select 42) to '{}' --\n",
+            target.display()
+        )
+    };
+
+    let session = open(&csv, false).await;
+    let refused = run(&*session, QueryRequest::write(hidden(&csv)))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.category(), DriverErrorCategory::Permission);
+    assert_eq!(std::fs::read_to_string(&csv).unwrap(), "id\n1\n");
+
+    let (_seeded, path) = seeded().await;
+    let read_only = open(&path, true).await;
+    run(&*read_only, QueryRequest::write(hidden(&out)))
+        .await
+        .unwrap_err();
+    let writable = open(&path, false).await;
+    let mut asked = QueryRequest::read(hidden(&out), 0);
+    asked.read_only = true;
+    run(&*writable, asked).await.unwrap_err();
+    writable
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::estimated(hidden(&out)))
+        .await
+        .unwrap_err();
+    assert!(!out.exists());
+
+    // Where writing is allowed, the two statements are two result sets, as DuckDB reads them.
+    let events = run(&*writable, QueryRequest::write("select 1 --\r; select 2"))
+        .await
+        .unwrap();
+    assert_eq!(texts(&events), [["1"], ["2"]]);
+}

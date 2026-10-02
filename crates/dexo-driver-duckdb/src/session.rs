@@ -120,6 +120,23 @@ pub(crate) fn is_read(sql: &str) -> bool {
     dexo_sql::is_read(sql, Dialect::Duckdb)
 }
 
+/// The first word of `sql` past its comments, in capitals.
+pub(crate) fn first_word(sql: &str) -> Option<String> {
+    dexo_sql::tokenize(sql, Dialect::Duckdb)
+        .into_iter()
+        .find(|token| token.kind != dexo_sql::TokenKind::Comment)
+        .filter(|token| token.kind == dexo_sql::TokenKind::Word)
+        .map(|token| sql[token.span].to_ascii_uppercase())
+}
+
+/// Whether `sql` only reads, by both readings: DuckDB's own parser takes every statement
+/// in it for a query, and Dexo's finds no query that writes on the side.
+/// Text DuckDB cannot parse is its error, not a write.
+pub(crate) fn reads(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
+    crate::parse::parse(sql)?;
+    Ok(crate::parse::only_queries(conn, sql)? && statements(sql).iter().all(|text| is_read(text)))
+}
+
 /// Opens a transaction for Dexo's own use, or says the user already has one open:
 /// DuckDB has no savepoint to nest one inside theirs.
 pub(crate) fn begin_own(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
@@ -260,10 +277,10 @@ fn run_script(
     guard: Guard,
     events: &Events,
 ) -> Result<(), DriverError> {
-    let statements = statements(sql);
-    if (guard.read_only || guard.reads_only) && !statements.iter().all(|text| is_read(text)) {
+    if (guard.read_only || guard.reads_only) && !reads(conn, sql)? {
         return Err(writes_refused());
     }
+    let statements = statements(sql);
     let fenced = guard.reads_only && begin_own(conn, "BEGIN TRANSACTION READ ONLY")?;
     let outcome = run_statements(conn, &statements, parameters, row_limit, events);
     if fenced {
@@ -285,7 +302,15 @@ fn run_statements(
 ) -> Result<(), DriverError> {
     let send = |event| events.blocking_send(Ok(event)).is_ok();
     let mut last_affected = None;
-    for (index, text) in statements.iter().enumerate() {
+    let mut index = 0;
+    for text in statements {
+        // DuckDB's prepare runs every statement but the last of what it is given, so
+        // each piece Dexo split has to be one statement to DuckDB too.
+        match crate::parse::statement_count(text) {
+            Some(0) => continue,
+            Some(1) | None => {}
+            Some(_) => return Err(split_differently(text)),
+        }
         let mut statement = conn.prepare(text).map_err(map_error)?;
         let expected = statement.parameter_count();
         if parameters.len() != expected {
@@ -323,6 +348,7 @@ fn run_statements(
             {
                 return Ok(());
             }
+            index += 1;
             continue;
         }
         let columns: Vec<ColumnMeta> = schema
@@ -373,6 +399,7 @@ fn run_statements(
         }) {
             return Ok(());
         }
+        index += 1;
     }
     send(QueryEvent::Finished {
         rows_affected: last_affected,
@@ -467,6 +494,17 @@ impl TransactionControl for DuckdbSession {
     fn state(&self) -> TransactionState {
         *self.tx_state.lock().unwrap_or_else(PoisonError::into_inner)
     }
+}
+
+/// What a piece of a script gets when DuckDB reads more than one statement in it.
+pub(crate) fn split_differently(text: &str) -> DriverError {
+    DriverError::new(
+        DriverErrorCategory::Syntax,
+        format!(
+            "DuckDB reads more than one statement in `{}`; end each with `;` on a line of its own",
+            text.lines().next().unwrap_or(text)
+        ),
+    )
 }
 
 fn no_savepoints() -> DriverError {

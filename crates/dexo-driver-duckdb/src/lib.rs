@@ -4,6 +4,7 @@ mod error;
 mod explain;
 mod factory;
 mod mutation;
+mod parse;
 mod session;
 
 pub use factory::DuckdbFactory;
