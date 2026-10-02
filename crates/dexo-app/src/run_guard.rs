@@ -1,6 +1,6 @@
 //! What the SQL editor has to ask before it runs a script on a connection.
 
-use dexo_sql::{Destructive, Dialect, destructive, is_read};
+use dexo_sql::{Dialect, destructive, is_read};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RunPolicy {
@@ -15,7 +15,7 @@ pub struct RunPolicy {
 pub struct Flagged {
     pub index: usize,
     pub sql: String,
-    pub reason: &'static str,
+    pub reason: String,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -34,6 +34,18 @@ pub enum RunVerdict {
 }
 
 const NOT_A_READ: &str = "not a read-only statement";
+
+/// Why a statement that is not destructive still counts as a write. A query that calls a
+/// function Dexo does not take for a read says which, rather than "not a read-only
+/// statement" for what looks like a plain SELECT.
+fn write_reason(sql: &str, dialect: Dialect) -> String {
+    match dexo_sql::inspect_read(sql, dialect) {
+        Err(dexo_sql::GuardRejection::Function(name)) => {
+            format!("calls {name}, which Dexo does not take for a read")
+        }
+        _ => NOT_A_READ.to_string(),
+    }
+}
 
 /// Read-only refuses any write; production asks for the connection's name before any
 /// write; elsewhere, `confirm_destructive` asks before the destructive ones. Unknown
@@ -54,7 +66,7 @@ pub fn judge(statements: &[String], dialect: Dialect, policy: &RunPolicy) -> Run
             None => RunVerdict::Run,
         };
     }
-    let flag = |index: usize, reason: &'static str| Flagged {
+    let flag = |index: usize, reason: String| Flagged {
         index,
         sql: statements[index].clone(),
         reason,
@@ -63,8 +75,10 @@ pub fn judge(statements: &[String], dialect: Dialect, policy: &RunPolicy) -> Run
         let flagged = writes
             .iter()
             .map(|&index| {
-                let reason = destructive(&statements[index], dialect)
-                    .map_or(NOT_A_READ, Destructive::describe);
+                let reason = destructive(&statements[index], dialect).map_or_else(
+                    || write_reason(&statements[index], dialect),
+                    |found| found.describe().to_string(),
+                );
                 flag(index, reason)
             })
             .collect();
@@ -77,7 +91,8 @@ pub fn judge(statements: &[String], dialect: Dialect, policy: &RunPolicy) -> Run
         let flagged: Vec<Flagged> = writes
             .iter()
             .filter_map(|&index| {
-                destructive(&statements[index], dialect).map(|found| flag(index, found.describe()))
+                destructive(&statements[index], dialect)
+                    .map(|found| flag(index, found.describe().to_string()))
             })
             .collect();
         if !flagged.is_empty() {
@@ -189,6 +204,23 @@ mod tests {
         };
         assert_eq!(typed, None);
         assert_eq!(flagged.len(), 1);
+    }
+
+    /// A SELECT that calls a function Dexo does not take for a read says which.
+    #[test]
+    fn a_query_calling_a_function_says_which() {
+        let verdict = judge(
+            &script(&["select pg_sleep(1)"]),
+            Dialect::Postgres,
+            &policy(false, false, true),
+        );
+        let RunVerdict::Confirm { flagged, .. } = verdict else {
+            panic!("{verdict:?}");
+        };
+        assert_eq!(
+            flagged[0].reason,
+            "calls pg_sleep, which Dexo does not take for a read"
+        );
     }
 
     #[test]

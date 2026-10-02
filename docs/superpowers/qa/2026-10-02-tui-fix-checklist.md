@@ -284,7 +284,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-21** `MINOR` Blocking line is cryptic: `419 blocks 764 · ShareLock on -`
 - [ ] **AT-23** `MINOR` Sessions: `t` on a read-only connection is refused only after the dialog is already open; fine message, but the dialog is a full admin view
 - [ ] **AT-25** `MINOR` User-pressed Cancel Query (Ctrl+F2) is reported as an error toast
-- [ ] **AT-27** `MINOR` `select pg_sleep(...)` on production asks for the name ("not a read-only statement"), `select now()` does not
+- [x] **AT-27** `MINOR` `select pg_sleep(...)` on production asks for the name ("not a read-only statement"), `select now()` does not
 - [ ] **AT-29** `MINOR` Ctrl+A in a brand-new empty document, then typing, drops the first character
 - [ ] **AT-30** `MINOR` Statements Dexo cannot parse are listed as "Dexo could not read this statement"
 - [ ] **AT-36** `MINOR` File extension and format are independent: `.sql` file with JSONL inside, `.csv` re-exported as another format
