@@ -222,16 +222,19 @@ fn plan_node(name: &str, info: &[(String, String)], native: Value) -> PlanNode {
     });
     let detail = info
         .iter()
-        .filter(|(key, _)| {
-            !matches!(
-                key.as_str(),
-                "Table"
-                    | "Type"
-                    | "Projections"
-                    | "Estimated Cardinality"
-                    | "__estimated_cardinality__"
-                    | "__projections__"
-            )
+        .filter(|(key, value)| {
+            // A table function's node is named after the function already.
+            let names_itself = key == "Function" && value.eq_ignore_ascii_case(name.trim());
+            !names_itself
+                && !matches!(
+                    key.as_str(),
+                    "Table"
+                        | "Type"
+                        | "Projections"
+                        | "Estimated Cardinality"
+                        | "__estimated_cardinality__"
+                        | "__projections__"
+                )
         })
         .map(|(key, value)| format!("{key}: {}", value.replace('\n', ", ")))
         .collect::<Vec<_>>()
@@ -251,8 +254,8 @@ fn plan_node(name: &str, info: &[(String, String)], native: Value) -> PlanNode {
     }
 }
 
-/// DuckDB prints a profiled operator's extra info as `{Key=value, Key='quoted, value'}`,
-/// a quote inside a quoted value escaped with a backslash.
+/// DuckDB prints a profiled operator's extra info as `{Key=value, 'Key (s)'='a, b'}`, a
+/// quote inside a quoted key or value escaped with a backslash.
 fn parse_map(text: &str) -> Vec<(String, String)> {
     let inner = text
         .trim()
@@ -263,27 +266,36 @@ fn parse_map(text: &str) -> Vec<(String, String)> {
     let mut chars = inner.chars().peekable();
     loop {
         while chars.next_if(|ch| *ch == ',' || *ch == ' ').is_some() {}
-        let key: String = std::iter::from_fn(|| chars.next_if(|ch| *ch != '=')).collect();
+        if chars.peek().is_none() {
+            break;
+        }
+        let key = token(&mut chars, '=');
         if chars.next().is_none() {
             break;
         }
-        let mut value = String::new();
-        if chars.next_if_eq(&'\'').is_some() {
-            while let Some(ch) = chars.next() {
-                match ch {
-                    '\\' => value.extend(chars.next()),
-                    '\'' => break,
-                    other => value.push(other),
-                }
-            }
-        } else {
-            while let Some(ch) = chars.next_if(|ch| *ch != ',') {
-                value.push(ch);
-            }
-        }
+        let value = token(&mut chars, ',');
         pairs.push((key.trim().to_string(), value));
     }
     pairs
+}
+
+/// One key or value: quoted, or bare up to `end`.
+fn token(chars: &mut std::iter::Peekable<std::str::Chars<'_>>, end: char) -> String {
+    let mut text = String::new();
+    if chars.next_if_eq(&'\'').is_some() {
+        while let Some(ch) = chars.next() {
+            match ch {
+                '\\' => text.extend(chars.next()),
+                '\'' => break,
+                other => text.push(other),
+            }
+        }
+    } else {
+        while let Some(ch) = chars.next_if(|ch| *ch != end) {
+            text.push(ch);
+        }
+    }
+    text
 }
 
 fn sorted(metrics: &HashMap<String, String>) -> serde_json::Map<String, Value> {
@@ -317,6 +329,8 @@ mod tests {
         assert_eq!(pairs[3], ("Filters".into(), "b>='x1' AND b<'x2'".into()));
         assert_eq!(pairs[4], ("__estimated_cardinality__".into(), "200".into()));
         assert!(parse_map("{}").is_empty());
+        let file = parse_map("{Function=READ_CSV_AUTO, 'Filename(s)'=/d/sales.csv}");
+        assert_eq!(file[1], ("Filename(s)".into(), "/d/sales.csv".into()));
     }
 
     #[test]
