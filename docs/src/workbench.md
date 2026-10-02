@@ -72,6 +72,16 @@ The title says how many rows there are: exactly when they all came, `~4.3M` from
 
 F7 shows the estimated plan of the statement under the cursor, Shift+F7 runs it with ANALYZE after asking; `v` steps through the tree, the table and a summary, and a second plan of the same statement is compared with the first. On Postgres with the hypopg extension, `i` tries an index before anyone builds it: type its definition (`CREATE INDEX ON orders (customer_id)`) and the statement is planned as if it existed, compared with its plan without it. The index exists only for that plan, on that session; `dexo explain --index "CREATE INDEX ON …"` does the same from the command line. Without hypopg, Dexo says so: install the package on the server, then `CREATE EXTENSION hypopg`.
 
+## Object inspector
+
+`i` on an object in the explorer opens the inspector: its properties, what the connected user may do with it, and, with `d` in the explorer, its DDL. Up and Down scroll it. `n` writes a note on the object -- what a table or a column means, for you and for agents over [MCP](mcp.md): Enter or [Save] keeps it, Esc or [Cancel] drops it, and a blank note removes it. The note shows once it is saved. A note belongs to a saved connection's object; without one, the database's own comment is shown, marked as such. Edit Object Note… in the palette does the same for the object selected in the explorer.
+
+## Agent Activity
+
+Ctrl+Alt+A, or Agent Activity in the palette, lists the writes MCP agents are waiting to make under grants that ask before each write, oldest first, with the time each has left, and the latest tool calls. Up and Down pick a request; its whole statement is shown under it, wrapped, and PgUp/PgDn or the wheel scroll through it while the buttons stay at the bottom. `a` approves after a second confirmation -- Cancel holds the focus, so an Enter out of habit decides nothing -- and `d` denies. A request decided elsewhere or out of time closes its confirmation and settles nothing, and a write is approved only while its agent still waits for the answer; otherwise Dexo says the agent is no longer waiting. `r` revokes every grant, which denies their waiting requests too. With the screen closed, a toast says when a request arrives.
+
+Grants are made in MCP Profiles -- `g`, or New MCP Grant… in the palette, with an "ask before each write" switch -- or with `dexo mcp grant create`; see [MCP](mcp.md).
+
 ## Saved queries
 
 Save Query As (Alt+S) keeps the selection, or the whole document, under a name, for the project and the connection; the same name replaces that query, and says so. Open Saved Query (Alt+O) searches names and SQL, shows the query, opens it in a new document on its connection, renames it (F2) and deletes it (Delete, then confirm). A saved query belongs to a saved connection and goes with it; a temporary connection asks to be saved first.
