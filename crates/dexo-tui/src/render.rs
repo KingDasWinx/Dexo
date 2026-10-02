@@ -1,6 +1,6 @@
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Layout, Rect};
-use ratatui::style::{Modifier, Style};
+use ratatui::style::{Color, Modifier, Style};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Clear, Paragraph};
 
@@ -481,11 +481,65 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         overlay_block(model, "DEXO"),
         lines.join("\n"),
     );
-    for_popup_lines(popup, &lines, |_, line, rect| {
+    let mut logo_rows = Vec::new();
+    for_popup_lines(popup, &lines, |index, line, rect| {
         if line.contains("Get started") {
             hits.register(HitTarget::Button(HitButton::GetStarted), rect);
         }
+        // The logo sits two lines down, under "Welcome" and a blank.
+        if !compact && (2..2 + logo.rows.len()).contains(&index) {
+            logo_rows.push((index - 2, rect));
+        }
     });
+    paint_logo(frame, model, &logo, &logo_rows);
+}
+
+/// The logo's colours, cell by cell: the animation's own, or across a still logo the
+/// theme's accent fading to its text colour. Painted over the popup's text, which is
+/// plain -- joining the cells into lines used to drop their colours, and the logo came
+/// out in the text colour. A terminal without true colour gets the accent alone.
+fn paint_logo(
+    frame: &mut Frame,
+    model: &Model,
+    logo: &crate::entrance::LogoFrame,
+    rows: &[(usize, Rect)],
+) {
+    use crate::capabilities::ColorDepth;
+    use crate::theme::Role;
+    let caps = model.capabilities;
+    let ends = model
+        .theme
+        .rgb(Role::Focus)
+        .zip(model.theme.rgb(Role::Foreground));
+    let width = logo.rows.first().map_or(0, Vec::len).max(1);
+    let buffer = frame.buffer_mut();
+    for &(row, rect) in rows {
+        for (column, cell) in logo.rows[row].iter().enumerate() {
+            let Ok(offset) = u16::try_from(column) else {
+                break;
+            };
+            if offset >= rect.width || cell.symbol.trim().is_empty() {
+                continue;
+            }
+            let color = match (caps.color_depth, cell.foreground, ends) {
+                (ColorDepth::None, ..) => None,
+                (ColorDepth::TrueColor, Some((r, g, b)), _) => Some(Color::Rgb(r, g, b)),
+                (ColorDepth::TrueColor, None, Some((from, to))) => {
+                    Some(blend(from, to, column as f32 / width as f32))
+                }
+                _ => model.theme.color(Role::Focus, caps),
+            };
+            if let (Some(color), Some(target)) = (color, buffer.cell_mut((rect.x + offset, rect.y)))
+            {
+                target.set_fg(color);
+            }
+        }
+    }
+}
+
+fn blend(from: (u8, u8, u8), to: (u8, u8, u8), at: f32) -> Color {
+    let mix = |a: u8, b: u8| (f32::from(a) + (f32::from(b) - f32::from(a)) * at).round() as u8;
+    Color::Rgb(mix(from.0, to.0), mix(from.1, to.1), mix(from.2, to.2))
 }
 
 fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
@@ -2653,6 +2707,34 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    /// The welcome logo used to come out in the text colour: its cells were joined into
+    /// plain lines. It starts in the theme's accent and fades towards the text colour.
+    #[test]
+    fn the_welcome_logo_is_painted_in_the_theme_colours() {
+        use crate::theme::Role;
+        use ratatui::style::Color;
+        let mut model = Model::default();
+        model.onboarding.open = true;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 40)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| super::render(frame, &model, &mut hits))
+            .unwrap();
+        let painted: Vec<Color> = terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| matches!(cell.symbol(), "█" | "░"))
+            .map(|cell| cell.fg)
+            .collect();
+        let (r, g, b) = model.theme.rgb(Role::Focus).unwrap();
+        assert!(painted.contains(&Color::Rgb(r, g, b)));
+        let text = model.theme.color(Role::Foreground, model.capabilities);
+        assert!(painted.iter().filter(|fg| Some(**fg) == text).count() < painted.len() / 2);
     }
 
     #[test]
