@@ -303,10 +303,15 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
             let name = &object.qualified_name;
             // MySQL names its databases as catalogs, the others as schemas.
             let schema = name.schema().or(name.catalog()).unwrap_or("");
-            match object.kind {
+            match &object.kind {
+                // Whatever a FROM can name: sequences and partitions read like tables.
                 dexo_driver_api::ObjectKind::Table
                 | dexo_driver_api::ObjectKind::View
-                | dexo_driver_api::ObjectKind::MaterializedView => {
+                | dexo_driver_api::ObjectKind::MaterializedView
+                | dexo_driver_api::ObjectKind::Sequence => {
+                    known.add_table(schema, name.object());
+                }
+                dexo_driver_api::ObjectKind::DriverSpecific(kind) if kind == "partition" => {
                     known.add_table(schema, name.object());
                 }
                 dexo_driver_api::ObjectKind::Column => {

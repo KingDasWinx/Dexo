@@ -28,7 +28,8 @@ fn is_system_schema(name: &str) -> bool {
 
 fn relkind_to_kind(relkind: &str) -> ObjectKind {
     match relkind {
-        "r" | "p" => ObjectKind::Table,
+        // A foreign table reads like any other.
+        "r" | "p" | "f" => ObjectKind::Table,
         "v" => ObjectKind::View,
         "m" => ObjectKind::MaterializedView,
         "S" => ObjectKind::Sequence,
@@ -39,7 +40,7 @@ fn relkind_to_kind(relkind: &str) -> ObjectKind {
 
 fn relkind_key(relkind: &str) -> &'static str {
     match relkind {
-        "r" | "p" => "table",
+        "r" | "p" | "f" => "table",
         "v" => "view",
         "m" => "materialized_view",
         "S" => "sequence",
@@ -233,7 +234,7 @@ impl PostgresSession {
                 "SELECT c.oid::bigint, c.relname::text, c.relkind::text, pg_get_partkeydef(c.oid)
                  FROM pg_class c
                  WHERE c.relnamespace = $1::bigint::oid
-                   AND c.relkind IN ('r','p','v','m','S')
+                   AND c.relkind IN ('r','p','f','v','m','S')
                    AND NOT c.relispartition
                  ORDER BY c.relname",
                 &[&schema_oid],
@@ -545,7 +546,7 @@ impl PostgresSession {
                     CASE c.relname
                       WHEN 'pg_class' THEN COALESCE((
                         SELECT CASE relkind
-                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'f' THEN 'table'
                           WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
                           WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
                           ELSE 'class' END
@@ -573,7 +574,7 @@ impl PostgresSession {
                     CASE c.relname
                       WHEN 'pg_class' THEN COALESCE((
                         SELECT CASE relkind
-                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                          WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'f' THEN 'table'
                           WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
                           WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
                           ELSE 'class' END
@@ -636,7 +637,7 @@ impl PostgresSession {
             .client
             .query_opt(
                 "SELECT CASE relkind
-                   WHEN 'r' THEN 'table' WHEN 'p' THEN 'table'
+                   WHEN 'r' THEN 'table' WHEN 'p' THEN 'table' WHEN 'f' THEN 'table'
                    WHEN 'v' THEN 'view' WHEN 'm' THEN 'materialized_view'
                    WHEN 'S' THEN 'sequence' WHEN 'i' THEN 'index'
                    ELSE 'class' END
