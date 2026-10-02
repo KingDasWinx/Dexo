@@ -4550,6 +4550,30 @@ fn rename_sessions(model: &mut Model, from: &str, to: &str) -> Vec<Effect> {
 
 /// `dexo <url>`: listed beside the saved connections, selected and dialled. A saved
 /// connection already going by the same name keeps it; sessions are found by name.
+/// `dexo <url>`'s connection, and what its URL warned of: said now, and again once the
+/// connection is ready -- under the name it was opened as, which is `name (2)` when a
+/// saved connection has the name.
+pub(crate) fn open_startup_connection(
+    model: &mut Model,
+    profile: dexo_app::ConnectionProfile,
+    warning: Option<String>,
+) -> Vec<Effect> {
+    let id = profile.id;
+    let effects = open_temporary_connection(model, profile);
+    if let Some(warning) = warning {
+        model.messages.warn(warning.clone());
+        if let Some(opened) = model
+            .connections
+            .temporary
+            .iter()
+            .find(|temporary| temporary.id == id)
+        {
+            model.startup_warning = Some((opened.name.clone(), warning));
+        }
+    }
+    effects
+}
+
 fn open_temporary_connection(
     model: &mut Model,
     mut profile: dexo_app::ConnectionProfile,
@@ -10146,6 +10170,29 @@ mod tests {
         model.active_session = Some(a);
         run(&mut model, "drop table scratch");
         assert!(crate::screens::editor::session_tables(&model).is_empty());
+    }
+
+    /// The startup warning waits for the connection under the name it was opened as.
+    #[test]
+    fn a_startup_warning_follows_a_clash_rename() {
+        let mut model = Model::default();
+        let profile = |name: &str| {
+            dexo_app::ConnectionProfile::new(
+                dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+                None,
+                name,
+                "postgres",
+                "local",
+                serde_json::json!({"host": "h"}),
+                dexo_app::connection_profile::SecretRef::new("ref".into()),
+            )
+        };
+        model.connections.load_profiles(vec![profile("shop")]);
+        super::open_startup_connection(&mut model, profile("shop"), Some("careful".into()));
+        assert_eq!(
+            model.startup_warning,
+            Some(("shop (2)".to_string(), "careful".to_string()))
+        );
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,

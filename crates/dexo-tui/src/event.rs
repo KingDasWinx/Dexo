@@ -114,15 +114,7 @@ async fn run_loop(
     model.onboarding.open = show_onboarding && temporary.is_none();
     model.onboarding.logo_frames = logo_frames;
     if let Some((profile, warning)) = temporary {
-        let name = profile.name.clone();
-        let effects = crate::update::update(
-            &mut model,
-            Action::OpenTemporaryConnection(Box::new(profile)),
-        );
-        if let Some(warning) = warning {
-            model.messages.warn(warning.clone());
-            model.startup_warning = Some((name, warning));
-        }
+        let effects = crate::update::open_startup_connection(&mut model, profile, warning);
         if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
             return Ok(());
         }
