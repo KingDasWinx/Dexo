@@ -2818,16 +2818,26 @@ fn render_recovery(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         frame,
         model,
         popup,
-        Block::bordered().title("Session recovery"),
+        overlay_block(model, "Session recovery"),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |_, line, rect| {
-        if line.starts_with("recovery open=") {
-            hits.register(HitTarget::Button(HitButton::Recover), rect);
-        }
-        if line.starts_with("confirm_discard=") {
-            hits.register(HitTarget::Button(HitButton::Discard), rect);
+        if line.contains("[Keep]") {
+            register_label(
+                hits,
+                rect,
+                line,
+                "[Keep]",
+                HitTarget::Button(HitButton::Recover),
+            );
+            register_label(
+                hits,
+                rect,
+                line,
+                "[Discard]",
+                HitTarget::Button(HitButton::Discard),
+            );
         }
     });
 }

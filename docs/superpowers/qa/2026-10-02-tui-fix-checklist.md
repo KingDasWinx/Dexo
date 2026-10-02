@@ -26,8 +26,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-12** `MAJOR` Ctrl+Shift+Tab (Previous Document) does nothing
 - [x] **PC-20** `MAJOR` Save/Open pickers show the start of the path, so the current folder is never visible
 - [x] **PC-21** `MAJOR` Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
-- [ ] **PC-25** `MAJOR` After a crash (kill) the recovered documents lose their connection and the "unsaved" marker
-- [ ] **PC-26** `MAJOR` Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
+- [x] **PC-25** `MAJOR` After a crash (kill) the recovered documents lose their connection and the "unsaved" marker
+- [x] **PC-26** `MAJOR` Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
 - [x] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
 - [x] **PC-29** `MAJOR` A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
 - [x] **PC-33** `MAJOR` Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command

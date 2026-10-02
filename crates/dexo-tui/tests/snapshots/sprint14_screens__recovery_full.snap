@@ -15,12 +15,12 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                   ┌Session recovery──────────────────────────────────────────────┐                                               │
-│                          ││                   │recovery open=true                                            │                                               │
-│                          ││                   │transaction=unknown                                           │                                               │
-│                          ││                   │confirm_discard=false                                         │                                               │
-│                          ││                   │document scratch.sql                                          │                                               │
+│                          ││                   │Dexo closed unexpectedly and kept these unsaved documents:    │                                               │
+│                          ││                   │  scratch.sql                                                 │                                               │
+│                          ││                   │A transaction was open: its state is unknown.                 │                                               │
 │                          ││                   │                                                              │                                               │
-│                          ││                   │                                                              │                                               │
+│                          ││                   │Keep leaves them open; Discard closes them.                   │                                               │
+│                          ││                   │ [Keep]   [Discard]                                           │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │                                                              │                                               │

@@ -498,7 +498,7 @@ fn destructive_local_commands_open_their_owner_before_confirmation() {
     press(&mut model, 'n');
     let view = dexo_tui::render::render_to_string(&model, 100, 30);
     assert!(
-        view.contains("confirm_discard=true"),
+        view.contains("Press Discard again"),
         "recovery discard confirmation is hidden"
     );
 

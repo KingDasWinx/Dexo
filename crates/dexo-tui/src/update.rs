@@ -6458,7 +6458,19 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
         if !has_stored_documents {
             model.documents.clear();
         }
+        let titles: Vec<String> = recovery
+            .documents
+            .iter()
+            .map(|document| document.title.clone())
+            .collect();
         restore_recovery_documents(model, recovery.documents);
+        // Said, not done silently: nothing told the user the documents were recovered.
+        model.messages.info(format!(
+            "Dexo closed unexpectedly. Restored {} unsaved document{}; Ctrl+P, Session Recovery lists them.",
+            titles.len(),
+            if titles.len() == 1 { "" } else { "s" }
+        ));
+        model.recovery.documents = titles;
     }
     let layout = if should_recover {
         recovery.layout.or(state.layout)
@@ -6506,12 +6518,16 @@ fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::Re
         let mut recovered = crate::model::EditorDocument::with_text(&checkpoint.content);
         recovered.id = checkpoint.id;
         recovered.title = checkpoint.title;
+        // The binding that was saved comes back with the document, and a recovered
+        // document is unsaved by definition: it is marked, and asks before it closes.
+        recovered.saved_revision = recovered.sql.revision().wrapping_add(1);
         if let Some(existing) = model
             .documents
             .iter_mut()
             .find(|document| document.id == recovered.id)
         {
             recovered.path = existing.path.clone();
+            recovered.connection_id = existing.connection_id.clone();
             *existing = recovered;
         } else {
             model.documents.push(recovered);

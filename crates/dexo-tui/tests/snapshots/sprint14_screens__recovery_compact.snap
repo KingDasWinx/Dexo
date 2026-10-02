@@ -5,12 +5,12 @@ expression: "render_to_string(&model, 60, 20)"
 default  no connection  —    1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
 ┌Session recovery──────────────────────────────────────────┐
-│recovery open=true                                        │
-│transaction=unknown                                       │
-│confirm_discard=false                                     │
-│document scratch.sql                                      │
+│Dexo closed unexpectedly and kept these unsaved documents:│
+│  scratch.sql                                             │
+│A transaction was open: its state is unknown.             │
 │                                                          │
-│                                                          │
+│Keep leaves them open; Discard closes them.               │
+│ [Keep]   [Discard]                                       │
 │                                                          │
 │                                                          │
 │                                                          │
