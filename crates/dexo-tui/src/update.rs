@@ -4234,6 +4234,20 @@ fn test_connection(model: &mut Model) -> Vec<Effect> {
 fn save_connection(model: &mut Model) -> Vec<Effect> {
     match model.connection_form.submit() {
         Some((input, password)) => {
+            // Sessions are found by name: a connection called what an open temporary
+            // one is called -- added or renamed -- would take its session over.
+            let saving = model.connection_form.saving_temporary.as_ref();
+            let clashes = model.connections.temporary.iter().any(|temporary| {
+                temporary.name == input.name.trim()
+                    && saving.is_none_or(|saving| saving.id != temporary.id)
+            });
+            if clashes {
+                model.connection_form.set_error(format!(
+                    "{} is the name of an open temporary connection; pick another",
+                    input.name.trim()
+                ));
+                return Vec::new();
+            }
             if let Some(original) = model.connection_form.editing.clone() {
                 match dexo_app::test_connection_input(input) {
                     Ok(mut profile) => {
@@ -4250,20 +4264,6 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
                     }
                 }
             } else {
-                // Sessions are found by name: a second connection called what an open
-                // temporary one is called would take its session over.
-                let saving = model.connection_form.saving_temporary.as_ref();
-                let clashes = model.connections.temporary.iter().any(|temporary| {
-                    temporary.name == input.name.trim()
-                        && saving.is_none_or(|saving| saving.id != temporary.id)
-                });
-                if clashes {
-                    model.connection_form.set_error(format!(
-                        "{} is the name of an open temporary connection; pick another",
-                        input.name.trim()
-                    ));
-                    return Vec::new();
-                }
                 vec![Effect::CreateConnection {
                     input,
                     password,
@@ -8383,6 +8383,27 @@ mod tests {
             ("database", "shop"),
             ("username", "ana"),
             ("password", "secret"),
+        ] {
+            model.connection_form.set_value(label, value);
+        }
+        assert!(update(&mut model, Action::SaveConnection).is_empty());
+        assert!(!model.connection_form.errors.is_empty());
+        // Nor may a saved one be renamed to it.
+        model.connection_form = crate::screens::connection::ConnectionForm::open();
+        model.connection_form.editing = Some(ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(9)),
+            None,
+            "pg",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "db"}),
+            SecretRef::new("ref-9".into()),
+        ));
+        for (label, value) in [
+            ("name", "demo"),
+            ("host", "db"),
+            ("database", "shop"),
+            ("username", "ana"),
         ] {
             model.connection_form.set_value(label, value);
         }
