@@ -277,7 +277,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-11** `MINOR` Document tab truncates the connection name to 7 characters
 - [ ] **AT-12** `MINOR` Error toasts never go away on their own and survive later successful actions
 - [ ] **AT-14** `MINOR` Nothing on screen says a connection is read-only until a write is refused
-- [ ] **AT-15** `MINOR` Destructive-statement guard is bypassed by a tautological WHERE
+- [x] **AT-15** `MINOR` Destructive-statement guard is bypassed by a tautological WHERE
 - [ ] **AT-17** `MINOR` Terminate success message is "signal sent"
 - [ ] **AT-18** `MINOR` Sessions list ignores Home/End/PageUp/PageDown and the mouse wheel; ids sort as text
 - [ ] **AT-19** `MINOR` Sessions list shows every database on the server and does not mark the user's own sessions
@@ -286,7 +286,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-25** `MINOR` User-pressed Cancel Query (Ctrl+F2) is reported as an error toast
 - [x] **AT-27** `MINOR` `select pg_sleep(...)` on production asks for the name ("not a read-only statement"), `select now()` does not
 - [ ] **AT-29** `MINOR` Ctrl+A in a brand-new empty document, then typing, drops the first character
-- [ ] **AT-30** `MINOR` Statements Dexo cannot parse are listed as "Dexo could not read this statement"
+- [x] **AT-30** `MINOR` Statements Dexo cannot parse are listed as "Dexo could not read this statement"
 - [ ] **AT-36** `MINOR` File extension and format are independent: `.sql` file with JSONL inside, `.csv` re-exported as another format
 - [ ] **AT-37** `MINOR` Exporting into a directory that does not exist shows a raw OS error and keeps the previous success line
 - [ ] **AT-38** `MINOR` JSON/JSONL export loses column order, writes jsonb/numeric as strings

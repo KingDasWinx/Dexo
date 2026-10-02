@@ -223,6 +223,22 @@ mod tests {
         );
     }
 
+    /// `where 1=1` is `delete from items` by another name, and asks the same.
+    #[test]
+    fn a_where_that_is_always_true_asks_like_no_where() {
+        let ask = policy(false, true, false);
+        for sql in [
+            "delete from items where 1=1",
+            "update items set n = 0 where true",
+        ] {
+            let verdict = judge(&script(&[sql]), Dialect::Postgres, &ask);
+            let RunVerdict::Confirm { flagged, .. } = verdict else {
+                panic!("{sql}: {verdict:?}");
+            };
+            assert_eq!(flagged.len(), 1, "{sql}");
+        }
+    }
+
     #[test]
     fn turning_confirmation_off_runs_destructive_statements_off_production() {
         assert_eq!(

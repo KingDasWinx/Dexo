@@ -1,7 +1,8 @@
 use std::ops::ControlFlow;
 
 use sqlparser::ast::{
-    Expr, ObjectName, ObjectNamePart, Query, Select, Statement, TableFactor, Visit, Visitor,
+    BinaryOperator, Expr, ObjectName, ObjectNamePart, Query, Select, Statement, TableFactor, Visit,
+    Visitor,
 };
 use sqlparser::dialect::{DuckDbDialect, MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
@@ -225,6 +226,9 @@ pub fn inspect_index(sql: &str, dialect: Dialect) -> Result<Inspection, GuardRej
 pub enum Destructive {
     DeleteWithoutWhere,
     UpdateWithoutWhere,
+    /// A WHERE that every row passes: `WHERE 1 = 1`, `WHERE true`.
+    DeleteAlways,
+    UpdateAlways,
     Drop,
     Truncate,
     AlterDrop,
@@ -237,6 +241,8 @@ impl Destructive {
         match self {
             Self::DeleteWithoutWhere => "DELETE without WHERE removes every row",
             Self::UpdateWithoutWhere => "UPDATE without WHERE changes every row",
+            Self::DeleteAlways => "DELETE with a WHERE that is always true removes every row",
+            Self::UpdateAlways => "UPDATE with a WHERE that is always true changes every row",
             Self::Drop => "DROP removes the object and what it holds",
             Self::Truncate => "TRUNCATE removes every row",
             Self::AlterDrop => "ALTER ... DROP removes part of the table",
@@ -503,8 +509,14 @@ impl Visitor for DestructiveFinder {
             Statement::Delete(delete) if delete.selection.is_none() => {
                 Some(Destructive::DeleteWithoutWhere)
             }
+            Statement::Delete(delete) if delete.selection.as_ref().is_some_and(always_true) => {
+                Some(Destructive::DeleteAlways)
+            }
             Statement::Update(update) if update.selection.is_none() => {
                 Some(Destructive::UpdateWithoutWhere)
+            }
+            Statement::Update(update) if update.selection.as_ref().is_some_and(always_true) => {
+                Some(Destructive::UpdateAlways)
             }
             // Every drop operation displays as `DROP ...`; matching the text covers
             // columns, constraints, keys, indexes and partitions alike.
@@ -519,6 +531,32 @@ impl Visitor for DestructiveFinder {
             _ => return ControlFlow::Continue(()),
         };
         ControlFlow::Break(())
+    }
+}
+
+/// Whether a WHERE lets every row through, as `1 = 1` and `true` do, or an OR with a side
+/// that does. A condition on a column is never taken for one.
+fn always_true(condition: &Expr) -> bool {
+    match condition {
+        Expr::Nested(inner) => always_true(inner),
+        Expr::Value(value) => {
+            let text = value.to_string();
+            text.eq_ignore_ascii_case("true")
+                || text.parse::<f64>().is_ok_and(|number| number != 0.0)
+        }
+        Expr::BinaryOp { left, op, right } => match op {
+            BinaryOperator::Eq => match (&**left, &**right) {
+                (Expr::Value(left), Expr::Value(right)) => {
+                    left.to_string() == right.to_string()
+                        && !left.to_string().eq_ignore_ascii_case("null")
+                }
+                _ => false,
+            },
+            BinaryOperator::And => always_true(left) && always_true(right),
+            BinaryOperator::Or => always_true(left) || always_true(right),
+            _ => false,
+        },
+        _ => false,
     }
 }
 
@@ -1128,6 +1166,40 @@ mod tests {
             destructive("delete from items limit 10", Dialect::Mysql),
             Some(Destructive::DeleteWithoutWhere)
         );
+    }
+
+    /// A WHERE every row passes is no condition: `delete ... where 1=1` removes the lot
+    /// and asks as `delete ...` does.
+    #[test]
+    fn a_where_that_is_always_true_is_not_a_condition() {
+        let pg = |sql: &str| destructive(sql, Dialect::Postgres);
+        for sql in [
+            "delete from items where 1=1",
+            "delete from items where true",
+            "delete from items where (1 = 1)",
+            "delete from items where id = 1 or true",
+            "delete from items where 'a' = 'a' and 2 = 2",
+        ] {
+            assert_eq!(pg(sql), Some(Destructive::DeleteAlways), "{sql}");
+        }
+        for sql in [
+            "update items set n = 0 where 1 = 1",
+            "update items set n = 0 where true",
+        ] {
+            assert_eq!(pg(sql), Some(Destructive::UpdateAlways), "{sql}");
+        }
+        assert_eq!(
+            destructive("delete from items where 1", Dialect::Mysql),
+            Some(Destructive::DeleteAlways)
+        );
+        for sql in [
+            "delete from items where id = 1",
+            "delete from items where 1 = 2",
+            "delete from items where false",
+            "update items set n = 0 where id = 1 and true",
+        ] {
+            assert_eq!(pg(sql), None, "{sql}");
+        }
     }
 
     #[test]
