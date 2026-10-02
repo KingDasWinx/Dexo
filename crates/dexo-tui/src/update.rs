@@ -7296,6 +7296,10 @@ fn open_related_picker(model: &mut Model) -> Vec<Effect> {
             .warn("Related rows are a table's; open a table's rows first.".into());
         return Vec::new();
     }
+    // Offline, the document's connection is dialled and `f` runs once it is up.
+    if let Some(effects) = when_connected(model, Action::OpenRelatedPicker) {
+        return effects;
+    }
     let Some(session) = model.active_session else {
         model
             .messages
@@ -10414,6 +10418,43 @@ mod tests {
         assert!(line("Count rows").contains(" t "), "{screen}");
         line("Sort by this column");
         line("Back from related rows");
+    }
+
+    /// Offline, `t` and `f` dial the document's connection and run once it is up.
+    #[test]
+    fn counting_and_related_rows_connect_by_themselves() {
+        for action in [Action::CountRows, Action::OpenRelatedPicker] {
+            let mut model = Model::default();
+            let profile = dexo_app::ConnectionProfile::new(
+                dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+                None,
+                "shop",
+                "postgres",
+                "local",
+                serde_json::json!({"host": "h"}),
+                dexo_app::connection_profile::SecretRef::new("ref".into()),
+            );
+            model.connections.load_profiles(vec![profile.clone()]);
+            model.documents = vec![crate::model::EditorDocument::new_table(
+                dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders"),
+                Some(profile.id.0.to_string()),
+            )];
+            model.active_document = 0;
+            let effects = update(&mut model, action.clone());
+            assert!(
+                effects
+                    .iter()
+                    .any(|effect| matches!(effect, Effect::ConnectProfile { .. })),
+                "{action:?}: {effects:?}"
+            );
+            assert_eq!(
+                model
+                    .pending_execute
+                    .as_ref()
+                    .map(|pending| &pending.action),
+                Some(&action)
+            );
+        }
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,
