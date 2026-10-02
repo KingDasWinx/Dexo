@@ -594,8 +594,8 @@ profile = "default"
 "alt+right" = "document.next_focus"
 "alt+-" = "layout.results_shrink"
 "alt+=" = "layout.results_grow"
-"alt+[" = "layout.explorer_shrink"
-"alt+]" = "layout.explorer_grow"
+"alt+," = "layout.explorer_shrink"
+"alt+." = "layout.explorer_grow"
 [explorer]
 "enter" = "explorer.expand"
 "n" = "connection.new"
@@ -610,9 +610,6 @@ profile = "default"
 "up" = "explorer.up"
 "down" = "explorer.down"
 "?" = "help.open"
-"alt+=" = "layout.explorer_grow"
-"alt+-" = "layout.explorer_shrink"
-"alt++" = "layout.explorer_grow"
 "alt+left" = "layout.explorer_shrink"
 "alt+right" = "layout.explorer_grow"
 [editor]
@@ -755,8 +752,6 @@ profile = "vim"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "?" = "help.open"
-"alt+=" = "layout.explorer_grow"
-"alt+-" = "layout.explorer_shrink"
 "alt+left" = "layout.explorer_shrink"
 "alt+right" = "layout.explorer_grow"
 [results]
@@ -871,8 +866,6 @@ profile = "emacs"
 "r" = "explorer.refresh"
 "i" = "explorer.inspect"
 "?" = "help.open"
-"alt+=" = "layout.explorer_grow"
-"alt+-" = "layout.explorer_shrink"
 "alt+left" = "layout.explorer_shrink"
 "alt+right" = "layout.explorer_grow"
 [results]
@@ -1365,5 +1358,35 @@ profile = "overlap"
                 .unwrap(),
             Some("document.prev")
         );
+    }
+
+    /// `Alt+[` reaches the terminal as `ESC [`, which opens every CSI sequence: it did
+    /// nothing, and ate the next key. The explorer is resized with Alt+, and Alt+. now,
+    /// and Alt+= and Alt+- belong to the results pane wherever the focus is.
+    #[test]
+    fn the_resize_keys_name_one_pane_each_and_none_starts_an_escape_sequence() {
+        let keymap = Keymap::default_profile();
+        let resolve = |chord: &str, context| {
+            keymap
+                .resolve(&parse_chord(chord).unwrap(), context)
+                .unwrap()
+        };
+        assert_eq!(
+            resolve("alt+,", KeyContext::Editor),
+            Some("layout.explorer_shrink")
+        );
+        assert_eq!(
+            resolve("alt+.", KeyContext::Results),
+            Some("layout.explorer_grow")
+        );
+        assert_eq!(resolve("alt+[", KeyContext::Editor), None);
+        for context in [
+            KeyContext::Explorer,
+            KeyContext::Editor,
+            KeyContext::Results,
+        ] {
+            assert_eq!(resolve("alt+=", context), Some("layout.results_grow"));
+            assert_eq!(resolve("alt+-", context), Some("layout.results_shrink"));
+        }
     }
 }

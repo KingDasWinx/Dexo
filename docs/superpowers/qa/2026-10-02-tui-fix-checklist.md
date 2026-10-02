@@ -352,13 +352,13 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 - [x] **SL-05** `MAJOR` "MOUSE OFF · Ctrl+P settings.mouse" shows an internal command id and points to a palette entry that does not exist
 - [x] **SL-06** `MAJOR` Cycle Theme / Toggle Light-Dark Mode / Cycle Accent / Cycle Keymap / Toggle Mouse / Toggle Animation / Toggle Unicode / Reset Settings and Hide Explorer / Hide Results / Grow-Shrink Results / Grow-Shrink Explorer are not in the command palette
-- [ ] **SL-07** `MAJOR` Alt+[ (Shrink Explorer Pane) does nothing and swallows the next key
+- [x] **SL-07** `MAJOR` Alt+[ (Shrink Explorer Pane) does nothing and swallows the next key
 - [x] **SL-16** `MAJOR` Running Dexo in a small terminal permanently hides the explorer and results (compact mode overwrites the saved layout)
 - [ ] **SL-17** `MAJOR` "Inspect value" shows raw Rust Debug text for numbers and booleans
 - [ ] **SL-01** `MINOR` Clicking an option in Settings cycles to the next value instead of choosing the clicked one
 - [ ] **SL-02** `MINOR` Empty-editor hint `Ctrl+N  new query / Ctrl+O  open a file` is hard-coded and wrong under the Emacs keymap
 - [ ] **SL-03** `MINOR` Unicode = Off still draws non-ASCII glyphs
-- [ ] **SL-08** `MINOR` Alt+= / Alt+- mean different things depending on focus, but the hotkey is shown only as "Grow/Shrink Results Pane"
+- [x] **SL-08** `MINOR` Alt+= / Alt+- mean different things depending on focus, but the hotkey is shown only as "Grow/Shrink Results Pane"
 - [ ] **SL-09** `MINOR` Panes can be shrunk until they are useless
 - [ ] **SL-10** `MINOR` Only one of the two border cells of a divider is draggable
 - [ ] **SL-18** `MINOR` "Toggle Light/Dark Mode" cycles through three modes
