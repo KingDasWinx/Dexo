@@ -98,3 +98,14 @@ fn a_click_in_the_help_search_does_not_close_help() {
     );
     assert!(model.help.open);
 }
+
+/// The palette's query was clipped at the border and the typed end was never seen.
+#[test]
+fn a_long_palette_query_scrolls_to_its_end() {
+    let mut model = Model::default();
+    update(&mut model, Action::OpenPalette);
+    let long = format!("{}END", "a long palette query ".repeat(8));
+    update(&mut model, Action::PaletteQuery(long));
+    let frame = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(frame.contains("END"), "{frame}");
+}

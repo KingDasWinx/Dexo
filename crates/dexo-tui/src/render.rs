@@ -1096,7 +1096,16 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 3;
     let popup = Rect::new(x, y, width, height);
-    let mut lines = vec![format!("> {}", model.palette.query.as_str())];
+    let query_fits = model.palette.query.len() + 4 <= usize::from(width.saturating_sub(2));
+    let mut lines = vec![if query_fits {
+        format!("> {}", model.palette.query.as_str())
+    } else {
+        // Longer than the box: the end the user is typing stays in view.
+        model
+            .palette
+            .query
+            .inline_line_within("> ", true, usize::from(width.saturating_sub(2)))
+    }];
     let rows = crate::palette::popup_list_rows(area.height, visible.len());
     let offset = scroll_to_selection(
         model.palette.selected,
@@ -1193,13 +1202,15 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         Paragraph::new(body).block(overlay_block(model, "Command Palette")),
         popup,
     );
-    show_input(
-        frame,
-        crate::mouse::line_rect(popup_inner(popup), 0),
-        "> ",
-        &model.palette.query,
-        false,
-    );
+    if query_fits {
+        show_input(
+            frame,
+            crate::mouse::line_rect(popup_inner(popup), 0),
+            "> ",
+            &model.palette.query,
+            false,
+        );
+    }
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, _, rect| {
         if i == 0 || i > list_lines || visible.is_empty() {
