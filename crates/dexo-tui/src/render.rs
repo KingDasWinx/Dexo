@@ -2056,7 +2056,13 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .len()
         .saturating_sub((popup.height.saturating_sub(2) as usize).max(1));
     hits.set_scroll_limit(crate::mouse::ScrollArea::Inspector, max_scroll);
-    let scroll = (model.inspector.scroll as usize).min(max_scroll) as u16;
+    // The note editor is the last two lines: while it is open the view stays at the end,
+    // where it is. Under a long DDL it opened below the popup and the note was typed blind.
+    let scroll = if model.inspector.editing_note.is_some() {
+        max_scroll
+    } else {
+        (model.inspector.scroll as usize).min(max_scroll)
+    } as u16;
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines.join("\n"))

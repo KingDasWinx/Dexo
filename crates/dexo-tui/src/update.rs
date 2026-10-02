@@ -9961,6 +9961,36 @@ mod tests {
         );
     }
 
+    /// Under a DDL taller than the inspector, `n` opens the note editor in view, not
+    /// below the popup where the note was typed blind.
+    #[test]
+    fn the_note_editor_opens_in_view() {
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut model = Model::default();
+        model.inspector.open = true;
+        model.inspector.facet = crate::screens::object_inspector::InspectorFacet::Ddl;
+        model.inspector.qualified_name = "shop.public.orders".into();
+        model.inspector.ddl = Some(
+            (0..60)
+                .map(|column| format!("  column_{column} integer,"))
+                .collect::<Vec<_>>()
+                .join("\n"),
+        );
+        model.inspector.object = Some(dexo_driver_api::CatalogObject::new(
+            dexo_driver_api::ObjectId::new("orders"),
+            dexo_driver_api::ObjectKind::Table,
+            dexo_driver_api::QualifiedName::new(Some("shop"), Some("public"), "orders"),
+            None,
+        ));
+        update(&mut model, key(KeyCode::Char('n')));
+        for ch in "typed here".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        let screen = crate::render::render_to_string(&model, 120, 30);
+        assert!(screen.contains("note: typed here"), "{screen}");
+        assert!(screen.contains("[Save]"), "{screen}");
+    }
+
     /// Agent Activity lists a waiting write with its SQL; approving takes a deliberate
     /// second step (Cancel holds the focus), denying one Enter; a request waiting while
     /// the screen is closed is announced once.
