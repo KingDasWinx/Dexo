@@ -130,21 +130,29 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
         Command::Connections { command } => run_connections(registry, command)?,
         Command::Completion { shell } => print_completion(&shell)?,
         Command::Config { command } => run_config(command)?,
+        // Nothing here prompts, so --non-interactive changes nothing: what is not
+        // confirmed by a flag is refused.
         Command::Query {
             connection,
             sql,
             file,
             format,
-            non_interactive,
+            non_interactive: _,
             param,
             continue_on_error,
+            confirm,
+            confirm_target,
         } => run_query(
             registry,
             connection,
             sql,
             file,
             format,
-            non_interactive,
+            Confirmed {
+                destructive: confirm,
+                target: confirm_target,
+                reads_only: false,
+            },
             param,
             false,
             continue_on_error,
@@ -153,16 +161,22 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             connection,
             file,
             format,
-            non_interactive,
+            non_interactive: _,
             param,
             continue_on_error,
+            confirm,
+            confirm_target,
         } => run_query(
             registry,
             connection,
             None,
             file,
             format,
-            non_interactive,
+            Confirmed {
+                destructive: confirm,
+                target: confirm_target,
+                reads_only: false,
+            },
             param,
             true,
             continue_on_error,
@@ -268,7 +282,10 @@ fn run_export(
         registry,
         connection,
         sql,
-        false,
+        Confirmed {
+            reads_only: true,
+            ..Confirmed::default()
+        },
         Vec::new(),
         ScriptPolicy::StopOnError,
     ))?;
@@ -382,6 +399,13 @@ async fn import_live(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    if dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?.read_only {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("Not run: {connection} is read-only, and an import writes into it"),
+        )
+        .into());
+    }
     let session = connect_session(&registry, &profile).await?;
     let writer = session
         .bulk()
@@ -836,11 +860,16 @@ fn run_schema_diff(
         }
         let connection =
             connection.ok_or_else(|| anyhow::anyhow!("--connection is required with --apply"))?;
+        // The target typed is the confirmation; production takes only its own name.
         let batches = tokio::runtime::Runtime::new()?.block_on(execute_script(
             registry,
             connection,
             script.forward.clone(),
-            true,
+            Confirmed {
+                destructive: true,
+                target: Some(target),
+                reads_only: false,
+            },
             Vec::new(),
             ScriptPolicy::StopOnError,
         ))?;
@@ -969,7 +998,7 @@ fn run_query(
     sql: Option<String>,
     file: Option<std::path::PathBuf>,
     format: OutputFormat,
-    non_interactive: bool,
+    confirmed: Confirmed,
     param: Vec<String>,
     from_run: bool,
     continue_on_error: bool,
@@ -978,13 +1007,10 @@ fn run_query(
     if sql.trim().is_empty() {
         anyhow::bail!("SQL is required");
     }
-    let mutating = looks_mutating(&sql);
-    if mutating && non_interactive {
-        return Err(AppError::new(
-            ErrorCategory::Permission,
-            "non-interactive mode cannot confirm a mutating statement",
-        )
-        .into());
+    if let Some(target) = confirmed.target.as_deref()
+        && target != connection
+    {
+        anyhow::bail!("--confirm-target does not match the connection '{connection}'");
     }
     let parameters = parse_params(param)?;
     let policy = if continue_on_error {
@@ -993,7 +1019,7 @@ fn run_query(
         ScriptPolicy::StopOnError
     };
     let batches = tokio::runtime::Runtime::new()?.block_on(execute_script(
-        registry, connection, sql, mutating, parameters, policy,
+        registry, connection, sql, confirmed, parameters, policy,
     ))?;
     let mut stdout = std::io::stdout();
     let mut stderr = std::io::stderr();
@@ -1017,11 +1043,86 @@ fn run_query(
     Ok(())
 }
 
+/// What the command line confirmed before SQL runs on a connection; the connection's
+/// policy, judged as the editor judges it, says what has to be.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Confirmed {
+    /// `--confirm`: the destructive statements may run, off production.
+    pub destructive: bool,
+    /// `--confirm-target`: the connection's name, typed; production asks it before any
+    /// write.
+    pub target: Option<String>,
+    /// Only reads run, whatever the connection allows: an export.
+    pub reads_only: bool,
+}
+
+/// Holds `statements` to the connection's policy: a read-only connection refuses any
+/// write, production needs its name typed before any write, and elsewhere a destructive
+/// statement needs `--confirm`. Nothing is asked: what is not confirmed is not run.
+fn hold_to_policy(
+    statements: &[String],
+    dialect: dexo_sql::Dialect,
+    policy: &dexo_app::run_guard::RunPolicy,
+    confirmed: &Confirmed,
+) -> Result<(), AppError> {
+    use dexo_app::run_guard::{RunVerdict, judge};
+    let first_line = |sql: &str| sql.trim().lines().next().unwrap_or_default().to_string();
+    let refuse = |message: String| Err(AppError::new(ErrorCategory::Permission, message));
+    match judge(statements, dialect, policy) {
+        RunVerdict::Run => Ok(()),
+        RunVerdict::Refuse { index, sql } => {
+            let why = if confirmed.reads_only {
+                "an export runs only reads".to_string()
+            } else {
+                format!("{} is read-only", policy.connection)
+            };
+            refuse(format!(
+                "Not run: {why}, and statement {} is not a read: {}",
+                index + 1,
+                first_line(&sql),
+            ))
+        }
+        RunVerdict::Confirm { flagged, typed } => {
+            let typed_name = confirmed.target.as_deref() == Some(policy.connection.as_str());
+            let (confirmed, why, flag) = match typed {
+                Some(_) => (
+                    typed_name,
+                    format!("{} is production", policy.connection),
+                    format!("--confirm-target {}", policy.connection),
+                ),
+                None => (
+                    confirmed.destructive || typed_name,
+                    "these statements need confirming".to_string(),
+                    "--confirm".to_string(),
+                ),
+            };
+            if confirmed {
+                return Ok(());
+            }
+            let listed: Vec<String> = flagged
+                .iter()
+                .map(|flagged| {
+                    format!(
+                        "  statement {}, {}: {}",
+                        flagged.index + 1,
+                        flagged.reason,
+                        first_line(&flagged.sql),
+                    )
+                })
+                .collect();
+            refuse(format!(
+                "Not run: {why}:\n{}\nPass {flag} to run them.",
+                listed.join("\n"),
+            ))
+        }
+    }
+}
+
 async fn execute_script(
     registry: DriverRegistry,
     connection: String,
     sql: String,
-    mutating: bool,
+    confirmed: Confirmed,
     parameters: Vec<DbValue>,
     policy: ScriptPolicy,
 ) -> anyhow::Result<Vec<Result<Vec<QueryEvent>, AppError>>> {
@@ -1035,11 +1136,28 @@ async fn execute_script(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    // Every SQL the command line sends passes here, so this is the one place the
+    // connection's policy is held to -- before it is dialled.
+    let dialect = dexo_app::dialect_for_driver(&profile.driver);
+    let resolved = dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?;
+    let read_only = resolved.read_only || confirmed.reads_only;
+    hold_to_policy(
+        &dexo_app::statements_for_dialect(&sql, ExecutionTarget::Document, 0, None, dialect),
+        dialect,
+        &dexo_app::run_guard::RunPolicy {
+            connection: profile.name.clone(),
+            read_only,
+            confirm_destructive: resolved.confirm_destructive,
+            production: dexo_app::Environment::parse_strict(&profile.environment)
+                == dexo_app::Environment::Production,
+        },
+        &confirmed,
+    )?;
     let secret = profile_secret(&profile).await?;
     let factory = registry.get(&profile.driver)?;
     let dexo_app::connect::Opened {
         session,
-        profile,
+        profile: _,
         policy: conn_policy,
     } = dexo_app::connect::open(factory.as_ref(), &profile, secret, None)
         .await
@@ -1049,13 +1167,13 @@ async fn execute_script(
         .execute_script(
             Arc::from(session),
             &sql,
-            dexo_app::dialect_for_driver(&profile.driver),
+            dialect,
             ExecutionTarget::Document,
             0,
             None,
             policy,
             conn_policy.max_rows,
-            mutating,
+            read_only,
             parameters,
             Duration::from_secs(conn_policy.timeout_secs),
         )
@@ -1118,11 +1236,21 @@ async fn explain_live(
             )
         })?;
     // Split as the connection's dialect writes it.
-    request.sql = dexo_app::explain_service::single_statement(
-        &request.sql,
-        dexo_app::dialect_for_driver(&profile.driver),
-    )?
-    .to_string();
+    let dialect = dexo_app::dialect_for_driver(&profile.driver);
+    request.sql = dexo_app::explain_service::single_statement(&request.sql, dialect)?.to_string();
+    if request.analyze
+        && dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?.read_only
+        && !dexo_sql::is_read(&request.sql, dialect)
+    {
+        let first = request.sql.lines().next().unwrap_or_default();
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!(
+                "Not run: {connection} is read-only, and EXPLAIN ANALYZE would run a statement that is not a read: {first}"
+            ),
+        )
+        .into());
+    }
     let session = connect_session(&registry, &profile).await?;
     let provider = session
         .explain()
@@ -1288,18 +1416,6 @@ fn load_sql(
         (Some(_), None, true) => anyhow::bail!("run reads a file or stdin, not --sql"),
         (None, None, false) => anyhow::bail!("provide --sql or --file"),
     }
-}
-
-fn looks_mutating(sql: &str) -> bool {
-    let trimmed = sql.trim_start().to_ascii_lowercase();
-    let explain_analyze = trimmed.starts_with("explain") && trimmed.contains("analyze");
-    trimmed.starts_with("insert")
-        || trimmed.starts_with("update")
-        || trimmed.starts_with("delete")
-        || trimmed.starts_with("drop")
-        || trimmed.starts_with("truncate")
-        || trimmed.starts_with("alter")
-        || explain_analyze
 }
 
 pub fn present_events(

@@ -97,6 +97,13 @@ pub enum Command {
         param: Vec<String>,
         #[arg(long)]
         continue_on_error: bool,
+        /// Run the destructive statements the connection asks about (DELETE or UPDATE
+        /// without WHERE, DROP, TRUNCATE).
+        #[arg(long)]
+        confirm: bool,
+        /// The connection's name: a production connection runs no write without it.
+        #[arg(long = "confirm-target", value_name = "CONNECTION")]
+        confirm_target: Option<String>,
     },
     /// Run a SQL file on a connection, statement by statement
     Run {
@@ -112,6 +119,13 @@ pub enum Command {
         param: Vec<String>,
         #[arg(long)]
         continue_on_error: bool,
+        /// Run the destructive statements the connection asks about (DELETE or UPDATE
+        /// without WHERE, DROP, TRUNCATE).
+        #[arg(long)]
+        confirm: bool,
+        /// The connection's name: a production connection runs no write without it.
+        #[arg(long = "confirm-target", value_name = "CONNECTION")]
+        confirm_target: Option<String>,
     },
     /// Show a connection's catalog: an object, a search, the grants, or a cached snapshot
     Inspect {

@@ -22,6 +22,8 @@ dexo doctor --json
 
 `--non-interactive` never prompts. Destructive actions need an explicit confirm flag.
 
+`query`, `run`, `export`, `import` and `explain --analyze` hold the SQL to the connection's policy, as the editor does, before anything is dialled: a read-only connection refuses every statement that is not a read (and `import`, and an `EXPLAIN ANALYZE` of one); a production connection runs no write until `--confirm-target <connection>` names it; elsewhere a destructive statement -- `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, `ALTER … DROP` -- waits for `--confirm` when the connection asks before them. Nothing is asked at the terminal: what is not confirmed is not run, and the error lists the statements and the flag. `export` runs only reads.
+
 ## Language server
 
 `dexo lsp` brings Dexo's completion, diagnostics and formatting to any editor that speaks the Language Server Protocol, on stdin and stdout. It completes and checks against the catalog Dexo cached for a connection -- `--connection name`, or a file's first line `-- dexo: connection=name` -- and never dials the database itself, so open the connection once in Dexo, or run `dexo inspect --connection name --refresh`, to cache its catalog. A catalog cached or refreshed while the editor runs is picked up without restarting the server. Formatting follows the editor's tab size, or indents with tabs when it asks for them.

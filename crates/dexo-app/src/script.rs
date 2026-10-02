@@ -2,7 +2,7 @@ use std::ops::Range;
 use std::sync::Arc;
 
 use dexo_driver_api::{QueryEvent, QueryRequest, Session};
-use dexo_sql::{Dialect, split_statements_in, statement_at_in};
+use dexo_sql::{Dialect, StatementEffect, split_statements_in, statement_at_in};
 
 use crate::error::AppError;
 use crate::query_service::QueryService;
@@ -113,18 +113,25 @@ impl QueryService {
         selection: Option<Range<usize>>,
         policy: ScriptPolicy,
         row_limit: u64,
-        mutating: bool,
+        read_only: bool,
         parameters: Vec<dexo_driver_api::DbValue>,
         timeout: std::time::Duration,
     ) -> Vec<Result<Vec<QueryEvent>, AppError>> {
         let statements = statements_for_dialect(sql, target, cursor, selection, dialect);
         let mut out = Vec::new();
         for statement in statements {
-            let mut request = if mutating {
-                QueryRequest::write(statement)
-            } else {
+            let effect = split_statements_in(&statement, dialect)
+                .first()
+                .map_or(StatementEffect::Unknown, |span| span.effect);
+            let mut request = if effect == StatementEffect::ReadOnly {
                 QueryRequest::read(statement, row_limit)
+            } else {
+                QueryRequest::write(statement)
             };
+            // Whatever it is taken for, what it returns stops at the limit, and on a
+            // read-only connection it runs where it cannot write.
+            request.row_limit = row_limit;
+            request.read_only = read_only;
             request.timeout = timeout;
             request.parameters = parameters.clone();
             let result = self.collect(Arc::clone(&session), request).await;
