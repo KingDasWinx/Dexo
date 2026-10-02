@@ -170,7 +170,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-41** `MAJOR` Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused
 - [ ] **ES-01** `MINOR` After the welcome dialog, focus is in the empty editor, not the explorer
 - [ ] **ES-02** `MINOR` Explorer labels are cut at the pane edge with no ellipsis at the default width
-- [ ] **ES-03** `MINOR` Inspect Object on a column shows internal ids and almost no column facts
+- [x] **ES-03** `MINOR` Inspect Object on a column shows internal ids and almost no column facts
 - [x] **ES-05** `MINOR` Tree: Left/Right/Space do nothing; clicking the disclosure arrow only selects; a double click is needed
 - [ ] **ES-08** `MINOR` Palette fuzzy search: "favor" lists unrelated commands above the exact matches
 - [ ] **ES-12** `MINOR` Inspect Object shows only 4 of the 7 table privileges and no owner / comment / size / columns / keys / indexes

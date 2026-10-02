@@ -816,34 +816,52 @@ fn properties_tab_body(model: &Model) -> String {
     }
     if let Some(object) = &model.inspector.object {
         lines.push(format!("kind: {}", object.kind.as_str()));
+        if let Some(type_name) = object.attributes.get("type").and_then(|v| v.as_str()) {
+            lines.push(format!("type: {type_name}"));
+        }
+        // Each driver names these its own way (`driver.sqlite.not_null`, `driver.mysql.nullable`).
+        for (key, value) in &object.attributes {
+            let Some(rest) = key.strip_prefix("driver.") else {
+                continue;
+            };
+            match (rest.split_once('.').map(|(_, name)| name), value.as_bool()) {
+                (Some("not_null"), Some(not_null)) => {
+                    lines.push(format!("nullable: {}", if not_null { "no" } else { "yes" }))
+                }
+                (Some("nullable"), Some(nullable)) => {
+                    lines.push(format!("nullable: {}", if nullable { "yes" } else { "no" }))
+                }
+                (Some("default"), _) => {
+                    if let Some(default) = value.as_str() {
+                        lines.push(format!("default: {default}"));
+                    }
+                }
+                _ => {}
+            }
+        }
         match model.inspector.shown_note() {
             Some(note) => lines.push(format!("note: {note}")),
             None => lines.push("note: none yet; n writes one".into()),
         }
     }
-    if !model.inspector.dependencies.is_empty() {
-        lines.push(format!(
-            "deps: {}",
-            model
+    // One related object to a line, by what it is: a list of ids ran past the border.
+    for (title, ids) in [
+        ("depends on", &model.inspector.dependencies),
+        ("depended on by", &model.inspector.dependents),
+    ] {
+        if ids.is_empty() {
+            continue;
+        }
+        lines.push(format!("{title}:"));
+        for id in ids {
+            let name = model
                 .inspector
-                .dependencies
-                .iter()
-                .map(|id| object_name(model, id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
-    }
-    if !model.inspector.dependents.is_empty() {
-        lines.push(format!(
-            "dependents: {}",
-            model
-                .inspector
-                .dependents
-                .iter()
-                .map(|id| object_name(model, id))
-                .collect::<Vec<_>>()
-                .join(", ")
-        ));
+                .names
+                .get(id)
+                .cloned()
+                .unwrap_or_else(|| object_name(model, id));
+            lines.push(format!("  {name}"));
+        }
     }
     if !model.inspector.effective_privileges.is_empty() {
         lines.push(format!(
@@ -3927,6 +3945,33 @@ mod tests {
             form.contains("target:") || form.contains("schema table"),
             "{form}"
         );
+    }
+
+    /// A column says its type and nullability, and what it relates to by name, one to a line.
+    #[test]
+    fn properties_say_what_a_column_is() {
+        let mut model = Model::default();
+        let column = dexo_driver_api::CatalogObject::new(
+            dexo_driver_api::ObjectId::new("c"),
+            dexo_driver_api::ObjectKind::Column,
+            dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "name"),
+            None,
+        )
+        .with_attribute("type", serde_json::json!("text"))
+        .with_attribute("driver.postgres.not_null", serde_json::json!(true));
+        let related = dexo_driver_api::ObjectId::new("pg:constraint:1");
+        model.inspector.qualified_name = "public.customers.name".into();
+        model.inspector.object = Some(column);
+        model.inspector.dependents = vec![related.clone()];
+        model
+            .inspector
+            .names
+            .insert(related, "constraint customers_pkey".into());
+        let body = super::properties_tab_body(&model);
+        assert!(body.contains("type: text"), "{body}");
+        assert!(body.contains("nullable: no"), "{body}");
+        assert!(body.contains("  constraint customers_pkey"), "{body}");
+        assert!(!body.contains("pg:constraint"), "{body}");
     }
 
     #[test]
