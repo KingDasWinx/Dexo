@@ -120,7 +120,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     // doors, then the hint. The doors outlive the hint because F1 is how you get the
     // hint back.
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
-    let doors = "Ctrl+P  F1";
+    let doors = doors(model);
+    let doors = doors.as_str();
     let room = (area.width as usize).saturating_sub(used);
     // A newer release outranks the key hint: the hint comes back with F1, the command
     // to update does not come back at all.
@@ -137,7 +138,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     } else if let Some(hint) = footer_hint(model)
         && room > reserved
     {
-        spans.push(Span::raw(fit_hint(hint, room - reserved)));
+        spans.push(Span::raw(fit_hint(&hint, room - reserved)));
     }
     let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
     let right = notice.as_ref().map_or(0, |n| n.chars().count() + 2) + doors.chars().count();
@@ -196,14 +197,43 @@ fn fit_hint(hint: &str, budget: usize) -> String {
     out
 }
 
-fn footer_hint(model: &Model) -> Option<&'static str> {
+/// `key what` for each command the active keymap binds, two spaces apart: Vim and
+/// Emacs page, close and run with other keys, or none, and a fixed hint said keys that
+/// did nothing there.
+fn keyed_hint(model: &Model, parts: &[(&str, &str)]) -> String {
+    parts
+        .iter()
+        .filter_map(|(id, what)| {
+            let key = crate::palette::shortcut_for(model, id, None)?;
+            Some(format!("{key} {what}"))
+        })
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+/// The palette's and Help's keys, which bring the hint back.
+fn doors(model: &Model) -> String {
+    keyed_hint(model, &[("palette.open", ""), ("help.open", "")])
+        .split("  ")
+        .map(str::trim)
+        .collect::<Vec<_>>()
+        .join("  ")
+}
+
+fn footer_hint(model: &Model) -> Option<String> {
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact)
         && matches!(
             model.effective_focus(),
             crate::model::Focus::Editor | crate::model::Focus::Palette
         )
     {
-        return Some("Alt+1 connections  Ctrl+P commands");
+        return Some(keyed_hint(
+            model,
+            &[
+                ("focus.explorer", "connections"),
+                ("palette.open", "commands"),
+            ],
+        ));
     }
     // A table document has no editor on screen, so the editor's hint would be a lie.
     match model.effective_focus() {
@@ -223,12 +253,34 @@ fn footer_hint(model: &Model) -> Option<&'static str> {
                     "Enter expand  a actions"
                 }
             })
-            .or(Some("Enter connect/expand  a actions  n new")),
-        crate::model::Focus::DocumentTabs => {
-            Some("←/→ tabs  Enter open/new  Ctrl+W close  Esc editor")
+            .or(Some("Enter connect/expand  a actions  n new"))
+            .map(str::to_string),
+        crate::model::Focus::DocumentTabs => Some(format!(
+            "←/→ tabs  Enter open/new  {}  Esc editor",
+            keyed_hint(model, &[("document.close", "close")])
+        )),
+        crate::model::Focus::Editor => Some(keyed_hint(
+            model,
+            &[
+                ("query.execute_statement", "run"),
+                ("document.new", "new sql"),
+                ("document.close", "close"),
+            ],
+        )),
+        crate::model::Focus::Results => {
+            let page = match (
+                crate::palette::shortcut_for(model, "data.page_next", None),
+                crate::palette::shortcut_for(model, "data.page_prev", None),
+            ) {
+                (Some(next), Some(previous)) => format!("{next}/{previous} page  "),
+                _ => String::new(),
+            };
+            Some(format!(
+                "Enter actions  {}  {page}{}",
+                keyed_hint(model, &[("results.cycle_view", "view")]),
+                keyed_hint(model, &[("document.close", "close")])
+            ))
         }
-        crate::model::Focus::Editor => Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close"),
-        crate::model::Focus::Results => Some("Enter actions  v view  n/p page  Ctrl+W close"),
         _ => None,
     }
 }
@@ -251,7 +303,7 @@ mod tests {
             .sync_connection_roots(&model.connections.profiles, "");
         model.explorer.select(connection_id("prod"));
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Enter connect  a actions  n new  e edit")
         );
 
@@ -271,7 +323,7 @@ mod tests {
             .sync_connection_roots(&model.connections.profiles, "prod");
         model.explorer.select(connection_id("prod"));
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Enter expand  a actions  n new  e edit")
         );
     }
@@ -298,7 +350,7 @@ mod tests {
             ..Model::default()
         };
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Alt+1 connections  Ctrl+P commands")
         );
     }
@@ -319,13 +371,13 @@ mod tests {
             ));
         model.set_active_document(1);
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Enter actions  v view  n/p page  Ctrl+W close")
         );
 
         model.set_active_document(0);
         assert_eq!(
-            footer_hint(&model),
+            footer_hint(&model).as_deref(),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")
         );
     }
@@ -444,5 +496,27 @@ mod tests {
                 "missing mouse recovery command at {width}x{height}"
             );
         }
+    }
+
+    /// The hints say the keys of the keymap in use: Vim has no page keys, and Emacs
+    /// opens the palette with Alt+X.
+    #[test]
+    fn hints_follow_the_keymap() {
+        let mut model = Model {
+            focus: Focus::Results,
+            keymap: crate::keymap::Keymap::vim_profile(),
+            ..Model::default()
+        };
+        let hint = footer_hint(&model).unwrap();
+        assert!(!hint.contains("page"), "{hint}");
+        assert!(hint.contains("Ctrl+W close"), "{hint}");
+        model.keymap = crate::keymap::Keymap::emacs_profile();
+        assert!(
+            super::doors(&model).starts_with("Alt+X"),
+            "{}",
+            super::doors(&model)
+        );
+        model.keymap = crate::keymap::Keymap::default_profile();
+        assert!(footer_hint(&model).unwrap().contains("n/p page"));
     }
 }
