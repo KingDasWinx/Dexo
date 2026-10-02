@@ -99,6 +99,11 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
                 i += word.len().max(1);
             }
             _ => {
+                // A Postgres routine's body is one dollar-quoted string, with no END to
+                // close it: past it, a new line may start the next statement.
+                if scan.routine && scan.depth == 0 && skip_dollar(sql, i).is_some() {
+                    scan.body_closed = true;
+                }
                 scan.last = Last::Other;
                 i = skip_atom(sql, i).max(i + 1);
             }
@@ -109,6 +114,19 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
     }
     spans
 }
+
+/// Words between a CREATE and the kind of object it makes. AGGREGATE is MariaDB's
+/// stored aggregate function, whose body is a block too.
+const CREATE_MODIFIERS: &[&str] = &[
+    "OR",
+    "REPLACE",
+    "DEFINER",
+    "CURRENT_USER",
+    "TEMP",
+    "TEMPORARY",
+    "CONSTRAINT",
+    "AGGREGATE",
+];
 
 /// Words that start a statement when they open a line.
 const STARTERS: &[&str] = &[
@@ -175,6 +193,8 @@ struct Scan {
     insert_awaits_rows: bool,
     /// A WITH at the top level: after its `)` the main query follows on its own line.
     cte: bool,
+    /// A CREATE whose object is not yet named: only modifiers have followed it.
+    create_header: bool,
     /// A CREATE of a trigger, function, procedure or event: its body is a block.
     routine: bool,
     /// `BEGIN`/`CASE` blocks open inside a routine's body. While one is open, `;` ends
@@ -192,7 +212,24 @@ impl Scan {
         let upper = word.to_ascii_uppercase();
         if self.first.is_none() {
             self.insert_awaits_rows = matches!(upper.as_str(), "INSERT" | "REPLACE");
+            self.create_header = upper == "CREATE";
             self.first = Some(upper.clone());
+        } else if self.create_header && self.depth == 0 {
+            // A routine is one only when it is what the CREATE makes, named past its
+            // modifiers -- `OR REPLACE`, `TEMP`, MySQL's `DEFINER = user@host`. Found
+            // anywhere, TRIGGER, FUNCTION, PROCEDURE or EVENT held the split: `CREATE
+            // TABLE event (…)` swallowed the statement on the next line.
+            if matches!(
+                upper.as_str(),
+                "TRIGGER" | "FUNCTION" | "PROCEDURE" | "EVENT"
+            ) {
+                self.routine = true;
+                self.create_header = false;
+            } else if !(CREATE_MODIFIERS.contains(&upper.as_str())
+                || matches!(self.last, Last::Operator | Last::Other))
+            {
+                self.create_header = false;
+            }
         } else if self.depth == 0
             && self.insert_awaits_rows
             && matches!(
@@ -204,15 +241,6 @@ impl Scan {
         }
         if self.depth == 0 && upper == "WITH" {
             self.cte = true;
-        }
-        if self.first.as_deref() == Some("CREATE")
-            && self.depth == 0
-            && matches!(
-                upper.as_str(),
-                "TRIGGER" | "FUNCTION" | "PROCEDURE" | "EVENT"
-            )
-        {
-            self.routine = true;
         }
         if self.routine {
             // `END IF`, `END LOOP`, ... close what was never counted as opening, so the
@@ -720,6 +748,32 @@ mod tests {
             split_statements_in(brackets, crate::Dialect::Sqlite).len(),
             2
         );
+    }
+
+    /// Only what a CREATE makes says whether it is a routine: a table or a column
+    /// named `event` or `trigger` is not one, and a Postgres routine's dollar-quoted
+    /// body is closed at its end.
+    #[test]
+    fn a_routine_is_what_the_create_makes() {
+        let count = |sql: &str, dialect| split_statements_in(sql, dialect).len();
+        for sql in [
+            "CREATE TABLE event (id int)\nSELECT 1",
+            "CREATE TABLE logs (trigger_name text, function text)\nSELECT 1",
+            "CREATE INDEX procedure ON t (x)\nSELECT 1",
+            "CREATE VIEW event AS SELECT 1\nSELECT 2",
+            "CREATE FUNCTION f() RETURNS int AS $$ select 1 $$ LANGUAGE sql\nSELECT 2",
+            "CREATE OR REPLACE FUNCTION f() RETURNS trigger AS $body$\nBEGIN\n  UPDATE t SET x = 1;\n  RETURN NEW;\nEND\n$body$ LANGUAGE plpgsql\nSELECT 3",
+        ] {
+            assert_eq!(count(sql, crate::Dialect::Postgres), 2, "{sql}");
+        }
+        for sql in [
+            "CREATE TABLE event (id int)\nSELECT 1",
+            "CREATE DEFINER=root@localhost PROCEDURE p() BEGIN\n  SELECT 1;\n  SELECT 2;\nEND\nselect 3",
+            "CREATE DEFINER = `root`@`%` TRIGGER t BEFORE INSERT ON x FOR EACH ROW BEGIN\n  SET NEW.a = 1;\nEND\nselect 3",
+            "CREATE AGGREGATE FUNCTION agg(x INT) RETURNS INT BEGIN\n  DECLARE s INT;\n  RETURN s;\nEND\nselect 3",
+        ] {
+            assert_eq!(count(sql, crate::Dialect::Mysql), 2, "{sql}");
+        }
     }
 
     /// A backslash command is its own statement, ending at its line, and a read; with
