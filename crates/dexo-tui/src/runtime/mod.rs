@@ -177,15 +177,18 @@ impl Password {
 }
 
 /// Dials `profile` with the password `password` resolves to, within `CONNECT_TIMEOUT`.
-/// A password the server turns down is forgotten if this session was holding it in
-/// memory -- a URL's, or one typed for the session -- so the next connect asks again
-/// instead of failing with it for ever.
+/// On a connect (`forget`), a password the server turns down is forgotten if this
+/// session was holding it in memory -- a URL's, or one typed for the session -- so the
+/// next connect asks again instead of failing with it for ever. A password command's
+/// answer is not one, and a test only reports.
 async fn dial(
     factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
     profile: &ConnectionProfile,
     password: Password,
     memory: &MemorySecretStore,
+    forget: bool,
 ) -> Result<(Box<dyn dexo_driver_api::Session>, SecretString), String> {
+    let forget = forget && matches!(password, Password::Ready(_));
     let secret = password.resolve().await?;
     let (connect, _) = profile
         .connect_request(SecretString::from(secret.expose_secret().to_string()))
@@ -196,7 +199,7 @@ async fn dial(
             let rejected = error.category() == dexo_driver_api::DriverErrorCategory::Authentication;
             let message = map_driver_error(error).to_string();
             let key = profile.secret_ref.as_str();
-            if rejected && matches!(memory.get(key), Ok(Some(_))) {
+            if forget && rejected && matches!(memory.get(key), Ok(Some(_))) {
                 let _ = memory.delete(key);
                 return Err(format!("{message} -- connect again to enter the password"));
             }
@@ -990,7 +993,7 @@ impl WorkbenchRuntime {
         let action_tx = self.action_tx.clone();
         let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
-            let action = match dial(factory, &profile, password, &memory).await {
+            let action = match dial(factory, &profile, password, &memory, true).await {
                 Ok((session, secret)) => {
                     let printed = from_command.then_some(secret);
                     *opening.lock().await = Some((token, profile, Arc::from(session), printed));
@@ -1163,9 +1166,9 @@ impl WorkbenchRuntime {
         let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
             let answered = match ready {
-                Ok((factory, password)) => {
-                    dial(factory, &profile, password, &memory).await.map(drop)
-                }
+                Ok((factory, password)) => dial(factory, &profile, password, &memory, false)
+                    .await
+                    .map(drop),
                 Err(message) => Err(message),
             };
             let (ok, message) = match answered {
@@ -1865,4 +1868,82 @@ fn grant_lines(
             ),
         })
         .collect()
+}
+
+#[cfg(test)]
+mod dial_tests {
+    use std::sync::Arc;
+
+    use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+    use dexo_driver_api::{ConnectRequest, ConnectionFactory, DriverError, DriverErrorCategory};
+    use dexo_secrets::{MemorySecretStore, SecretStore};
+    use secrecy::SecretString;
+
+    use super::{Password, dial};
+
+    struct Refuses;
+
+    #[async_trait::async_trait]
+    impl ConnectionFactory for Refuses {
+        fn descriptor(&self) -> dexo_driver_api::DriverDescriptor {
+            dexo_driver_api::DriverDescriptor {
+                id: "postgres",
+                display_name: "Refuses",
+                default_port: 5432,
+                options: dexo_driver_api::ConnectionOptions {
+                    tls: false,
+                    client_certificate: false,
+                    ssh: false,
+                    proxy: false,
+                },
+                file: false,
+            }
+        }
+
+        async fn connect(
+            &self,
+            _: ConnectRequest,
+        ) -> Result<Box<dyn dexo_driver_api::Session>, DriverError> {
+            Err(DriverError::new(
+                DriverErrorCategory::Authentication,
+                "password authentication failed",
+            ))
+        }
+    }
+
+    /// Only a connect with a password held in memory forgets it and says to connect
+    /// again; a password command's answer, or a test, is reported as it is.
+    #[tokio::test]
+    async fn only_a_connect_forgets_a_rejected_password() {
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(1)),
+            None,
+            "shop",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h", "port": 5432, "username": "u", "database": "d"}),
+            SecretRef::new("held".into()),
+        );
+        let memory = MemorySecretStore::default();
+        memory.put("held", "wrong").unwrap();
+        let factory: Arc<dyn ConnectionFactory> = Arc::new(Refuses);
+        let ready = || Password::Ready(SecretString::from("wrong"));
+        for (password, forget) in [
+            (ready(), false),
+            (Password::Command("printf wrong".into()), true),
+        ] {
+            let message = dial(Arc::clone(&factory), &profile, password, &memory, forget)
+                .await
+                .err()
+                .unwrap();
+            assert!(!message.contains("connect again"), "{message}");
+            assert!(memory.get("held").unwrap().is_some());
+        }
+        let message = dial(factory, &profile, ready(), &memory, true)
+            .await
+            .err()
+            .unwrap();
+        assert!(message.contains("connect again"), "{message}");
+        assert!(memory.get("held").unwrap().is_none());
+    }
 }
