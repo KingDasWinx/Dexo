@@ -289,6 +289,19 @@ fn rows_label(model: &Model) -> String {
         .results
         .tabs
         .get(model.results.active)
+        .is_some_and(|tab| tab.paged)
+    {
+        // One page of the result: a full one may have more after it.
+        let seen = model.data.page_offset + shown;
+        if shown >= u64::from(model.data.page_limit) {
+            format!("{}+ rows", grouped(seen))
+        } else {
+            rows_of(&grouped(seen), seen)
+        }
+    } else if model
+        .results
+        .tabs
+        .get(model.results.active)
         .is_some_and(|tab| tab.truncated)
     {
         format!("{}+ rows, limit reached", grouped(shown))

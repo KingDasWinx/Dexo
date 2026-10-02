@@ -6436,6 +6436,26 @@ fn change_data_page(model: &mut Model, offset: u64) -> Vec<Effect> {
         model.data.last_error = Some("connect a session first".into());
         return Vec::new();
     }
+    // A result run again with the bars is paged too: the statement runs again at the
+    // next offset.
+    let paged = model
+        .results
+        .tabs
+        .get(model.results.active)
+        .filter(|tab| tab.paged)
+        .and_then(|tab| tab.source_sql.clone());
+    if let Some(source) = paged {
+        let shown = model.results.row_count() as u64;
+        if offset > model.data.page_offset && shown < u64::from(model.data.page_limit) {
+            model.messages.info("This is the last page.".into());
+            return Vec::new();
+        }
+        if rerun_refused(model) {
+            return Vec::new();
+        }
+        model.data.page_offset = offset;
+        return rerun_derived(model, source);
+    }
     if !model.active_document().kind.is_table() {
         model.data.last_error = Some("open a table first".into());
         return Vec::new();
@@ -6849,6 +6869,7 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
     );
     tab.source_sql = source_sql;
     tab.status = crate::model::OperationStatus::Running;
+    tab.paged = true;
     model.results.replace_tabs(tab);
     model.active_operation = Some(operation);
     vec![Effect::StartScript(crate::action::ScriptRequest {

@@ -1278,3 +1278,52 @@ fn apply_bars(model: &mut Model) -> Vec<dexo_tui::Effect> {
         )),
     )
 }
+
+/// A result run again with the bars is one page: a full page says more may follow, and
+/// n runs the statement again at the next offset.
+#[test]
+fn a_result_run_again_with_the_bars_pages() {
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(1))),
+        session_generation: 1,
+        ..Model::default()
+    };
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select n from generate_series(1, 500) n".into());
+    model.results.tabs = vec![tab];
+    let effects = apply_bars(&mut model);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::StartScript(_)))
+    );
+    let page = |model: &mut Model, rows: i64| {
+        model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+            name: "n".into(),
+            type_name: "int".into(),
+            nullable: false,
+        }]);
+        model
+            .results
+            .append_rows((0..rows).map(|n| vec![DbValue::I64(n)]).collect());
+        model.active_operation = None;
+    };
+    let limit = i64::from(model.data.page_limit);
+    page(&mut model, limit);
+    let title = dexo_tui::render::render_to_string(&model, 120, 30);
+    assert!(title.contains("Results (100+ rows)"), "{title}");
+    let effects = update(&mut model, Action::NextDataPage);
+    let sql = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::StartScript(request) => Some(request.statements[0].clone()),
+            _ => None,
+        })
+        .expect("the next page runs");
+    assert!(sql.contains("OFFSET 100"), "{sql}");
+    page(&mut model, 7);
+    let title = dexo_tui::render::render_to_string(&model, 120, 30);
+    assert!(title.contains("Results (107 rows)"), "{title}");
+    assert!(update(&mut model, Action::NextDataPage).is_empty());
+}

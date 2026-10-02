@@ -379,6 +379,9 @@ pub struct ResultTab {
     pub source_offset: Option<(usize, u64)>,
     /// The rows stopped at the row limit with more left.
     pub truncated: bool,
+    /// A page of the statement run again with the bars (`LIMIT`/`OFFSET`): its rows are
+    /// one page, not the whole result, and n and p turn it.
+    pub paged: bool,
 }
 
 impl ResultTab {
@@ -394,6 +397,7 @@ impl ResultTab {
             local_only: None,
             source_offset: None,
             truncated: false,
+            paged: false,
         }
     }
 }
