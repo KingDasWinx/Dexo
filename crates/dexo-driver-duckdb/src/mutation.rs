@@ -487,21 +487,49 @@ impl DataMutator for DuckdbSession {
 
 #[async_trait::async_trait]
 impl BulkWriter for DuckdbSession {
+    /// Through DuckDB's appender, which casts each value to its column: an INSERT
+    /// prepared and run per row took most of an import's time. All the rows land
+    /// together or none do.
     async fn insert_batch(
         &self,
         table: &QualifiedName,
         columns: &[String],
         rows: &[Vec<DbValue>],
     ) -> Result<u64, DriverError> {
-        let mutations: Vec<Mutation> = rows
-            .iter()
-            .map(|values| Mutation::Insert {
-                table: table.clone(),
-                columns: columns.iter().cloned().map(ColumnId).collect(),
-                values: values.clone(),
-            })
-            .collect();
-        self.apply(&mutations).await?;
-        Ok(rows.len() as u64)
+        if self.read_only() {
+            return Err(writes_refused());
+        }
+        let (table, columns, rows) = (table.clone(), columns.to_vec(), rows.to_vec());
+        self.with_conn(move |conn| {
+            let (database, schema) = place_of(conn, &table)?;
+            let own = begin_own(conn, "BEGIN TRANSACTION")?;
+            let appended = (|| {
+                let names: Vec<&str> = columns.iter().map(String::as_str).collect();
+                let mut appender = conn
+                    .appender_with_columns_to_catalog_and_db(
+                        table.object(),
+                        &database,
+                        &schema,
+                        &names,
+                    )
+                    .map_err(map_error)?;
+                for row in &rows {
+                    appender
+                        .append_row(duckdb::appender_params_from_iter(row.iter().map(to_sql)))
+                        .map_err(map_error)?;
+                }
+                appender.flush().map_err(map_error)
+            })();
+            match (own, appended) {
+                (true, Ok(())) => conn.execute_batch("COMMIT").map_err(map_error)?,
+                (true, Err(error)) => {
+                    let _ = close_own(conn);
+                    return Err(error);
+                }
+                (false, appended) => appended?,
+            }
+            Ok(rows.len() as u64)
+        })
+        .await
     }
 }

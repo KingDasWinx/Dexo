@@ -1040,3 +1040,46 @@ async fn keys_point_at_tables_whatever_case_they_were_written_in() {
         .unwrap();
     assert_eq!(key.attributes["fk_table"], "parent");
 }
+
+/// An import goes through DuckDB's appender, every value cast to its column, and lands
+/// whole or not at all.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_import_appends_every_row_or_none() {
+    let session = DuckdbFactory
+        .connect(request(":memory:", false))
+        .await
+        .unwrap();
+    run(
+        &*session,
+        QueryRequest::write("create table imported (id int, price double, day date)"),
+    )
+    .await
+    .unwrap();
+    let table = QualifiedName::new(None::<String>, None::<String>, "imported");
+    let columns = ["id", "price", "day"].map(String::from);
+    let row = |id: usize, day: &str| {
+        vec![
+            DbValue::Text(id.to_string()),
+            DbValue::Text("2.5".into()),
+            DbValue::Text(day.into()),
+        ]
+    };
+    let rows: Vec<_> = (0..1000).map(|id| row(id, "2020-01-02")).collect();
+    let bulk = session.bulk().unwrap();
+    assert_eq!(
+        bulk.insert_batch(&table, &columns, &rows).await.unwrap(),
+        1000
+    );
+    let mut broken = rows.clone();
+    broken[500] = row(500, "not a date");
+    bulk.insert_batch(&table, &columns, &broken)
+        .await
+        .unwrap_err();
+    let events = run(
+        &*session,
+        QueryRequest::read("select count(*), sum(price), min(day) from imported", 0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(texts(&events), [["1000", "2500.0", "2020-01-02"]]);
+}
