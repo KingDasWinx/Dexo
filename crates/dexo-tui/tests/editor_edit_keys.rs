@@ -202,3 +202,14 @@ fn an_external_edit_is_one_undo_step() {
     press(&mut model, KeyCode::Char('z'), KeyModifiers::CONTROL);
     assert_eq!(model.active_document().text(), "select 1;");
 }
+
+/// A cursor in the indentation stays there when the line is commented.
+#[test]
+fn toggling_a_comment_leaves_a_cursor_in_the_indent() {
+    let mut model = editor_with("    select 1", 1);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(model.active_document().text(), "    -- select 1");
+    assert_eq!(model.active_document().cursor(), 1);
+    update(&mut model, Action::EditorToggleComment);
+    assert_eq!(model.active_document().cursor(), 1);
+}

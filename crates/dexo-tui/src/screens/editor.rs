@@ -1390,6 +1390,16 @@ pub fn toggle_comment(model: &mut Model) {
         .map(|line| line.chars().take_while(|ch| ch.is_whitespace()).count())
         .min()
         .unwrap_or(0);
+    // The cursor moves with the text it sits in, and stays put in the indentation the
+    // dashes go after.
+    let cursor_column = {
+        let doc = model.active_document();
+        let line_start: usize = lines[..first]
+            .iter()
+            .map(|line| line.chars().count() + 1)
+            .sum();
+        doc.cursor().saturating_sub(line_start)
+    };
     let mut shift = 0isize;
     let edited: Vec<String> = block
         .iter()
@@ -1405,10 +1415,12 @@ pub fn toggle_comment(model: &mut Model) {
                     .or_else(|| rest.strip_prefix("--"))
                     .unwrap_or(&rest);
                 let removed = rest.chars().count() - bare.chars().count();
-                shift -= removed as isize;
+                shift -= removed.min(cursor_column.saturating_sub(lead)) as isize;
                 format!("{}{bare}", line.chars().take(lead).collect::<String>())
             } else {
-                shift += 3;
+                if cursor_column >= indent {
+                    shift += 3;
+                }
                 let head: String = line.chars().take(indent).collect();
                 let tail: String = line.chars().skip(indent).collect();
                 format!("{head}-- {tail}")

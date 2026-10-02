@@ -37,8 +37,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if pane.width == 0 || pane.height == 0 {
         return;
     }
-    // The find bar takes the pane's last rows; the text keeps the rest.
-    let bar = (crate::screens::find::bar_rows(model) as u16).min(pane.height.saturating_sub(1));
+    // The find bar takes the pane's last rows; the text keeps the rest -- all of them in
+    // a pane too short for both, since the bar has the keys while it is open.
+    let bar = (crate::screens::find::bar_rows(model) as u16).min(pane.height);
     let inner = Rect {
         height: pane.height - bar,
         ..pane
@@ -211,9 +212,22 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
         (None, total) => format!("{total} found"),
     };
     let find = &model.find;
+    // Each field shows the stretch of its text around the cursor, so a query wider than
+    // the pane still shows where the typing is.
+    let room = (area.width as usize)
+        .saturating_sub(FIND_LABEL.len() + 1)
+        .max(1);
+    let window = |input: &crate::widgets::text_input::TextInput| {
+        let chars: Vec<char> = input.as_str().chars().collect();
+        let start = input.cursor().saturating_sub(room);
+        let end = (start + room).min(chars.len());
+        (start, chars[start..end].iter().collect::<String>())
+    };
+    let (query_start, query_shown) = window(&find.query);
+    let (replacement_start, replacement_shown) = window(&find.replacement);
     let mut rows = vec![Line::from(vec![
         Span::styled(FIND_LABEL, muted),
-        Span::raw(find.query.as_str().to_string()),
+        Span::raw(query_shown),
         Span::raw("  "),
         Span::raw(count),
         Span::raw("  "),
@@ -228,17 +242,22 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
     if find.replacing {
         rows.push(Line::from(vec![
             Span::styled(REPLACE_LABEL, muted),
-            Span::raw(find.replacement.as_str().to_string()),
+            Span::raw(replacement_shown),
             Span::styled("  Enter replace · Alt+A all · Tab switch", muted),
         ]));
     }
     frame.render_widget(Paragraph::new(rows), area);
     if model.effective_focus() == Focus::Editor {
-        let (row, input) = match find.field {
-            FindField::Query => (0, &find.query),
-            FindField::Replace => (1, &find.replacement),
+        let (row, input, start) = match find.field {
+            FindField::Query => (0, &find.query, query_start),
+            FindField::Replace => (1, &find.replacement, replacement_start),
         };
-        let typed: String = input.as_str().chars().take(input.cursor()).collect();
+        let typed: String = input
+            .as_str()
+            .chars()
+            .skip(start)
+            .take(input.cursor() - start)
+            .collect();
         let x = area.x
             + FIND_LABEL.len() as u16
             + unicode_width::UnicodeWidthStr::width(typed.as_str()) as u16;

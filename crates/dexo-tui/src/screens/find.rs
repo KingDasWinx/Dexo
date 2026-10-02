@@ -334,6 +334,19 @@ mod tests {
         assert_eq!(model.active_document().text(), "select ação, ação from t");
     }
 
+    /// A query wider than the pane shows its end, where the typing is, at small sizes.
+    #[test]
+    fn a_long_query_shows_where_the_typing_is() {
+        let mut model = editor_with("select 1");
+        model.keys_disambiguated = true;
+        press(&mut model, KeyCode::Char('f'), KeyModifiers::CONTROL);
+        for ch in "abcdefghijklmnopqrstuvwxyz0123456789zz".chars() {
+            press(&mut model, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        let screen = crate::render::render_to_string(&model, 40, 8);
+        assert!(screen.contains("6789zz"), "{screen}");
+    }
+
     /// Where ^H is Ctrl+Backspace, Ctrl+H deletes a word instead of opening the bar.
     #[test]
     fn ctrl_h_is_replace_only_where_keys_are_unambiguous() {
