@@ -58,7 +58,8 @@ pub fn split_statements(sql: &str) -> Vec<StatementSpan> {
             b' ' | b'\t' | b'\r' | b'\n' => {
                 let next = skip_ws(sql, i);
                 let new_line = sql[i..next].contains('\n');
-                if new_line && bytes.get(next) == Some(&b'\\') {
+                if new_line && bytes.get(next) == Some(&b'\\') && scan.depth == 0 && scan.block == 0
+                {
                     spans.push(classify_span(sql, start..trim_end(sql, start, i)));
                     start = next;
                     scan = Scan::default();
@@ -425,10 +426,12 @@ fn classify(sql: &str) -> (StatementEffect, bool) {
     }
 }
 
-/// A psql backslash command on its own line. One with a `;` in it is not taken for one:
-/// `\dt ; DELETE …` on one line is what a server would see as SQL.
+/// A psql backslash command on its own line, a `;` at its end allowed out of psql habit.
+/// One with a `;` anywhere else is not taken for one: `\dt ; DELETE …` on one line is
+/// what a server would see as SQL.
 pub fn is_backslash_command(sql: &str) -> bool {
     let sql = sql.trim();
+    let sql = sql.strip_suffix(';').unwrap_or(sql);
     sql.starts_with('\\') && !sql.contains(';') && !sql.contains('\n')
 }
 
@@ -709,6 +712,12 @@ mod tests {
         );
         assert_eq!(spans[0].effect, super::StatementEffect::ReadOnly);
         assert!(super::is_backslash_command("\\x"));
+        assert!(super::is_backslash_command("\\dt;"));
+        assert!(!super::is_backslash_command("\\dt;;"));
+        // A line of a statement that starts with a backslash, inside parentheses, is
+        // still that statement's.
+        let nested = "select (\n\\N\n)";
+        assert_eq!(super::split_statements(nested).len(), 1);
         assert!(!super::is_backslash_command("\\dt ; delete from t"));
         assert!(!crate::is_read(
             "\\dt ; delete from t",
