@@ -5,11 +5,10 @@
 use std::collections::{HashMap, HashSet};
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{
-    Expr, Ident, ObjectName, ObjectNamePart, Query, Statement, TableFactor, Visit, Visitor,
-};
+use sqlparser::ast::{Expr, Ident, ObjectNamePart, Query, Statement, TableFactor, Visit, Visitor};
 use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
+use sqlparser::tokenizer::{Token, Tokenizer};
 
 use crate::statement::{first_keyword, split_statements_in};
 use crate::{Diagnostic, Dialect};
@@ -77,21 +76,10 @@ pub fn diagnose(
 ) -> Vec<Diagnostic> {
     let spans = split_statements_in(sql, dialect);
     // Tables the document creates itself are known before the catalog hears of them.
-    let mut created = HashSet::new();
-    for span in &spans {
-        let body = &sql[span.byte_range.clone()];
-        if first_keyword(body).as_deref() == Some("CREATE")
-            && let Ok(statements) = parse(body, dialect)
-        {
-            for statement in statements {
-                if let Statement::CreateTable(create) = &statement {
-                    created.extend(last_part(&create.name));
-                } else if let Statement::CreateView(view) = &statement {
-                    created.extend(last_part(&view.name));
-                }
-            }
-        }
-    }
+    let created: HashSet<String> = spans
+        .iter()
+        .filter_map(|span| created_name(&sql[span.byte_range.clone()], dialect))
+        .collect();
     let mut found = Vec::new();
     for span in &spans {
         let body = &sql[span.byte_range.clone()];
@@ -294,11 +282,77 @@ fn system_name(table: &str) -> bool {
         || table == "information_schema"
 }
 
-fn last_part(name: &ObjectName) -> Option<String> {
-    match name.0.last()? {
-        ObjectNamePart::Identifier(ident) => Some(ident.value.to_lowercase()),
-        ObjectNamePart::Function(_) => None,
+/// The table, view or sequence `body` creates, read from its words rather than parsed:
+/// the parser misses `CREATE UNLOGGED TABLE`, `(LIKE ..)`, SQLite's virtual tables and
+/// `SELECT .. INTO new_table`, and each left the new name underlined further down.
+fn created_name(body: &str, dialect: Dialect) -> Option<String> {
+    let tokens = match dialect {
+        Dialect::Postgres => Tokenizer::new(&PostgreSqlDialect {}, body).tokenize(),
+        Dialect::Mysql => Tokenizer::new(&MySqlDialect {}, body).tokenize(),
+        Dialect::Sqlite => Tokenizer::new(&SQLiteDialect {}, body).tokenize(),
     }
+    .ok()?;
+    let mut tokens = tokens
+        .into_iter()
+        .filter(|token| !matches!(token, Token::Whitespace(_) | Token::EOF | Token::Period));
+    let word = |token: &Token| match token {
+        Token::Word(word) => Some((word.value.to_uppercase(), word.value.to_lowercase())),
+        _ => None,
+    };
+    let (first, _) = word(&tokens.next()?)?;
+    let names: Vec<(String, String)> = match first.as_str() {
+        "CREATE" => tokens.map_while(|token| word(&token)).collect(),
+        // `SELECT .. INTO name`: the words after the first INTO.
+        "SELECT" => tokens
+            .skip_while(|token| word(token).is_none_or(|(upper, _)| upper != "INTO"))
+            .skip(1)
+            .map_while(|token| word(&token))
+            .collect(),
+        _ => return None,
+    };
+    const MODIFIERS: &[&str] = &[
+        "OR",
+        "REPLACE",
+        "GLOBAL",
+        "LOCAL",
+        "TEMP",
+        "TEMPORARY",
+        "UNLOGGED",
+        "VIRTUAL",
+        "MATERIALIZED",
+        "RECURSIVE",
+        "FOREIGN",
+        "TABLE",
+        "VIEW",
+        "SEQUENCE",
+        "IF",
+        "NOT",
+        "EXISTS",
+    ];
+    let mut words = names.into_iter().peekable();
+    if first == "CREATE" {
+        let mut creates = false;
+        while let Some((upper, _)) = words.peek() {
+            if !MODIFIERS.contains(&upper.as_str()) {
+                break;
+            }
+            creates |= matches!(upper.as_str(), "TABLE" | "VIEW" | "SEQUENCE");
+            words.next();
+        }
+        if !creates {
+            return None;
+        }
+    }
+    // A qualified name's dots were dropped: its words run on, and the table is the last
+    // one before the next keyword -- `public.t (` stops at the `(`, `x.t AS` at AS.
+    let mut name = None;
+    for (upper, lower) in words {
+        if name.is_some() && matches!(upper.as_str(), "AS" | "USING" | "FROM" | "LIKE") {
+            break;
+        }
+        name = Some(lower);
+    }
+    name
 }
 
 /// Byte offsets of `first`'s start to `last`'s end in `body`, from sqlparser's spans.
@@ -421,6 +475,11 @@ mod tests {
             "select o.rowid, o.oid, o._rowid_, o.ctid, o.xmin, o.tableoid from orders o",
             "select o.total from orders o where exists (select 1 from customers o where o.id = 1)",
             "with orders as (select id, 1 as extra from orders) select orders.extra from orders",
+            "create unlogged table ul (id int); select * from ul",
+            "create table t2 (like orders including all); select * from t2",
+            "select * into newtab from orders; select * from newtab",
+            "create virtual table ft using fts5(body); select * from ft",
+            "create temp table if not exists public.tmp1 as select 1; select * from tmp1",
         ] {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
