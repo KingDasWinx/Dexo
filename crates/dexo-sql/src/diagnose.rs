@@ -81,6 +81,7 @@ pub fn diagnose(
         .filter_map(|span| created_name(&sql[span.byte_range.clone()], dialect))
         .collect();
     let mut found = Vec::new();
+    let mut grammar = None;
     for span in &spans {
         let body = &sql[span.byte_range.clone()];
         let checked = matches!(
@@ -93,15 +94,21 @@ pub fn diagnose(
         let start = span.byte_range.start;
         match parse(body, dialect) {
             Err(error) => {
-                let typing = cursor >= start && cursor <= span.byte_range.end + 1;
                 let message = error.to_string();
-                if typing && message.contains("found: EOF") {
+                let located =
+                    location(&message).and_then(|(line, column)| offset(body, line, column));
+                // Ended too soon: the last word is where something more was wanted.
+                let at = located.unwrap_or_else(|| last_word_start(body));
+                let end = token_end(body, at);
+                // The statement being typed is not told off for what is at or past the
+                // cursor: that part is not written yet.
+                let typing = cursor >= start && cursor <= span.byte_range.end + 1;
+                if typing && start + end >= cursor {
                     continue;
                 }
-                let at = location(&message)
-                    .and_then(|(line, column)| offset(body, line, column))
-                    .unwrap_or(0);
-                let end = token_end(body, at);
+                if located.is_some() && !beyond_doubt(body, at, &mut grammar) {
+                    continue;
+                }
                 found.push(Diagnostic::local(clean(&message), start + at..start + end));
             }
             Ok(statements) => {
@@ -117,6 +124,72 @@ pub fn diagnose(
         }
     }
     found
+}
+
+/// Whether a parse error at `at` is the SQL's and not the parser's. sqlparser knows only
+/// part of each dialect, so an error is believed only when the highlighting grammar
+/// fails the statement too and the statement uses none of the constructs sqlparser is
+/// known to lack.
+fn beyond_doubt(body: &str, at: usize, grammar: &mut Option<tree_sitter::Parser>) -> bool {
+    // ponytail: a list of what sqlparser fails on in each dialect; extend it as more
+    // valid SQL turns up underlined.
+    const UNPARSED: &[&[&str]] = &[
+        &["rows", "from"],
+        &["symmetric"],
+        &["asymmetric"],
+        &["lock", "in"],
+        &["share", "mode"],
+        &["with", "rollup"],
+        &["outfile"],
+        &["dumpfile"],
+        &["indexed", "by"],
+        &["not", "indexed"],
+        &["glob"],
+    ];
+    let words: Vec<String> = body
+        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
+        .filter(|word| !word.is_empty())
+        .map(str::to_lowercase)
+        .collect();
+    let lacking = UNPARSED.iter().any(|construct| {
+        words.windows(construct.len()).any(|run| {
+            run.iter()
+                .zip(construct.iter())
+                .all(|(word, want)| word == want)
+        })
+    });
+    // `ORDER BY id USING <`, `CHAR(65 USING utf8mb4)`.
+    let at_using = body[at..]
+        .get(..5)
+        .is_some_and(|word| word.eq_ignore_ascii_case("using"));
+    if lacking || at_using {
+        return false;
+    }
+    let grammar = grammar.get_or_insert_with(|| {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_sequel::LANGUAGE.into())
+            .expect("tree-sitter-sequel language");
+        parser
+    });
+    grammar
+        .parse(body, None)
+        .is_none_or(|tree| tree.root_node().has_error())
+}
+
+fn is_keyword(word: &str) -> bool {
+    !word.is_empty()
+        && sqlparser::keywords::ALL_KEYWORDS
+            .binary_search(&word.to_ascii_uppercase().as_str())
+            .is_ok()
+}
+
+/// Where the last word of `body` starts.
+fn last_word_start(body: &str) -> usize {
+    let trimmed = body.trim_end();
+    trimmed.rfind(char::is_whitespace).map_or(0, |at| {
+        at + trimmed[at..].chars().next().map_or(1, char::len_utf8)
+    })
 }
 
 fn parse(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
@@ -218,7 +291,11 @@ fn check(
         if let Some(alias) = alias {
             name(alias.clone(), (schema.clone(), table.clone()));
         }
+        // `FROM ONLY t`, `UPDATE IGNORE t`: the parser took a keyword it does not know
+        // there for the table.
+        let keyword = parts.len() == 1 && parts[0].quote_style.is_none() && is_keyword(&table);
         let unknown = match &schema {
+            None if keyword => false,
             None => {
                 !refs.ctes.contains(&table)
                     && !created.contains(&table)
@@ -451,6 +528,63 @@ mod tests {
             )
             .is_empty()
         );
+    }
+
+    /// What sqlparser cannot parse but the dialect can is not underlined; typos are.
+    #[test]
+    fn parse_errors_are_the_sql_s_not_the_parser_s() {
+        let in_dialect =
+            |sql: &str, dialect: Dialect| diagnose(sql, dialect, Some(&known()), usize::MAX);
+        for (dialect, fine) in [
+            (Dialect::Postgres, "select * from only orders"),
+            (
+                Dialect::Postgres,
+                "select * from rows from (generate_series(1,3), generate_series(1,4))",
+            ),
+            (
+                Dialect::Postgres,
+                "select * from orders where id between symmetric 1 and 2",
+            ),
+            (
+                Dialect::Postgres,
+                "select * from orders order by id using <",
+            ),
+            (Dialect::Mysql, "select * from orders lock in share mode"),
+            (
+                Dialect::Mysql,
+                "select id, count(*) from orders group by id with rollup",
+            ),
+            (Dialect::Mysql, "select 5 div 2"),
+            (Dialect::Mysql, "select * from orders into outfile '/tmp/x'"),
+            (Dialect::Mysql, "select char(65 using utf8mb4)"),
+            (Dialect::Mysql, "update ignore orders set total = 1"),
+            (Dialect::Mysql, "update low_priority orders set total = 1"),
+            (Dialect::Sqlite, "select * from orders indexed by i"),
+            (Dialect::Sqlite, "select * from orders not indexed"),
+            (Dialect::Sqlite, "select * from orders where id glob 'a*'"),
+            (Dialect::Sqlite, "select * from orders where id is 0"),
+            (Dialect::Sqlite, "select id << 2 from orders"),
+        ] {
+            assert!(
+                in_dialect(fine, dialect).is_empty(),
+                "{fine}: {:?}",
+                in_dialect(fine, dialect)
+            );
+        }
+        for wrong in [
+            "select * frm orders",
+            "select * form orders",
+            "select * from orders wher id = 1",
+            "insert into orders (id, total) valus (1, 2)",
+            "delete form orders",
+            "select * from orders where id = = 1",
+        ] {
+            assert_eq!(in_dialect(wrong, Dialect::Postgres).len(), 1, "{wrong}");
+        }
+        // Typing `o.` in the middle: what follows the cursor is not written yet.
+        let sql = "select o. from orders o";
+        assert!(diagnose(sql, Dialect::Postgres, None, 9).is_empty());
+        assert!(!diagnose(sql, Dialect::Postgres, None, usize::MAX).is_empty());
     }
 
     #[test]
