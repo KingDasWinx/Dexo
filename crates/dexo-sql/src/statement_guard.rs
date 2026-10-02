@@ -355,8 +355,9 @@ fn whole(
         Dialect::Sqlite => &SQLiteDialect {},
         Dialect::Duckdb => &DuckDbDialect {},
     };
+    let text = crate::statement::line_ends(text, dialect);
     let mut parser = Parser::new(grammar)
-        .try_with_sql(text)
+        .try_with_sql(&text)
         .map_err(|error| error.to_string())?;
     read(&mut parser).map_err(|error| error.to_string())?;
     match parser.peek_token().token {
@@ -443,7 +444,10 @@ fn pragma_reads(sql: &str) -> bool {
 /// The first keyword past the comments `dialect` has: MySQL's `#` too.
 fn keyword_in(sql: &str, dialect: Dialect) -> Option<String> {
     match dialect {
-        Dialect::Postgres | Dialect::Sqlite | Dialect::Duckdb => first_keyword(sql),
+        Dialect::Postgres | Dialect::Duckdb => {
+            first_keyword(&crate::statement::line_ends(sql, dialect))
+        }
+        Dialect::Sqlite => first_keyword(sql),
         Dialect::Mysql => first_keyword(&mysql_mask(sql)),
     }
 }
@@ -491,6 +495,7 @@ fn executable_comment(text: &str) -> bool {
 }
 
 fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
+    let sql = &*crate::statement::line_ends(sql, dialect);
     let mut statements = match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
         // sqlparser reads MySQL's `/*! … */` as code, as the server runs it, but takes
@@ -1253,6 +1258,22 @@ mod tests {
             destructive("drop table orders", Dialect::Duckdb),
             Some(Destructive::Drop)
         );
+        // DuckDB and Postgres end a `--` comment at a bare carriage return: what follows
+        // it is a statement, not part of the comment.
+        for dialect in [Dialect::Duckdb, Dialect::Postgres] {
+            let hidden = "select 1 --\r; copy orders to 'x.csv' --\n";
+            assert!(!is_read(hidden, dialect), "{dialect:?}");
+            let spans = crate::split_statements_in("select 1 --\r; drop table t --\n", dialect);
+            assert_eq!(spans.len(), 2, "{dialect:?}");
+            let bar = super::clauses_read(
+                &dexo_driver_api::RawClauses {
+                    where_sql: Some("1=1 --\r) or (true".into()),
+                    order_by: None,
+                },
+                dialect,
+            );
+            assert!(bar.is_err(), "{dialect:?}");
+        }
         assert_eq!(
             inspect_read("select * from Shop.Main.Orders", Dialect::Duckdb)
                 .unwrap()

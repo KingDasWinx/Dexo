@@ -306,7 +306,7 @@ pub fn statement_at(sql: &str, byte_index: usize) -> Option<StatementSpan> {
 /// every statement after it.
 pub fn split_statements_in(sql: &str, dialect: Dialect) -> Vec<StatementSpan> {
     match dialect {
-        Dialect::Postgres | Dialect::Duckdb => split_statements(sql),
+        Dialect::Postgres | Dialect::Duckdb => split_statements(&line_ends(sql, dialect)),
         Dialect::Sqlite => split_statements(&sqlite_mask(sql)),
         Dialect::Mysql => split_statements(&mysql_mask(sql)),
     }
@@ -361,6 +361,18 @@ fn sqlite_mask(sql: &str) -> String {
 /// [`statement_at`] for `dialect`, as [`split_statements_in`] splits it.
 pub fn statement_at_in(sql: &str, byte_index: usize, dialect: Dialect) -> Option<StatementSpan> {
     pick_statement(sql, split_statements_in(sql, dialect), byte_index)
+}
+
+/// `sql` as `dialect` ends its lines. Postgres and DuckDB end a `--` comment at a bare
+/// carriage return as at a line feed: read to the next line feed instead, `select 1
+/// --\r; drop table t` was one statement here and two on the server. Byte for byte, so
+/// offsets into it are offsets into `sql`.
+pub fn line_ends(sql: &str, dialect: Dialect) -> std::borrow::Cow<'_, str> {
+    if matches!(dialect, Dialect::Postgres | Dialect::Duckdb) && sql.contains('\r') {
+        std::borrow::Cow::Owned(sql.replace('\r', "\n"))
+    } else {
+        std::borrow::Cow::Borrowed(sql)
+    }
 }
 
 /// `sql` with MySQL's `#` comments blanked and every backslash-escaped character in a

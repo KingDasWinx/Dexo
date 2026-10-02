@@ -336,6 +336,7 @@ fn last_word_start(body: &str) -> usize {
 }
 
 fn parse(sql: &str, dialect: Dialect) -> Result<Vec<Statement>, sqlparser::parser::ParserError> {
+    let sql = &*crate::statement::line_ends(sql, dialect);
     match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
         Dialect::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
