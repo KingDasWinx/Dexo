@@ -6,9 +6,14 @@ use super::data::DataScreen;
 
 impl DataScreen {
     pub fn apply_page(&mut self, page: DataPage) {
+        // A later page is not asked for the estimate again: it keeps the first page's.
+        self.estimated_total = if page.offset == 0 {
+            page.estimated_total
+        } else {
+            page.estimated_total.or(self.estimated_total)
+        };
         self.page_offset = page.offset;
         self.has_more = page.has_more;
-        self.estimated_total = page.estimated_total;
         self.loading = false;
         self.last_error = None;
     }
@@ -55,6 +60,23 @@ pub fn describe_filter(filter: &Filter) -> String {
 
 #[cfg(test)]
 mod tests {
+    /// The second page keeps the estimate the first was given; a first page takes its own.
+    #[test]
+    fn later_pages_keep_the_first_pages_estimate() {
+        let mut screen = super::DataScreen::default();
+        let page = |offset: u64, estimate: Option<u64>| {
+            let mut page =
+                dexo_driver_api::DataPage::from_fetched(Vec::new(), Vec::new(), offset, 100);
+            page.estimated_total = estimate;
+            page
+        };
+        screen.apply_page(page(0, Some(5_000)));
+        screen.apply_page(page(100, None));
+        assert_eq!(screen.estimated_total, Some(5_000));
+        screen.apply_page(page(0, None));
+        assert_eq!(screen.estimated_total, None);
+    }
+
     /// A text value reads as the SQL literal it stands for.
     #[test]
     fn a_quote_in_a_value_is_doubled() {

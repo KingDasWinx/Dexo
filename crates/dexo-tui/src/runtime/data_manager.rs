@@ -23,9 +23,11 @@ pub async fn fetch_page(
             .await;
         return;
     };
-    // Asked only of a page that leaves rows out and has nothing filtering it: what the
-    // statistics say is the table's size, not the filter's.
-    let unfiltered = request.filter.is_none() && request.clauses.where_sql.is_none();
+    // Asked only of a first page that leaves rows out and has nothing filtering it: what
+    // the statistics say is the table's size, not the filter's. The pages after it keep
+    // the one the first got.
+    let unfiltered =
+        request.filter.is_none() && request.clauses.where_sql.is_none() && request.page.offset == 0;
     let object = request.object.clone();
     match data.fetch(request).await {
         Ok(mut page) => {
