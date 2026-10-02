@@ -639,6 +639,9 @@ pub struct ResultsState {
     /// This document's plan. It lived on the model, so every tab showed the last plan
     /// explained anywhere.
     pub explain: ExplainScreen,
+    /// The result a sort or clause re-run replaced, until the run answers: kept with the
+    /// document's output, so a failure puts it back in that document and no other.
+    pub derived_backup: Option<DerivedBackup>,
     /// Last size the output pane handed down. Kept so a tab created between two syncs
     /// is born the right size instead of with `GridViewport`'s defaults.
     viewport_size: (u16, u16),
@@ -677,6 +680,7 @@ impl Default for ResultsState {
             explain_scroll: 0,
             messages_scroll: 0,
             explain: ExplainScreen::default(),
+            derived_backup: None,
             viewport_size: (empty.width as u16, empty.height as u16),
         }
     }
@@ -1745,8 +1749,6 @@ pub struct Model {
     pub recovery: RecoveryScreen,
     pub mcp_audit: McpAuditScreen,
     pub editor: EditorState,
-    /// The result a sort or clause re-run replaced, until the run answers.
-    pub derived_backup: Option<DerivedBackup>,
     /// The completion catalog holds the whole database, so a table it does not list
     /// is one the database does not have.
     pub catalog_complete: bool,
@@ -1895,7 +1897,6 @@ impl Default for Model {
             recovery: RecoveryScreen::default(),
             mcp_audit: McpAuditScreen::default(),
             editor: EditorState::default(),
-            derived_backup: None,
             catalog_complete: false,
             schema_run: None,
             session_tables: Default::default(),

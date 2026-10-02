@@ -239,13 +239,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_query = None;
             model.active_operation = None;
             let mut effects = finish_schema_run(model, key.operation, None);
-            if model
-                .derived_backup
-                .as_ref()
-                .is_some_and(|backup| backup.operation == key.operation)
+            if let Some((results, bars)) = document_output(model, &key)
+                && results
+                    .derived_backup
+                    .as_ref()
+                    .is_some_and(|backup| backup.operation == key.operation)
             {
-                model.derived_backup = None;
-                model.data.bars.good = model.data.bars.applied.clone();
+                results.derived_backup = None;
+                bars.good = bars.applied.clone();
             }
             // A run that went through answers with rows, so a pane left on Messages by the
             // previous error comes back to them.
@@ -270,13 +271,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             point_at_failure(model, &key, index, &message, position);
             // A sort or a clause the server would not run leaves the rows it had.
-            if let Some(backup) = model
-                .derived_backup
-                .take_if(|backup| backup.operation == key.operation)
+            if let Some((results, bars)) = document_output(model, &key)
+                && let Some(backup) = results
+                    .derived_backup
+                    .take_if(|backup| backup.operation == key.operation)
             {
-                model.results.tabs = backup.tabs;
-                model.results.active = backup.active;
-                model.data.bars.applied = model.data.bars.good.clone();
+                results.tabs = backup.tabs;
+                results.active = backup.active;
+                bars.applied = bars.good.clone();
             }
             model.messages.error_with(message, details);
             // The grid of a failed statement is empty; the reason is in Messages, so the
@@ -5659,6 +5661,27 @@ fn result_tab_mut<'a>(
     model.results.tabs.get_mut(index)
 }
 
+/// The output and the clause bars of `key`'s document: on screen, or parked with it
+/// while another document is active.
+fn document_output<'a>(
+    model: &'a mut Model,
+    key: &crate::runtime::OperationKey,
+) -> Option<(
+    &'a mut crate::model::ResultsState,
+    &'a mut crate::screens::data::ClauseBars,
+)> {
+    if operation_matches(model, key) {
+        return Some((&mut model.results, &mut model.data.bars));
+    }
+    let active = model.active_document;
+    let (_, document) = model
+        .documents
+        .iter_mut()
+        .enumerate()
+        .find(|(index, document)| *index != active && document.id == key.document)?;
+    Some((&mut document.results, &mut document.browse.bars))
+}
+
 fn operation_matches(model: &Model, key: &crate::runtime::OperationKey) -> bool {
     let session = model
         .active_session
@@ -6440,7 +6463,7 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
     let operation = crate::runtime::OperationId::new();
     // Until the new run answers with rows, the result it replaces is kept: a clause the
     // server turns down puts it back.
-    model.derived_backup = Some(crate::model::DerivedBackup {
+    model.results.derived_backup = Some(crate::model::DerivedBackup {
         operation,
         tabs: model.results.tabs.clone(),
         active: model.results.active,
@@ -9532,6 +9555,76 @@ mod tests {
                 .iter()
                 .any(|field| field.label == "password" && field.value == "s3cret")
         );
+    }
+
+    /// A sort's re-run that fails puts the rows back in its own document, even when
+    /// another document is on screen by then.
+    #[test]
+    fn a_failed_re_run_comes_back_to_its_own_document() {
+        let mut model = Model {
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            session_generation: 1,
+            ..Model::default()
+        };
+        model.documents = vec![
+            crate::model::EditorDocument::with_text("select id from a"),
+            crate::model::EditorDocument::with_text("select 2"),
+        ];
+        model.documents[0].id = "doc-a".into();
+        model.documents[1].id = "doc-b".into();
+        model.active_document = 0;
+        update(&mut model, Action::SelectDocument { index: 0 });
+        let mut tab = crate::model::ResultTab::new(
+            crate::model::ResultKey {
+                operation: crate::runtime::OperationKey::new(
+                    crate::runtime::OperationId::new(),
+                    model.active_session.unwrap().0.to_string(),
+                    "doc-a",
+                    1,
+                ),
+                index: 0,
+            },
+            "a's rows",
+        );
+        tab.source_sql = Some("select id from a".into());
+        model.results.tabs = vec![tab];
+        model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+            name: "id".into(),
+            type_name: "int".into(),
+            nullable: false,
+        }]);
+        model.results.append_rows(vec![vec![DbValue::I64(1)]]);
+        let effects = update(
+            &mut model,
+            Action::SortByColumn {
+                column: Some(0),
+                add: false,
+            },
+        );
+        let key = effects
+            .iter()
+            .find_map(|effect| match effect {
+                Effect::StartScript(request) => Some(request.key.clone()),
+                _ => None,
+            })
+            .expect("the sort runs again");
+        model.active_operation = None;
+        update(&mut model, Action::SelectDocument { index: 1 });
+        update(
+            &mut model,
+            Action::QueryFailed {
+                key,
+                index: 0,
+                message: "no".into(),
+                details: Vec::new(),
+                position: None,
+            },
+        );
+        assert!(model.results.tabs.iter().all(|tab| tab.title != "a's rows"));
+        update(&mut model, Action::SelectDocument { index: 0 });
+        assert_eq!(model.results.tabs[0].title, "a's rows");
+        assert_eq!(model.results.rows().len(), 1);
+        assert!(model.data.bars.applied.order_by.is_none());
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,
