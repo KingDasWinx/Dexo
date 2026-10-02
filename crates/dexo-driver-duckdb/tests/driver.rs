@@ -672,11 +672,11 @@ async fn a_carriage_return_hides_no_statement() {
     assert_eq!(std::fs::read_to_string(&csv).unwrap(), "id\n1\n");
 
     let (_seeded, path) = seeded().await;
+    let writable = open(&path, false).await;
     let read_only = open(&path, true).await;
     run(&*read_only, QueryRequest::write(hidden(&out)))
         .await
         .unwrap_err();
-    let writable = open(&path, false).await;
     let mut asked = QueryRequest::read(hidden(&out), 0);
     asked.read_only = true;
     run(&*writable, asked).await.unwrap_err();
@@ -693,4 +693,70 @@ async fn a_carriage_return_hides_no_statement() {
         .await
         .unwrap();
     assert_eq!(texts(&events), [["1"], ["2"]]);
+}
+
+/// A second engine on a file deleted, as it closed, the write-ahead log the first was
+/// still writing to. Every session on a file shares one database.
+#[tokio::test(flavor = "multi_thread")]
+async fn sessions_on_one_file_share_its_database() {
+    let (_dir, path) = seeded().await;
+    let first = open(&path, false).await;
+    run(
+        &*first,
+        QueryRequest::write("insert into notes values ('third')"),
+    )
+    .await
+    .unwrap();
+    let wal = path.with_extension("duckdb.wal");
+    assert!(wal.exists(), "the insert is in the log");
+    let second = open(&path, false).await;
+    let events = run(
+        &*second,
+        QueryRequest::read("select count(*) from notes", 0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(texts(&events), [["3"]]);
+    second.close().await.unwrap();
+    assert!(
+        wal.exists(),
+        "closing one session leaves the log to the database"
+    );
+
+    // Read-only shares a database open for writing; writing cannot share a read-only one.
+    let reader = open(&path, true).await;
+    let refused = run(&*reader, QueryRequest::write("delete from notes"))
+        .await
+        .unwrap_err();
+    assert_eq!(refused.category(), DriverErrorCategory::Permission);
+    drop(reader);
+    first.close().await.unwrap();
+    let reader = open(&path, true).await;
+    let writer = DuckdbFactory
+        .connect(request(&path.to_string_lossy(), false))
+        .await
+        .err()
+        .unwrap();
+    assert_eq!(writer.category(), DriverErrorCategory::Configuration);
+    // A read-only database still profiles a query, and fetches no extension by itself.
+    reader
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("select * from notes"))
+        .await
+        .unwrap();
+    let events = run(
+        &*reader,
+        QueryRequest::read("select current_setting('autoinstall_known_extensions')", 0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(texts(&events), [["false"]]);
+    let refused = run(
+        &*reader,
+        QueryRequest::write("set autoinstall_known_extensions = true"),
+    )
+    .await
+    .unwrap_err();
+    assert_eq!(refused.category(), DriverErrorCategory::Permission);
 }

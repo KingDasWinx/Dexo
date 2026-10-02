@@ -33,10 +33,17 @@ pub struct DuckdbSession {
     read_only: bool,
     capabilities: Vec<CapabilityState>,
     tx_state: Mutex<TransactionState>,
+    /// The file's database, shared with every other session on it and kept open while
+    /// this one is.
+    _database: Option<Arc<crate::factory::SharedDatabase>>,
 }
 
 impl DuckdbSession {
-    pub(crate) fn new(conn: Connection, read_only: bool) -> Self {
+    pub(crate) fn new(
+        conn: Connection,
+        read_only: bool,
+        database: Option<Arc<crate::factory::SharedDatabase>>,
+    ) -> Self {
         let interrupt = conn.interrupt_handle();
         Self {
             conn: Arc::new(Mutex::new(conn)),
@@ -45,6 +52,7 @@ impl DuckdbSession {
             read_only,
             capabilities: capabilities(),
             tx_state: Mutex::new(TransactionState::Idle),
+            _database: database,
         }
     }
 

@@ -1,4 +1,6 @@
-use std::path::Path;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError, Weak};
 
 use dexo_driver_api::{
     Capability, CapabilityState, ConnectRequest, ConnectionFactory, DriverDescriptor, DriverError,
@@ -32,10 +34,14 @@ impl ConnectionFactory for DuckdbFactory {
         }
         let read_only = request.read_only;
         let data_file = reader(Path::new(&endpoint)).is_some();
-        let conn = tokio::task::spawn_blocking(move || open(&endpoint, read_only))
+        let (conn, database) = tokio::task::spawn_blocking(move || open(&endpoint, read_only))
             .await
             .map_err(internal)??;
-        Ok(Box::new(DuckdbSession::new(conn, read_only || data_file)))
+        Ok(Box::new(DuckdbSession::new(
+            conn,
+            read_only || data_file,
+            database,
+        )))
     }
 }
 
@@ -52,7 +58,37 @@ fn reader(path: &Path) -> Option<&'static str> {
     })
 }
 
-fn open(endpoint: &str, read_only: bool) -> Result<Connection, DriverError> {
+/// One database per file in the process, which every session on the file shares through
+/// a connection of its own. A second engine on a file the first has open checkpoints, as
+/// it closes, and deletes the write-ahead log the first is still writing to: a crash
+/// after that lost committed work. The database closes with its last session.
+pub(crate) struct SharedDatabase {
+    root: Mutex<Connection>,
+    read_only: bool,
+}
+
+fn databases() -> &'static Mutex<HashMap<PathBuf, Weak<SharedDatabase>>> {
+    static OPEN: OnceLock<Mutex<HashMap<PathBuf, Weak<SharedDatabase>>>> = OnceLock::new();
+    OPEN.get_or_init(Mutex::default)
+}
+
+/// Extensions DuckDB does not have are never fetched on their own: the one request Dexo
+/// makes by itself is its update check. One installed already still loads when a query
+/// needs it. Settings stay unlocked -- EXPLAIN ANALYZE turns the profiler on and off --
+/// and a read-only session refuses the SET, PRAGMA, INSTALL and LOAD that would change
+/// them, which are not queries.
+fn config(read_only: bool) -> Result<Config, duckdb::Error> {
+    let config = Config::default().with("autoinstall_known_extensions", "false")?;
+    if read_only {
+        config.access_mode(AccessMode::ReadOnly)
+    } else {
+        Ok(config)
+    }
+}
+
+type Opened = (Connection, Option<Arc<SharedDatabase>>);
+
+fn open(endpoint: &str, read_only: bool) -> Result<Opened, DriverError> {
     let cannot_open = |error: duckdb::Error| {
         DriverError::new(
             DriverErrorCategory::Configuration,
@@ -60,11 +96,42 @@ fn open(endpoint: &str, read_only: bool) -> Result<Connection, DriverError> {
         )
     };
     if endpoint == ":memory:" {
-        return Connection::open_in_memory().map_err(cannot_open);
+        let conn = Connection::open_in_memory_with_flags(config(false).map_err(cannot_open)?)
+            .map_err(cannot_open)?;
+        return Ok((conn, None));
     }
     let path = Path::new(endpoint);
     if let Some(reader) = reader(path) {
-        return open_data_file(path, reader).map_err(cannot_open);
+        return Ok((open_data_file(path, reader).map_err(cannot_open)?, None));
+    }
+    let key = std::fs::canonicalize(path)
+        .or_else(|_| std::path::absolute(path))
+        .map_err(|error| {
+            DriverError::new(
+                DriverErrorCategory::Configuration,
+                format!("cannot open {endpoint}: {error}"),
+            )
+        })?;
+    let mut open = databases().lock().unwrap_or_else(PoisonError::into_inner);
+    open.retain(|_, database| database.strong_count() > 0);
+    if let Some(database) = open.get(&key).and_then(Weak::upgrade) {
+        // A read-only session on a file open for writing shares that database, and
+        // Dexo's own checks keep it to reads.
+        if database.read_only && !read_only {
+            return Err(DriverError::new(
+                DriverErrorCategory::Configuration,
+                format!(
+                    "{endpoint} is open read-only in this Dexo: close its read-only connections to open it for writing"
+                ),
+            ));
+        }
+        let conn = database
+            .root
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .try_clone()
+            .map_err(cannot_open)?;
+        return Ok((conn, Some(database)));
     }
     if read_only && !path.exists() {
         return Err(DriverError::new(
@@ -72,14 +139,15 @@ fn open(endpoint: &str, read_only: bool) -> Result<Connection, DriverError> {
             format!("{endpoint} does not exist, and a read-only connection cannot create it"),
         ));
     }
-    let config = if read_only {
-        Config::default()
-            .access_mode(AccessMode::ReadOnly)
-            .map_err(cannot_open)?
-    } else {
-        Config::default()
-    };
-    Connection::open_with_flags(path, config).map_err(cannot_open)
+    let root = Connection::open_with_flags(path, config(read_only).map_err(cannot_open)?)
+        .map_err(cannot_open)?;
+    let conn = root.try_clone().map_err(cannot_open)?;
+    let database = Arc::new(SharedDatabase {
+        root: Mutex::new(root),
+        read_only,
+    });
+    open.insert(key, Arc::downgrade(&database));
+    Ok((conn, Some(database)))
 }
 
 /// An in-memory database with the file as a view named after it, `sales.parquet` as
@@ -87,7 +155,7 @@ fn open(endpoint: &str, read_only: bool) -> Result<Connection, DriverError> {
 /// file as it is when queried; creating it reads its header, so a file that is missing
 /// or not what its name says fails here and not on the first query.
 fn open_data_file(path: &Path, reader: &str) -> Result<Connection, duckdb::Error> {
-    let conn = Connection::open_in_memory()?;
+    let conn = Connection::open_in_memory_with_flags(config(false)?)?;
     let name = path
         .file_name()
         .and_then(|name| name.to_str())
