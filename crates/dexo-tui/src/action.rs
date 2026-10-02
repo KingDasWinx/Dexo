@@ -379,6 +379,14 @@ pub enum Action {
         object: String,
         note: Option<String>,
     },
+    /// A note's save answered: the note now kept (none when it was blanked), or why it
+    /// was not.
+    NoteSaved {
+        object: String,
+        saved: Result<Option<String>, String>,
+    },
+    /// The palette's Edit Object Note: `n` on the explorer's object.
+    EditObjectNote,
     /// `f` on a row: list the foreign keys from and to its table.
     OpenRelatedPicker,
     ForeignKeysLoaded {

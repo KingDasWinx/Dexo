@@ -29,6 +29,9 @@ pub struct ObjectInspector {
         crate::widgets::text_input::TextInput,
         crate::widgets::form::FooterFocus,
     )>,
+    /// The palette asked for the note editor before the object was read: it opens once
+    /// the object and its note are.
+    pub note_requested: bool,
 }
 
 impl ObjectInspector {

@@ -2071,6 +2071,21 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         popup,
     );
     register_overlay(hits, popup);
+    // [Save] and [Cancel] answer a click like every other dialog's.
+    if model.inspector.editing_note.is_some() {
+        let inner = crate::mouse::popup_inner(popup);
+        let footer = lines.len() - 1;
+        if let Some(row) = footer.checked_sub(scroll as usize)
+            && row < inner.height as usize
+        {
+            crate::widgets::form::register_footer(
+                hits,
+                crate::mouse::line_rect(inner, row),
+                &lines[footer],
+                "Save",
+            );
+        }
+    }
 }
 
 fn ddl_overlay_body(model: &Model) -> String {

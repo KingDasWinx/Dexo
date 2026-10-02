@@ -410,12 +410,9 @@ impl WorkbenchRuntime {
                             dexo_storage::ObjectNoteRepository::new(db.connection())
                                 .set(&connection_id, &object, &note)
                                 .map_err(|error| error.to_string())
-                        });
-                    let message = match saved {
-                        Ok(()) => format!("Saved the note on {object}."),
-                        Err(error) => format!("The note was not saved: {error}"),
-                    };
-                    let _ = action_tx.blocking_send(Action::Notice(message));
+                        })
+                        .map(|()| Some(note).filter(|note| !note.is_empty()));
+                    let _ = action_tx.blocking_send(Action::NoteSaved { object, saved });
                 });
             }
             crate::Effect::DiscoverDocker => {

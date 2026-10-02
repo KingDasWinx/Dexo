@@ -1169,6 +1169,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                         object,
                     }];
                 }
+                // No note to read first: the editor the palette asked for opens now.
+                if std::mem::take(&mut model.inspector.note_requested)
+                    && model.inspector.object.is_some()
+                {
+                    start_note_editor(model);
+                }
             }
             Vec::new()
         }
@@ -1285,9 +1291,30 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::NoteLoaded { object, note } => {
             if model.inspector.note_key().as_deref() == Some(object.as_str()) {
                 model.inspector.note = note;
+                if std::mem::take(&mut model.inspector.note_requested) {
+                    start_note_editor(model);
+                }
             }
             Vec::new()
         }
+        Action::NoteSaved { object, saved } => {
+            match saved {
+                Ok(note) => {
+                    model.messages.info(match &note {
+                        Some(_) => format!("Saved the note on {object}."),
+                        None => format!("Removed the note on {object}."),
+                    });
+                    if model.inspector.note_key().as_deref() == Some(object.as_str()) {
+                        model.inspector.note = note;
+                    }
+                }
+                Err(error) => model
+                    .messages
+                    .error(format!("The note on {object} was not saved: {error}")),
+            }
+            Vec::new()
+        }
+        Action::EditObjectNote => edit_object_note(model),
         Action::OpenSaveQuery => open_save_query(model),
         Action::OpenSavedQueries => {
             if model.project_id.is_empty() {
@@ -2474,10 +2501,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
         Some(OverlayKind::Admin) => mouse_admin(model, hit),
         Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
-        Some(OverlayKind::ObjectOverlay) => {
-            model.inspector.open = false;
-            Vec::new()
-        }
+        Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
         Some(OverlayKind::SchemaForm) => {
             model.schema_editor.open = false;
             Vec::new()
@@ -3040,6 +3064,23 @@ fn mouse_recovery(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::Button(HitButton::Recover)) => update(model, Action::ConfirmRecover),
         Some(HitTarget::Button(HitButton::Discard)) => {
             update(model, Action::ConfirmDiscardRecovery)
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// A click closes the inspector -- unless a note is being written: then [Save] and
+/// [Cancel] answer, and a click anywhere else keeps what was typed.
+fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    if model.inspector.editing_note.is_none() {
+        model.inspector.open = false;
+        return Vec::new();
+    }
+    match hit {
+        Some(HitTarget::FooterSubmit) => submit_note(model),
+        Some(HitTarget::FooterCancel) => {
+            model.inspector.editing_note = None;
+            Vec::new()
         }
         _ => Vec::new(),
     }
@@ -3647,30 +3688,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
         if let Some((input, focus)) = model.inspector.editing_note.as_mut() {
             return match footer_key(focus, &key) {
-                FooterKey::Submit => {
-                    let note = input.as_str().trim().to_string();
-                    model.inspector.editing_note = None;
-                    let connection =
-                        active_connection_uuid(model).filter(|id| is_saved_connection(model, id));
-                    match (model.inspector.note_key(), connection) {
-                        (Some(object), Some(connection_id)) => {
-                            model.inspector.note =
-                                Some(note.clone()).filter(|note| !note.is_empty());
-                            vec![Effect::SaveNote {
-                                connection_id,
-                                object,
-                                note,
-                            }]
-                        }
-                        _ => {
-                            model.messages.warn(
-                                "A note belongs to a saved connection's object; save this connection first (Save Connection…)."
-                                    .into(),
-                            );
-                            Vec::new()
-                        }
-                    }
-                }
+                FooterKey::Submit => submit_note(model),
                 FooterKey::Cancel => {
                     model.inspector.editing_note = None;
                     Vec::new()
@@ -3686,11 +3704,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         return match key.code {
             KeyCode::Char('n') if model.inspector.object.is_some() => {
-                let current = model.inspector.note.clone().unwrap_or_default();
-                model.inspector.editing_note = Some((
-                    crate::widgets::text_input::TextInput::new(current),
-                    FooterFocus::Input,
-                ));
+                start_note_editor(model);
                 Vec::new()
             }
             KeyCode::Esc => {
@@ -7009,6 +7023,54 @@ fn open_inspector_facet(
     effects
 }
 
+/// `n` in the inspector: the note editor, holding the note as it stands.
+fn start_note_editor(model: &mut Model) {
+    let current = model.inspector.note.clone().unwrap_or_default();
+    model.inspector.editing_note = Some((
+        crate::widgets::text_input::TextInput::new(current),
+        crate::widgets::form::FooterFocus::Input,
+    ));
+}
+
+/// The palette's way to `n`: on the explorer's object, opening its inspector first when
+/// it is not the one open. The editor opens once the object and its note are read.
+fn edit_object_note(model: &mut Model) -> Vec<Effect> {
+    if model.inspector.open && model.inspector.object.is_some() {
+        start_note_editor(model);
+        return Vec::new();
+    }
+    let effects = open_inspector_facet(
+        model,
+        crate::screens::object_inspector::InspectorFacet::Properties,
+    );
+    model.inspector.note_requested = !effects.is_empty();
+    effects
+}
+
+/// Saves the note being written. It is shown once the save answers, not before: a
+/// failed write showed a note that was never kept.
+fn submit_note(model: &mut Model) -> Vec<Effect> {
+    let Some((input, _)) = model.inspector.editing_note.take() else {
+        return Vec::new();
+    };
+    let note = input.as_str().trim().to_string();
+    let connection = active_connection_uuid(model).filter(|id| is_saved_connection(model, id));
+    match (model.inspector.note_key(), connection) {
+        (Some(object), Some(connection_id)) => vec![Effect::SaveNote {
+            connection_id,
+            object,
+            note,
+        }],
+        _ => {
+            model.messages.warn(
+                "A note belongs to a saved connection's object; save this connection first (Save Connection…)."
+                    .into(),
+            );
+            Vec::new()
+        }
+    }
+}
+
 /// Loads an object's metadata. It does not show anything -- see `open_inspector_facet`.
 fn load_inspector(model: &mut Model) -> Vec<Effect> {
     let Some(node) = model.explorer.selected_node() else {
@@ -9955,10 +10017,124 @@ mod tests {
             ),
             "{effects:?}"
         );
+        // Shown once the save answers, not before; a failed save says so and shows
+        // nothing new.
+        assert_eq!(
+            model.inspector.note.as_deref(),
+            Some("One row per checkout.")
+        );
+        update(
+            &mut model,
+            Action::NoteSaved {
+                object: "shop.public.orders".into(),
+                saved: Err("disk full".into()),
+            },
+        );
+        assert_eq!(
+            model.inspector.note.as_deref(),
+            Some("One row per checkout.")
+        );
+        assert!(
+            model
+                .messages
+                .last()
+                .is_some_and(|message| message.message.contains("was not saved: disk full"))
+        );
+        update(
+            &mut model,
+            Action::NoteSaved {
+                object: "shop.public.orders".into(),
+                saved: Ok(Some("One row per checkout. Paid only.".into())),
+            },
+        );
         assert_eq!(
             model.inspector.note.as_deref(),
             Some("One row per checkout. Paid only.")
         );
+
+        // [Save] and [Cancel] answer the mouse; a click beside them keeps the draft.
+        update(&mut model, key(KeyCode::Char('n')));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| crate::render::render(frame, &model, &mut hits))
+            .unwrap();
+        let click = |(column, row): (u16, u16)| {
+            Action::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            })
+        };
+        let save = hits.center(crate::mouse::HitTarget::FooterSubmit);
+        let cancel = hits.center(crate::mouse::HitTarget::FooterCancel);
+        model.hits = hits;
+        update(&mut model, click((save.0 + 20, save.1)));
+        assert!(model.inspector.open && model.inspector.editing_note.is_some());
+        assert!(matches!(
+            update(&mut model, click(save)).as_slice(),
+            [Effect::SaveNote { .. }]
+        ));
+        update(&mut model, key(KeyCode::Char('n')));
+        update(&mut model, click(cancel));
+        assert!(model.inspector.editing_note.is_none() && model.inspector.open);
+    }
+
+    /// The palette's Edit Object Note opens the inspector on the explorer's object and
+    /// the note editor once the object and its note are read.
+    #[test]
+    fn the_palette_edits_an_objects_note() {
+        let session = crate::runtime::SessionId(uuid::Uuid::from_u128(1));
+        let mut model = Model {
+            active_session: Some(session),
+            ..Model::default()
+        };
+        model.explorer.replace_roots(dexo_driver_api::CatalogList {
+            objects: vec![dexo_driver_api::CatalogObject::new(
+                dexo_driver_api::ObjectId::new("orders"),
+                dexo_driver_api::ObjectKind::Table,
+                dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders"),
+                None,
+            )],
+            restrictions: vec![],
+        });
+        model
+            .explorer
+            .select(dexo_driver_api::ObjectId::new("orders"));
+        let effects = update(&mut model, Action::EditObjectNote);
+        assert!(
+            matches!(effects.as_slice(), [Effect::LoadObjectInspector { .. }]),
+            "{effects:?}"
+        );
+        assert!(model.inspector.open && model.inspector.editing_note.is_none());
+        let generation = model.session_generation;
+        update(
+            &mut model,
+            Action::InspectorLoaded {
+                generation,
+                session: session.0.to_string(),
+                qualified_name: "public.orders".into(),
+                object: Some(dexo_driver_api::CatalogObject::new(
+                    dexo_driver_api::ObjectId::new("orders"),
+                    dexo_driver_api::ObjectKind::Table,
+                    dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders"),
+                    None,
+                )),
+                ddl: None,
+                dependencies: Vec::new(),
+                dependents: Vec::new(),
+                effective_privileges: Vec::new(),
+                restrictions: Vec::new(),
+            },
+        );
+        assert!(model.inspector.editing_note.is_some());
+        let entry = crate::palette::palette_entries(&model)
+            .into_iter()
+            .find(|entry| entry.id == "explorer.note")
+            .expect("in the palette");
+        assert_eq!(entry.shortcut.as_deref(), Some("n"));
     }
 
     /// Under a DDL taller than the inspector, `n` opens the note editor in view, not

@@ -587,6 +587,21 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenObjectInspector),
         },
         CommandSpec {
+            id: "explorer.note",
+            title: "Edit Object Note…",
+            keywords: &[
+                "note",
+                "comment",
+                "describe",
+                "meaning",
+                "agent",
+                "inspector",
+            ],
+            shortcut: Some("n"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::EditObjectNote),
+        },
+        CommandSpec {
             id: "explorer.ddl",
             title: "Open Object DDL",
             keywords: &["create", "script"],
@@ -1593,6 +1608,7 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "data.refresh"
         | "data.insert_row" => &[ActiveSession],
         "explorer.inspect"
+        | "explorer.note"
         | "explorer.ddl"
         | "explorer.dependencies"
         | "explorer.dependents"
