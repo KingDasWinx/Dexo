@@ -18,6 +18,7 @@ pub fn map_error(error: rusqlite::Error) -> DriverError {
         } => (*error, msg.clone(), position(sql, *offset)),
         _ => return DriverError::new(DriverErrorCategory::Internal, error.to_string()),
     };
+    let message = friendly(&message);
     let category = match code.code {
         ErrorCode::OperationInterrupted => {
             return DriverError::new(DriverErrorCategory::Cancelled, "query cancelled");
@@ -48,6 +49,43 @@ pub fn map_error(error: rusqlite::Error) -> DriverError {
     mapped
 }
 
+/// What SQLite says, with a sentence in front of the three a person meets most: its own
+/// text stays in brackets, for whoever searches for it.
+fn friendly(message: &str) -> String {
+    let columns = |list: &str| -> (String, Vec<String>) {
+        let mut table = String::new();
+        let names = list
+            .split(", ")
+            .map(|qualified| match qualified.rsplit_once('.') {
+                Some((owner, column)) => {
+                    table = owner.to_string();
+                    column.to_string()
+                }
+                None => qualified.to_string(),
+            })
+            .collect();
+        (table, names)
+    };
+    if let Some(list) = message.strip_prefix("UNIQUE constraint failed: ") {
+        let (table, names) = columns(list);
+        return format!(
+            "A row with the same {} already exists in {table} ({message})",
+            names.join(", ")
+        );
+    }
+    if let Some(list) = message.strip_prefix("NOT NULL constraint failed: ") {
+        let (table, names) = columns(list);
+        return format!(
+            "{} in {table} cannot be empty ({message})",
+            names.join(", ")
+        );
+    }
+    if message == "datatype mismatch" {
+        return "A value does not fit the type of its column (datatype mismatch)".into();
+    }
+    message.to_string()
+}
+
 /// SQLite reports a byte offset from 0; the contract counts characters from 1.
 fn position(sql: &str, offset: i32) -> Option<u32> {
     let offset = usize::try_from(offset).ok()?;
@@ -57,4 +95,26 @@ fn position(sql: &str, offset: i32) -> Option<u32> {
 
 pub fn internal(error: impl std::fmt::Display) -> DriverError {
     DriverError::new(DriverErrorCategory::Internal, error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::friendly;
+
+    #[test]
+    fn the_common_constraint_errors_say_what_happened() {
+        assert_eq!(
+            friendly("UNIQUE constraint failed: tbl.id"),
+            "A row with the same id already exists in tbl (UNIQUE constraint failed: tbl.id)"
+        );
+        assert_eq!(
+            friendly("NOT NULL constraint failed: tbl.name"),
+            "name in tbl cannot be empty (NOT NULL constraint failed: tbl.name)"
+        );
+        assert_eq!(
+            friendly("datatype mismatch"),
+            "A value does not fit the type of its column (datatype mismatch)"
+        );
+        assert_eq!(friendly("no such table: x"), "no such table: x");
+    }
 }
