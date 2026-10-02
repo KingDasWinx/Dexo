@@ -12,7 +12,7 @@ The spec ships as one release in nine sections. Each section gets its own plan h
 | 4 | [04-results.md](04-results.md) | C1, C2, A3, C3, C4 | done |
 | 5 | [05-connecting-and-personalising.md](05-connecting-and-personalising.md) | D5, D8, D6 | done |
 | 6 | [06-agents.md](06-agents.md) | E3, E1, E2, E4, E5 | written |
-| 7 | 07-duckdb.md | D3 | after 6 |
+| 7 | [07-duckdb.md](07-duckdb.md) | D3 | in progress |
 | 8 | 08-fixes.md | F1, F2 | after 7 |
 | 9 | 09-launch-assets.md | README, GIF, `--help` | last |
 
