@@ -32,7 +32,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 **Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree (with estimated and actual rows on Postgres, MySQL and MariaDB), schema diffs, import and export -- for Postgres, MySQL, MariaDB and SQLite in one tool.
 
-**Why not DataGrip or DBeaver?** Dexo starts in a terminal in a moment, runs over SSH, and is free and open source. It does not try to be an IDE for every database.
+**Why not DataGrip or DBeaver?** Dexo starts in a terminal in a moment and runs over SSH, where a desktop IDE cannot. It does not try to be an IDE for every database.
 
 **Why not rainfrog or another TUI?** See the comparison below. In short: query plans drawn as a tree, schema diff with migrations, import, and agents that write only through grants you make, each write approved if you like, are what we did not find in the others.
 
