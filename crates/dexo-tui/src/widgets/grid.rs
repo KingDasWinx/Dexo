@@ -35,9 +35,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         return;
     }
     let extra = result_banner(model);
+    let affected = affected_label(model);
     // Nothing has run into the pane: no count to give.
     let title = if model.results.columns().is_empty() {
-        format!("Results{extra}")
+        match &affected {
+            Some(label) => format!("Results ({label}){extra}"),
+            None => format!("Results{extra}"),
+        }
     } else if model.results.truncated() {
         format!("Results ({}) …{extra}", rows_label(model))
     } else {
@@ -96,9 +100,27 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             } else {
                 body
             };
-            frame.render_widget(Paragraph::new(preview_lines(model, body, hits)), body);
+            let lines = match affected {
+                Some(label) if model.results.columns().is_empty() => vec![Line::from(label)],
+                _ => preview_lines(model, body, hits),
+            };
+            frame.render_widget(Paragraph::new(lines), body);
         }
     }
+}
+
+/// What a statement that returns no rows changed, once it finished: `4 rows affected`.
+/// Without it a DELETE or an UPDATE left the pane blank, as if nothing had run.
+fn affected_label(model: &Model) -> Option<String> {
+    let tab = model.results.tabs.get(model.results.active)?;
+    let rows = tab
+        .rows_affected
+        .filter(|_| model.results.columns().is_empty())?;
+    Some(if rows == 1 {
+        "1 row affected".to_string()
+    } else {
+        format!("{} rows affected", grouped(rows))
+    })
 }
 
 /// `WHERE [...]  ORDER BY [...]`: the text typed, or what the key is when there is none,
@@ -1170,6 +1192,18 @@ mod tests {
         assert!(view.contains("info "), "{view}");
         assert!(view.contains("warn "), "{view}");
         assert!(view.contains("error"), "{view}");
+    }
+
+    /// A write that returns no rows says how many it changed, in the pane and its title.
+    #[test]
+    fn a_write_says_how_many_rows_it_changed() {
+        let mut model = Model::default();
+        *model.results = GridModel::default();
+        model.results.tabs[0].rows_affected = Some(1_204);
+        let view = render_to_string(&model, 120, 40);
+        assert_eq!(view.matches("1,204 rows affected").count(), 2, "{view}");
+        model.results.tabs[0].rows_affected = Some(1);
+        assert!(render_to_string(&model, 120, 40).contains("Results (1 row affected)"));
     }
 
     /// The log is the one list in the pane that only grows, so it scrolls on its own
