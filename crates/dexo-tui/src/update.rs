@@ -1360,6 +1360,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let lines = text.lines().count().max(1);
             model.messages.info(match model.data.copy_note.take() {
                 Some(note) => note,
+                // A name or a short value says what it was; a long one only that it went.
+                None if lines == 1 && !text.is_empty() && text.chars().count() <= 60 => {
+                    format!("copied {text} to clipboard")
+                }
                 None if lines == 1 => "copied to clipboard".into(),
                 None => format!("copied {lines} lines to clipboard"),
             });
