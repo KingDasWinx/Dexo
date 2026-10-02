@@ -172,6 +172,17 @@ fn editor_backspace_delete_and_shift_selection() {
     assert_eq!(model.active_document().text(), "xd");
 }
 
+/// Select All in an empty document, then typing, wrote `elect 1`: the anchor Select All
+/// leaves beside the cursor made the first letter a selection the second one replaced.
+#[test]
+fn typing_after_select_all_in_an_empty_document_keeps_the_first_letter() {
+    let mut model = Model::default();
+    update(&mut model, ctrl('a'));
+    send_text(&mut model, "select 1");
+    assert_eq!(model.active_document().text(), "SELECT 1");
+    assert_eq!(model.active_document().selection(), None);
+}
+
 #[test]
 fn editor_select_all_indent_tab_and_redo() {
     let mut model = Model::default();

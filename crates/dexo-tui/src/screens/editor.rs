@@ -1268,8 +1268,11 @@ fn insert_text(model: &mut Model, text: &str) {
         doc.sql.begin_group();
         doc.typing = true;
     }
+    // Select All on an empty document leaves an anchor beside the cursor, with nothing
+    // between them. Left there, the first letter typed became a selection of its own and
+    // the second one replaced it.
+    doc.anchor = None;
     let _ = if let Some(range) = range {
-        doc.anchor = None;
         doc.sql.replace_chars(range, text)
     } else {
         doc.sql.insert(doc.sql.cursor(), text)
