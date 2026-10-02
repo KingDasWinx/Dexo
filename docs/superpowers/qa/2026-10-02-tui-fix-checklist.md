@@ -172,7 +172,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ES-02** `MINOR` Explorer labels are cut at the pane edge with no ellipsis at the default width
 - [x] **ES-03** `MINOR` Inspect Object on a column shows internal ids and almost no column facts
 - [x] **ES-05** `MINOR` Tree: Left/Right/Space do nothing; clicking the disclosure arrow only selects; a double click is needed
-- [ ] **ES-08** `MINOR` Palette fuzzy search: "favor" lists unrelated commands above the exact matches
+- [x] **ES-08** `MINOR` Palette fuzzy search: "favor" lists unrelated commands above the exact matches
 - [ ] **ES-12** `MINOR` Inspect Object shows only 4 of the 7 table privileges and no owner / comment / size / columns / keys / indexes
 - [ ] **ES-13** `MINOR` Single click on a connection row connects/toggles it, on every other node it only selects
 - [ ] **ES-14** `MINOR` Actions menu on a connection has 18 entries and no keys for most of them

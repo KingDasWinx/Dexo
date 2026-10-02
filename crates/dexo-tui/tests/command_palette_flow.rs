@@ -311,3 +311,15 @@ fn every_palette_id_has_an_observable_outcome() {
         }
     }
 }
+
+/// A command named for what was typed comes before one that only has it as a keyword.
+#[test]
+fn the_commands_named_for_the_query_come_first() {
+    let model = Model::default();
+    let entries = dexo_tui::palette::palette_entries(&model);
+    let found: Vec<&str> = dexo_tui::palette::filter_entries(&entries, "favor")
+        .into_iter()
+        .map(|entry| entry.title)
+        .collect();
+    assert_eq!(found[0], "Show Favorites Only", "{found:?}");
+}
