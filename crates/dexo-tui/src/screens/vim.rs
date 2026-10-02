@@ -49,10 +49,13 @@ pub struct VimState {
     visual_anchor: usize,
     /// `:` or `/` being typed on the status line.
     pub prompt: Option<Prompt>,
-    /// An Insert session's command and count (`3ia`), and the keys typed in it, which
-    /// the count repeats at Esc.
+    /// An Insert session's command and count (`3ia`), which the count repeats at Esc,
+    /// and the text before it: what it inserted is the difference, repeated as text --
+    /// replaying its keys without completion put in something else.
     insert: Option<(char, usize)>,
-    insert_typed: Vec<KeyEvent>,
+    insert_before: Option<String>,
+    /// The text the last change inserted, which `.` puts in again.
+    last_change_text: Option<String>,
     /// The document all of this is about. Another one becoming active starts afresh: an
     /// Insert session's undo depth or a Visual anchor means nothing in it.
     document: Option<String>,
@@ -85,16 +88,36 @@ pub fn active(model: &Model) -> bool {
     model.keymap.name == "vim"
 }
 
+/// The mode the active document is in. The state is the last document's that took a
+/// key: another document starts in Normal, and its status line and cursor say so
+/// before the first key -- showing the old document's INSERT, `dd` deleted a line.
+pub fn mode(model: &Model) -> Mode {
+    if model.vim.document.as_deref() == Some(model.active_document().id.as_str()) {
+        model.vim.mode
+    } else {
+        Mode::Normal
+    }
+}
+
+/// The keys typed toward a command in the active document, if any.
+pub fn pending(model: &Model) -> &str {
+    if model.vim.document.as_deref() == Some(model.active_document().id.as_str()) {
+        &model.vim.pending
+    } else {
+        ""
+    }
+}
+
 /// A block cursor everywhere but Insert mode, as Vim draws it.
 pub fn block_cursor(model: &Model) -> bool {
-    active(model) && model.vim.mode != Mode::Insert && model.vim.prompt.is_none()
+    active(model) && mode(model) != Mode::Insert && model.vim.prompt.is_none()
 }
 
 /// What Visual mode has selected, as the operators will take it: both ends included,
 /// whichever way it was made -- and whole lines in Visual-line mode.
 pub fn display_selection(model: &Model) -> Option<Range<usize>> {
-    if !active(model) || model.vim.document.as_deref() != Some(model.active_document().id.as_str())
-    {
+    // The mode first: this runs every frame, and copying the text for nothing did too.
+    if !active(model) || !matches!(mode(model), Mode::Visual | Mode::VisualLine) {
         return None;
     }
     let chars: Vec<char> = model.active_document().text().chars().collect();
@@ -131,12 +154,6 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
             leave_insert(model);
             return Outcome::Done;
         }
-        if let Some(recording) = &mut model.vim.recording
-            && !model.vim.replaying
-        {
-            recording.push(key);
-        }
-        model.vim.insert_typed.push(key);
         return Outcome::Pass;
     }
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
@@ -147,8 +164,21 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Outcome {
                 history(model, count, false);
                 Outcome::Done
             }
-            // Ctrl chords the keymap did not take are not Vim's either -- and Normal mode
-            // does not hand them to the plain editor, where Ctrl+Backspace would delete.
+            // Ctrl with an arrow, Home or End moves by word or to the document's ends,
+            // as in any editor.
+            KeyCode::Left
+            | KeyCode::Right
+            | KeyCode::Up
+            | KeyCode::Down
+            | KeyCode::Home
+            | KeyCode::End => {
+                model.vim.pending.clear();
+                model.vim.pending_keys.clear();
+                Outcome::Pass
+            }
+            // Other Ctrl chords the keymap did not take are not Vim's either -- and
+            // Normal mode does not hand them to the plain editor, where Ctrl+Backspace
+            // would delete.
             _ => Outcome::Done,
         };
     }
@@ -222,6 +252,10 @@ enum Parsed {
     Invalid,
     Move(usize, Motion),
     Operate(char, usize, Option<Motion>),
+    /// An operator over a text object: `diw`, `caw`.
+    OperateObject(char, usize, bool),
+    /// A text object picked in Visual mode: `iw`, `aw`.
+    Object(bool),
     Simple(usize, char),
 }
 
@@ -270,8 +304,9 @@ fn parse(text: &str, visual: bool) -> Parsed {
             let (inner, rest) = split_count(after);
             let total = count_or_one * inner.unwrap_or(1);
             match rest {
-                "" => Parsed::Incomplete,
-                "g" => Parsed::Incomplete,
+                "" | "g" | "i" | "a" => Parsed::Incomplete,
+                "iw" | "iW" => Parsed::OperateObject(first, total, false),
+                "aw" | "aW" => Parsed::OperateObject(first, total, true),
                 "gg" => {
                     Parsed::Operate(first, count.or(inner).unwrap_or(0), Some(Motion::FileStart))
                 }
@@ -292,6 +327,11 @@ fn parse(text: &str, visual: bool) -> Parsed {
                 _ => Parsed::Invalid,
             }
         }
+        'i' | 'a' if visual => match after {
+            "" => Parsed::Incomplete,
+            "w" | "W" => Parsed::Object(first == 'a'),
+            _ => Parsed::Invalid,
+        },
         'g' => match after {
             "" => Parsed::Incomplete,
             "g" => Parsed::Move(count.unwrap_or(0), Motion::FileStart),
@@ -330,7 +370,7 @@ fn command(model: &mut Model) -> Outcome {
         }
         // In Visual mode an operator acts on the selection at once.
         Parsed::Operate(op, _, _) if visual => {
-            visual_operate(model, op);
+            visual_operate(model, op, false);
             Outcome::Done
         }
         Parsed::Operate(op, count, motion) => {
@@ -338,6 +378,25 @@ fn command(model: &mut Model) -> Outcome {
             begin_change(model, changes, &keys);
             operate(model, op, count, motion);
             finish_change(model, changes, op == 'c');
+            Outcome::Done
+        }
+        Parsed::OperateObject(op, count, around) => {
+            let changes = op != 'y';
+            begin_change(model, changes, &keys);
+            let chars: Vec<char> = model.active_document().text().chars().collect();
+            let range = word_object(&chars, model.active_document().cursor(), around, count);
+            apply(model, op, range, false);
+            finish_change(model, changes, op == 'c');
+            Outcome::Done
+        }
+        Parsed::Object(around) => {
+            let chars: Vec<char> = model.active_document().text().chars().collect();
+            let range = word_object(&chars, model.active_document().cursor(), around, 1);
+            if !range.is_empty() {
+                model.vim.mode = Mode::Visual;
+                model.vim.visual_anchor = range.start;
+                set_cursor(model, range.end - 1);
+            }
             Outcome::Done
         }
         // `o` goes to the other end; the insert commands are not Visual's.
@@ -349,6 +408,7 @@ fn command(model: &mut Model) -> Outcome {
             Outcome::Done
         }
         Parsed::Simple(_, 'i' | 'a' | 'I' | 'A' | 'O') if visual => Outcome::Done,
+        // The capitals act on whole lines, whichever Visual mode it is.
         Parsed::Simple(_, ch) if visual && "xXdDcCyY".contains(ch) => {
             let op = match ch {
                 'x' | 'D' | 'X' => 'd',
@@ -356,7 +416,7 @@ fn command(model: &mut Model) -> Outcome {
                 'Y' => 'y',
                 other => other,
             };
-            visual_operate(model, op);
+            visual_operate(model, op, ch.is_ascii_uppercase());
             Outcome::Done
         }
         Parsed::Simple(count, ch) => simple(model, count, ch, &keys),
@@ -426,10 +486,17 @@ fn simple(model: &mut Model, count: usize, ch: char, keys: &[KeyEvent]) -> Outco
             let replayed: Vec<KeyEvent> = if digits.is_empty() {
                 change
             } else {
-                let body = change.iter().skip_while(
-                    |key| matches!(key.code, KeyCode::Char(ch) if ch.is_ascii_digit() && ch != '0'),
-                );
-                digits.iter().chain(body).copied().collect()
+                // Every count of the change goes -- `d2w`'s too -- or `3.` deleted six.
+                let is_count = |key: &&KeyEvent| matches!(key.code, KeyCode::Char(ch) if ch.is_ascii_digit() && ch != '0');
+                let mut body = change.iter().skip_while(is_count);
+                let command: Vec<KeyEvent> = body.next().into_iter().copied().collect();
+                let rest: Vec<KeyEvent> = match command.first().map(|key| key.code) {
+                    Some(KeyCode::Char('d' | 'c' | 'y')) => {
+                        body.skip_while(is_count).copied().collect()
+                    }
+                    _ => body.copied().collect(),
+                };
+                digits.iter().copied().chain(command).chain(rest).collect()
             };
             replay(model, &replayed);
         }
@@ -502,22 +569,23 @@ fn finish_change(model: &mut Model, changes: bool, into_insert: bool) {
 }
 
 fn leave_insert(model: &mut Model) {
+    let inserted = model
+        .vim
+        .insert_before
+        .take()
+        .map(|before| inserted_text(&before, &model.active_document().text()));
     // `3ia<Esc>` puts the text in three times; `3o` opens three lines with it.
     if let Some((how, count)) = model.vim.insert.take()
         && count > 1
+        && let Some(text) = &inserted
     {
-        let typed = std::mem::take(&mut model.vim.insert_typed);
         for _ in 1..count {
             if matches!(how, 'o' | 'O') {
                 enter_insert(model, how);
             }
-            for key in &typed {
-                crate::screens::editor::handle_key(model, *key);
-                model.editor.completion_open = false;
-            }
+            type_text(model, text);
         }
     }
-    model.vim.insert_typed.clear();
     crate::screens::editor::end_typing(model);
     if let Some(depth) = model.vim.change_depth.take() {
         model.active_document_mut().sql.merge_undo_since(depth);
@@ -525,8 +593,10 @@ fn leave_insert(model: &mut Model) {
     if let Some(mut keys) = model.vim.recording.take() {
         keys.push(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE));
         model.vim.last_change = keys;
+        model.vim.last_change_text = inserted;
     }
     model.vim.mode = Mode::Normal;
+    model.vim.insert_before = None;
     // Vim steps back onto the last character typed.
     let doc = model.active_document();
     let chars: Vec<char> = doc.text().chars().collect();
@@ -535,6 +605,40 @@ fn leave_insert(model: &mut Model) {
         set_cursor(model, cursor - 1);
     }
     clamp_normal(model);
+}
+
+/// What an Insert session put in: the text after it, less what it shares with the text
+/// before at either end.
+fn inserted_text(before: &str, after: &str) -> String {
+    let before: Vec<char> = before.chars().collect();
+    let after: Vec<char> = after.chars().collect();
+    let prefix = before
+        .iter()
+        .zip(&after)
+        .take_while(|(a, b)| a == b)
+        .count();
+    let room = before.len().min(after.len()) - prefix;
+    let suffix = before
+        .iter()
+        .rev()
+        .zip(after.iter().rev())
+        .take(room)
+        .take_while(|(a, b)| a == b)
+        .count();
+    after[prefix..after.len() - suffix].iter().collect()
+}
+
+/// `text` put in at the cursor, the cursor after it, as typing it would.
+fn type_text(model: &mut Model, text: &str) {
+    let cursor = model.active_document().cursor();
+    replace(model, cursor..cursor, text);
+    set_cursor(model, cursor + text.chars().count());
+}
+
+/// Into Insert mode, remembering the text so Esc can tell what was inserted.
+fn start_insert(model: &mut Model) {
+    model.vim.mode = Mode::Insert;
+    model.vim.insert_before = Some(model.active_document().text());
 }
 
 fn leave_visual(model: &mut Model) {
@@ -566,8 +670,7 @@ fn enter_insert(model: &mut Model, how: char) {
         _ => {}
     }
     model.active_document_mut().anchor = None;
-    model.vim.mode = Mode::Insert;
-    model.vim.insert_typed.clear();
+    start_insert(model);
 }
 
 fn move_cursor(model: &mut Model, motion: Motion, count: usize) {
@@ -670,20 +773,27 @@ fn operate(model: &mut Model, op: char, count: usize, motion: Option<Motion>) {
         }
         Some(motion) => {
             let on_blank = chars.get(cursor).is_some_and(|ch| class(*ch) == 0);
-            // `cw` changes to the end of the word, as Vim does -- unless it starts on a
-            // blank, where it changes the blanks.
-            let motion = if op == 'c' && motion == Motion::WordForward && !on_blank {
-                Motion::WordEnd
-            } else {
-                motion
-            };
-            let (mut to, linewise, inclusive) = target(&chars, cursor, motion, count);
-            // An operator over `w` stops at the end of the line its last word ends: `dw`
-            // on a line's last word leaves the line break.
-            if motion == Motion::WordForward
-                && let Some(newline) = chars[cursor.min(to)..to].iter().rposition(|ch| *ch == '\n')
+            let (mut to, mut linewise, inclusive) =
+                if op == 'c' && motion == Motion::WordForward && !on_blank {
+                    // `cw` changes to the end of the word, as Vim does -- the word it is on,
+                    // even from its last character -- unless it starts on a blank.
+                    (change_word_end(&chars, cursor, count), false, true)
+                } else if motion == Motion::WordForward {
+                    (operator_word_end(&chars, cursor, count), false, false)
+                } else {
+                    target(&chars, cursor, motion, count)
+                };
+            // An exclusive motion that ends at the start of a later line, from at or
+            // before the first non-blank of its own, takes whole lines: `dw` on an empty
+            // line deletes it.
+            if !linewise
+                && !inclusive
+                && to > cursor
+                && to == line_start(&chars, to)
+                && cursor <= first_non_blank(&chars, line_start(&chars, cursor))
             {
-                to = cursor + newline;
+                linewise = true;
+                to -= 1;
             }
             if linewise {
                 (line_span(&chars, cursor, to), true)
@@ -701,11 +811,11 @@ fn operate(model: &mut Model, op: char, count: usize, motion: Option<Motion>) {
     apply(model, op, range, linewise);
 }
 
-fn visual_operate(model: &mut Model, op: char) {
+fn visual_operate(model: &mut Model, op: char, whole_lines: bool) {
     let chars: Vec<char> = model.active_document().text().chars().collect();
     let cursor = model.active_document().cursor();
     let anchor = model.vim.visual_anchor;
-    let linewise = model.vim.mode == Mode::VisualLine;
+    let linewise = whole_lines || model.vim.mode == Mode::VisualLine;
     let range = if linewise {
         line_span(&chars, anchor, cursor)
     } else {
@@ -725,6 +835,13 @@ fn visual_operate(model: &mut Model, op: char) {
 /// `d`, `c` or `y` over `range`, which for a linewise span covers whole lines and the
 /// line break that goes with them.
 fn apply(model: &mut Model, op: char, range: Range<usize>, linewise: bool) {
+    // Nothing to act on -- `x` on an empty line: the register keeps what it had.
+    if range.is_empty() && !linewise {
+        if op == 'c' {
+            start_insert(model);
+        }
+        return;
+    }
     let chars: Vec<char> = model.active_document().text().chars().collect();
     let text: String = chars[range.clone()].iter().collect();
     let mut yanked = text.clone();
@@ -766,7 +883,7 @@ fn apply(model: &mut Model, op: char, range: Range<usize>, linewise: bool) {
                 replace(model, range.clone(), "");
                 set_cursor(model, range.start);
             }
-            model.vim.mode = Mode::Insert;
+            start_insert(model);
         }
         _ => {}
     }
@@ -812,6 +929,14 @@ fn put(model: &mut Model, after: bool) {
 fn replay(model: &mut Model, keys: &[KeyEvent]) {
     model.vim.replaying = true;
     for key in keys {
+        // The change's Insert session is its text, put in as it was, not its keys.
+        if key.code == KeyCode::Esc && model.vim.mode == Mode::Insert {
+            if let Some(text) = model.vim.last_change_text.clone() {
+                type_text(model, &text);
+            }
+            leave_insert(model);
+            continue;
+        }
         if matches!(handle_key(model, *key), Outcome::Pass) {
             crate::screens::editor::handle_key(model, *key);
         }
@@ -883,9 +1008,16 @@ fn ex(model: &mut Model, command: &str) -> Outcome {
             crate::model::CloseChoice::Discard,
         )]),
         // Saved first, closed once the save lands -- or kept, if it does not.
-        "wq" | "x" => Outcome::Then(vec![Action::ResolveCloseActive(
+        "wq" => Outcome::Then(vec![Action::ResolveCloseActive(
             crate::model::CloseChoice::Save,
         )]),
+        // `:x` writes only what changed.
+        "x" if model.active_document().is_dirty() => {
+            Outcome::Then(vec![Action::ResolveCloseActive(
+                crate::model::CloseChoice::Save,
+            )])
+        }
+        "x" => Outcome::Then(vec![Action::CloseDocument]),
         line if line.chars().all(|ch| ch.is_ascii_digit()) => {
             let line: usize = line.parse().unwrap_or(1);
             move_cursor(model, Motion::FileStart, line.max(1));
@@ -1109,6 +1241,86 @@ fn word_end(chars: &[char], at: usize) -> usize {
     at
 }
 
+/// Where `w` takes an operator: the cursor's `w`, except that the last word moved over
+/// ends the text at its line's end -- `dw` on a line's last word keeps the line break,
+/// `d3w` across a line break takes the words before it -- and from an empty line the
+/// next line's start is the end.
+fn operator_word_end(chars: &[char], cursor: usize, count: usize) -> usize {
+    let mut at = cursor;
+    for step in 1..=count.max(1) {
+        let from = at;
+        if step == count.max(1) && chars.get(from) == Some(&'\n') && from == line_start(chars, from)
+        {
+            return from + 1;
+        }
+        at = next_word_start(chars, from);
+        if step == count.max(1)
+            && let Some(newline) = chars[from..at].iter().position(|ch| *ch == '\n')
+        {
+            return from + newline;
+        }
+    }
+    at
+}
+
+/// The last character `cw` changes: the end of the word the cursor is on, even from its
+/// last character, then of the words after it for a count.
+fn change_word_end(chars: &[char], cursor: usize, count: usize) -> usize {
+    let on_end = chars
+        .get(cursor + 1)
+        .is_none_or(|next| class(*next) != class(chars[cursor]));
+    let mut at = cursor;
+    let steps = if on_end {
+        count.max(1) - 1
+    } else {
+        count.max(1)
+    };
+    for _ in 0..steps {
+        at = word_end(chars, at);
+    }
+    at
+}
+
+/// `iw` and `aw`: the run of one class the cursor is on -- a word, or blanks -- within
+/// its line, `count` of them; `aw` takes the blanks after it too, or those before it
+/// when none follow.
+fn word_object(chars: &[char], cursor: usize, around: bool, count: usize) -> Range<usize> {
+    let (first, last) = (line_start(chars, cursor), line_end(chars, cursor));
+    if cursor >= last {
+        return cursor..cursor;
+    }
+    let class_at = |at: usize| class(chars[at]);
+    let mut start = cursor;
+    while start > first && class_at(start - 1) == class_at(cursor) {
+        start -= 1;
+    }
+    // Each run is one: `2iw` is a word and the blanks after it, as in Vim.
+    let mut end = cursor;
+    for _ in 0..count.max(1) {
+        if end >= last {
+            break;
+        }
+        let here = class_at(end);
+        while end < last && class_at(end) == here {
+            end += 1;
+        }
+    }
+    if around && class_at(cursor) != 0 {
+        let mut after = end;
+        while after < last && class_at(after) == 0 {
+            after += 1;
+        }
+        if after > end {
+            end = after;
+        } else {
+            while start > first && class_at(start - 1) == 0 {
+                start -= 1;
+            }
+        }
+    }
+    start..end
+}
+
 #[cfg(test)]
 mod tests {
     use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
@@ -1201,14 +1413,15 @@ mod tests {
         keys(&mut model, "d");
         assert_eq!(text(&model), "def");
 
+        // `iw` picks the word; `X` takes whole lines, as in Vim.
         let mut model = vim("name rest");
         keys(&mut model, "viwd");
         assert_eq!(model.vim.mode, Mode::Normal);
-        assert_eq!(text(&model), "est");
+        assert_eq!(text(&model), " rest");
 
-        let mut model = vim("abc");
+        let mut model = vim("abc\nxyz");
         keys(&mut model, "vlX");
-        assert_eq!(text(&model), "c");
+        assert_eq!(text(&model), "xyz");
         assert_eq!(model.vim.mode, Mode::Normal);
     }
 
@@ -1338,5 +1551,108 @@ mod tests {
         assert_eq!(text(&model), "omega beta\ngamma omega\nomega");
         keys(&mut model, "u");
         assert_eq!(text(&model), "alpha beta\ngamma alpha\nalpha");
+    }
+
+    /// `d3w` across a line break takes the words before it, `dw` on an empty line
+    /// deletes it, and `dw` on a line's last word keeps the line break.
+    #[test]
+    fn delete_words_like_vim() {
+        let mut model = vim("a b\nc d e");
+        keys(&mut model, "d3w");
+        assert_eq!(text(&model), "d e");
+        let mut model = vim("a\n\nb");
+        model.active_document_mut().sql.set_cursor(2).unwrap();
+        keys(&mut model, "dw");
+        assert_eq!(text(&model), "a\nb");
+        let mut model = vim("a b\nc");
+        model.active_document_mut().sql.set_cursor(2).unwrap();
+        keys(&mut model, "dw");
+        assert_eq!(text(&model), "a \nc");
+    }
+
+    /// `cw` on a word's last character changes only that character.
+    #[test]
+    fn change_word_from_its_last_character() {
+        let mut model = vim("a.id");
+        keys(&mut model, "cwx\u{1b}");
+        assert_eq!(text(&model), "x.id");
+    }
+
+    /// A count given to `.` replaces every count of the change: `d2w` then `3.`
+    /// deletes three words.
+    #[test]
+    fn a_count_on_dot_replaces_the_changes_own() {
+        let mut model = vim("a b c d e f g h");
+        keys(&mut model, "d2w3.");
+        assert_eq!(text(&model), "f g h");
+    }
+
+    /// A repeated Insert session puts its text in again, not its keys: with
+    /// completion in the way the keys typed something else.
+    #[test]
+    fn repeated_inserts_put_the_text_in() {
+        let mut model = vim("");
+        keys(&mut model, "3ia\u{1b}");
+        assert_eq!(text(&model), "aaa");
+        let mut model = vim("x");
+        keys(&mut model, "2oy\u{1b}");
+        assert_eq!(text(&model), "x\ny\ny");
+        let mut model = vim("one\ntwo");
+        keys(&mut model, "Ahi\u{1b}j.");
+        assert_eq!(text(&model), "onehi\ntwohi");
+    }
+
+    /// Visual `iw` and `aw` pick a word, and the capitals act on whole lines.
+    #[test]
+    fn visual_text_objects_and_capitals() {
+        let mut model = vim("select name from t");
+        model.active_document_mut().sql.set_cursor(8).unwrap();
+        keys(&mut model, "viwd");
+        assert_eq!(text(&model), "select  from t");
+        let mut model = vim("select name from t");
+        model.active_document_mut().sql.set_cursor(8).unwrap();
+        keys(&mut model, "vawd");
+        assert_eq!(text(&model), "select from t");
+        let mut model = vim("select name from t");
+        model.active_document_mut().sql.set_cursor(8).unwrap();
+        keys(&mut model, "ciwid\u{1b}");
+        assert_eq!(text(&model), "select id from t");
+        let mut model = vim("one\ntwo\nthree");
+        model.active_document_mut().sql.set_cursor(5).unwrap();
+        keys(&mut model, "vX");
+        assert_eq!(text(&model), "one\nthree");
+    }
+
+    /// An empty `x` leaves the register as it was; Ctrl with an arrow moves.
+    #[test]
+    fn an_empty_delete_keeps_the_register_and_ctrl_arrows_move() {
+        let mut model = vim("ab\n\ncd");
+        keys(&mut model, "x");
+        model.active_document_mut().sql.set_cursor(2).unwrap();
+        keys(&mut model, "x");
+        model.active_document_mut().sql.set_cursor(3).unwrap();
+        keys(&mut model, "p");
+        assert_eq!(text(&model), "b\n\ncad");
+        let mut model = vim("select name from t");
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
+        );
+        assert!(model.active_document().cursor() > 0);
+    }
+
+    /// Another document starts in Normal mode, and says so before its first key.
+    #[test]
+    fn another_document_starts_in_normal_mode() {
+        let mut model = vim("a");
+        keys(&mut model, "i");
+        assert_eq!(super::mode(&model), Mode::Insert);
+        let mut other = crate::model::EditorDocument::with_text("b\nc");
+        other.id = "other".into();
+        model.documents.push(other);
+        model.set_active_document(1);
+        assert_eq!(super::mode(&model), Mode::Normal);
+        let status = crate::render::render_to_string(&model, 100, 30);
+        assert!(status.contains("-- NORMAL --"), "{status}");
     }
 }

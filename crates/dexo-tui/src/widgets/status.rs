@@ -69,14 +69,15 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if crate::screens::vim::active(model) && model.effective_focus() == crate::model::Focus::Editor
     {
         spans.push(Span::styled(
-            format!("-- {} -- ", model.vim.mode.label()),
+            format!("-- {} -- ", crate::screens::vim::mode(model).label()),
             model
                 .theme
                 .style(Role::Focus, model.capabilities)
                 .add_modifier(ratatui::style::Modifier::BOLD),
         ));
-        if !model.vim.pending.is_empty() {
-            spans.push(Span::raw(format!("{}  ", model.vim.pending)));
+        let pending = crate::screens::vim::pending(model);
+        if !pending.is_empty() {
+            spans.push(Span::raw(format!("{pending}  ")));
         }
     }
     if !model.mouse {

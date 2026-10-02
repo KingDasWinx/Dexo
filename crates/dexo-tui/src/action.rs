@@ -573,6 +573,11 @@ pub enum Action {
         document: String,
         revision: u64,
     },
+    /// The write did not land: a close waiting on it is called off.
+    DocumentSaveFailed {
+        document: String,
+        message: String,
+    },
     DocumentConflict {
         path: String,
     },

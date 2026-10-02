@@ -2019,6 +2019,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             effects
         }
+        Action::DocumentSaveFailed { document, message } => {
+            // A close armed by `:wq` or the unsaved-changes prompt was waiting on this
+            // write; left armed, a later save would close the tab by surprise.
+            if model
+                .pending_document_close
+                .as_ref()
+                .is_some_and(|pending| pending.document == document)
+            {
+                model.pending_document_close = None;
+            }
+            model
+                .messages
+                .error(format!("The file was not saved: {message}"));
+            Vec::new()
+        }
         Action::DocumentConflict { path } => {
             // The write never landed, so any tab waiting on it stays open.
             model.pending_document_close = None;
@@ -3992,7 +4007,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if crate::screens::vim::active(model)
         && model.effective_focus() == Focus::Editor
         && matches!(
-            model.vim.mode,
+            crate::screens::vim::mode(model),
             crate::screens::vim::Mode::Insert
                 | crate::screens::vim::Mode::Visual
                 | crate::screens::vim::Mode::VisualLine
@@ -10063,6 +10078,25 @@ mod tests {
                 .iter()
                 .any(|entry| entry.message.contains("save this one first"))
         );
+    }
+
+    /// A save that fails calls off the close waiting on it.
+    #[test]
+    fn a_failed_save_calls_off_its_close() {
+        let mut model = Model::default();
+        let document = model.active_document().id.clone();
+        model.pending_document_close = Some(crate::model::PendingDocumentClose {
+            document: document.clone(),
+            revision: 1,
+        });
+        update(
+            &mut model,
+            Action::DocumentSaveFailed {
+                document,
+                message: "disk full".into(),
+            },
+        );
+        assert!(model.pending_document_close.is_none());
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,

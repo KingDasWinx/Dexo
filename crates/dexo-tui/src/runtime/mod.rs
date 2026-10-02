@@ -1687,8 +1687,8 @@ impl WorkbenchRuntime {
                 .await;
             }
             Err(error) => {
-                self.emit(Action::OperationFailed {
-                    key: OperationKey::new(OperationId::new(), "", String::new(), 0),
+                self.emit(Action::DocumentSaveFailed {
+                    document: request.document,
                     message: error.to_string(),
                 })
                 .await;
