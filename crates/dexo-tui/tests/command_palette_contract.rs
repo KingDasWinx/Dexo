@@ -80,6 +80,8 @@ const COMMAND_IDS: &[&str] = &[
     "document.open",
     "results.select_row",
     "results.select_column",
+    "results.sort_column",
+    "results.sort_add_column",
     "results.next_tab",
     "results.prev_tab",
     "settings.mode",
@@ -222,8 +224,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 151);
-    assert_eq!(actual.len(), 151, "duplicate command id");
+    assert_eq!(specs.len(), 153);
+    assert_eq!(actual.len(), 153, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -232,7 +234,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 99);
+    assert_eq!(visible.len(), 101);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a

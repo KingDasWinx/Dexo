@@ -854,6 +854,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
+        Action::SortByColumn { column, add } => {
+            let column = column.or_else(|| model.results.selection().map(|(_, col)| col));
+            match column {
+                Some(column) => sort_by_column(model, column, add),
+                None => Vec::new(),
+            }
+        }
         Action::NextResultTab => {
             if !model.results.tabs.is_empty() {
                 model.results.active = (model.results.active + 1) % model.results.tabs.len();
@@ -2796,7 +2803,12 @@ fn mouse_workbench(
             close_palette(model);
             model.focus = Focus::Results;
             model.results.select_column(col);
-            Vec::new()
+            // A grid that cannot run again keeps its rows; the click only selects.
+            if clause_bars_shown(model) {
+                sort_by_column(model, col, extend)
+            } else {
+                Vec::new()
+            }
         }
         Some(HitTarget::GridCell { row, col }) => {
             crate::screens::editor::end_typing(model);
@@ -5880,6 +5892,36 @@ fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
     }
     Some(Vec::new())
+}
+
+/// A header click, or `s`: the ORDER BY bar's text is the sort, so the click rewrites
+/// it and runs the grid again with it. Text no header can show -- an expression -- is
+/// replaced. The WHERE that runs is the one that last ran, not one half typed.
+fn sort_by_column(model: &mut Model, column: usize, add: bool) -> Vec<Effect> {
+    if !clause_bars_shown(model) {
+        model
+            .messages
+            .warn("Sorting runs a table's rows or a query's result again; run one first.".into());
+        return Vec::new();
+    }
+    let Some(name) = model
+        .results
+        .columns()
+        .get(column)
+        .map(|meta| meta.name.clone())
+    else {
+        return Vec::new();
+    };
+    let dialect = crate::screens::editor::editor_dialect(model);
+    let applied = model.data.bars.applied.order_by.clone().unwrap_or_default();
+    let keys = dexo_sql::order_keys(&applied, dialect).unwrap_or_default();
+    let keys = dexo_sql::cycle_order(&keys, &name, add);
+    let bars = &mut model.data.bars;
+    bars.where_input
+        .set_text(bars.applied.where_sql.clone().unwrap_or_default());
+    bars.order_input
+        .set_text(dexo_sql::order_text(&keys, dialect));
+    apply_clauses(model)
 }
 
 /// Runs the grid again with the bars' text, once it is known to only read. Refused text

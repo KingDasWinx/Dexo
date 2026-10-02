@@ -234,6 +234,13 @@ pub enum Action {
     RenameDocument,
     SelectGridRow,
     SelectGridColumn,
+    /// `s` / a header click: the column's sort goes ascending, descending, off; with
+    /// `add` (`S`, Shift-click) the other sorted columns stay. `None` is the cursor's
+    /// column.
+    SortByColumn {
+        column: Option<usize>,
+        add: bool,
+    },
     NextResultTab,
     PrevResultTab,
     SelectResultTab {

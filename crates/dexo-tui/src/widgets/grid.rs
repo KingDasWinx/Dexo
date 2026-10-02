@@ -264,13 +264,47 @@ fn result_banner(model: &Model) -> String {
     extra
 }
 
+/// Each sorted column's marker -- `▲1`, `▼2`, or `^1`, `v2` without Unicode -- read from
+/// the ORDER BY that ran. Text no header can show marks nothing.
+fn sort_markers(model: &Model) -> impl Fn(&str) -> Option<String> {
+    let keys = model
+        .data
+        .bars
+        .applied
+        .order_by
+        .as_deref()
+        .filter(|_| crate::update::clause_bars_shown(model))
+        .and_then(|text| dexo_sql::order_keys(text, crate::screens::editor::editor_dialect(model)))
+        .unwrap_or_default();
+    let (up, down) = if model.capabilities.unicode {
+        ("▲", "▼")
+    } else {
+        ("^", "v")
+    };
+    move |name: &str| {
+        let at = keys.iter().position(|key| key.names(name))?;
+        let arrow = if keys[at].descending { down } else { up };
+        Some(format!("{arrow}{}", at + 1))
+    }
+}
+
 fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'static>> {
     let grid = &model.results;
     let col_indices = grid.visible_column_indices();
     let widths = grid.column_widths();
+    let sorted = sort_markers(model);
+    // A sorted column is as wide as its name and its marker.
     let natural_widths: Vec<u16> = col_indices
         .iter()
-        .map(|&index| widths.get(index).copied().unwrap_or(8))
+        .map(|&index| {
+            let width = widths.get(index).copied().unwrap_or(8);
+            let marked = grid.columns().get(index).and_then(|column| {
+                let marker = sorted(&column.name)?;
+                let wide = unicode_width::UnicodeWidthStr::width;
+                u16::try_from(wide(column.name.as_str()) + 1 + wide(marker.as_str())).ok()
+            });
+            width.max(marked.unwrap_or(0))
+        })
         .collect();
     let (cell_widths, overflowed) = allocate_column_widths(&natural_widths, area.width as usize);
     let mut header = Vec::new();
@@ -288,10 +322,19 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             HitTarget::GridHeader(index),
             Rect::new(header_x, area.y, cell_width as u16, 1),
         );
+        // The marker stays whole; the name gives way to it.
+        let label = match sorted(&column.name) {
+            Some(marker) => {
+                let room = cell_width
+                    .saturating_sub(unicode_width::UnicodeWidthStr::width(marker.as_str()) + 1);
+                format!("{} {marker}", truncate_cell(&column.name, room))
+            }
+            None => column.name.clone(),
+        };
         header.push(Span::styled(
             format!(
                 "{:width$}",
-                truncate_cell(&column.name, cell_width),
+                truncate_cell(&label, cell_width),
                 width = cell_width
             ),
             header_style,

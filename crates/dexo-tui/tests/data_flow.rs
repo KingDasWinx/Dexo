@@ -577,3 +577,152 @@ fn the_bars_run_the_result_again_only_with_a_read() {
     assert!(model.data.bars.applied.where_sql.is_none());
     assert_eq!(model.data.bars.where_input.as_str(), "id > 5");
 }
+
+/// A header click sorts by that column through the ORDER BY bar -- ascending, then
+/// descending, then off -- Shift adds a column after the others, and the headers show
+/// the order that ran.
+#[test]
+fn a_header_click_sorts_through_the_order_by_bar() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use dexo_tui::mouse::{HitMap, HitTarget};
+
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        ..Model::default()
+    };
+    model.apply_size(100, 30);
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id, name from users".into());
+    model.results.tabs = vec![tab];
+    model.results.set_columns(
+        ["id", "name"]
+            .into_iter()
+            .map(|name| dexo_driver_api::ColumnMeta {
+                name: name.into(),
+                type_name: "text".into(),
+                nullable: false,
+            })
+            .collect(),
+    );
+    model
+        .results
+        .append_rows(vec![vec![DbValue::I64(7), DbValue::Text("ana".into())]]);
+    let paint = |model: &mut Model| -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut hits = HitMap::default();
+        let frame = terminal
+            .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+            .unwrap();
+        let text: String = frame
+            .buffer
+            .content()
+            .chunks(100)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect::<String>() + "\n")
+            .collect();
+        model.hits = hits;
+        text
+    };
+    let click = |model: &mut Model, column: usize, shift: bool| {
+        let (x, y) = model.hits.center(HitTarget::GridHeader(column));
+        update(
+            model,
+            Action::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: if shift {
+                    KeyModifiers::SHIFT
+                } else {
+                    KeyModifiers::NONE
+                },
+            }),
+        )
+    };
+    let ran = |effects: &[dexo_tui::Effect]| {
+        effects
+            .iter()
+            .find_map(|effect| match effect {
+                dexo_tui::Effect::StartScript(request) => Some(request.statements[0].clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+    };
+    // The re-run's rows, as the server would send them.
+    let answer = |model: &mut Model| {
+        model.results.set_columns(
+            ["id", "name"]
+                .into_iter()
+                .map(|name| dexo_driver_api::ColumnMeta {
+                    name: name.into(),
+                    type_name: "text".into(),
+                    nullable: false,
+                })
+                .collect(),
+        );
+        model
+            .results
+            .append_rows(vec![vec![DbValue::I64(7), DbValue::Text("ana".into())]]);
+        model.active_operation = None;
+    };
+    paint(&mut model);
+    let effects = click(&mut model, 0, false);
+    assert!(
+        ran(&effects).contains("ORDER BY id ASC"),
+        "{}",
+        ran(&effects)
+    );
+    assert_eq!(model.data.bars.order_input.as_str(), "id ASC");
+    answer(&mut model);
+    paint(&mut model);
+    let effects = click(&mut model, 1, true);
+    assert!(
+        ran(&effects).contains("ORDER BY id ASC, name ASC"),
+        "{}",
+        ran(&effects)
+    );
+    answer(&mut model);
+    let screen = paint(&mut model);
+    assert!(
+        screen.contains("id ▲1") && screen.contains("name ▲2"),
+        "{screen}"
+    );
+    // `s` on the cursor's column cycles it alone: name was ascending, now descending.
+    model.results.select_cell(0, 1);
+    let effects = update(
+        &mut model,
+        Action::SortByColumn {
+            column: None,
+            add: false,
+        },
+    );
+    assert!(
+        ran(&effects).contains("ORDER BY name DESC"),
+        "{}",
+        ran(&effects)
+    );
+    answer(&mut model);
+    model.results.select_cell(0, 1);
+    let effects = update(
+        &mut model,
+        Action::SortByColumn {
+            column: None,
+            add: false,
+        },
+    );
+    let unsorted = ran(&effects);
+    assert!(
+        !unsorted.is_empty() && !unsorted.contains("ORDER BY"),
+        "{unsorted}"
+    );
+    answer(&mut model);
+    // An ORDER BY no header can show is replaced by a click, and marks nothing.
+    model.data.bars.applied.order_by = Some("lower(name)".into());
+    assert!(!paint(&mut model).contains('▲'));
+    let effects = click(&mut model, 0, false);
+    assert!(
+        ran(&effects).contains("ORDER BY id ASC"),
+        "{}",
+        ran(&effects)
+    );
+}

@@ -677,6 +677,28 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::SelectGridColumn),
         },
         CommandSpec {
+            id: "results.sort_column",
+            title: "Sort by Column",
+            keywords: &["order", "order by", "header", "ascending", "descending"],
+            shortcut: Some("s"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::SortByColumn {
+                column: None,
+                add: false,
+            }),
+        },
+        CommandSpec {
+            id: "results.sort_add_column",
+            title: "Add Column to Sort",
+            keywords: &["order", "order by", "header", "multi"],
+            shortcut: Some("S"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::SortByColumn {
+                column: None,
+                add: true,
+            }),
+        },
+        CommandSpec {
             id: "results.next_tab",
             title: "Next Result Tab",
             keywords: &["grid"],
@@ -1494,7 +1516,9 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explorer.dependencies"
         | "explorer.dependents"
         | "explorer.data" => &[ActiveSession, ExplorerNode],
-        "data.sort" | "data.filter" => &[ActiveSession, Results],
+        "data.sort" | "data.filter" | "results.sort_column" | "results.sort_add_column" => {
+            &[ActiveSession, Results]
+        }
         "data.apply" => &[ActiveSession, PendingChanges],
         "data.copy.csv"
         | "data.copy.text"
