@@ -67,8 +67,15 @@ fn temporary_connection_with(
     let warning = match prompt.filter(|_| !connection.profile.is_file()) {
         Some(prompt) => {
             // What is typed is the password, an empty answer too: the URL's would
-            // otherwise be used without a word when the prompt is left empty.
-            let password = prompt(&connection.profile.name)?;
+            // otherwise be used without a word when the prompt is left empty. Without
+            // a terminal to ask on, the error was only "os error 6".
+            let password = prompt(&connection.profile.name).map_err(|error| {
+                anyhow::anyhow!(
+                    "--password-prompt asks on a terminal, and there is none here ({error}); \
+                     without one, save the connection with `dexo connections add` and \
+                     --password-stdin or --password-command"
+                )
+            })?;
             connection.password =
                 (!password.is_empty()).then(|| secrecy::SecretString::from(password));
             in_url.then_some(
@@ -1960,5 +1967,20 @@ mod temporary_tests {
         let unasked = temporary_connection_with(url, none).unwrap();
         assert_eq!(unasked.password.unwrap().expose_secret(), "in-url");
         assert!(unasked.warning.unwrap().contains("--password-prompt"));
+    }
+
+    /// With no terminal to ask on, the error says so and what to do instead.
+    #[test]
+    fn a_prompt_without_a_terminal_says_what_it_needs() {
+        let error = temporary_connection_with(
+            "postgres://ana@db/shop",
+            Some(|_: &str| Err(std::io::Error::from_raw_os_error(6))),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("terminal") && error.contains("--password-stdin"),
+            "{error}"
+        );
     }
 }
