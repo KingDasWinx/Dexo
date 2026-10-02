@@ -151,7 +151,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 ## ES: Explorer, schema tools, explain
 
 - [x] **ES-31** `BLOCKER` Production: the Schema form (Preview DDL > Apply) creates the table without asking for the connection's name
-- [ ] **ES-04** `MAJOR` Postgres table DDL (Open Object DDL / Copy DDL) leaves out PK, NOT NULL, DEFAULT, UNIQUE, FKs, CHECK, indexes and comments
+- [x] **ES-04** `MAJOR` Postgres table DDL (Open Object DDL / Copy DDL) leaves out PK, NOT NULL, DEFAULT, UNIQUE, FKs, CHECK, indexes and comments
 - [ ] **ES-09** `MAJOR` Inspect Object offers itself on constraints, functions, types, sequences and group nodes and answers "Select an object in Explorer."
 - [ ] **ES-10** `MAJOR` Copy Object Name on a schema / database returns a doubled name
 - [ ] **ES-11** `MAJOR` "Show Dependencies" is just the Inspect dialog with raw catalog ids

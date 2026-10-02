@@ -230,6 +230,16 @@ async fn postgres_catalog_contract() {
 
     let ddl = catalog.ddl(&table.id).await.unwrap();
     assert!(ddl.sql.to_ascii_uppercase().contains("CREATE TABLE"));
+    // What makes the table this table: the key, the default drawn on a sequence, the
+    // enum and the domain, the partitioning.
+    for wanted in [
+        "CONSTRAINT orders_pkey PRIMARY KEY (id)",
+        "DEFAULT nextval('dexo_catalog.order_seq'::regclass) NOT NULL",
+        "status dexo_catalog.mood",
+        "PARTITION BY RANGE (id)",
+    ] {
+        assert!(ddl.sql.contains(wanted), "{wanted}\n{}", ddl.sql);
+    }
     let deps = catalog.dependents(&table.id).await.unwrap();
     assert!(!deps.is_empty());
 
