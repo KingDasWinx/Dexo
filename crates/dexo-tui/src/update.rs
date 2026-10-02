@@ -1414,7 +1414,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let sql = model.active_document().text();
             if !sql.trim().is_empty() {
                 model.schema_editor.apply_raw(sql);
-                model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
+                model.schema_editor.errors.clear();
+                model.schema_editor.footer = crate::widgets::form::FooterFocus::Submit;
                 model.schema_editor.open = true;
             } else {
                 model.messages.warn("no SQL to apply".into());
@@ -2528,7 +2529,9 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
         Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
         Some(OverlayKind::SchemaForm) => match hit {
-            Some(HitTarget::FormField(index)) if index < model.schema_editor.fields.len() => {
+            Some(HitTarget::FormField(index))
+                if index < model.schema_editor.fields.len() && !model.schema_editor.is_raw() =>
+            {
                 model.schema_editor.focus = index;
                 model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
                 Vec::new()
@@ -7804,9 +7807,21 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
 /// its buttons -- once the walk has passed its last field. It used to take Tab, Enter
 /// and Esc and nothing else: nothing typed reached a field, and it had no buttons.
 fn schema_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    use crate::widgets::form::{FooterFocus, FooterKey, confirm_key, footer_key};
     let editor = &mut model.schema_editor;
     let last = editor.fields.len().saturating_sub(1);
+    // Opened on raw SQL, Run runs that SQL and nothing else: the fields are not shown,
+    // and the keys walk the two buttons only. They used to take typing Run ignored.
+    if editor.is_raw() {
+        return match confirm_key(&mut editor.footer, &key) {
+            FooterKey::Submit => submit_schema_form(model),
+            FooterKey::Cancel => {
+                model.schema_editor.open = false;
+                Vec::new()
+            }
+            FooterKey::Moved | FooterKey::Pass => Vec::new(),
+        };
+    }
     if editor.footer == FooterFocus::Input {
         match key.code {
             KeyCode::Tab | KeyCode::Down if editor.focus < last => {
@@ -9600,6 +9615,7 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
             model.schema_editor.raw_sql.clear();
             model.schema_editor.form_diff = None;
+            model.schema_editor.errors.clear();
             model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
             model.schema_editor.open = true;
             Vec::new()

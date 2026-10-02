@@ -262,6 +262,11 @@ impl SchemaEditor {
         }
     }
 
+    /// Opened on raw SQL by Apply Raw DDL: Submit runs that SQL, whatever the fields say.
+    pub fn is_raw(&self) -> bool {
+        !self.raw_sql.is_empty()
+    }
+
     /// What the form's Submit does: preview the DDL its fields make, or run the SQL it
     /// was opened with.
     pub fn submit_label(&self) -> &'static str {
@@ -409,7 +414,13 @@ impl SchemaEditor {
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!("schema {}", kind_label(self.kind))];
         let on_fields = self.footer == crate::widgets::form::FooterFocus::Input;
-        for (index, field) in self.fields.iter().enumerate() {
+        // Raw SQL runs as it is: fields shown beside it took typing that changed nothing.
+        let fields = if self.is_raw() {
+            &[][..]
+        } else {
+            &self.fields[..]
+        };
+        for (index, field) in fields.iter().enumerate() {
             let marker = if on_fields && index == self.focus {
                 ">"
             } else {
@@ -527,6 +538,53 @@ mod tests {
         };
         update(&mut model, Action::OpenDdlPreview);
         assert!(model.schema_editor.preview.is_some());
+    }
+
+    /// Apply Raw DDL showed the fields, took typing into them and marked them, and Run
+    /// ignored all of it. Errors from an earlier form stayed on screen in either mode.
+    #[test]
+    fn raw_ddl_mode_has_no_fields_to_type_in_and_no_old_errors() {
+        use crate::widgets::form::FooterFocus;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut model = Model::default();
+        model.active_document_mut().sql = dexo_sql::SqlDocument::new("CREATE INDEX i ON t (id)");
+        model.schema_editor.errors = vec!["target is required".into()];
+        update(&mut model, Action::ApplyRawDdl);
+        assert!(model.schema_editor.open);
+        assert!(model.schema_editor.errors.is_empty(), "an old error stayed");
+        assert_eq!(model.schema_editor.footer, FooterFocus::Submit);
+        let before = model.schema_editor.fields.clone();
+        for code in [
+            KeyCode::Char('x'),
+            KeyCode::Up,
+            KeyCode::Char('y'),
+            KeyCode::Down,
+        ] {
+            update(&mut model, key(code));
+        }
+        assert_eq!(model.schema_editor.fields, before, "typing reached a field");
+        assert_ne!(model.schema_editor.footer, FooterFocus::Input);
+        let screen = crate::render::render_to_string(&model, 100, 30);
+        assert!(!screen.contains("> target:"), "{screen}");
+        assert!(!screen.contains("  columns:"), "{screen}");
+        assert!(screen.contains("[Run]"), "{screen}");
+
+        // The fields' own Preview starts without the errors of the last one.
+        update(&mut model, key(KeyCode::Esc));
+        model.schema_editor.errors = vec!["columns are required".into()];
+        model.active_session = Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1)));
+        update(&mut model, Action::OpenPalette);
+        update(&mut model, Action::PaletteQuery("Preview DDL".into()));
+        let entries = crate::palette::palette_entries(&model);
+        model.palette.selected = crate::palette::filter_entries(&entries, "Preview DDL")
+            .iter()
+            .position(|entry| entry.id == "schema.preview")
+            .expect("Preview DDL is in the palette");
+        update(&mut model, Action::PaletteSelect);
+        assert!(model.schema_editor.open);
+        assert!(!model.schema_editor.is_raw());
+        assert!(model.schema_editor.errors.is_empty(), "an old error stayed");
     }
 
     /// The preview after the form had no Submit and Cancel, and what was typed to
