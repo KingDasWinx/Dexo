@@ -528,6 +528,8 @@ fn system_column(name: &str, dialect: Dialect) -> bool {
 fn system_name(table: &str) -> bool {
     table.starts_with("pg_")
         || table.starts_with("sqlite_")
+        // DuckDB's catalog views: `duckdb_tables`, `duckdb_columns`.
+        || table.starts_with("duckdb_")
         || table == "dual"
         || table == "information_schema"
 }
@@ -954,6 +956,7 @@ mod tests {
             "select * into newtab from orders; select * from newtab",
             "create virtual table ft using fts5(body); select * from ft",
             "create temp table if not exists public.tmp1 as select 1; select * from tmp1",
+            "select * from duckdb_tables",
         ] {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
