@@ -28,7 +28,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
   <img src="assets/demo.gif" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
 </div>
 
-## Questions every launch thread asks
+## Questions
 
 **Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree (with estimated and actual rows on Postgres, MySQL and MariaDB), schema diffs, import and export -- for Postgres, MySQL, MariaDB and SQLite in one tool.
 
