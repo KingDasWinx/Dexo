@@ -16,12 +16,15 @@ pub struct DocumentNamePrompt {
     pub document_index: usize,
     pub error: Option<String>,
     pub footer: FooterFocus,
+    /// The connection a new document will belong to -- id and name -- so the dialog can
+    /// say it, and the document goes to the one it said.
+    pub connection: Option<(String, String)>,
 }
 
 impl DocumentNamePrompt {
     /// The suggested name starts selected, so what is typed replaces it -- it used to be
     /// typed on the end of it.
-    pub fn open_create(default_name: String) -> Self {
+    pub fn open_create(default_name: String, connection: Option<(String, String)>) -> Self {
         let mut name = TextInput::new(default_name.clone());
         name.select_all();
         Self {
@@ -32,6 +35,7 @@ impl DocumentNamePrompt {
             document_index: 0,
             error: None,
             footer: FooterFocus::Input,
+            connection,
         }
     }
 
@@ -46,6 +50,7 @@ impl DocumentNamePrompt {
             document_index,
             error: None,
             footer: FooterFocus::Input,
+            connection: None,
         }
     }
 
@@ -66,8 +71,20 @@ impl DocumentNamePrompt {
     }
 
     pub fn lines(&self) -> Vec<String> {
+        self.lines_within(80)
+    }
+
+    /// The dialog's lines in `width` columns: a long name scrolls with the cursor.
+    pub fn lines_within(&self, width: usize) -> Vec<String> {
         let focused = self.footer == FooterFocus::Input;
-        let mut lines = vec![self.name.inline_line("name: ", focused)];
+        let mut lines = Vec::new();
+        if self.intent == Some(DocumentNameIntent::Create) {
+            lines.push(match &self.connection {
+                Some((_, name)) => format!("connection: {name}"),
+                None => "connection: none -- pick one in the explorer first".into(),
+            });
+        }
+        lines.push(self.name.inline_line_within("name: ", focused, width));
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }
@@ -118,9 +135,21 @@ mod tests {
 
     #[test]
     fn create_prompt_prefills_the_default_name() {
-        let prompt = DocumentNamePrompt::open_create("query-2.sql".into());
+        let prompt = DocumentNamePrompt::open_create("query-2.sql".into(), None);
         assert!(prompt.open);
         assert_eq!(prompt.name.as_str(), "query-2.sql");
-        assert!(prompt.lines()[0].contains("query-2.sql"));
+        assert!(
+            prompt
+                .lines()
+                .iter()
+                .any(|line| line.contains("query-2.sql"))
+        );
+    }
+
+    #[test]
+    fn create_prompt_names_the_connection() {
+        let prompt =
+            DocumentNamePrompt::open_create("q.sql".into(), Some(("id".into(), "pg-dev".into())));
+        assert_eq!(prompt.lines()[0], "connection: pg-dev");
     }
 }

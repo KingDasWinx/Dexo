@@ -22,7 +22,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-01** `MAJOR` Palette search ranks loose subsequence matches above the obvious prefix/word match
 - [x] **PC-02** `MAJOR` PageUp / PageDown do nothing in the palette list
 - [x] **PC-05** `MAJOR` Most commands of the registry are missing from the palette (not searchable, not listed)
-- [ ] **PC-11** `MAJOR` Alt+Left / Alt+Right switch the document but not the session: header and status bar keep the old connection, no reconnect
+- [x] **PC-11** `MAJOR` Alt+Left / Alt+Right switch the document but not the session: header and status bar keep the old connection, no reconnect
 - [x] **PC-12** `MAJOR` Ctrl+Shift+Tab (Previous Document) does nothing
 - [x] **PC-20** `MAJOR` Save/Open pickers show the start of the path, so the current folder is never visible
 - [x] **PC-21** `MAJOR` Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
@@ -31,7 +31,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
 - [ ] **PC-29** `MAJOR` A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
 - [x] **PC-33** `MAJOR` Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command
-- [ ] **PC-35** `MAJOR` Ctrl+N creates the document on the "active" connection, not on the connection under the explorer cursor; the status bar names a third one
+- [x] **PC-35** `MAJOR` Ctrl+N creates the document on the "active" connection, not on the connection under the explorer cursor; the status bar names a third one
 - [x] **PC-03** `MINOR` Palette with no match shows an empty box and no message
 - [x] **PC-06** `MINOR` The empty palette lists commands that cannot work in the current context, unordered, with repeated group names
 - [ ] **PC-07** `MINOR` Hotkeys shown in the palette differ from the command table (or from the help)
@@ -42,14 +42,14 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-15** `MINOR` Error toast never goes away by itself
 - [ ] **PC-16** `MINOR` Confirmation for an unparsable statement is titled "Run destructive statements"
 - [x] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
-- [ ] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
+- [x] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
 - [ ] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
 - [ ] **PC-27** `MINOR` Tab strip / tab focus details
 - [ ] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
 - [ ] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
 - [ ] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
 - [ ] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
-- [ ] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
+- [x] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
 - [x] **PC-04** `COSMETIC` "Reset layout" is not Title Case
 - [ ] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20
 - [ ] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`

@@ -867,13 +867,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         // Gated on the editor focus while the strip was only drawn there. It is always
         // on screen now, and a table document never holds the editor focus at all.
-        Action::NextDocumentTabFocus => {
-            model.advance_document_tab_focus(1);
-            Vec::new()
-        }
-        Action::PrevDocumentTabFocus => {
-            model.advance_document_tab_focus(-1);
-            Vec::new()
+        // The same switch Ctrl+Tab makes: the session goes with the document. These moved
+        // the tab only, and the header and the status bar kept the connection left behind.
+        Action::NextDocumentTabFocus | Action::PrevDocumentTabFocus => {
+            let step = if matches!(action, Action::NextDocumentTabFocus) {
+                1
+            } else {
+                -1
+            };
+            model.advance_document_tab_focus(step);
+            if model.nothing_open() {
+                return Vec::new();
+            }
+            let index = model.active_document;
+            activate_document(model, index)
         }
         Action::ScrollDocumentTabsPrev => {
             model.document_tabs_scroll = model.document_tabs_scroll.saturating_sub(1);
@@ -9062,8 +9069,28 @@ fn suggested_document_name(model: &Model) -> String {
 
 fn open_new_document_prompt(model: &mut Model) {
     let default_name = suggested_document_name(model);
+    let connection = new_document_connection(model);
     model.document_name_prompt =
-        crate::screens::document_name_prompt::DocumentNamePrompt::open_create(default_name);
+        crate::screens::document_name_prompt::DocumentNamePrompt::open_create(
+            default_name,
+            connection,
+        );
+}
+
+/// The connection a new document is for, as `(id, name)`. From the explorer it is the
+/// one under the cursor -- the one in view -- and the connection last made active
+/// otherwise: Ctrl+N on `pg-dev` made a document that ran on SQLite.
+fn new_document_connection(model: &Model) -> Option<(String, String)> {
+    let picked = (model.focus == Focus::Explorer)
+        .then(|| model.explorer.selected_connection_name())
+        .flatten();
+    let name = picked.unwrap_or(model.connection.name.as_str());
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == name)
+        .map(|row| (row.profile.id.0.to_string(), row.profile.name.clone()))
 }
 
 fn open_rename_document_prompt(model: &mut Model) {
@@ -9081,6 +9108,12 @@ fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
 
     let intent = model.document_name_prompt.intent;
     let fallback = model.document_name_prompt.default_name.clone();
+    // Nothing typed is not a request for the suggestion: the field was cleared on
+    // purpose, and the dialog used to close as if it had been answered.
+    if model.document_name_prompt.name.trim().is_empty() {
+        model.document_name_prompt.error = Some("name cannot be empty".into());
+        return Vec::new();
+    }
     let name = match normalize_document_name(model.document_name_prompt.name.as_str(), &fallback) {
         Ok(name) => name,
         Err(error) => {
@@ -9094,7 +9127,11 @@ fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
 
     match intent {
         Some(DocumentNameIntent::Create) => {
-            let connection_id = active_connection_uuid(model);
+            let connection_id = model
+                .document_name_prompt
+                .connection
+                .as_ref()
+                .map(|(id, _)| id.clone());
             model
                 .documents
                 .push(crate::model::EditorDocument::new_unique(
@@ -9102,9 +9139,13 @@ fn submit_document_name_prompt(model: &mut Model) -> Vec<Effect> {
                     None,
                     connection_id,
                 ));
-            model.active_document = model.documents.len() - 1;
+            let index = model.documents.len() - 1;
+            model.active_document = index;
             model.focus_active_document_tab();
             model.focus = Focus::Editor;
+            // The session follows the document, as it does for a tab picked from the
+            // strip: the header and the status bar named the connection left behind.
+            return activate_document(model, index);
         }
         Some(DocumentNameIntent::Rename) => {
             let index = model.document_name_prompt.document_index;
@@ -9559,8 +9600,9 @@ fn remove_document(model: &mut Model, index: usize) -> Vec<Effect> {
     if index >= model.documents.len() {
         return Vec::new();
     }
+    let was_active = index == model.active_document;
     // A count still running for it is stopped on the server, not left counting.
-    let effects = if index == model.active_document {
+    let mut effects = if index == model.active_document {
         drop_count(model)
     } else {
         match model.documents[index]
@@ -9590,15 +9632,11 @@ fn remove_document(model: &mut Model, index: usize) -> Vec<Effect> {
     }
     model.focus_active_document_tab();
     model.focus = Focus::Editor;
-    let mut effects = effects;
-    // The tab that comes up is on its own connection, and the status bar and the table
-    // actions answer for the live session: the closed tab's must not outlive it.
+    // The document that is on screen now brings its connection with it, as when it is
+    // picked from the strip; the header and the status bar kept the closed one's.
     if was_active && !model.active_document().kind.is_placeholder() {
-        let landed = model.active_document;
-        match switch_to_document_connection(model, landed) {
-            Switch::Ready => {}
-            Switch::Activated(more) | Switch::Dialling(more) => effects.extend(more),
-        }
+        let next = model.active_document;
+        effects.extend(activate_document(model, next));
     }
     effects
 }

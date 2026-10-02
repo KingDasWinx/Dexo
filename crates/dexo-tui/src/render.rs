@@ -2335,13 +2335,18 @@ fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 56, 8);
-    let lines = model.document_name_prompt.lines();
+    let area = frame.area();
+    let width = 56.min(area.width);
+    // A long name scrolls inside the field; the box is as tall as what it holds.
+    let lines = model
+        .document_name_prompt
+        .lines_within(usize::from(width.saturating_sub(2)));
+    let popup = centered(area, width, lines.len() as u16 + 2);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title(model.document_name_prompt.title()),
+        overlay_block(model, model.document_name_prompt.title()),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
@@ -3350,6 +3355,7 @@ mod tests {
             document_name_prompt:
                 crate::screens::document_name_prompt::DocumentNamePrompt::open_create(
                     "query-1.sql".into(),
+                    None,
                 ),
             ..Model::default()
         };
