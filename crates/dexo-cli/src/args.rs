@@ -308,7 +308,7 @@ pub enum SessionsCommand {
 pub enum ConnectionsCommand {
     /// List the saved connections
     List,
-    /// Save a connection; its password goes to the keychain
+    /// Save a connection; a password it is given is kept in the OS keychain
     Add {
         #[arg(long)]
         name: String,
