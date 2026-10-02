@@ -1648,3 +1648,336 @@ Setup note (not a Dexo bug): a tester wrapper script in the shared scratchpad wa
 - Double-click / triple-click word and line selection, and the middle mouse button: not offered by the editor (nothing happened); no feature to compare with.
 - Snippet insertion: no snippet can be created from the UI or CLI, so the picker never had anything to show.
 - Early in the session a wrapper script in the shared scratchpad was overwritten by another tester, so some keystrokes went to the connections-projects session and (once) the MCP profiles dialog appeared in mine; everything reported above was reproduced after a clean restart with a private wrapper.
+
+### Explorer, schema tools and explain (explorer-schema)
+
+
+
+Binary: dexo dev 1.4.2 (duckdb). Terminal 120x36 unless stated.
+
+#### Findings
+
+##### [MINOR] After the welcome dialog, focus is in the empty editor, not the explorer
+- **Where:** first start, welcome "Get started"
+- **Steps:** start, Enter on [Get started]; press Down Down Enter
+- **Expected:** a first-time user with no document open lands where Down/Enter move through connections (the welcome says "n in the explorer adds a connection"); or at least the focused pane is obvious (standard 3)
+- **Actual:** focus is in the SQL editor ("▸ SQL" marker); Down Down Enter created an empty `query-1.sql*` document with two lines (Enter typed a newline) and no connection ("disconnected"). The explorer cursor `>` is drawn on duck-sales even though the explorer has no focus.
+
+##### [MINOR] Explorer labels are cut at the pane edge with no ellipsis at the default width
+- **Where:** explorer tree, default 26-column sidebar
+- **Steps:** connect pg-dev, expand qa4 > Schemas > public > Tables > customers > Columns
+- **Expected:** truncated labels end with an ellipsis, or the count/type stays visible (standard 6)
+- **Actual:** `▸ Columns (6`, `▸ Indexes (2`, `▸ Constraint`, `created_`, `profile ` are cut hard at the border (row 13-21 of the 26-col pane). Widening with Alt+] shows `Columns (6)`, but `created_at (timestam` and `total (numeric(12,2)` are still cut hard at the wider pane's border.
+
+##### [MINOR] Inspect Object on a column shows internal ids and almost no column facts
+- **Where:** explorer.inspect (column node: actions > Inspect Object / `i`)
+- **Steps:** pg-dev, customers > Columns > name, press `a`, Enter on "Inspect Object"
+- **Expected:** type, nullable, default, key membership; readable dependency names; no internal ids (standard 7)
+- **Actual:**
+```
+qa4.public.customers.name
+kind: column
+note: none yet; n writes one
+deps: pg:schema:2200
+dependents: pg:sequence:16749, pg:constraint:16758, pg:constraint:16760, pg:constr
+```
+  The `pg:schema:2200`/`pg:constraint:16758` ids are raw OIDs; the `dependents:` line is cut at the dialog border (no wrap, and Down does not scroll); no data type / nullability / default shown. The dialog is ~24 rows tall for 5 lines of text.
+
+##### [MAJOR] Postgres table DDL (Open Object DDL / Copy DDL) leaves out PK, NOT NULL, DEFAULT, UNIQUE, FKs, CHECK, indexes and comments
+- **Where:** explorer.ddl, explorer.copy_ddl (pg-dev)
+- **Steps:** pg-dev > public > Tables > customers (or orders, order_items, "MixedCase"), press `d`; or Ctrl+P "Copy DDL" and read `qa.sh clipboard`
+- **Expected:** DDL that recreates the table: the seed has `id serial PRIMARY KEY`, `name text NOT NULL`, `email text UNIQUE`, `created_at ... DEFAULT now()`, `status order_status NOT NULL DEFAULT 'new'`, `REFERENCES customers(id)`, `PRIMARY KEY (order_id, product_id)`, `CHECK (qty > 0)`, `COMMENT ON TABLE`
+- **Actual:** only column names and bare types, e.g.
+```
+CREATE TABLE public.orders (
+  id integer,
+  customer_id integer,
+  status order_status,
+  total numeric(12,2),
+  placed_at timestamp without time zone,
+  note text
+);
+```
+  and `"MixedCase"` shows `id integer, "Label" text` without its PRIMARY KEY (the Constraints (1) node and the inspector's `dependents: pg:constraint:16812` prove the PK exists). `serial` became `integer`, so a pasted DDL creates a different table (no PK, nullable, no default, no FK).
+
+##### [MINOR] Tree: Left/Right/Space do nothing; clicking the disclosure arrow only selects; a double click is needed
+- **Where:** explorer.expand
+- **Steps:** select an expanded node, press Left (nothing), Right on a collapsed node (nothing), Space (nothing); click the `▸`/`▾` glyph with the mouse once (only selects, e.g. col 14 row 11 on `▸ MixedCase`)
+- **Expected:** Right expands, Left collapses / jumps to the parent (tree standard), a click on the arrow toggles
+- **Actual:** only Enter toggles (and double click). Enter is also the only key that connects. Left/Right are silently ignored.
+
+##### [COSMETIC] Object actions menu: half of the actions show no hotkey
+- **Where:** explorer.actions (`a`) on table, column nodes
+- **Steps:** select `MixedCase` table, press `a`
+- **Expected:** every action lists its hotkey (brief; standard 2)
+- **Actual:** `Open Table Data o`, `Inspect Object i`, `Open Object DDL d`, `Copy Object Name c`, `Refresh Catalog Node r` show keys; `Copy DDL`, `Show Dependencies`, `Copy Simple Name`, `Toggle Favorite` show none, and Edit Object Note (`n`) is not in the menu at all although it is only reachable inside Inspect/DDL dialogs.
+
+##### [COSMETIC] Copy toasts do not say what was copied
+- **Where:** explorer.copy_name / copy_simple
+- **Steps:** column `name` selected, press `c`
+- **Actual:** toast `copied to clipboard` (clipboard has `qa4.public.customers.name`). `Copy DDL` says `copied 8 lines to clipboard`, so the name copy could say what it copied (standard 7).
+
+##### [MINOR] Palette fuzzy search: "favor" lists unrelated commands above the exact matches
+- **Where:** Ctrl+P
+- **Steps:** Ctrl+P, type `favor`
+- **Actual:** order is `Open Saved Query…`, `Save Query As…`, `Show Favorites Only`, `Toggle Favorite`. The two commands that contain "favor" come last.
+
+##### [MAJOR] Inspect Object offers itself on constraints, functions, types, sequences and group nodes and answers "Select an object in Explorer."
+- **Where:** explorer.inspect (`i` and actions menu `a` > Inspect Object)
+- **Steps:** pg-dev, with a constraint (`order_items_order_id_fkey`), the function `order_count`, the type `order_status` or the group `Users & Roles` selected, press `a` then Enter on "Inspect Object" (or just `i`)
+- **Expected:** properties of that object, or no Inspect entry in the menu, or a message such as "Constraints cannot be inspected" (standard 7)
+- **Actual:** the Properties dialog says `Select an object in Explorer.` while an object IS selected. Same on the connection row. `d` on the type says `DDL is not available for this object.` (an enum has a DDL: `CREATE TYPE … AS ENUM`). The function menu has no Open Object DDL / Copy DDL / Show Dependencies entry even though `d` works on it.
+
+##### [MAJOR] Copy Object Name on a schema / database returns a doubled name
+- **Where:** explorer.copy_name (`c`), explorer.inspect header
+- **Steps:** pg-dev > qa4 > Schemas > reporting, press `c`, then `qa.sh clipboard`; select the `qa4` database row, press `c`
+- **Expected:** `qa4.reporting` (or `reporting`), `qa4`
+- **Actual:** clipboard `qa4.reporting.reporting` for the schema, `qa4.qa4` for the database; the inspector header shows the same wrong names (`qa4.reporting.reporting`, `qa4.qa4`, `kind: catalog`). Pasting the first into SQL is not valid.
+
+##### [MAJOR] "Show Dependencies" is just the Inspect dialog with raw catalog ids
+- **Where:** explorer.dependencies
+- **Steps:** select view `paid_orders`, Ctrl+P "Show Dependencies" Enter
+- **Expected:** a list of names (orders, customers, schema public) with their kinds, ideally navigable (standard 7)
+- **Actual:** the same Properties dialog as Inspect: `deps: pg:schema:2200, pg:type:16740, pg:table:16750, pg:table:16774`. Nothing says which table is 16750. For a table: `dependents: pg:constraint:16812`. No dedicated title, no list per line.
+
+##### [MINOR] Inspect Object shows only 4 of the 7 table privileges and no owner / comment / size / columns / keys / indexes
+- **Where:** explorer.inspect on `"MixedCase"` (pg-dev, superuser `dexo`)
+- **Actual:** `kind: table`, `note:`, `deps:`, `dependents:`, `privileges: SELECT, INSERT, UPDATE, DELETE`. The server grants SELECT INSERT UPDATE DELETE TRUNCATE REFERENCES TRIGGER (checked with information_schema.table_privileges), so TRUNCATE, REFERENCES and TRIGGER are missing. No owner, row estimate, size, column list, keys or indexes in the inspector, and an index inspector (`order_items_pkey`) is only `kind: index` + note (no columns, uniqueness, method).
+
+##### [MINOR] Single click on a connection row connects/toggles it, on every other node it only selects
+- **Where:** explorer tree, mouse
+- **Steps:** click `pg-dev` (toggles collapse), click `mysql-dev` (connects at once: toast "Connected to mysql-dev"); click `customers` table row (only selects; double click needed)
+- **Expected:** one rule for all rows
+
+##### [MINOR] Actions menu on a connection has 18 entries and no keys for most of them
+- **Where:** explorer.actions on a connection (`a`)
+- **Actual:** Connect or Expand (Enter), New Document (Ctrl+N), Copy Object Name (c), Test Connection, Refresh Catalog Node (r), Search History, Manage Grants, Inspect Sessions, Native Backup, Native Restore, Show Favorites Only, Toggle System Objects, Edit Selected Connection (e), Duplicate Connection, Move to Group, Disconnect Connection (Shift+D), Delete Connection. Refresh Catalog (all) is not in it; the menu is as tall as the pane (see 80x24 check below).
+
+##### [MAJOR] Manage Grants (Security panel): the "DDL preview" opens underneath the panel and cannot be read; Apply answers "ddl RolledBack"
+- **Where:** schema.security (palette "Manage Grants" or connection actions menu), pg-dev
+- **Steps:** select the pg-dev row (view `paid_orders` was the last explorer object), Ctrl+P "Manage Grants" Enter; Down Down Enter is not needed: Enter on the role `dexo` already opens the preview
+- **Expected:** a preview dialog on top, readable, with the whole GRANT statement; Apply says what was applied (standards 6, 7)
+- **Actual:** the 40-column Security panel is drawn over the centre of the "DDL preview" dialog, so only the left 15 columns of the preview show (`target: public.`, `risk: destructi`, `GRANT SELECT ON`, `>[Apply]   [Can`) and the panel's rows run through its border (same at 80, 120, 200 and 260 columns). Enter on [Apply] shows the toast `ddl RolledBack` (a Rust enum name, no sentence) and nothing is granted (`pg_class.relacl` stays empty; the server's last statement on that session is `ROLLBACK`). A plain GRANT to a role is labelled `risk: destructive`, and Enter on a role goes straight to a preview with the Apply button focused (before choosing a privilege or object).
+
+##### [MAJOR] Security panel is a 40-column box that truncates every grant and has no hints
+- **Where:** schema.security, pg-dev
+- **Actual:** the three list rows `PUBLIC`, `dexo`, `pg_read_all_stats` (the tree says `Users & Roles (1)`), then `grant PUBLIC on qa4.information_schema` repeated, cut at the box edge so the table/privilege never shows. Selecting another role does not change the grants list; PageDown, wheel and Tab do nothing; there is no footer line saying what Enter, Esc, g, r do. Rows shorter than the box do not clear what is behind them: at 80x30 after a resize `PUBLIC          ││` shows the explorer/editor border running through the panel.
+
+##### [MAJOR] Refresh Catalog (all) and `r` on a connection / group node do not refresh anything; no feedback either way
+- **Where:** explorer.refresh_all, explorer.refresh
+- **Steps:** pg-dev connected, Tables (8) expanded. In psql: `create table zz_refresh_test(a int)`. In Dexo: select `Tables (8)` and press `r`; select the `pg-dev` row and press `r`; Ctrl+P "Refresh Catalog" Enter; wait 5 s each time
+- **Expected:** the new table appears (Tables (9)); a toast / message says the catalog was refreshed (standard 7)
+- **Actual:** still `Tables (8)` after all three. Only `r` on the schema node (`public`) gave `Tables (9)`, and `r` on the database node (`qa4`) reloads the list of schemas. A second table (`zz_two`) created later was also missed by "Refresh Catalog" and found only after `r` on `public` (`Tables (10)`). None of the refreshes shows a toast or a Messages line.
+
+##### [MINOR] Toggle System Objects gives no sign of its state, and turning it on is only half-applied
+- **Where:** explorer.system_objects
+- **Steps:** pg-dev expanded, Ctrl+P "Toggle System Objects" Enter
+- **Actual:** `Users & Roles (1)` becomes `(15)` at once, but `Schemas (2)` does not list `information_schema` / `pg_catalog` / `pg_toast` until `r` on the `qa4` database node (then `Schemas (5)`); turning it off hides them immediately. No toast, no marker in the pane title, no hotkey.
+
+##### [MINOR] Show Favorites Only: header is a raw filter string, and there is no way back except the palette
+- **Where:** explorer.favorites_only
+- **Steps:** favorite table `MixedCase` (actions > Toggle Favorite, shown as `*MixedCase`), Ctrl+P "Favorites Only" Enter
+- **Actual:** the pane shows `filter: kind:- fav:true` (internal query syntax, `kind:-`) above one row `▸ *MixedCase` with the tree's full indentation (no schema/table context, connections gone); Esc, `/`, Tab do nothing; the status bar does not name the way out. Enter on `*MixedCase` marks it `▾` but shows no children (all filtered out). The same command, run again from the palette, restores the tree.
+
+##### [MAJOR] Hotkey `n` of "Edit Object Note…" does not work from the explorer: it opens "Add connection"
+- **Where:** explorer.note (palette shows `n`), explorer.actions
+- **Steps:** mysql-dev > qa4 > Tables > customers selected, focus on the explorer, press `n`
+- **Expected:** the note editor for the selected object (palette entry "Edit Object Note…  n"; docs: "Edit Object Note… in the palette does the same")
+- **Actual:** the "Add connection" form opens (the explorer's own `[n]ew`). `n` only works inside the Inspect/DDL dialogs, so the hotkey the palette advertises for the explorer is shadowed by New Connection (standard 2). Esc closes the form without harm. The note editor itself works (Enter or [Save] saves, Esc cancels, blank removes: "Removed the note on qa4.customers."; the database comment comes back marked "(database comment)").
+
+##### [MINOR] MySQL tree shows two rows `mysql.users [restricted]` and `mysql.roles [restricted]` with no explanation
+- **Where:** mysql-dev > qa4, after `Views (1)`
+- **Actual:** two unexpandable rows at the database level; Inspect Object on them says `Select an object in Explorer.`; the actions menu offers Inspect / Copy / Favorite / Refresh. A user cannot tell what "restricted" means or why `mysql.users` (not a real MySQL table name) is listed in database qa4.
+
+##### [MINOR] Index / constraint names in Inspect have no table: `qa4.PRIMARY`, `qa4.customer_id`, `qa4.public.order_items_pkey`
+- **Where:** explorer.inspect on an index or constraint (MySQL and Postgres)
+- **Actual:** header `qa4.PRIMARY` (kind: constraint) for orders' PK; every MySQL table has a `PRIMARY` so the name is ambiguous. Copy Object Name gives the same. PG constraint Inspect says "Select an object in Explorer." while MySQL constraint Inspect works.
+
+##### [MINOR] DDL dialog cuts long lines and cannot scroll sideways
+- **Where:** explorer.ddl on MySQL `orders` / `customers`, DuckDB view `sales`
+- **Actual:** `CONSTRAINT `orders_ibfk_1` FOREIGN KEY (`customer_id`) REFERENCES `customers` (`` ends at the dialog border (the target column and ON DELETE are not visible), `) ENGINE=InnoDB … COLLATE=utf8mb4_0900_ai_c` and the `read_csv_auto('/tmp/…` path also. Left/Right/End do not scroll. Copy DDL has the whole text, the dialog does not.
+
+##### [MAJOR] Preview DDL form: `defaults`, `indexes`, `constraints` and `foreign_keys` fields are ignored by the preview and by Apply
+- **Where:** schema.preview (palette "Preview DDL", pg-dev active document), "Schema" form for a table
+- **Steps:** fill target `public.qa_items`, columns `id bigint identity pk, customer_id int, label text`, defaults `label='x'`, indexes `qa_items_label_idx on label`, constraints `check (length(label) > 0)`, foreign_keys `customer_id references customers(id)`; [Preview]; [Apply]
+- **Expected:** a DDL with the default, the index, the CHECK and the FOREIGN KEY, or the fields are not offered
+- **Actual:** the preview is only
+```
+CREATE TABLE "public"."qa_items" (
+  "id" bigint GENERATED ALWAYS AS IDENTITY NOT NULL PRIMARY KEY,
+  "customer_id" int,
+  "label" text
+)
+```
+  and Apply created exactly that (`\d qa_items`: no default, no index other than the PK, no check, no FK). Nothing tells the user their four lines were dropped.
+
+##### [MAJOR] Preview DDL form: the columns field is a hidden mini-language; commas inside `numeric(10,2)` break the DDL, and unknown words are dropped silently
+- **Where:** schema.preview, columns field
+- **Steps:** columns `id bigint identity pk, name text not null, price numeric(10,2) default 0` then [Preview]
+- **Expected:** `"price" numeric(10,2) DEFAULT 0` and `"name" text NOT NULL`; or an error naming what is not understood. The form shows no syntax help (the only hint line says `tab/arrows move  enter preview  esc cancel`)
+- **Actual:**
+```
+  "name" text,
+  "price" numeric(10,
+  "2)" default
+```
+  i.e. the comma inside the type splits the column in two and produces invalid SQL. `not null`, `notnull`, `not_null`, `nn`, `required`, `unique`, `default x`, `nullable=false` are all accepted and ignored (`"name" text`); only the words `pk`, `identity`, `autoinc` do anything, and `pk` is the only way to get NOT NULL. A non-pk column can never be NOT NULL from this form.
+
+##### [MAJOR] Applying DDL answers `ddl Committed` / `ddl RolledBack` (Rust enum names); a failure never says why
+- **Where:** DDL preview > [Apply] (schema.preview, schema.security)
+- **Steps:** (a) preview with target `public.orders` (the form's default target, the table already exists) and Apply; (b) preview `public.qa_items`, Apply
+- **Expected:** (a) the server's error (`relation "orders" already exists`) and what to do; (b) `Created table public.qa_items` (standard 7)
+- **Actual:** (a) toast and Messages line `[12:41:16] info  ddl RolledBack` at level *info*; (b) toast `ddl Committed`. The explorer is not refreshed afterwards: `Tables (10)` still lacks `qa_items` until `r` on the schema node.
+
+##### [MINOR] The Schema form opens prefilled with the name of an existing table (`public.orders`) and Apply happily tries to create it
+- **Where:** schema.preview
+- **Actual:** the first open shows `target: public.orders`, `columns: id bigint identity pk`; the target is not taken from the explorer selection (the selected object was another table) nor from the active connection's schema list. A user who presses Enter twice gets a failing CREATE TABLE of a real table. (The form remembers the last values after Cancel/Esc, which is good.)
+
+##### [MINOR] DDL preview: `risk: destructive=false lock=None` is a debug dump
+- **Where:** DDL preview dialog (Schema form and Security panel)
+- **Actual:** line 2 of every preview reads `risk: destructive=false lock=None` (Rust Debug of the Option), also `risk: destructive` for a plain GRANT. Standard 7.
+
+##### [MINOR] Schema form text fields do not scroll to the cursor and cut the text at the border
+- **Where:** Schema form, columns field
+- **Steps:** type `id bigint identity pk, name text not null, price numeric(10,2) default 0` in `columns`
+- **Actual:** the field shows `columns: id bigint identity pk, name text not null, price numeric(10,2)` and stops at the border; the end of the text (where the cursor is) is not visible and nothing marks that there is more.
+
+##### [MINOR] Esc / Cancel in the DDL preview closes the whole form, there is no way back to edit
+- **Where:** DDL preview
+- **Actual:** Esc, [Cancel] and a click on [Cancel] close both dialogs; the form must be reopened from the palette (its values are kept). A "Back" / Esc-to-form would make the preview loop usable.
+
+##### [BLOCKER] Production: the Schema form (Preview DDL > Apply) creates the table without asking for the connection's name
+- **Where:** schema.preview on `pg-prod` (production, status bar `●PROD pg-prod`)
+- **Steps:** document on pg-prod active, Ctrl+P "Preview DDL" Enter, target `public.qa_prod_items`, [Preview], [Apply] (Enter)
+- **Expected:** "Run on production ... Type pg-prod to run this on production" (docs: "On production, any write asks for the connection's name, typed exactly"; standard 8). Apply Raw DDL on the same connection does ask (`Type pg-prod to run this on production.`, wrong name: `The name does not match; nothing was run.`)
+- **Actual:** the DDL preview shows no production line at all; Enter on [Apply] runs it at once (`ddl Committed`); `\dt` in psql shows `qa_prod_items` created on the production connection. The Manage Grants panel has the same Apply path (not tried on prod).
+
+##### [MAJOR] Apply Raw DDL dialog: raw `key=value` dump, leftover form values shown as removed lines, and ADD COLUMN labelled destructive
+- **Where:** schema.raw (palette "Apply Raw DDL", SQL document active)
+- **Steps:** document text `ALTER TABLE qa_items ADD COLUMN note text;`, Ctrl+P "Apply Raw DDL" Enter
+- **Expected:** the statement and an honest risk (adding a nullable column is not destructive); no reference to the last Preview form
+- **Actual:** dialog "Schema":
+```
+schema table
+- target=public.qa_items
+columns=id bigint identity pk, customer_id int, label text
+defaults=label='x'
+indexes=qa_items_label_idx on label
+constraints=check (length(label) > 0)
+foreign_keys=customer_id references customers(id)
++ ALTER TABLE qa_items ADD COLUMN note text
+risk destructive=true
+raw: ALTER TABLE qa_items ADD COLUMN note text
+```
+  i.e. the stale Preview form is dumped as `-` lines, `risk destructive=true` for an ADD COLUMN (and `destructive=false` for CREATE TABLE, `true` for DROP TABLE), the same statement twice, and the trailing `;` is dropped. `[Run]` ran the ADD COLUMN at once with no further question; for `DROP TABLE zz_two` a second dialog "Run destructive statements" (Cancel focused) did appear, so the first dialog's "destructive=true" label does not match what the product actually asks about. Results pane: `0 rows affected`.
+
+##### [MAJOR] DDL preview cannot be scrolled: long DDL is cut with "…" and still offers [Apply]
+- **Where:** DDL preview, MySQL form with 30 columns (120x36); a 3-column table at 100x12
+- **Steps:** columns `id int pk, c01 int, … c29 int`, [Preview]
+- **Expected:** the whole statement can be read (Up/Down/PageDown/wheel scroll) before applying
+- **Actual:** the preview shows `id`…`c11` then a line `…` and the buttons; Up/Down only move between [Apply]/[Cancel], PageDown and the wheel do nothing. At 100x12 the 3-column table already shows `id`, `name` and `…`. The user applies SQL they could not read.
+
+##### [MAJOR] After a restart, Preview DDL ran for the explorer's last connection (MySQL) while the visible document belonged to pg-readonly
+- **Where:** session restore, schema.preview
+- **Steps:** with documents open on several connections, quit and start again (the active tab is the `pg-read…·Preview DDL.sql` document), Alt+1, connect `mysql-dev`, Alt+2 back to the editor, Ctrl+P "Preview DDL"
+- **Expected:** the document's connection (pg-readonly, standard 5: switching tabs switches the session), or the header shows which connection will be used
+- **Actual:** the header and status bar say `mysql-dev` while the tab and editor are the pg-readonly document; the preview is MySQL dialect (`` CREATE TABLE `public`.`qa_ro_items` (`id` bigint AUTO_INCREMENT …``). After running a query in the editor the header changes to pg-readonly. An Apply here would have run on mysql-dev.
+
+##### [MINOR] pg-readonly: Apply refuses only after the preview; the refusal leaves the preview open
+- **Where:** schema.preview / schema.raw on pg-readonly
+- **Actual:** the Schema form and the DDL preview are offered in full; [Apply] answers `connection is read-only` (warn toast, preview stays open with Apply focused). Apply Raw DDL answers `… read-only, and statement 1 is not a read: CREATE TABLE ro_test(a int)` (good wording). Nothing was written (`\dt ro_*` empty). It would be kinder to say so when opening the form.
+
+##### [MINOR] There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
+- **Where:** schema.preview, schema.raw, explorer actions menus
+- **Actual:** the palette has Preview DDL (a CREATE TABLE form with a free-text target), Apply Raw DDL (SQL of the editor), Compare Schema and Manage Grants. No "New table" / "Alter table" entry in the table or Tables-group actions menu, the form never loads an existing table's columns, and no key switches `schema table` to another kind. DuckDB answers `DuckDB schema changes are written in the editor; the schema editor does not plan them yet` (the message is cut at the palette border: `…does no`), SQLite has no schema editor either.
+
+##### [MINOR] After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
+- **Where:** layout / resize
+- **Steps:** 120x50, `qa.sh resize 100 12`, `qa.sh resize 120 36`
+- **Actual:** editor alone; the sidebar returns only with Alt+1 and the results pane with the layout keys. The compact layout is not undone by growing the terminal (standard 6).
+
+##### [MAJOR] Compare Schema cannot compare two different databases or a snapshot: it only ever diffs the current connection with itself
+- **Where:** schema.diff (palette "Compare Schema")
+- **Steps:** (a) pg-dev current: `l`; Esc; select pg-b (a second connection to database qa4b that I made differ from qa4: other columns, dropped/added tables, extra index); reopen "Compare Schema", press `r`; (b) with one connection: `l`, change the database from psql (`alter table customers add column extra1 text`, `drop table qa_prod_items`, `create table new_t…`), `r`, Enter; (c) a snapshot saved with `dexo schema snapshot --connection pg-dev --name snap-before` before the changes
+- **Expected:** pick a left and a right source (two connections, or a saved snapshot, as the docs say: "compares live, saved, and imported snapshots") and get the added / removed / changed list with a migration script
+- **Actual:** the only sources are `l` = live left and `r` = live right, both taken from the connection currently selected in the explorer, and the dialog is modal (a click on the sidebar does nothing), so left and right are always the same connection. Closing the dialog clears both sources (`sources left=none right=none` on reopen). Enter with one connection on both sides gives an empty `--- script ---` even after the database changed (7 DDL changes made behind its back); with nothing set it says `select both schema sources`. There is no list of saved snapshots (`snap-before` exists in `schema_diff_snapshots`) and no import. So the filters, risk labels, migration script, confirmation and apply could not be reached from the TUI.
+
+##### [MAJOR] Schema diff dialog is an unlabelled raw dump with hidden keys and no buttons
+- **Where:** schema.diff
+- **Actual:** the whole dialog (no Cancel/Compare buttons, no focus marker, nothing clickable) reads
+```
+Live("861da1f0-9455-4bbb-bace-299162bc2ded") -> Live("861da1f0-9455-4bbb-bace-
+filters added=true removed=true changed=true
+confirm=false apply=blocked
+sources left=live:861da1f0-9455-4bbb-bace-299162bc2ded right=none
+l=live left  r=live right  enter=compare
+--- script ---
+```
+  i.e. Rust Debug output with internal connection UUIDs instead of connection names (standard 7), `apply=blocked` with no reason, and only `l`, `r`, Enter are hinted. The filter keys are not shown anywhere: `a` toggles added, `c` toggles changed, `y` sets confirm, and `r` toggles *removed* once the sources line has gone, so `r` means "live right" before the first compare and "removed filter" after it (the hint line also disappears after the first compare). `d` does nothing. Enter resets the filters to all true. A comparison with no differences shows an empty script instead of "No differences". Esc closes the dialog.
+
+##### [MINOR] Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
+- **Where:** connection edit (outside my brief, seen while preparing the diff test)
+- **Steps:** Duplicate Connection on pg-dev (`saved pg-dev (copy)` is appended at the end of the list, not in alphabetical order), `e`, change name to pg-b and database to qa4b, Submit
+- **Actual:** the row is `● pg-b▾` with the old catalog `qa4`, then `Enter connect` in the hint although it shows connected; only Shift+D and a reconnect shows `qa4b`. Also, after Shift+D the explorer selection jumps to another connected connection.
+
+##### [MAJOR] Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused
+- **Where:** explain.analyze (Shift+F7) on pg-prod
+- **Steps:** pg-prod document, `delete from order_items where order_id <= 10`, Shift+F7, Enter
+- **Expected:** EXPLAIN ANALYZE really executes the DELETE (then rolls back); docs: "On production, any write asks for the connection's name, typed exactly, before it runs" and the CLI's `explain --analyze` needs `--confirm-target` on production (standard 8). The dialog text is also the same generic "runs this statement to time it" for a DELETE, with Run focused
+- **Actual:** dialog "Explain Analyze" with the extra line `This is a production connection.`, `>[Run]   [Cancel]`; one Enter ran it (`Analyzed · 0.11 ms … Delete on order_items`). The DELETE rolled back (count(*) of order_items stayed 1000 on pg-dev and pg-prod), so the guarantee of the rollback holds, but the typed confirmation is missing.
+
+##### [MINOR] `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error
+- **Where:** explain.open / explain.analyze, Postgres
+- **Steps:** `select * from orders where id = :id`, F7; then Shift+F7 + Run
+- **Expected:** like `$1` ("this statement has parameters, and its plan needs their values: write them into the statement to explain it")
+- **Actual:** `$1` is handled well on F7 (generic plan, `cond (id = $1)`, cost 8.29) and on Shift+F7 (the sentence above, shown only after pressing Run in the dialog). `:id` reaches the server: `syntax error at or near ":"` in the toast and Messages, with no hint that `:name` needs a value.
+
+##### [MINOR] Explain error toasts are wider than the screen and are cut at the right edge
+- **Where:** explain.analyze refusals
+- **Actual:** `Not run: pg-readonly is read-only, and EXPLAIN ANALYZE would run a statement that is not a read: DELETE FROM order_` and `…and the rollback after it may not undo the change: `legacy_log` is a MyISAM tab` end at the screen border with no ellipsis; the full sentence is only in the Messages tab. (The refusals themselves are right: pg-readonly refuses a DELETE, MySQL refuses the MyISAM table and any UPDATE/DELETE-only statements, rows stayed 2 in `legacy_log`, `note` stayed NULL.)
+
+##### [MINOR] Explain: plan comparison says "now" without naming what it replaced; internal names leak into the node text
+- **Where:** explain.open on Postgres / DuckDB
+- **Actual:** after an index was created, the second F7 of the same statement says `2 changes since the last plan (Summary)` and the Summary lists `now      Bitmap Heap Scan on orders` and `added    Bitmap Index Scan on orders_status_idx` but never the removed `Seq Scan` (a plan "now" X does not say from what). Running F7 twice on an unchanged statement shows nothing about the comparison. DuckDB nodes read `FILTER __expression__: (un…` and `READ_CSV_AUTO  Total Fil…` (internal key names); the `QUERY PLAN` root of SQLite has `-` cost and `?` rows.
+
+##### [MINOR] Try an index: the dialog is offered everywhere and only refuses after you type the index
+- **Where:** explain.try_index (`i` in the Explain tab / palette) on pg-dev, DuckDB
+- **Actual:** the dialog says `Planned as if built, on Postgres with hypopg; nothing is created.`, you type `orders (placed_at)`, [Try], and then get `trying an index needs the hypopg extension: install its package on the server, then run CREATE EXTENSION hypopg` (pg-dev, clear and actionable) or `trying an index before building it needs Postgres with the hypopg extension` (DuckDB). The check could run before opening the dialog. The prefilled `index: CREATE INDEX ON █` has no example of what follows.
+
+##### [MINOR] Manage Grants panel is transparent and empty on MySQL; unsupported tools are offered in the menu of SQLite / DuckDB
+- **Where:** schema.security
+- **Actual:** mysql-dev: an empty "Security" box (no roles, no grants, no "restricted" or "nothing to show" text) through which the sidebar/editor borders `││` show (row text `│      ││      │`); at 60x20 the sidebar header text (`[e]dit [a]ctions`) shows inside the panel's first row. DuckDB: `DuckDB has no users, grants, server sessions or locks to administer`, SQLite: `Manage Grants: SQLite has no users, grants, server sessions or locks to administer` (good, but the prefix differs between the two), yet both connections' actions menus still list Manage Grants, Inspect Sessions, Native Backup / Restore. (The DuckDB message is cut inside the palette at 60 columns.)
+
+##### [MINOR] Tree keys: Home, End, PageUp, PageDown do nothing; Show Favorites Only is empty after a restart until the tree is expanded
+- **Where:** explorer.up / explorer.down, explorer.favorites_only
+- **Actual:** with 25+ rows (120x14) Up/Down walk and the view follows, the wheel scrolls the view, but Home/End/PageUp/PageDown are ignored. A favorite (`MixedCase`, stored in `object_usage`, shown as `*MixedCase` after expanding pg-dev > Tables) is not listed by Show Favorites Only on a fresh start (`filter: kind:- fav:true` and no row) until its table list has been expanded.
+
+#### Checked and fine
+
+- explorer.expand (Enter, double click): connects an offline connection and expands/collapses catalog, schema, group, table, view nodes on Postgres, MySQL, SQLite, DuckDB; `reporting` schema, `"MixedCase"` table and a view's columns show; a single click on a connection row also connects.
+- explorer.up / explorer.down: arrows walk the tree and the view follows the selection; the wheel scrolls the view.
+- explorer.refresh (`r`) on a schema and on a database node: picks up tables created behind Dexo's back and the system schemas.
+- explorer.inspect (`i`) on tables, columns, views, indexes, schemas, databases (and MySQL constraints): dialog opens, Esc closes; note shown with "(database comment)" when only the database has one.
+- explorer.note: write, edit (prefilled), remove (blank), Esc cancels the note editor only, Enter or [Save]; the notes survived a restart on Postgres, MySQL, SQLite (`object_notes`); the palette entry works from the explorer.
+- explorer.ddl (`d`): tables / views / functions on Postgres (view and function DDL complete), full `SHOW CREATE TABLE` on MySQL, original text on SQLite, `CREATE VIEW … read_csv_auto` on DuckDB; `DDL is not available for this object.` on group nodes.
+- explorer.copy_name (`c`), explorer.copy_simple, explorer.copy_ddl: clipboard content correct for tables, columns, functions (see findings for schemas and databases).
+- explorer.favorite: `*` marker, persisted across restart; explorer.favorites_only toggles from the palette and restores the tree.
+- explorer.data (`o`): opens the table data; on a connection row says `Select a table or view to open its data`.
+- explorer.actions (`a`): menu for every node type opens with Enter/Esc, fits at 80x24 and 60x20 (18 entries on a connection).
+- schema.preview: form focus walks with Tab/Shift+Tab/arrows/mouse, values are remembered, Ctrl+A selects and typing replaces, 100x12 scrolls the fields and keeps the buttons visible; preview buttons work with Left/Right/Up/Down/Tab, Esc and mouse (Apply, Cancel); creates the table on pg-dev and mysql-dev.
+- schema.raw: errors are reported with the server text and SQLSTATE; production asks `Type pg-prod to run this on production.` and refuses a wrong name (`The name does not match; nothing was run.`); DROP TABLE gets a second "Run destructive statements" dialog with Cancel focused; pg-readonly refuses (`…read-only, and statement 1 is not a read: …`).
+- schema.security: opens on Postgres; DuckDB and SQLite answer that they have no grants.
+- explain.open (F7): tree / table / summary on Postgres, MySQL, SQLite, DuckDB; `v` cycles the views; plan comparison after a changed plan; `$1` on Postgres 16 gives a generic plan; empty editor says `there is no statement under the cursor to explain`.
+- explain.analyze (Shift+F7): confirmation dialog (text, arrows, Esc, production line on pg-prod); Analyze of a DELETE on pg-dev and pg-prod rolled back (1000 rows kept); pg-readonly refuses a DELETE; MySQL refuses the MyISAM `legacy_log` and non-SELECT statements; SQLite says `SQLite has no EXPLAIN ANALYZE`; DuckDB analyze shows actual rows and time; `$1` says the plan needs values.
+- explain.try_index (`i`): without hypopg the message names the extension and the command to install it.
+- Esc / Ctrl+Q: no crash, no freeze at any point; `qa.sh alive` stayed `running` except for the intended quit.
+
+#### Not testable
+
+- Schema diff with a real difference: Compare Schema can only diff the current connection with itself (see findings), so the filters' effect on a script, the risk labels, the migration script, apply with confirmation and a snapshot-vs-live comparison could not be reached from the TUI. A snapshot (`dexo schema snapshot`) and a second database (`qa4b`, connection `pg-b`) were prepared for it.
+- Alter table: there is no form for it (only CREATE TABLE and raw SQL).
+- Typed confirmation for a destructive change from the Schema form: the form can only produce CREATE TABLE; the destructive path was only seen through Apply Raw DDL.
+- Manage Grants Apply: the preview is hidden under the Security panel, so its content and the real effect of Apply could not be read (the result was `ddl RolledBack`).
+- Try an index with hypopg installed: the extension is not installed on the test server.
+- Create-table with foreign key / indexes / defaults: the form ignores those fields, so a foreign key could not be created from it.
+- DuckDB `n` note and Create Table on SQLite / DuckDB: no schema editor for those drivers.
