@@ -1170,7 +1170,9 @@ fn run_explain(
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
     if analyze && !confirm {
-        anyhow::bail!("EXPLAIN ANALYZE runs the statement, then rolls it back; pass --confirm");
+        anyhow::bail!(
+            "EXPLAIN ANALYZE runs the statement, then rolls back what it changed (a sequence or auto-increment counter keeps its advance); pass --confirm"
+        );
     }
     let request = if indexes.is_empty() {
         dexo_driver_api::ExplainRequest {

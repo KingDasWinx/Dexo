@@ -367,7 +367,8 @@ fn render_explain_prompt(
     let footer = crate::widgets::form::footer_line("Run", focus);
     let mut lines = vec![
         "EXPLAIN ANALYZE runs this statement to time it,".to_string(),
-        "then rolls back what it changed.".to_string(),
+        "then rolls back what it changed; a sequence or".to_string(),
+        "an auto-increment counter keeps its advance.".to_string(),
     ];
     if production {
         lines.push("This is a production connection.".to_string());
