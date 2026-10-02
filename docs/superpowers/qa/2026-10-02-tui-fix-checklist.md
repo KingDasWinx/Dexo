@@ -29,7 +29,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-25** `MAJOR` After a crash (kill) the recovered documents lose their connection and the "unsaved" marker
 - [ ] **PC-26** `MAJOR` Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
 - [x] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
-- [ ] **PC-29** `MAJOR` A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
+- [x] **PC-29** `MAJOR` A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
 - [x] **PC-33** `MAJOR` Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command
 - [x] **PC-35** `MAJOR` Ctrl+N creates the document on the "active" connection, not on the connection under the explorer cursor; the status bar names a third one
 - [x] **PC-03** `MINOR` Palette with no match shows an empty box and no message
@@ -48,7 +48,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
 - [ ] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
 - [ ] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
-- [ ] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
+- [x] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
 - [x] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
 - [x] **PC-04** `COSMETIC` "Reset layout" is not Title Case
 - [ ] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20

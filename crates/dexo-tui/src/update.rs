@@ -238,6 +238,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
+            apply_sql_transactions(model, key.operation, usize::MAX);
             let mut effects = finish_schema_run(model, key.operation, None);
             if let Some((results, bars)) = document_output(model, &key)
                 && results
@@ -269,6 +270,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if let Some(tab) = result_tab_mut(model, &key, index) {
                 tab.status = crate::model::OperationStatus::Failed;
             }
+            apply_sql_transactions(model, key.operation, index);
             point_at_failure(model, &key, index, &message, position);
             // A sort or a clause the server would not run leaves the rows it had.
             let mut derived = false;
@@ -2446,7 +2448,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 return Vec::new();
             }
             model.quit_prompt = None;
-            let mut effects = checkpoint_dirty(model);
+            // The server keeps a statement running after its client is gone: it is asked
+            // to stop first.
+            let mut effects: Vec<Effect> = model
+                .active_query
+                .and(model.active_operation)
+                .map(Effect::CancelOperation)
+                .into_iter()
+                .collect();
+            effects.extend(checkpoint_dirty(model));
             effects.push(flush_documents_effect(model));
             effects.push(persist_layout_effect(model));
             effects.push(Effect::Shutdown);
@@ -6240,6 +6250,14 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
             dropped,
         },
     );
+    model.sql_transactions = Some(crate::model::SqlTransactions {
+        operation,
+        session: model.active_session,
+        steps: statements
+            .iter()
+            .map(|sql| transaction_after(sql))
+            .collect(),
+    });
     let session = model
         .active_session
         .map(|id| id.0.to_string())
@@ -6307,6 +6325,50 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         read_only: false,
     }));
     effects
+}
+
+/// The transaction state a statement leaves behind when it is one that opens or closes a
+/// transaction, `None` for any other. `ROLLBACK TO` and `RELEASE` end a savepoint, not
+/// the transaction.
+fn transaction_after(sql: &str) -> Option<TransactionState> {
+    let lowered = sql.trim().trim_end_matches(';').to_ascii_lowercase();
+    let mut words = lowered.split_whitespace();
+    match words.next()? {
+        "begin" | "start" => Some(TransactionState::Active),
+        "commit" | "end" | "abort" => Some(TransactionState::Idle),
+        "rollback" if words.next() == Some("to") => None,
+        "rollback" => Some(TransactionState::Idle),
+        _ => None,
+    }
+}
+
+/// Records what the statements of the finished run (those before `until`) did to the
+/// transaction: a `begin;` typed in the editor is as open as one from the palette, and
+/// quitting has to ask about it.
+fn apply_sql_transactions(model: &mut Model, operation: crate::runtime::OperationId, until: usize) {
+    let Some(run) = model
+        .sql_transactions
+        .take_if(|run| run.operation == operation)
+    else {
+        return;
+    };
+    let Some(state) = run.steps.iter().take(until).rev().find_map(|step| *step) else {
+        return;
+    };
+    let Some(session) = run.session else {
+        return;
+    };
+    if let Some(row) = model
+        .connections
+        .sessions
+        .iter_mut()
+        .find(|row| row.id == session)
+    {
+        row.transaction = state;
+    }
+    if model.active_session == Some(session) {
+        model.transaction = state;
+    }
 }
 
 fn cancel_query(model: &mut Model) -> Vec<Effect> {
@@ -9476,6 +9538,12 @@ pub(crate) fn quit_losses(model: &Model) -> Vec<String> {
         .filter(|(index, _)| *index != model.active_document)
         .map(|(_, document)| document.browse.changes.pending().len())
         .sum();
+    if model.active_query.is_some() && model.active_operation.is_some() {
+        losses.push(format!(
+            "A query is still running on {}: quitting cancels it.",
+            model.connection.name
+        ));
+    }
     let edits = model.data.changes.pending().len() + parked;
     if edits > 0 {
         losses.push(format!(

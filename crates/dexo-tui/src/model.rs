@@ -1782,6 +1782,16 @@ pub struct SchemaRun {
     pub dropped: Vec<Vec<String>>,
 }
 
+/// What each statement of a running script does to the transaction -- `BEGIN` opens one,
+/// `COMMIT` and `ROLLBACK` close it -- applied as the script reports back. The session
+/// only knew of the transactions Dexo's own commands began.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SqlTransactions {
+    pub operation: crate::runtime::OperationId,
+    pub session: Option<crate::runtime::SessionId>,
+    pub steps: Vec<Option<dexo_driver_api::TransactionState>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedBackup {
     pub operation: crate::runtime::OperationId,
@@ -1902,6 +1912,7 @@ pub struct Model {
     pub catalog_complete: bool,
     /// The running script changes the schema: once it ends, the catalog is read again.
     pub schema_run: Option<SchemaRun>,
+    pub sql_transactions: Option<SqlTransactions>,
     /// Tables this session's runs created, temporary ones included, which no catalog
     /// lists; with the session and its generation they belong to -- every session's
     /// generation starts at 1, so the generation alone let them leak to another.
@@ -2056,6 +2067,7 @@ impl Default for Model {
             editor: EditorState::default(),
             catalog_complete: false,
             schema_run: None,
+            sql_transactions: None,
             session_tables: Default::default(),
             vim: crate::screens::vim::VimState::default(),
             startup_warning: None,
