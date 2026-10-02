@@ -1542,14 +1542,14 @@ fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
     register_overlay(hits, popup);
     let buttons = [
-        None,
-        Some(HitButton::New),
-        Some(HitButton::Edit),
-        Some(HitButton::Duplicate),
-        Some(HitButton::Test),
-        Some(HitButton::Delete),
-        Some(HitButton::CloseSession),
-        None,
+        HitButton::Connect,
+        HitButton::New,
+        HitButton::Edit,
+        HitButton::Duplicate,
+        HitButton::Test,
+        HitButton::Delete,
+        HitButton::CloseSession,
+        HitButton::Docker,
     ];
     for_popup_lines(popup, &lines, |i, line, rect| {
         if let Some((Some(row), _)) = shown.get(i).filter(|_| i < rows) {
@@ -1557,9 +1557,7 @@ fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         }
         if i > rows {
             for (label, button) in crate::screens::connections::HINTS.iter().zip(buttons) {
-                if let Some(button) = button {
-                    register_label(hits, rect, line, label, HitTarget::Button(button));
-                }
+                register_label(hits, rect, line, label, HitTarget::Button(button));
             }
         }
     });

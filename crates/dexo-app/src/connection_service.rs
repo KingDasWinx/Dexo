@@ -16,6 +16,9 @@ pub struct NewConnection {
     pub extra_config: serde_json::Value,
     pub policy: crate::connection_policy::ConnectionPolicyOverrides,
     pub group_path: Option<String>,
+    /// The database lets the user in without a password (a Docker container made so):
+    /// an empty one is kept rather than refused.
+    pub allow_empty_password: bool,
 }
 
 impl Default for NewConnection {
@@ -31,6 +34,7 @@ impl Default for NewConnection {
             extra_config: serde_json::json!({}),
             policy: crate::connection_policy::ConnectionPolicyOverrides::default(),
             group_path: None,
+            allow_empty_password: false,
         }
     }
 }
@@ -52,6 +56,7 @@ pub fn create(
     secrets: &dyn SecretStore,
     repo: &impl ConnectionProfiles,
 ) -> Result<(ConnectionProfile, SecretPersist), AppError> {
+    let allow_empty_password = input.allow_empty_password;
     let profile = build_profile(input)?;
     if profile.password_command().is_some() {
         // The password manager answers every connect; nothing goes to the keychain.
@@ -64,7 +69,7 @@ pub fn create(
         repo.save(&profile)?;
         return Ok((profile, SecretPersist::Stored));
     }
-    if password.is_empty() && !profile.is_file() {
+    if password.is_empty() && !profile.is_file() && !allow_empty_password {
         return Err(AppError::new(
             ErrorCategory::Authentication,
             "password is required",
@@ -315,6 +320,28 @@ mod tests {
                 .unwrap()
                 .expose_secret(),
             SENTINEL
+        );
+    }
+
+    /// An empty password is refused unless the database lets its user in without one.
+    #[test]
+    fn create_keeps_an_empty_password_only_when_allowed() {
+        let repo = MemoryRepo::default();
+        let store = MemorySecretStore::default();
+        let error = create(input(), "", &store, &repo).unwrap_err();
+        assert!(error.to_string().contains("password is required"));
+        let open = NewConnection {
+            allow_empty_password: true,
+            ..input()
+        };
+        let (profile, _) = create(open, "", &store, &repo).unwrap();
+        assert_eq!(
+            store
+                .get(profile.secret_ref.as_str())
+                .unwrap()
+                .unwrap()
+                .expose_secret(),
+            ""
         );
     }
 

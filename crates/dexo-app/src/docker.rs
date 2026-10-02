@@ -2,21 +2,40 @@
 //! MariaDB containers that publish their port, with the user, database and password
 //! their environment set. Docker is only read: `docker ps` and `docker inspect`.
 
-use std::io::Read;
-use std::process::{Command, Stdio};
+use std::process::Command;
 use std::time::{Duration, Instant};
+
+use secrecy::{ExposeSecret, SecretString};
 
 use crate::NewConnection;
 
 /// A container that answers as a database on this machine.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone)]
 pub struct DockerDatabase {
     pub container: String,
     pub image: String,
     /// What the connection form is filled with: name, driver, host, port, database, user.
     pub connection: NewConnection,
     /// From the container's environment, for the form's password field only.
-    pub password: Option<String>,
+    pub password: Option<SecretString>,
+    /// The container lets its user in without a password.
+    pub passwordless: bool,
+}
+
+impl PartialEq for DockerDatabase {
+    fn eq(&self, other: &Self) -> bool {
+        let password = |database: &Self| {
+            database
+                .password
+                .as_ref()
+                .map(|password| password.expose_secret().to_string())
+        };
+        self.container == other.container
+            && self.image == other.image
+            && self.connection == other.connection
+            && self.passwordless == other.passwordless
+            && password(self) == password(other)
+    }
 }
 
 impl std::fmt::Debug for DockerDatabase {
@@ -30,9 +49,15 @@ impl std::fmt::Debug for DockerDatabase {
 }
 
 /// The running database containers. No `docker` on PATH, or a daemon that does not
-/// answer within `timeout`, is no containers -- not an error worth saying.
+/// answer within `timeout` -- all its calls together -- is no containers, not an error
+/// worth saying.
 pub fn discover(timeout: Duration) -> Vec<DockerDatabase> {
-    let Some(ids) = run(&["ps", "-q", "--no-trunc"], timeout) else {
+    discover_with("docker", timeout)
+}
+
+fn discover_with(docker: &str, timeout: Duration) -> Vec<DockerDatabase> {
+    let deadline = Instant::now() + timeout;
+    let Some(ids) = run(docker, &["ps", "-q", "--no-trunc"], deadline) else {
         return Vec::new();
     };
     let ids: Vec<&str> = ids.split_whitespace().collect();
@@ -41,9 +66,63 @@ pub fn discover(timeout: Duration) -> Vec<DockerDatabase> {
     }
     let mut args = vec!["inspect"];
     args.extend(ids);
-    run(&args, timeout)
-        .map(|json| from_inspect(&json))
-        .unwrap_or_default()
+    let Some(json) = run(docker, &args, deadline) else {
+        return Vec::new();
+    };
+    let found = from_inspect(&json);
+    if found.is_empty() {
+        return found;
+    }
+    let daemon = daemon_host(docker, deadline);
+    found
+        .into_iter()
+        .map(|mut database| {
+            if let Some(daemon) = &daemon
+                && database.connection.host == "127.0.0.1"
+            {
+                database.connection.host = daemon.clone();
+            }
+            database
+        })
+        .collect()
+}
+
+/// The host a remote daemon runs on -- `DOCKER_HOST`, else the current context's
+/// endpoint -- where its containers publish their ports; `None` for a local one.
+fn daemon_host(docker: &str, deadline: Instant) -> Option<String> {
+    let endpoint = match std::env::var("DOCKER_HOST") {
+        Ok(host) if !host.trim().is_empty() => host,
+        _ => run(
+            docker,
+            &[
+                "context",
+                "inspect",
+                "--format",
+                "{{.Endpoints.docker.Host}}",
+            ],
+            deadline,
+        )?,
+    };
+    remote_host(endpoint.trim())
+}
+
+/// `tcp://10.0.0.5:2376` or `ssh://me@build-box` is that host; a socket or pipe is
+/// this machine.
+fn remote_host(endpoint: &str) -> Option<String> {
+    let (scheme, rest) = endpoint.split_once("://")?;
+    if !matches!(scheme, "tcp" | "ssh" | "http" | "https") {
+        return None;
+    }
+    let authority = rest.split('/').next()?;
+    let host = authority
+        .rsplit_once('@')
+        .map_or(authority, |(_, host)| host);
+    let host = match host.strip_prefix('[') {
+        Some(bracketed) => bracketed.split(']').next()?,
+        None => host.rsplit_once(':').map_or(host, |(host, _)| host),
+    };
+    (!host.is_empty() && !matches!(host, "localhost" | "127.0.0.1" | "::1"))
+        .then(|| host.to_string())
 }
 
 /// `docker inspect`'s JSON array, read for databases.
@@ -90,11 +169,15 @@ fn database(container: &serde_json::Value) -> Option<DockerDatabase> {
     };
     let inner_port = if driver == "postgres" { 5432 } else { 3306 };
     let (host, port) = published(container, inner_port)?;
-    let (username, database, password) = match driver {
+    let yes = |key: &str| {
+        get(key).is_some_and(|value| matches!(value.to_lowercase().as_str(), "yes" | "true" | "1"))
+    };
+    let (username, database, password, passwordless) = match driver {
         "postgres" => {
             let user = get("POSTGRES_USER").unwrap_or_else(|| "postgres".into());
             let database = get("POSTGRES_DB").unwrap_or_else(|| user.clone());
-            (user, database, get("POSTGRES_PASSWORD"))
+            let trusted = get("POSTGRES_HOST_AUTH_METHOD").as_deref() == Some("trust");
+            (user, database, get("POSTGRES_PASSWORD"), trusted)
         }
         _ => {
             // MariaDB's own names first, then the MySQL ones it also reads.
@@ -102,14 +185,32 @@ fn database(container: &serde_json::Value) -> Option<DockerDatabase> {
                 "mariadb" => get(mariadb).or_else(|| get(mysql)),
                 _ => get(mysql),
             };
-            let database = either("MARIADB_DATABASE", "MYSQL_DATABASE").unwrap_or_default();
+            // A container made with only a root password has no database of its own; the
+            // server's `mysql` schema is always there to connect to.
+            let database =
+                either("MARIADB_DATABASE", "MYSQL_DATABASE").unwrap_or_else(|| "mysql".into());
             match either("MARIADB_USER", "MYSQL_USER") {
-                Some(user) => (user, database, either("MARIADB_PASSWORD", "MYSQL_PASSWORD")),
-                None => (
-                    "root".into(),
+                Some(user) => (
+                    user,
                     database,
-                    either("MARIADB_ROOT_PASSWORD", "MYSQL_ROOT_PASSWORD"),
+                    either("MARIADB_PASSWORD", "MYSQL_PASSWORD"),
+                    false,
                 ),
+                None => {
+                    let empty = match driver {
+                        "mariadb" => {
+                            yes("MARIADB_ALLOW_EMPTY_ROOT_PASSWORD")
+                                || yes("MYSQL_ALLOW_EMPTY_PASSWORD")
+                        }
+                        _ => yes("MYSQL_ALLOW_EMPTY_PASSWORD"),
+                    };
+                    (
+                        "root".into(),
+                        database,
+                        either("MARIADB_ROOT_PASSWORD", "MYSQL_ROOT_PASSWORD"),
+                        empty,
+                    )
+                }
             }
         }
     };
@@ -125,7 +226,8 @@ fn database(container: &serde_json::Value) -> Option<DockerDatabase> {
             username,
             ..NewConnection::default()
         },
-        password,
+        passwordless: passwordless && password.is_none(),
+        password: password.map(SecretString::from),
     })
 }
 
@@ -145,44 +247,25 @@ fn published(container: &serde_json::Value, inner: u16) -> Option<(String, u16)>
     })
 }
 
-/// `docker args…`'s output, or `None` when it cannot start, fails, or takes longer than
-/// `timeout`; then it is stopped.
-fn run(args: &[&str], timeout: Duration) -> Option<String> {
-    let mut child = Command::new("docker")
-        .args(args)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .ok()?;
-    let mut stdout = child.stdout.take()?;
-    let (sender, receiver) = std::sync::mpsc::channel();
-    std::thread::spawn(move || {
-        let mut output = String::new();
-        let _ = stdout.read_to_string(&mut output);
-        let _ = sender.send(output);
-    });
-    let deadline = Instant::now() + timeout;
-    loop {
-        match child.try_wait() {
-            Ok(Some(status)) if status.success() => break,
-            Ok(Some(_)) | Err(_) => return None,
-            Ok(None) if Instant::now() >= deadline => {
-                let _ = child.kill();
-                let _ = child.wait();
-                return None;
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
+/// `docker args…`'s output, or `None` when it cannot start, fails, or is still running
+/// at `deadline`; then it is stopped, with whatever it started.
+fn run(docker: &str, args: &[&str], deadline: Instant) -> Option<String> {
+    let mut command = Command::new(docker);
+    command.args(args).stderr(std::process::Stdio::null());
+    crate::process::detach(&mut command);
+    match crate::process::run_until(command, deadline, crate::process::stop_group).ok()? {
+        crate::process::Ran::Exited(status, Some(output)) if status.success() => {
+            String::from_utf8(output).ok()
         }
+        _ => None,
     }
-    receiver
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .ok()
 }
 
 #[cfg(test)]
 mod tests {
-    use super::from_inspect;
+    use secrecy::ExposeSecret;
+
+    use super::{from_inspect, remote_host};
 
     /// What `docker inspect` says of a Postgres, a MySQL with only a root password, a
     /// MariaDB with a user, and a container that publishes nothing or is not a database.
@@ -199,6 +282,10 @@ mod tests {
           {"Name": "/maria", "Config": {"Image": "mariadb:11.4",
              "Env": ["MARIADB_USER=bo", "MARIADB_PASSWORD=pw", "MARIADB_DATABASE=app"]},
            "NetworkSettings": {"Ports": {"3306/tcp": [{"HostIp": "", "HostPort": "3308"}]}}},
+          {"Name": "/open-my", "Config": {"Image": "mysql:8.4", "Env": ["MYSQL_ALLOW_EMPTY_PASSWORD=yes"]},
+           "NetworkSettings": {"Ports": {"3306/tcp": [{"HostIp": "0.0.0.0", "HostPort": "3309"}]}}},
+          {"Name": "/trusting-pg", "Config": {"Image": "postgres:16", "Env": ["POSTGRES_HOST_AUTH_METHOD=trust"]},
+           "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5434"}]}}},
           {"Name": "/internal-pg", "Config": {"Image": "postgres:16", "Env": []},
            "NetworkSettings": {"Ports": {"5432/tcp": null}}},
           {"Name": "/web", "Config": {"Image": "nginx", "Env": []},
@@ -215,7 +302,10 @@ mod tests {
                     db.connection.port,
                     db.connection.username.as_str(),
                     db.connection.database.as_str(),
-                    db.password.as_deref(),
+                    db.password
+                        .as_ref()
+                        .map(|password| password.expose_secret().to_string()),
+                    db.passwordless,
                 )
             })
             .collect();
@@ -229,7 +319,8 @@ mod tests {
                     Some(5433),
                     "ana",
                     "shop",
-                    Some("s3cret")
+                    Some("s3cret".to_string()),
+                    false
                 ),
                 (
                     "legacy",
@@ -237,8 +328,9 @@ mod tests {
                     "127.0.0.1",
                     Some(3307),
                     "root",
-                    "",
-                    Some("root")
+                    "mysql",
+                    Some("root".to_string()),
+                    false
                 ),
                 (
                     "maria",
@@ -247,12 +339,88 @@ mod tests {
                     Some(3308),
                     "bo",
                     "app",
-                    Some("pw")
+                    Some("pw".to_string()),
+                    false
+                ),
+                (
+                    "open-my",
+                    "mysql",
+                    "127.0.0.1",
+                    Some(3309),
+                    "root",
+                    "mysql",
+                    None,
+                    true
+                ),
+                (
+                    "trusting-pg",
+                    "postgres",
+                    "127.0.0.1",
+                    Some(5434),
+                    "postgres",
+                    "postgres",
+                    None,
+                    true
                 ),
             ]
         );
         // The password never shows in a debug print.
         assert!(!format!("{:?}", found[0]).contains("s3cret"));
         assert!(from_inspect("not json").is_empty());
+    }
+
+    /// A remote daemon's containers publish on its host; a socket is this machine.
+    #[test]
+    fn a_remote_daemon_is_where_its_ports_are() {
+        assert_eq!(
+            remote_host("tcp://10.0.0.5:2376").as_deref(),
+            Some("10.0.0.5")
+        );
+        assert_eq!(
+            remote_host("ssh://me@build-box").as_deref(),
+            Some("build-box")
+        );
+        assert_eq!(
+            remote_host("ssh://me@build-box:2222").as_deref(),
+            Some("build-box")
+        );
+        assert_eq!(
+            remote_host("tcp://[fd00::5]:2376").as_deref(),
+            Some("fd00::5")
+        );
+        assert_eq!(remote_host("unix:///var/run/docker.sock"), None);
+        assert_eq!(remote_host("npipe:////./pipe/docker_engine"), None);
+        assert_eq!(remote_host("tcp://localhost:2375"), None);
+    }
+
+    /// A daemon that hangs is given up on within the time asked, all calls together,
+    /// and what the `docker` it ran started is stopped with it.
+    #[cfg(unix)]
+    #[test]
+    fn a_hanging_daemon_is_given_up_on() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let shim = dir.path().join("docker");
+        std::fs::write(&shim, "#!/bin/sh\nsleep 98761 &\nsleep 98761\n").unwrap();
+        std::fs::set_permissions(&shim, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let started = std::time::Instant::now();
+        let found = super::discover_with(
+            shim.to_str().unwrap(),
+            std::time::Duration::from_millis(500),
+        );
+        assert!(found.is_empty());
+        assert!(started.elapsed() < std::time::Duration::from_secs(2));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while std::process::Command::new("pgrep")
+            .args(["-f", "sleep 98761"])
+            .output()
+            .is_ok_and(|output| !output.stdout.is_empty())
+        {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the shim's sleeps outlived discovery"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
     }
 }

@@ -13,11 +13,28 @@ pub enum FormKind {
     Index,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, PartialEq)]
 pub struct FormField {
     pub label: String,
     pub value: String,
     pub secret: bool,
+}
+
+/// A secret field's value -- a password kept while its form is open -- never shows in
+/// a debug print.
+impl std::fmt::Debug for FormField {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        let value: &dyn std::fmt::Debug = if self.secret {
+            &"[redacted]"
+        } else {
+            &self.value
+        };
+        f.debug_struct("FormField")
+            .field("label", &self.label)
+            .field("value", value)
+            .field("secret", &self.secret)
+            .finish()
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]

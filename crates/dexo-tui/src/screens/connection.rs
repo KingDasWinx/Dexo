@@ -19,6 +19,9 @@ pub struct ConnectionForm {
     /// The temporary connection this form saves. Its session is already open, so
     /// saving dials nothing new; the saved profile takes over its session and documents.
     pub saving_temporary: Option<ConnectionProfile>,
+    /// Filled from a Docker container that lets its user in without a password: an
+    /// empty password is that, not a mistake.
+    pub allow_empty_password: bool,
 }
 
 impl Default for ConnectionForm {
@@ -31,6 +34,7 @@ impl Default for ConnectionForm {
             editing: None,
             advanced: false,
             saving_temporary: None,
+            allow_empty_password: false,
         }
     }
 }
@@ -50,8 +54,7 @@ impl ConnectionForm {
             focus: 0,
             errors: Vec::new(),
             editing: Some(profile.clone()),
-            advanced: false,
-            saving_temporary: None,
+            ..Self::default()
         };
         set_field(&mut form.fields, "name", &profile.name);
         set_field(&mut form.fields, "driver", &profile.driver);
@@ -281,18 +284,19 @@ impl ConnectionForm {
             .is_some_and(|descriptor| descriptor.file);
         let from_command = !field(&self.fields, "password_command").trim().is_empty();
         match to_input(&self.fields) {
-            Ok(input) => {
-                if self.editing.is_none() && password.is_empty() && !opens_file && !from_command {
+            Ok(mut input) => {
+                input.allow_empty_password = self.allow_empty_password;
+                if self.editing.is_none()
+                    && password.is_empty()
+                    && !opens_file
+                    && !from_command
+                    && !self.allow_empty_password
+                {
                     self.errors.push("password is required".into());
                     return None;
                 }
-                if let Some(field) = self
-                    .fields
-                    .iter_mut()
-                    .find(|field| field.label == "password")
-                {
-                    field.value.clear();
-                }
+                // The password stays in the form until it closes: a save the app turns
+                // down -- a name taken, a field missing -- comes back to it as typed.
                 Some((input, password))
             }
             Err(error) => {
@@ -706,6 +710,7 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
         } else {
             Some(group)
         },
+        allow_empty_password: false,
     })
 }
 
@@ -714,7 +719,7 @@ mod tests {
     use super::ConnectionForm;
 
     #[test]
-    fn password_field_is_masked_and_cleared_on_submit() {
+    fn password_field_is_masked_and_kept_until_the_form_closes() {
         let mut form = ConnectionForm::open();
         for (label, value) in [
             ("name", "local-pg"),
@@ -743,15 +748,14 @@ mod tests {
         let (input, password) = form.submit().unwrap();
         assert_eq!(input.name, "local-pg");
         assert_eq!(password, "SUPER_SECRET_SENTINEL");
+        assert!(!form.lines().join("\n").contains("SUPER_SECRET_SENTINEL"));
+        assert!(!format!("{form:?}").contains("SUPER_SECRET_SENTINEL"));
+        form.close();
         assert!(
             form.fields
                 .iter()
-                .find(|field| field.label == "password")
-                .unwrap()
-                .value
-                .is_empty()
+                .all(|field| !field.value.contains("SUPER_SECRET_SENTINEL"))
         );
-        assert!(!form.lines().join("\n").contains("SUPER_SECRET_SENTINEL"));
     }
 
     #[test]

@@ -71,6 +71,8 @@ pub enum HitButton {
     Test,
     Delete,
     CloseSession,
+    Connect,
+    Docker,
     ParentDir,
     ToggleDescending,
     CycleDriver,

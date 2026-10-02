@@ -2635,9 +2635,12 @@ fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
         Some(HitTarget::Button(HitButton::CloseSession)) => {
             update(model, Action::CloseSelectedSession)
         }
+        Some(HitTarget::Button(HitButton::Connect)) => choose_connection_intent(model),
+        Some(HitTarget::Button(HitButton::Docker)) => vec![Effect::DiscoverDocker],
         _ => Vec::new(),
     }
 }
+
 fn mouse_onboarding(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     if matches!(hit, Some(HitTarget::Button(HitButton::GetStarted))) {
         return complete_onboarding(model);
@@ -8609,10 +8612,13 @@ fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
             ("port", port.as_str()),
             ("database", connection.database.as_str()),
             ("username", connection.username.as_str()),
-            ("password", database.password.as_deref().unwrap_or("")),
         ] {
             form.set_value(label, value);
         }
+        if let Some(password) = &database.password {
+            form.set_value("password", secrecy::ExposeSecret::expose_secret(password));
+        }
+        form.allow_empty_password = database.passwordless;
         model.connection_form = form;
         return Vec::new();
     }
@@ -9060,7 +9066,7 @@ mod tests {
     }
 
     #[test]
-    fn save_connection_clears_password_and_emits_create() {
+    fn save_connection_keeps_password_out_of_debug_and_emits_create() {
         let mut model = Model::default();
         update(&mut model, Action::OpenConnectionForm);
         for (label, value) in [
@@ -9084,16 +9090,6 @@ mod tests {
             &effects[..],
             [Effect::CreateConnection { password, .. }] if password == "SUPER_SECRET_SENTINEL"
         ));
-        assert!(
-            model
-                .connection_form
-                .fields
-                .iter()
-                .find(|field| field.label == "password")
-                .unwrap()
-                .value
-                .is_empty()
-        );
         assert!(!format!("{:?}", model.connection_form).contains("SUPER_SECRET_SENTINEL"));
     }
 
@@ -9519,6 +9515,65 @@ mod tests {
                 "s3cret"
             ]
             .map(String::from)
+        );
+        // A save the app turns down comes back to the form with the password as it was.
+        let effects = update(&mut model, Action::SaveConnection);
+        assert!(
+            matches!(effects.as_slice(), [Effect::CreateConnection { password, .. }] if password == "s3cret")
+        );
+        update(
+            &mut model,
+            Action::ConnectionFormError {
+                message: "connection 'shop-pg' already exists".into(),
+            },
+        );
+        assert!(
+            model
+                .connection_form
+                .fields
+                .iter()
+                .any(|field| field.label == "password" && field.value == "s3cret")
+        );
+    }
+
+    /// A container that lets root in without a password saves with an empty one; one
+    /// a saved connection already dials is not listed again.
+    #[test]
+    fn docker_rows_without_a_password_or_already_saved() {
+        let mut model = Model::default();
+        update(&mut model, Action::OpenConnections);
+        let found = dexo_app::docker::from_inspect(
+            r#"[{"Name": "/open-my", "Config": {"Image": "mysql:8.4", "Env": ["MYSQL_ALLOW_EMPTY_PASSWORD=yes"]},
+                 "NetworkSettings": {"Ports": {"3306/tcp": [{"HostIp": "0.0.0.0", "HostPort": "3309"}]}}},
+                {"Name": "/shop-pg", "Config": {"Image": "postgres:16", "Env": ["POSTGRES_PASSWORD=pw"]},
+                 "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5433"}]}}}]"#,
+        );
+        update(&mut model, Action::DockerDiscovered(found));
+        model
+            .connections
+            .load_profiles(vec![dexo_app::ConnectionProfile::new(
+                dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+                None,
+                "shop",
+                "postgres",
+                "local",
+                serde_json::json!({"host": "127.0.0.1", "port": "5433", "username": "postgres"}),
+                dexo_app::connection_profile::SecretRef::new("ref".into()),
+            )]);
+        let screen = crate::render::render_to_string(&model, 100, 30);
+        assert!(screen.contains("open-my [mysql]"), "{screen}");
+        assert!(!screen.contains("shop-pg"), "{screen}");
+        assert_eq!(model.connections.row_count(), 2);
+        model.connections.selected_profile = 1;
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+        );
+        let effects = update(&mut model, Action::SaveConnection);
+        assert!(
+            matches!(effects.as_slice(), [Effect::CreateConnection { input, password, .. }]
+                if password.is_empty() && input.allow_empty_password && input.database == "mysql"),
+            "{effects:?}"
         );
     }
 

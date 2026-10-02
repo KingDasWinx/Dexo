@@ -120,12 +120,31 @@ impl ConnectionsScreen {
     pub fn selected_docker(&self) -> Option<&dexo_app::docker::DockerDatabase> {
         self.selected_profile
             .checked_sub(self.profiles.len())
-            .and_then(|index| self.docker.get(index))
+            .and_then(|index| self.unsaved_docker().nth(index))
     }
 
     /// Saved connections, then the Docker ones: what Up and Down walk.
     pub fn row_count(&self) -> usize {
-        self.profiles.len() + self.docker.len()
+        self.profiles.len() + self.unsaved_docker().count()
+    }
+
+    /// The Docker databases no saved connection dials already -- same driver, host and
+    /// port.
+    pub fn unsaved_docker(&self) -> impl Iterator<Item = &dexo_app::docker::DockerDatabase> {
+        self.docker.iter().filter(|database| {
+            let connection = &database.connection;
+            !self.profiles.iter().any(|row| {
+                let config = &row.profile.config;
+                let port = config.get("port").and_then(|port| {
+                    port.as_u64()
+                        .or_else(|| port.as_str().and_then(|port| port.parse().ok()))
+                });
+                row.profile.driver == connection.driver
+                    && config.get("host").and_then(serde_json::Value::as_str)
+                        == Some(connection.host.as_str())
+                    && port == connection.port.map(u64::from)
+            })
+        })
     }
 
     pub fn is_temporary(&self, name: &str) -> bool {
@@ -224,10 +243,10 @@ impl ConnectionsScreen {
                 .map(|(index, line)| (Some(index), line))
                 .collect()
         };
-        if !self.docker.is_empty() {
+        if self.unsaved_docker().next().is_some() {
             rows.push((None, String::new()));
             rows.push((None, "  Running in Docker".into()));
-            for (offset, database) in self.docker.iter().enumerate() {
+            for (offset, database) in self.unsaved_docker().enumerate() {
                 let index = self.profiles.len() + offset;
                 let marker = if index == self.selected_profile {
                     ">"

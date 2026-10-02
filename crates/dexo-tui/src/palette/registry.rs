@@ -961,6 +961,14 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenNodeMenu),
         },
         CommandSpec {
+            id: "connection.find_docker",
+            title: "Find Databases in Docker",
+            keywords: &["docker", "container", "discover", "local"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenConnections),
+        },
+        CommandSpec {
             id: "connection.test",
             title: "Test Connection",
             keywords: &["ping", "check", "reach"],
