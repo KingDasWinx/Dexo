@@ -1,0 +1,62 @@
+//! `[offline]` marks the one connection whose tree is a saved snapshot. It went on every
+//! connection in the sidebar as soon as any catalog was one, connected rows included, and
+//! stayed on after a reconnect.
+use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+use dexo_tui::runtime::SessionId;
+use dexo_tui::screens::connections::SessionRow;
+use dexo_tui::{Model, render::render_to_string};
+
+fn profile(name: &str, n: u128) -> ConnectionProfile {
+    ConnectionProfile::new(
+        ConnectionId(uuid::Uuid::from_u128(n)),
+        None,
+        name,
+        "postgres",
+        "local",
+        serde_json::json!({"host":"localhost","port":5432,"username":"u","database":"d"}),
+        SecretRef::new(format!("ref-{n}")),
+    )
+}
+
+fn sidebar_rows(model: &Model) -> Vec<String> {
+    render_to_string(model, 100, 30)
+        .lines()
+        .map(str::to_string)
+        .collect()
+}
+
+#[test]
+fn only_the_connection_showing_a_snapshot_is_marked_offline() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    model.connections.load_profiles(vec![
+        profile("alpha", 1),
+        profile("beta", 2),
+        profile("gamma", 3),
+    ]);
+    let profiles = model.connections.profiles.clone();
+    // `alpha` is the active connection and has no session: its tree is the saved snapshot.
+    model.explorer.sync_connection_roots(&profiles, "alpha");
+    model.explorer.offline = true;
+    model.connection.name = "alpha".into();
+    // `beta` is connected.
+    model.connections.upsert_session(SessionRow {
+        id: SessionId(uuid::Uuid::from_u128(20)),
+        connection: "beta".into(),
+        transaction: dexo_driver_api::TransactionState::Idle,
+        generation: 1,
+        environment: "local".into(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
+    let rows = sidebar_rows(&model);
+    let row = |name: &str| {
+        rows.iter()
+            .find(|line| line.contains(name) && line.starts_with('\u{2502}'))
+            .unwrap_or_else(|| panic!("no row for {name}:\n{}", rows.join("\n")))
+            .clone()
+    };
+    assert!(row("alpha").contains("[offline]"), "{}", row("alpha"));
+    assert!(!row("beta").contains("[offline]"), "{}", row("beta"));
+    assert!(!row("gamma").contains("[offline]"), "{}", row("gamma"));
+}

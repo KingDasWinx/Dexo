@@ -101,8 +101,8 @@ pub fn render_sidebar(
         None,
         0,
         &mut tree,
-        connected,
-        offline,
+        (connected, offline),
+        active_connection,
     );
     let mut body = chrome_lines(state, false);
     body.extend(
@@ -151,7 +151,7 @@ fn render_visible_inner(
 ) -> Vec<String> {
     let header = chrome_lines(state, show_offline_chrome);
     let mut tree = Vec::new();
-    collect(&state.roots, state, &[], None, 0, &mut tree, "●", "○");
+    collect(&state.roots, state, &[], None, 0, &mut tree, ("●", "○"), "");
     let tree = window_tree(state, &tree, viewport_rows, header.len());
     let mut lines = header;
     lines.extend(tree);
@@ -183,6 +183,9 @@ fn connection_sessions(profiles: &[ConnectionRow], name: &str) -> usize {
         .unwrap_or(0)
 }
 
+/// `marks` are the connected and the offline marker. The `[offline]` badge goes on the
+/// one connection whose catalog is a saved snapshot -- the active one, with no session --
+/// where it used to go on every connection once any catalog was.
 #[allow(clippy::too_many_arguments)]
 fn collect(
     nodes: &[ExplorerNode],
@@ -191,9 +194,10 @@ fn collect(
     owner: Option<&str>,
     depth: usize,
     lines: &mut Vec<String>,
-    connected: &str,
-    offline: &str,
+    marks: (&str, &str),
+    active: &str,
 ) {
+    let (connected, offline) = marks;
     for node in nodes {
         let owner = crate::screens::explorer::connection_name(&node.id).or(owner);
         if state.matches(node) {
@@ -213,7 +217,11 @@ fn collect(
                 NodeState::Error { .. } => " [error]",
                 NodeState::Stale => " [stale]",
                 NodeState::Collapsed | NodeState::Expanded => {
-                    if is_connection_node(node) && state.offline {
+                    if is_connection_node(node)
+                        && state.offline
+                        && node.label == active
+                        && connection_sessions(profiles, &node.label) == 0
+                    {
                         " [offline]"
                     } else if is_connection_node(node)
                         && profiles
@@ -264,8 +272,8 @@ fn collect(
                 owner,
                 depth + 1,
                 lines,
-                connected,
-                offline,
+                marks,
+                active,
             );
         }
     }

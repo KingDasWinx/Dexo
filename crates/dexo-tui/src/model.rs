@@ -1876,6 +1876,9 @@ pub struct Model {
     pub results_menu: ResultsMenuState,
     pub node_menu: NodeMenuState,
     pub pending_execute: Option<PendingExecute>,
+    /// A sidebar menu command waiting for the connection it was picked on to connect,
+    /// with the `connect_token` in flight.
+    pub pending_menu: Option<(u64, crate::palette::PaletteInvocation)>,
     pub close_prompt: Option<ClosePrompt>,
     /// Asked before EXPLAIN ANALYZE runs the statement under the cursor; the focused
     /// footer button while it is open.
@@ -2029,6 +2032,7 @@ impl Default for Model {
             results_menu: ResultsMenuState::default(),
             node_menu: NodeMenuState::default(),
             pending_execute: None,
+            pending_menu: None,
             close_prompt: None,
             explain_prompt: None,
             quit_prompt: None,

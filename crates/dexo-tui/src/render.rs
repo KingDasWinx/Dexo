@@ -2112,84 +2112,125 @@ fn render_delete_connection(frame: &mut Frame, model: &Model, hits: &mut HitMap)
 }
 
 fn render_projects(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 72, 18);
-    let lines = model.projects.lines();
+    use crate::screens::projects::ProjectsMode;
+    let area = frame.area();
+    let projects = &model.projects;
+    let unsaved = crate::update::unsaved_titles(model);
+    // The list gives way before the buttons and hints under it do.
+    let room = (area.height as usize).saturating_sub(8).clamp(1, 14);
+    let lines = projects.lines(&model.project, &unsaved, room);
+    let popup = centered(
+        area,
+        72,
+        (lines.len() + 2).min(area.height as usize).max(6) as u16,
+    );
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Projects"),
+        overlay_block(model, projects.title()),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    let projects = &model.projects;
+    let unsaved_question = projects.asking_about_unsaved();
+    let deleting = projects.delete.is_some();
+    let browsing = !unsaved_question
+        && !deleting
+        && !matches!(projects.mode, ProjectsMode::Create | ProjectsMode::Rename);
+    let offset = projects.list_offset(room);
+    let shown = projects.list.len().saturating_sub(offset).min(room.max(1));
     for_popup_lines(popup, &lines, |i, line, rect| {
-        if i < projects.list.len() {
-            hits.register(HitTarget::ListRow(i), rect);
+        if unsaved_question {
+            for (needle, button) in [
+                ("[Save]", HitButton::Confirm),
+                ("[Don't save]", HitButton::Discard),
+                ("[Cancel]", HitButton::Cancel),
+            ] {
+                register_label(hits, rect, line, needle, HitTarget::Button(button));
+            }
+            return;
         }
-        if line.starts_with("create:") || line.starts_with("rename:") {
+        if browsing && i < shown {
+            hits.register(HitTarget::ListRow(offset + i), rect);
+        }
+        if let Some(name) = line
+            .strip_prefix("> name: ")
+            .or_else(|| line.strip_prefix("  name: "))
+        {
+            let _ = name;
             if projects.footer == crate::widgets::form::FooterFocus::Input {
-                let before = if line.starts_with("create:") {
-                    "create: "
-                } else {
-                    "rename: "
+                let input = match &projects.delete {
+                    Some(delete) => &delete.typed,
+                    None => &projects.name_input,
                 };
-                show_input(frame, rect, before, &projects.name_input, false);
+                show_input(frame, rect, "> name: ", input, false);
             }
             hits.register(HitTarget::FormField(0), rect);
         }
-        if let Some(delete) = &projects.delete
-            && line.starts_with("type name to confirm (")
-        {
-            show_input(frame, rect, "type name to confirm (", &delete.typed, false);
-        }
         if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Submit");
+            let submit = if deleting { "Delete" } else { "Submit" };
+            crate::widgets::form::register_footer(hits, rect, line, submit);
         }
-        if line.contains("connections:") {
+        if deleting && line.contains("Alt+C") {
             hits.register(HitTarget::Button(HitButton::ToggleConnections), rect);
-        }
-        if line.contains("delete ") && line.contains('?') {
-            hits.register(HitTarget::Button(HitButton::ConfirmDelete), rect);
-        }
-        if line.contains("switch to ") {
-            hits.register(HitTarget::Button(HitButton::ConfirmDirty), rect);
         }
     });
 }
 
 fn render_config_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 72, 16);
-    let lines = model.config_transfer.lines();
+    use crate::screens::config_transfer::ConfigStage;
+    let area = frame.area();
+    let screen = &model.config_transfer;
+    let width = area.width.min(78);
+    let cap = area.height.saturating_sub(2).clamp(6, 26);
+    let inner_width = width.saturating_sub(2) as usize;
+    let view = screen.view(inner_width, cap.saturating_sub(2) as usize);
+    // The preview scrolls and takes the room; the other steps are as tall as they are.
+    let height = if screen.stage() == ConfigStage::Preview {
+        cap
+    } else {
+        (view.lines.len() as u16 + 2).min(cap)
+    };
+    let popup = centered(area, width, height);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Config transfer"),
-        lines.join("\n"),
+        overlay_block(model, "Config transfer"),
+        view.lines.join("\n"),
     );
-    let conflict_names = model
-        .config_transfer
-        .preview
-        .as_ref()
-        .map(|preview| preview.conflicts.clone())
-        .unwrap_or_default();
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
-        if let Some(name) = line.trim_start().split(':').next()
-            && let Some(index) = conflict_names.iter().position(|item| item == name)
-        {
-            hits.register(HitTarget::ListRow(index), rect);
+    // The buttons are the second line from the bottom of every step.
+    let button_line = view.lines.len().saturating_sub(2);
+    for_popup_lines(popup, &view.lines, |i, line, rect| {
+        if let Some((_, conflict)) = view.conflict_rows.iter().find(|(row, _)| *row == i) {
+            hits.register(HitTarget::ListRow(*conflict), rect);
         }
-        if line.starts_with("conflicts:") || line.starts_with("path:") {
-            hits.register(HitTarget::Button(HitButton::Apply), rect);
+        if i != button_line {
+            return;
+        }
+        for label in screen.buttons() {
+            let button = match *label {
+                "Export" => HitButton::Export,
+                "Import" => HitButton::Apply,
+                "Close" => HitButton::Close,
+                "Overwrite" => HitButton::Confirm,
+                _ => HitButton::Cancel,
+            };
+            register_label(
+                hits,
+                rect,
+                line,
+                &format!("[{label}]"),
+                HitTarget::Button(button),
+            );
         }
     });
 }
 
 fn render_secret(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 56, 8);
     let lines = model.secret_prompt.lines();
+    let popup = centered(frame.area(), 70, (lines.len() as u16 + 2).max(8));
     paint_popup(
         frame,
         model,

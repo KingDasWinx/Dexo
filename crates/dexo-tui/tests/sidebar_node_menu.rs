@@ -305,3 +305,58 @@ fn the_current_row_is_coloured_where_the_cursor_is() {
         "the current row lost its mark when the sidebar lost focus"
     );
 }
+
+fn second_profile(name: &str, n: u128) -> ConnectionProfile {
+    ConnectionProfile::new(
+        ConnectionId(uuid::Uuid::from_u128(n)),
+        None,
+        name,
+        "postgres",
+        "local",
+        serde_json::json!({"host":"localhost","port":5432,"username":"u","database":"d"}),
+        SecretRef::new(format!("ref-{n}")),
+    )
+}
+
+/// The menu is titled with the connection it was opened for. Its session commands used to
+/// run on whatever session was active: Inspect Sessions, with the `terminate` key, on the
+/// wrong server.
+#[test]
+fn a_session_command_runs_on_the_connection_the_menu_is_for() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    model.connections.load_profiles(vec![
+        second_profile("active", 1),
+        second_profile("other", 2),
+    ]);
+    let profiles = model.connections.profiles.clone();
+    model.explorer.sync_connection_roots(&profiles, "active");
+    // `active` is connected, and `other` is what the menu is opened on.
+    model.connection.name = "active".into();
+    model.active_session = Some(SessionId(uuid::Uuid::from_u128(11)));
+    model
+        .explorer
+        .select(dexo_tui::screens::explorer::connection_id("other"));
+    update(&mut model, Action::OpenNodeMenu);
+    let at = node_menu_entries(&model, NodeMenuKind::Connection)
+        .iter()
+        .position(|entry| entry.id == "admin.sessions")
+        .expect("the menu lists Inspect Sessions");
+    model.node_menu.selected = at;
+    let effects = update(
+        &mut model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::ConnectProfile { profile, .. } if profile.name == "other"
+        )),
+        "the other connection is dialled first: {effects:?}"
+    );
+    assert!(!model.admin.open, "nothing opened on the active session");
+    assert!(model.pending_menu.is_some(), "and the command waits for it");
+}

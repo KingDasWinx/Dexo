@@ -382,6 +382,11 @@ pub enum ImportResolution {
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct ImportPreview {
     pub conflicts: Vec<String>,
+    /// The name of every connection the file holds, the ones that clash with a saved
+    /// one among them.
+    pub incoming: Vec<String>,
+    /// Every connection saved already: a name a clashing one is renamed to must not be one.
+    pub existing: Vec<String>,
     pub connections_needing_secret: Vec<String>,
     /// What each connection would run on this machine when it connects.
     pub commands: Vec<String>,
@@ -473,7 +478,9 @@ pub fn import_portable(conn: &Connection, toml_text: &str) -> anyhow::Result<Imp
         profile.policy = policy;
         connections.save(&profile)?;
         commands.extend(commands_of(&item.name, &profile.config));
-        connections_needing_secret.push(item.name);
+        if needs_secret(&profile) {
+            connections_needing_secret.push(item.name);
+        }
     }
     Ok(ImportReport {
         connections_needing_secret,
@@ -498,12 +505,33 @@ pub fn preview_import(conn: &Connection, toml_text: &str) -> anyhow::Result<Impo
         if existing.contains_key(&item.name) {
             conflicts.push(item.name.clone());
         }
-        connections_needing_secret.push(item.name.clone());
         let config: Value = serde_json::from_str(&item.config_json)?;
         commands.extend(commands_of(&item.name, &config));
+        // A file has no password, and a password command supplies its own: neither is
+        // something the person must type after the import.
+        let probe = ConnectionProfile::new(
+            ConnectionId(Uuid::nil()),
+            None,
+            item.name.clone(),
+            item.driver.clone(),
+            item.environment.clone(),
+            config,
+            SecretRef::new(String::new()),
+        );
+        if needs_secret(&probe) {
+            connections_needing_secret.push(item.name.clone());
+        }
     }
+    let mut existing: Vec<String> = existing.into_keys().collect();
+    existing.sort();
     Ok(ImportPreview {
         conflicts,
+        incoming: portable
+            .connections
+            .iter()
+            .map(|item| item.name.clone())
+            .collect(),
+        existing,
         connections_needing_secret,
         commands,
     })
@@ -581,12 +609,19 @@ pub fn import_portable_resolved(
         profile.policy = policy;
         connections.save(&profile)?;
         commands.extend(commands_of(&name, &profile.config));
-        connections_needing_secret.push(name);
+        if needs_secret(&profile) {
+            connections_needing_secret.push(name);
+        }
     }
     Ok(ImportReport {
         connections_needing_secret,
         commands,
     })
+}
+
+/// Whether a connection will want a password typed for it once it is imported.
+fn needs_secret(profile: &ConnectionProfile) -> bool {
+    !profile.is_file() && profile.password_command().is_none()
 }
 
 fn parse_uuid_anyhow(value: &str) -> anyhow::Result<uuid::Uuid> {

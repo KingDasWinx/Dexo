@@ -293,3 +293,241 @@ async fn config_import_previews_conflicts_and_generates_fresh_secret_refs() {
     );
     assert!(!dumped.contains("secret-123"));
 }
+
+fn stored(
+    id: &str,
+    title: &str,
+    content: &str,
+    path: Option<&str>,
+) -> dexo_storage::StoredDocument {
+    dexo_storage::StoredDocument {
+        id: id.into(),
+        project_id: Some("p".into()),
+        title: title.into(),
+        content: content.into(),
+        path: path.map(str::to_string),
+        fingerprint: None,
+        kind: None,
+        connection_id: Some(uuid::Uuid::from_u128(7).to_string()),
+    }
+}
+
+/// A document left behind by a project switch comes back as the tab it was: named, bound
+/// to its connection and, being text no file holds, unsaved. It used to come back titled
+/// with its internal id, and as if it had been saved.
+#[test]
+fn a_project_loaded_brings_its_documents_back_by_name_and_unsaved() {
+    let mut model = Model::default();
+    let _ = update(
+        &mut model,
+        Action::ProjectLoaded {
+            project: Project {
+                id: ProjectId(uuid::Uuid::new_v4()),
+                name: "Project B".into(),
+                created_at: "2".into(),
+            },
+            documents: vec![
+                stored("e7c03b76-95a8", "doc1.sql", "select 1", None),
+                stored("0d1c", "empty.sql", "", None),
+            ],
+            layout: None,
+            recent_sql_files: Vec::new(),
+        },
+    );
+    let draft = &model.documents[0];
+    assert_eq!(draft.title, "doc1.sql");
+    assert_eq!(
+        draft.connection_id.as_deref(),
+        Some(uuid::Uuid::from_u128(7).to_string().as_str())
+    );
+    assert!(draft.is_dirty(), "a draft with no file is unsaved");
+    assert!(!model.documents[1].is_dirty(), "an empty one is not");
+}
+
+/// A document with a file is unsaved only when the file says something else.
+#[test]
+fn a_restored_document_with_a_file_is_unsaved_only_when_the_file_differs() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("q.sql");
+    std::fs::write(&path, "select 1").unwrap();
+    let path = path.to_string_lossy().into_owned();
+    let same = dexo_tui::update::document_from_stored_for_test(stored(
+        "a",
+        "q.sql",
+        "select 1",
+        Some(&path),
+    ));
+    assert!(!same.is_dirty());
+    let edited = dexo_tui::update::document_from_stored_for_test(stored(
+        "b",
+        "q.sql",
+        "select 2",
+        Some(&path),
+    ));
+    assert!(edited.is_dirty());
+}
+
+fn two_projects() -> (Model, Project, Project) {
+    let (a, b) = (
+        Project {
+            id: ProjectId(uuid::Uuid::from_u128(1)),
+            name: "Default".into(),
+            created_at: "1".into(),
+        },
+        Project {
+            id: ProjectId(uuid::Uuid::from_u128(2)),
+            name: "qa".into(),
+            created_at: "2".into(),
+        },
+    );
+    let mut model = Model {
+        project: "Default".into(),
+        project_id: a.id.0.to_string(),
+        ..Model::default()
+    };
+    model.apply_size(100, 30);
+    model.projects.load(vec![a.clone(), b.clone()]);
+    (model, a, b)
+}
+
+fn key(code: crossterm::event::KeyCode) -> Action {
+    Action::Key(crossterm::event::KeyEvent::new(
+        code,
+        crossterm::event::KeyModifiers::NONE,
+    ))
+}
+
+/// Leaving a project with unsaved documents asks, with the three answers of closing a tab.
+/// It showed `switch to qa (ConfirmDirty)` and waited for a letter it did not name.
+#[test]
+fn leaving_a_project_with_unsaved_documents_asks_save_dont_save_or_cancel() {
+    use crossterm::event::KeyCode;
+    let (mut model, _, qa) = two_projects();
+    model
+        .active_document_mut()
+        .sql
+        .insert(0, "select 1")
+        .unwrap();
+    model.projects.open = true;
+    let effects = update(&mut model, Action::ProjectSwitchTarget(qa.clone()));
+    assert!(
+        effects.is_empty(),
+        "nothing moves before the answer: {effects:?}"
+    );
+    let screen = dexo_tui::render::render_to_string(&model, 100, 30);
+    for part in ["Unsaved changes", "[Save]", "[Don't save]", "[Cancel]"] {
+        assert!(screen.contains(part), "{part}:\n{screen}");
+    }
+    assert!(!screen.contains("ConfirmDirty"), "{screen}");
+
+    // Esc is Cancel: the switch is dropped and the document is still there.
+    update(&mut model, key(KeyCode::Esc));
+    assert!(model.projects.pending.is_none());
+    assert!(model.active_document().is_dirty());
+
+    // Don't save closes the unsaved document and goes on.
+    update(&mut model, Action::ProjectSwitchTarget(qa.clone()));
+    let effects = update(&mut model, key(KeyCode::Char('d')));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::FlushDocuments { .. })),
+        "{effects:?}"
+    );
+    assert!(model.documents.iter().all(|document| !document.is_dirty()));
+
+    // Save keeps them in the project and goes on too.
+    let (mut model, _, qa) = two_projects();
+    model
+        .active_document_mut()
+        .sql
+        .insert(0, "select 2")
+        .unwrap();
+    model.projects.open = true;
+    update(&mut model, Action::ProjectSwitchTarget(qa));
+    let effects = update(&mut model, key(KeyCode::Enter));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::FlushDocuments { .. })),
+        "{effects:?}"
+    );
+}
+
+/// Deleting the project that is open moves to another, saving nothing into the project
+/// that is gone. It left the app without a project, its document on screen, and every
+/// switch after it failed on a foreign key.
+#[test]
+fn deleting_the_open_project_moves_to_another_without_saving_into_it() {
+    let (mut model, default, qa) = two_projects();
+    model.project = "qa".into();
+    model.project_id = qa.id.0.to_string();
+    model
+        .active_document_mut()
+        .sql
+        .insert(0, "select 1")
+        .unwrap();
+    let effects = update(&mut model, Action::ProjectDeleted { name: "qa".into() });
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseProjectSessions)),
+        "{effects:?}"
+    );
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::FlushDocuments { .. } | Effect::PersistLayout { .. }
+        )),
+        "nothing is saved into the deleted project: {effects:?}"
+    );
+    assert_eq!(
+        model
+            .projects
+            .pending
+            .as_ref()
+            .map(|switch| switch.target.id),
+        Some(default.id)
+    );
+    assert!(
+        model
+            .documents
+            .iter()
+            .all(|document| document.kind.is_placeholder())
+    );
+}
+
+/// A rename of the open project is the open project's name from then on: the header kept
+/// the old one.
+#[test]
+fn renaming_the_open_project_renames_the_header() {
+    let (mut model, default, qa) = two_projects();
+    let renamed = Project {
+        name: "Work".into(),
+        ..default
+    };
+    update(&mut model, Action::ProjectsLoaded(vec![renamed, qa]));
+    assert_eq!(model.project, "Work");
+    assert!(
+        !model.projects.recents.contains(&"Default".to_string()),
+        "the old name is not a recent project"
+    );
+}
+
+/// One project is not deleted: Dexo keeps at least one, and says so, where it used to ask
+/// for a name and then fail.
+#[test]
+fn the_last_project_is_not_offered_for_deletion() {
+    let (mut model, default, _) = two_projects();
+    model.projects.load(vec![default]);
+    let effects = update(&mut model, Action::DeleteProject);
+    assert!(effects.is_empty());
+    assert!(
+        model
+            .projects
+            .error
+            .as_deref()
+            .unwrap_or("")
+            .contains("at least one")
+    );
+}

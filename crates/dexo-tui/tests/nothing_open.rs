@@ -130,3 +130,20 @@ fn saving_nothing_open_does_nothing() {
         "saving nothing opened the file picker"
     );
 }
+
+/// The Welcome sends the first key to the explorer: `n` was typed into a new document,
+/// because focus started in the editor of a workbench with nothing open.
+#[test]
+fn with_nothing_open_the_welcome_hands_focus_to_the_explorer() {
+    let mut model = Model {
+        focus: Focus::Editor,
+        ..Model::default()
+    };
+    model.documents = vec![EditorDocument::placeholder()];
+    model.onboarding.open = true;
+    update(&mut model, key(KeyCode::Enter, M::NONE));
+    assert_eq!(model.focus, Focus::Explorer);
+    update(&mut model, key(KeyCode::Char('n'), M::NONE));
+    assert!(model.connection_form.open, "n opens New Connection");
+    assert_eq!(model.documents.len(), 1, "and starts no document");
+}

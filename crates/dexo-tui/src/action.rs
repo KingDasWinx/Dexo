@@ -642,11 +642,13 @@ pub enum Action {
     DeleteProject,
     ConfirmProjectDelete,
     ConfirmSwitchDirty,
+    /// The answer to "this project has unsaved documents": save, don't save, or stay.
+    ResolveProjectSwitch(crate::model::CloseChoice),
     CancelProjectSwitch,
     ProjectsLoaded(Vec<dexo_app::Project>),
     ProjectLoaded {
         project: dexo_app::Project,
-        documents: Vec<(String, String)>,
+        documents: Vec<dexo_storage::StoredDocument>,
         layout: Option<dexo_storage::WorkbenchLayout>,
         recent_sql_files: Vec<std::path::PathBuf>,
     },
@@ -661,8 +663,12 @@ pub enum Action {
         path: std::path::PathBuf,
     },
     ConfigPreviewed(dexo_storage::ImportPreview),
+    /// The export was written.
+    ConfigExported,
     ConfigImported {
         needing_secret: Vec<String>,
+        /// What the imported connections run on this machine when they connect.
+        commands: Vec<String>,
     },
     DocumentsFlushed,
     LayoutPersisted,

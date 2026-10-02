@@ -2136,11 +2136,7 @@ impl WorkbenchRuntime {
             Ok(loaded) => {
                 self.emit(Action::ProjectLoaded {
                     project: loaded.project,
-                    documents: loaded
-                        .documents
-                        .into_iter()
-                        .map(|document| (document.id, document.content))
-                        .collect(),
+                    documents: loaded.documents,
                     layout: loaded.layout,
                     recent_sql_files: loaded.recent_sql_files,
                 })
@@ -2164,12 +2160,7 @@ impl WorkbenchRuntime {
             return;
         };
         match storage.export_config(path).await {
-            Ok(()) => {
-                self.emit(Action::ConfigImported {
-                    needing_secret: Vec::new(),
-                })
-                .await;
-            }
+            Ok(()) => self.emit(Action::ConfigExported).await,
             Err(error) => self.fail_project(error).await,
         }
     }
@@ -2196,8 +2187,18 @@ impl WorkbenchRuntime {
             Ok(report) => {
                 self.emit(Action::ConfigImported {
                     needing_secret: report.connections_needing_secret,
+                    commands: report.commands,
                 })
                 .await;
+                // What was imported is in the database; the sidebar and the project list
+                // read it from there, and showed the old ones until a restart.
+                if let Ok(projects) = storage.list_projects().await {
+                    self.emit(Action::ProjectsLoaded(projects)).await;
+                }
+                if let Ok(profiles) = self.with_repo(|repo| repo.list().map_err(|e| e.to_string()))
+                {
+                    self.emit(Action::ProfilesLoaded(profiles)).await;
+                }
             }
             Err(error) => self.fail_project(error).await,
         }

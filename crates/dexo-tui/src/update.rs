@@ -100,6 +100,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 .filter(|pending| ready && pending.token == token)
                 .filter(|pending| model.active_document().id == pending.document)
                 .map(|pending| pending.action);
+            let menu_replay = model
+                .pending_menu
+                .take()
+                .filter(|(waiting, _)| ready && *waiting == token)
+                .map(|(_, invocation)| invocation);
             // An answer given for one connection never runs on another.
             if model.connection.name != name || model.active_session != session {
                 model.run_prompt = None;
@@ -148,6 +153,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 }
                 if let Some(action) = replay {
                     effects.extend(update(model, action));
+                }
+                if let Some(invocation) = menu_replay {
+                    effects.extend(invoke_palette(model, invocation));
                 }
                 effects
             } else {
@@ -2497,42 +2505,94 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             effects.push(Effect::Shutdown);
             effects
         }
-        Action::OpenProjects => {
-            model.projects.open = true;
-            vec![Effect::ListProjects]
-        }
+        Action::OpenProjects => open_projects(model, None),
         Action::SwitchProject { name } => switch_project(model, name),
         Action::ProjectSwitchTarget(project) => start_switch(model, project),
         Action::CreateProject { name } => {
+            if model.projects.list.iter().any(|other| other.name == name) {
+                model.projects.error = Some(format!("a project named {name} exists already"));
+                return Vec::new();
+            }
             model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
             model.projects.name_input.clear();
+            // Asked for by the palette, the dialog was the question; asked for from the
+            // list, the answer is the list with the new project in it.
+            if !model.projects.from_list {
+                model.projects.open = false;
+            }
+            model.messages.info(format!("created project {name}"));
             vec![Effect::CreateProject { name }]
         }
-        Action::RenameProject { name } => model
-            .projects
-            .selected()
-            .map(|project| Effect::RenameProject {
+        Action::RenameProject { name } => {
+            let Some(project) = model.projects.selected().cloned() else {
+                return Vec::new();
+            };
+            if model
+                .projects
+                .list
+                .iter()
+                .any(|other| other.name == name && other.id != project.id)
+            {
+                model.projects.error = Some(format!("a project named {name} exists already"));
+                return Vec::new();
+            }
+            // Renamed, the dialog is the list again, or gone when it was only asked to
+            // rename: it stayed on the name just typed.
+            model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+            model.projects.name_input.clear();
+            model.projects.error = None;
+            if model.projects.intent == Some(crate::screens::projects::ProjectIntent::Rename) {
+                model.projects.open = false;
+                model.projects.intent = None;
+            }
+            vec![Effect::RenameProject {
                 id: project.id.0.to_string(),
                 name,
-            })
-            .into_iter()
-            .collect(),
-        Action::DeleteProject => model
-            .projects
-            .selected()
-            .map(|project| Effect::PreviewProjectDelete {
-                id: project.id.0.to_string(),
-            })
-            .into_iter()
-            .collect(),
+            }]
+        }
+        Action::DeleteProject => {
+            if model.projects.list.len() <= 1 {
+                model.projects.error = Some(
+                    "Dexo keeps at least one project: create another before deleting this one."
+                        .into(),
+                );
+                return Vec::new();
+            }
+            model
+                .projects
+                .selected()
+                .map(|project| Effect::PreviewProjectDelete {
+                    id: project.id.0.to_string(),
+                })
+                .into_iter()
+                .collect()
+        }
         Action::ConfirmProjectDelete => confirm_project_delete(model),
-        Action::ConfirmSwitchDirty => complete_switch_stage(model),
+        Action::ConfirmSwitchDirty => {
+            resolve_project_switch(model, crate::model::CloseChoice::Save)
+        }
+        Action::ResolveProjectSwitch(choice) => resolve_project_switch(model, choice),
         Action::CancelProjectSwitch => {
             model.projects.pending = None;
+            model.projects.dirty_choice = None;
             Vec::new()
         }
         Action::ProjectsLoaded(projects) => {
             model.projects.load(projects);
+            // A rename changes the name of the project that is open, which the header
+            // shows: it kept the old one.
+            if let Some(open) = model
+                .projects
+                .list
+                .iter()
+                .find(|project| project.id.0.to_string() == model.project_id)
+            {
+                model.project = open.name.clone();
+                let name = open.name.clone();
+                if !model.projects.recents.contains(&name) {
+                    model.projects.touch_recent(&name);
+                }
+            }
             Vec::new()
         }
         Action::ProjectLoaded {
@@ -2546,12 +2606,38 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ProjectDeleted { name } => {
             model.projects.delete = None;
+            model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
             model.projects.recents.retain(|item| item != &name);
-            if model.project == name {
-                model.project.clear();
-                model.project_id.clear();
+            model.messages.info(format!("deleted project {name}"));
+            if model.project != name {
+                return Vec::new();
             }
-            Vec::new()
+            // The project that was open is gone. What was in it goes with it, and the
+            // workbench moves to another, as a switch does -- but without saving a
+            // single document into a project that no longer exists.
+            let fallback = model
+                .projects
+                .list
+                .iter()
+                .find(|project| project.name != name)
+                .cloned();
+            model.documents = vec![crate::model::EditorDocument::placeholder()];
+            model.active_document = 0;
+            model.project.clear();
+            model.project_id.clear();
+            match fallback {
+                Some(target) => {
+                    model.projects.closing_sessions = model.connections.sessions.len();
+                    let switch = crate::runtime::project_manager::ProjectSwitch {
+                        stage: crate::runtime::project_manager::ProjectSwitchStage::CloseProjectSessions,
+                        target,
+                        operation: crate::runtime::OperationId::new(),
+                    };
+                    model.projects.pending = Some(switch.clone());
+                    crate::runtime::project_manager::advance(model, &switch)
+                }
+                None => vec![Effect::ListProjects],
+            }
         }
         Action::DocumentsFlushed => {
             for document in &mut model.documents {
@@ -2573,6 +2659,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ProjectDeletePreviewed { project, preview } => {
+            model.projects.footer = crate::widgets::form::FooterFocus::Input;
             model.projects.mode = crate::screens::projects::ProjectsMode::DeleteConfirm;
             model.projects.delete = Some(crate::screens::projects::ProjectDeletePrompt {
                 project,
@@ -2583,21 +2670,47 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenConfigTransfer => {
-            model.config_transfer.open = true;
+            // Opened fresh: the last import's clashes and the last path are not carried in.
+            model.config_transfer.reset();
             model.config_transfer.mode =
                 crate::screens::config_transfer::ConfigTransferMode::Export;
             Vec::new()
         }
         Action::ExportConfig { path } => {
+            // A file that is there is only replaced when the person says so.
+            if path.exists() && model.config_transfer.overwrite.as_ref() != Some(&path) {
+                model.config_transfer.overwrite = Some(path);
+                model.config_transfer.focus = 1;
+                return Vec::new();
+            }
+            model.config_transfer.overwrite = None;
+            model.config_transfer.focus = 0;
+            model.config_transfer.message = None;
             model.config_transfer.path = path.clone();
             model.config_transfer.mode =
                 crate::screens::config_transfer::ConfigTransferMode::Export;
             vec![Effect::ExportConfig { path }]
         }
+        Action::ConfigExported => {
+            model.config_transfer.message = Some(format!(
+                "Exported {} and {} to {}.",
+                match model.connections.profiles.len() {
+                    1 => "1 connection".to_string(),
+                    n => format!("{n} connections"),
+                },
+                match model.projects.list.len() {
+                    1 => "1 project".to_string(),
+                    n => format!("{n} projects"),
+                },
+                model.config_transfer.path.display()
+            ));
+            Vec::new()
+        }
         Action::ImportConfig { path } => {
             model.config_transfer.path = path.clone();
             model.config_transfer.mode =
                 crate::screens::config_transfer::ConfigTransferMode::Import;
+            model.config_transfer.message = None;
             vec![Effect::ImportConfig { path }]
         }
         Action::ApplyConfigImport => {
@@ -2605,7 +2718,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             // its session over, as sessions are found by name.
             let clash = model.config_transfer.preview.as_ref().and_then(|preview| {
                 preview
-                    .connections_needing_secret
+                    .incoming
                     .iter()
                     .map(|name| match model.config_transfer.resolutions.get(name) {
                         Some(dexo_storage::ImportResolution::Rename(renamed)) => renamed,
@@ -2625,12 +2738,27 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             vec![Effect::ApplyConfigImport { path, resolutions }]
         }
         Action::ConfigPreviewed(preview) => {
-            model.config_transfer.preview = Some(preview);
+            let screen = &mut model.config_transfer;
+            screen.resolutions.clear();
+            screen.selected = 0;
+            screen.scroll = 0;
+            screen.focus = 0;
+            screen.needing_secret.clear();
+            screen.commands.clear();
+            screen.preview = Some(preview);
             Vec::new()
         }
-        Action::ConfigImported { needing_secret } => {
-            model.config_transfer.needing_secret = needing_secret;
-            model.config_transfer.message = Some("ok".into());
+        Action::ConfigImported {
+            needing_secret,
+            commands,
+        } => {
+            let screen = &mut model.config_transfer;
+            screen.message = Some(screen.summary());
+            screen.preview = None;
+            screen.resolutions.clear();
+            screen.focus = 0;
+            screen.needing_secret = needing_secret;
+            screen.commands = commands;
             Vec::new()
         }
     }
@@ -2989,6 +3117,23 @@ fn mouse_document_name(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect>
 }
 
 fn mouse_projects(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    use crate::model::CloseChoice;
+    // The question about unsaved documents has three buttons and nothing else to click.
+    if model.projects.asking_about_unsaved() {
+        return match hit {
+            Some(HitTarget::Button(HitButton::Confirm)) => {
+                resolve_project_switch(model, CloseChoice::Save)
+            }
+            Some(HitTarget::Button(HitButton::Discard)) => {
+                resolve_project_switch(model, CloseChoice::Discard)
+            }
+            Some(HitTarget::Button(HitButton::Cancel)) => {
+                resolve_project_switch(model, CloseChoice::Cancel)
+            }
+            _ => Vec::new(),
+        };
+    }
+    let deleting = model.projects.delete.is_some();
     match hit {
         Some(HitTarget::ListRow(index)) => {
             if index < model.projects.list.len() {
@@ -3004,16 +3149,23 @@ fn mouse_projects(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> V
             model.projects.footer = crate::widgets::form::FooterFocus::Input;
             Vec::new()
         }
+        Some(HitTarget::FooterSubmit) if deleting => update(model, Action::ConfirmProjectDelete),
         Some(HitTarget::FooterSubmit) => submit_project_name(model),
+        Some(HitTarget::FooterCancel) if deleting => {
+            model.projects.delete = None;
+            model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+            model.projects.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
         Some(HitTarget::FooterCancel) => {
             model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
             model.projects.name_input.clear();
             model.projects.error = None;
             model.projects.footer = crate::widgets::form::FooterFocus::Input;
+            if !model.projects.from_list {
+                model.projects.open = false;
+            }
             Vec::new()
-        }
-        Some(HitTarget::Button(HitButton::ConfirmDelete)) => {
-            update(model, Action::ConfirmProjectDelete)
         }
         Some(HitTarget::Button(HitButton::ToggleConnections)) => {
             if let Some(delete) = &mut model.projects.delete {
@@ -3021,37 +3173,41 @@ fn mouse_projects(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> V
             }
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::ConfirmDirty)) => {
-            update(model, Action::ConfirmSwitchDirty)
-        }
         _ => Vec::new(),
     }
 }
 
 fn mouse_config_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    // A button of the row shown, by the position it has in it.
+    let press = |model: &mut Model, label: &str| {
+        let at = model
+            .config_transfer
+            .buttons()
+            .iter()
+            .position(|button| *button == label);
+        match at {
+            Some(index) => {
+                model.config_transfer.focus = index;
+                press_config_button(model)
+            }
+            None => Vec::new(),
+        }
+    };
     match hit {
+        // A click picks a clash; a second click on the picked one changes its answer.
         Some(HitTarget::ListRow(index)) => {
-            if let Some(preview) = &model.config_transfer.preview
-                && let Some(name) = preview.conflicts.get(index).cloned()
-            {
-                let next = match model.config_transfer.resolutions.get(&name) {
-                    Some(dexo_storage::ImportResolution::Skip) | None => {
-                        dexo_storage::ImportResolution::Replace
-                    }
-                    Some(dexo_storage::ImportResolution::Replace) => {
-                        dexo_storage::ImportResolution::Rename(format!("{name}-2"))
-                    }
-                    Some(dexo_storage::ImportResolution::Rename(_)) => {
-                        dexo_storage::ImportResolution::Skip
-                    }
-                };
-                model.config_transfer.resolutions.insert(name, next);
+            let picked = model.config_transfer.selected == index;
+            model.config_transfer.selected = index;
+            if picked {
+                model.config_transfer.cycle_selected();
             }
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::Apply) | HitTarget::FooterSubmit) => {
-            update(model, Action::ApplyConfigImport)
-        }
+        Some(HitTarget::Button(HitButton::Export)) => press(model, "Export"),
+        Some(HitTarget::Button(HitButton::Apply)) => press(model, "Import"),
+        Some(HitTarget::Button(HitButton::Close)) => press(model, "Close"),
+        Some(HitTarget::Button(HitButton::Confirm)) => press(model, "Overwrite"),
+        Some(HitTarget::Button(HitButton::Cancel)) => press(model, "Cancel"),
         _ => Vec::new(),
     }
 }
@@ -4016,6 +4172,10 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         } else if model.projects.selected + 1 < model.projects.list.len() {
             model.projects.selected += 1;
         }
+        return Vec::new();
+    }
+    if overlay == Some(OverlayKind::ConfigTransfer) {
+        model.config_transfer.select(delta.signum() as isize);
         return Vec::new();
     }
     if overlay.is_some() {
@@ -5479,7 +5639,21 @@ fn move_palette_selection(model: &mut Model, delta: isize) {
 }
 fn complete_onboarding(model: &mut Model) -> Vec<Effect> {
     model.onboarding.open = false;
+    focus_explorer_when_nothing_is_open(model);
     vec![Effect::CompleteOnboarding]
+}
+
+/// With no document open there is no editor to type into, and the Welcome sends the
+/// first key -- `n` -- to the explorer: it started a document with an `n` in it instead.
+fn focus_explorer_when_nothing_is_open(model: &mut Model) {
+    if model
+        .documents
+        .iter()
+        .all(|document| document.kind.is_placeholder())
+    {
+        model.panes.explorer_visible = true;
+        model.focus = Focus::Explorer;
+    }
 }
 
 fn handle_onboarding_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
@@ -5741,7 +5915,38 @@ fn pick_node_menu(model: &mut Model) -> Vec<Effect> {
         model.messages.warn(format!("{}: {reason}", entry.title));
         return Vec::new();
     }
-    invoke_palette(model, entry.invocation.clone())
+    let (id, invocation) = (entry.id, entry.invocation.clone());
+    // These act on a live session, and the menu is titled with the connection it was
+    // opened for: on any other session they would list another server's sessions and
+    // grants under that name.
+    const NEEDS_THE_CONNECTION: [&str; 5] = [
+        "schema.security",
+        "admin.sessions",
+        "backup.dump",
+        "backup.restore",
+        "explorer.refresh",
+    ];
+    if NEEDS_THE_CONNECTION.contains(&id)
+        && node_menu_kind(model) == Some(crate::palette::NodeMenuKind::Connection)
+        && let Some(index) = selected_connection_profile_index(model)
+    {
+        let profile = model.connections.profiles[index].profile.clone();
+        if model.connection.name != profile.name || model.active_session.is_none() {
+            return match model.connections.session_for(&profile.name).cloned() {
+                Some(session) => {
+                    let mut effects = activate_existing_session(model, &profile, session);
+                    effects.extend(invoke_palette(model, invocation));
+                    effects
+                }
+                None => {
+                    let effects = connect_to(model, profile);
+                    model.pending_menu = Some((model.connect_token, invocation));
+                    effects
+                }
+            };
+        }
+    }
+    invoke_palette(model, invocation)
 }
 
 fn mouse_node_menu(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -6570,6 +6775,8 @@ fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::Boo
     };
     model.connections.load_profiles(state.connections);
     apply_layout(model, layout);
+    name_front_document_connection(model);
+    focus_explorer_when_nothing_is_open(model);
     rename_restored_consoles(model);
     sync_explorer_connections(model);
     model.editor.snippets = state.snippets;
@@ -6650,6 +6857,16 @@ fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::E
     document.id = stored.id;
     document.title = stored.title;
     document.path = stored.path.map(std::path::PathBuf::from);
+    // The store keeps the text a document had when the app closed, not whether it was
+    // saved. A draft with no file is unsaved by definition; one with a file is, when the
+    // file says something else. Coming back as saved let Ctrl+W throw the text away.
+    let unsaved = match &document.path {
+        None => !stored.content.is_empty(),
+        Some(path) => std::fs::read_to_string(path).is_ok_and(|disk| disk != stored.content),
+    };
+    if unsaved {
+        document.sql.mark_modified();
+    }
     document.connection_id = stored
         .connection_id
         .or_else(|| connection_id_from_console_path(document.path.as_deref()));
@@ -6661,6 +6878,21 @@ fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::E
         document.kind = kind;
     }
     document
+}
+
+/// The header and the status bar name the connection of the document in front. The
+/// layout remembers the connection that was active when the app closed, which need not
+/// be that one: they said `pg-dev` over a document of `sqlite-shop`.
+fn name_front_document_connection(model: &mut Model) {
+    let name = model
+        .documents
+        .get(model.active_document)
+        .and_then(|document| document.connection_id.as_deref())
+        .and_then(|id| profile_by_uuid(model, id))
+        .map(|profile| profile.name);
+    if let Some(name) = name {
+        model.connection.name = name;
+    }
 }
 
 fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>) {
@@ -10677,10 +10909,72 @@ fn start_switch(model: &mut Model, target: dexo_app::Project) -> Vec<Effect> {
             Vec::new()
         }
         Ok(switch) => {
+            model.projects.closing_sessions = model.connections.sessions.len();
+            model.projects.dirty_choice = (switch.stage
+                == crate::runtime::project_manager::ProjectSwitchStage::ConfirmDirty)
+                .then_some(crate::model::CloseChoice::Save);
             model.projects.pending = Some(switch.clone());
             crate::runtime::project_manager::advance(model, &switch)
         }
     }
+}
+
+/// The titles of the open documents with changes no file holds.
+pub fn unsaved_titles(model: &Model) -> Vec<String> {
+    model
+        .documents
+        .iter()
+        .filter(|document| document.is_dirty())
+        .map(|document| document.title.clone())
+        .collect()
+}
+
+/// The answer to "these documents have unsaved changes" when a project is being left.
+/// Save writes the ones that have a file and leaves the rest in the project as drafts,
+/// which is where they were; Don't save closes them. Either way the switch goes on.
+fn resolve_project_switch(model: &mut Model, choice: crate::model::CloseChoice) -> Vec<Effect> {
+    use crate::model::CloseChoice;
+    if !model.projects.asking_about_unsaved() {
+        return Vec::new();
+    }
+    model.projects.dirty_choice = None;
+    let mut effects = Vec::new();
+    match choice {
+        CloseChoice::Cancel => return update(model, Action::CancelProjectSwitch),
+        CloseChoice::Save => {
+            for document in model
+                .documents
+                .iter()
+                .filter(|document| document.is_dirty())
+            {
+                if let Some(path) = &document.path {
+                    effects.push(Effect::SaveDocument(crate::action::DocumentIoRequest {
+                        document: document.id.clone(),
+                        path: path.clone(),
+                        content: document.text(),
+                        revision: document.sql.revision(),
+                        expected_fingerprint: None,
+                    }));
+                }
+            }
+        }
+        CloseChoice::Discard => {
+            let dirty: Vec<usize> = model
+                .documents
+                .iter()
+                .enumerate()
+                .filter(|(_, document)| document.is_dirty())
+                .map(|(index, _)| index)
+                .collect();
+            for index in dirty.into_iter().rev() {
+                let id = model.documents[index].id.clone();
+                effects.extend(remove_document(model, index));
+                effects.push(Effect::DiscardRecovery { document: id });
+            }
+        }
+    }
+    effects.extend(complete_switch_stage(model));
+    effects
 }
 
 fn complete_switch_stage(model: &mut Model) -> Vec<Effect> {
@@ -10716,7 +11010,7 @@ fn confirm_project_delete(model: &mut Model) -> Vec<Effect> {
 fn apply_loaded_project(
     model: &mut Model,
     project: dexo_app::Project,
-    documents: Vec<(String, String)>,
+    documents: Vec<dexo_storage::StoredDocument>,
     layout: Option<dexo_storage::WorkbenchLayout>,
     recent_sql_files: Vec<std::path::PathBuf>,
 ) {
@@ -10724,56 +11018,91 @@ fn apply_loaded_project(
     model.project_id = project.id.0.to_string();
     model.projects.touch_recent(&project.name);
     model.projects.pending = None;
+    // The switch is done; the dialog was only the way to it.
+    model.projects.open = false;
+    model.projects.intent = None;
+    model.projects.error = None;
+    model.messages.info(if model.projects.closing_sessions > 0 {
+        format!(
+            "Opened project {}. Its connections start closed; they connect when you use them.",
+            project.name
+        )
+    } else {
+        format!("Opened project {}.", project.name)
+    });
+    model.projects.closing_sessions = 0;
     model.recent_sql_files = recent_sql_files;
     if documents.is_empty() {
         model.documents = vec![crate::model::EditorDocument::placeholder()];
         model.active_document = 0;
     } else {
-        model.documents = documents
-            .into_iter()
-            .map(|(id, content)| {
-                let mut document = crate::model::EditorDocument::with_text(&content);
-                document.id = id.clone();
-                document.title = id;
-                document
-            })
-            .collect();
+        // As at start-up: each comes back with its name, its connection and its kind.
+        model.documents = documents.into_iter().map(document_from_stored).collect();
         model.active_document = 0;
     }
     apply_layout(model, layout);
+    name_front_document_connection(model);
 }
 
 fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    if let Some(delete) = &mut model.projects.delete {
+    use crate::model::CloseChoice;
+    use crate::screens::projects::ProjectsMode;
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    // The question about unsaved documents: the same three answers as closing a tab.
+    if model.projects.asking_about_unsaved() {
+        let choice = model.projects.dirty_choice.unwrap_or(CloseChoice::Save);
         return match key.code {
-            KeyCode::Esc => {
+            KeyCode::Esc => resolve_project_switch(model, CloseChoice::Cancel),
+            KeyCode::Right | KeyCode::Down | KeyCode::Tab => {
+                model.projects.dirty_choice = Some(choice.next());
+                Vec::new()
+            }
+            KeyCode::Left | KeyCode::Up | KeyCode::BackTab => {
+                model.projects.dirty_choice = Some(choice.prev());
+                Vec::new()
+            }
+            KeyCode::Enter => resolve_project_switch(model, choice),
+            KeyCode::Char('s') => resolve_project_switch(model, CloseChoice::Save),
+            KeyCode::Char('d') => resolve_project_switch(model, CloseChoice::Discard),
+            _ => Vec::new(),
+        };
+    }
+    // Deleting: type the name, Tab to the buttons. Alt+C: a plain `c` toggled this, so a
+    // name with a `c` in it could never be typed to confirm.
+    if let Some(delete) = &mut model.projects.delete {
+        if key.code == KeyCode::Char('c') && key.modifiers == KeyModifiers::ALT {
+            delete.delete_connections = !delete.delete_connections;
+            return Vec::new();
+        }
+        return match footer_key(&mut model.projects.footer, &key) {
+            FooterKey::Cancel => {
                 model.projects.delete = None;
-                model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                model.projects.mode = ProjectsMode::Browse;
+                model.projects.footer = FooterFocus::Input;
                 Vec::new()
             }
-            KeyCode::Enter => update(model, Action::ConfirmProjectDelete),
-            // Alt+C: a plain `c` toggled this, so a name with a `c` in it could never be
-            // typed to confirm.
-            KeyCode::Char('c') if key.modifiers == KeyModifiers::ALT => {
-                delete.delete_connections = !delete.delete_connections;
-                Vec::new()
-            }
-            _ => {
-                delete.typed.handle_key(key);
+            FooterKey::Submit => update(model, Action::ConfirmProjectDelete),
+            FooterKey::Moved => Vec::new(),
+            FooterKey::Pass => {
+                if model.projects.footer == FooterFocus::Input {
+                    delete.typed.handle_key(key);
+                }
                 Vec::new()
             }
         };
     }
     match model.projects.mode {
-        crate::screens::projects::ProjectsMode::Create
-        | crate::screens::projects::ProjectsMode::Rename => {
-            use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+        ProjectsMode::Create | ProjectsMode::Rename => {
             match footer_key(&mut model.projects.footer, &key) {
                 FooterKey::Cancel => {
-                    model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
+                    model.projects.mode = ProjectsMode::Browse;
                     model.projects.name_input.clear();
                     model.projects.error = None;
                     model.projects.footer = FooterFocus::Input;
+                    // Asked for from the palette, there is no list to go back to.
+                    if !model.projects.from_list {
+                        model.projects.open = false;
+                    }
                     return Vec::new();
                 }
                 FooterKey::Submit => return submit_project_name(model),
@@ -10782,11 +11111,11 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             }
             if model.projects.footer == FooterFocus::Input {
                 model.projects.name_input.handle_key(key);
+                model.projects.error = None;
             }
             Vec::new()
         }
-        crate::screens::projects::ProjectsMode::Browse
-        | crate::screens::projects::ProjectsMode::DeleteConfirm => match key.code {
+        ProjectsMode::Browse | ProjectsMode::DeleteConfirm => match key.code {
             KeyCode::Esc => {
                 if model.projects.pending.is_some() {
                     return update(model, Action::CancelProjectSwitch);
@@ -10798,87 +11127,172 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             }
             KeyCode::Enter => choose_project_intent(model),
             KeyCode::Up => {
-                if model.projects.selected > 0 {
-                    model.projects.selected -= 1;
-                }
+                model.projects.selected = model.projects.selected.saturating_sub(1);
+                model.projects.error = None;
                 Vec::new()
             }
             KeyCode::Down => {
                 if model.projects.selected + 1 < model.projects.list.len() {
                     model.projects.selected += 1;
                 }
+                model.projects.error = None;
+                Vec::new()
+            }
+            KeyCode::Home => {
+                model.projects.selected = 0;
+                Vec::new()
+            }
+            KeyCode::End => {
+                model.projects.selected = model.projects.list.len().saturating_sub(1);
                 Vec::new()
             }
             KeyCode::Char('n') => {
-                model.projects.mode = crate::screens::projects::ProjectsMode::Create;
+                model.projects.mode = ProjectsMode::Create;
                 model.projects.name_input.clear();
-                model.projects.footer = crate::widgets::form::FooterFocus::Input;
+                model.projects.footer = FooterFocus::Input;
+                model.projects.from_list = true;
+                model.projects.error = None;
                 Vec::new()
             }
             KeyCode::Char('r') => {
-                model.projects.mode = crate::screens::projects::ProjectsMode::Rename;
+                model.projects.mode = ProjectsMode::Rename;
                 let name = model
                     .projects
                     .selected()
                     .map(|project| project.name.clone())
                     .unwrap_or_default();
                 model.projects.name_input.set_text(name);
-                model.projects.footer = crate::widgets::form::FooterFocus::Input;
+                model.projects.footer = FooterFocus::Input;
+                model.projects.from_list = true;
+                model.projects.error = None;
                 Vec::new()
             }
             KeyCode::Char('x') => update(model, Action::DeleteProject),
-            KeyCode::Char('y') if model.projects.pending.is_some() => {
-                update(model, Action::ConfirmSwitchDirty)
-            }
             _ => Vec::new(),
         },
     }
 }
 
 fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::config_transfer::ConfigStage;
+    use dexo_storage::ImportResolution;
+    let stage = model.config_transfer.stage();
+    let screen = &mut model.config_transfer;
     match key.code {
-        KeyCode::Esc => {
-            model.config_transfer.open = false;
-            Vec::new()
-        }
-        KeyCode::Char('e') => {
+        KeyCode::Esc => match stage {
+            ConfigStage::Start => {
+                screen.open = false;
+                Vec::new()
+            }
+            ConfigStage::ConfirmOverwrite | ConfigStage::Preview => {
+                cancel_config_step(model);
+                Vec::new()
+            }
+        },
+        KeyCode::Char('e') if stage == ConfigStage::Start => {
             open_file_picker(
                 model,
                 crate::screens::file_picker::FilePickerMode::ConfigExport,
             );
             Vec::new()
         }
-        KeyCode::Char('i') => {
+        KeyCode::Char('i') if stage == ConfigStage::Start => {
             open_file_picker(
                 model,
                 crate::screens::file_picker::FilePickerMode::ConfigImport,
             );
             Vec::new()
         }
-        KeyCode::Enter => update(model, Action::ApplyConfigImport),
-        KeyCode::Char('r') => {
-            if let Some(preview) = &model.config_transfer.preview
-                && let Some(name) = preview.conflicts.first()
-            {
-                model.config_transfer.resolutions.insert(
-                    name.clone(),
-                    dexo_storage::ImportResolution::Rename(format!("{name}-2")),
-                );
-            }
+        KeyCode::Left | KeyCode::BackTab => {
+            screen.focus_prev();
             Vec::new()
         }
-        KeyCode::Char('p') => {
-            if let Some(preview) = &model.config_transfer.preview
-                && let Some(name) = preview.conflicts.first()
-            {
-                model
-                    .config_transfer
-                    .resolutions
-                    .insert(name.clone(), dexo_storage::ImportResolution::Replace);
-            }
+        KeyCode::Right | KeyCode::Tab => {
+            screen.focus_next();
             Vec::new()
         }
+        KeyCode::Up if stage == ConfigStage::Preview => {
+            screen.select(-1);
+            Vec::new()
+        }
+        KeyCode::Down if stage == ConfigStage::Preview => {
+            screen.select(1);
+            Vec::new()
+        }
+        KeyCode::PageUp if stage == ConfigStage::Preview => {
+            screen.select(-5);
+            Vec::new()
+        }
+        KeyCode::PageDown if stage == ConfigStage::Preview => {
+            screen.select(5);
+            Vec::new()
+        }
+        KeyCode::Char(' ') if stage == ConfigStage::Preview => {
+            screen.cycle_selected();
+            Vec::new()
+        }
+        KeyCode::Char('s') if stage == ConfigStage::Preview => {
+            screen.resolve_selected(ImportResolution::Skip);
+            Vec::new()
+        }
+        KeyCode::Char('o' | 'p') if stage == ConfigStage::Preview => {
+            screen.resolve_selected(ImportResolution::Replace);
+            Vec::new()
+        }
+        KeyCode::Char('r') if stage == ConfigStage::Preview => {
+            screen.resolve_selected(ImportResolution::Rename(String::new()));
+            Vec::new()
+        }
+        KeyCode::Enter => press_config_button(model),
         _ => Vec::new(),
+    }
+}
+
+/// Backs out of the step the dialog is at: the question about replacing a file, or the
+/// preview of an import. Nothing was changed by either.
+fn cancel_config_step(model: &mut Model) {
+    let screen = &mut model.config_transfer;
+    screen.overwrite = None;
+    screen.preview = None;
+    screen.resolutions.clear();
+    screen.focus = 0;
+}
+
+/// Enter on the focused button of the dialog, or a click on one.
+fn press_config_button(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::config_transfer::ConfigStage;
+    let screen = &model.config_transfer;
+    let Some(label) = screen.buttons().get(screen.focus).copied() else {
+        return Vec::new();
+    };
+    match (screen.stage(), label) {
+        (ConfigStage::Start, "Export") => {
+            open_file_picker(
+                model,
+                crate::screens::file_picker::FilePickerMode::ConfigExport,
+            );
+            Vec::new()
+        }
+        (ConfigStage::Start, "Import") => {
+            open_file_picker(
+                model,
+                crate::screens::file_picker::FilePickerMode::ConfigImport,
+            );
+            Vec::new()
+        }
+        (ConfigStage::Start, _) => {
+            model.config_transfer.open = false;
+            Vec::new()
+        }
+        (ConfigStage::ConfirmOverwrite, "Overwrite") => {
+            let path = model.config_transfer.overwrite.clone().unwrap_or_default();
+            update(model, Action::ExportConfig { path })
+        }
+        (ConfigStage::Preview, "Import") => update(model, Action::ApplyConfigImport),
+        _ => {
+            cancel_config_step(model);
+            Vec::new()
+        }
     }
 }
 
@@ -10886,10 +11300,32 @@ fn open_project_intent(
     model: &mut Model,
     intent: crate::screens::projects::ProjectIntent,
 ) -> Vec<Effect> {
+    open_projects(model, Some(intent))
+}
+
+/// The Projects dialog, fresh: whatever it was last left showing -- a half-typed name, an
+/// error, a hint for another command -- is not carried into this opening.
+fn open_projects(
+    model: &mut Model,
+    intent: Option<crate::screens::projects::ProjectIntent>,
+) -> Vec<Effect> {
     model.projects.open = true;
-    model.projects.intent = Some(intent);
+    model.projects.intent = intent;
     model.projects.mode = crate::screens::projects::ProjectsMode::Browse;
     model.projects.error = None;
+    model.projects.delete = None;
+    model.projects.name_input.clear();
+    model.projects.footer = crate::widgets::form::FooterFocus::Input;
+    model.projects.from_list = true;
+    // The cursor starts on the project that is open.
+    if let Some(index) = model
+        .projects
+        .list
+        .iter()
+        .position(|project| project.name == model.project)
+    {
+        model.projects.selected = index;
+    }
     vec![Effect::ListProjects]
 }
 
@@ -10918,21 +11354,28 @@ fn choose_project_intent(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     match model.projects.intent {
-        Some(crate::screens::projects::ProjectIntent::Switch) => {
-            model.projects.intent = None;
-            update(model, Action::SwitchProject { name: project.name })
-        }
         Some(crate::screens::projects::ProjectIntent::Rename) => {
             model.projects.mode = crate::screens::projects::ProjectsMode::Rename;
             model.projects.name_input.set_text(project.name);
+            model.projects.footer = crate::widgets::form::FooterFocus::Input;
+            model.projects.from_list = true;
             model.projects.error = None;
             Vec::new()
         }
         Some(crate::screens::projects::ProjectIntent::Delete) => {
-            model.projects.intent = None;
             update(model, Action::DeleteProject)
         }
-        None => update(model, Action::SwitchProject { name: project.name }),
+        Some(crate::screens::projects::ProjectIntent::Switch) | None => {
+            if project.name == model.project {
+                model.projects.open = false;
+                model.projects.intent = None;
+                model
+                    .messages
+                    .info(format!("Project {} is already open.", project.name));
+                return Vec::new();
+            }
+            update(model, Action::SwitchProject { name: project.name })
+        }
     }
 }
 
@@ -11051,6 +11494,18 @@ fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePi
     model
         .file_picker
         .fit_recents(crate::screens::file_picker::inner_rows(model.height));
+    // A config file is looked for in the home folder, not wherever Dexo was started from.
+    if matches!(
+        mode,
+        crate::screens::file_picker::FilePickerMode::ConfigExport
+            | crate::screens::file_picker::FilePickerMode::ConfigImport
+    ) && let Some(home) = std::env::home_dir()
+    {
+        let _ = model.file_picker.enter_path(home);
+    }
+    if mode == crate::screens::file_picker::FilePickerMode::ConfigExport {
+        model.file_picker.name.set_text("dexo-config.toml");
+    }
     if mode == crate::screens::file_picker::FilePickerMode::Save {
         // The picker only opens for a document that has never been saved, so the file
         // name alone left the field empty every time; the tab's name is the one to offer.
@@ -11159,6 +11614,8 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
             model.projects.open = true;
             model.projects.mode = crate::screens::projects::ProjectsMode::Create;
             model.projects.intent = None;
+            model.projects.delete = None;
+            model.projects.from_list = false;
             model.projects.error = None;
             model.projects.name_input.clear();
             model.projects.footer = crate::widgets::form::FooterFocus::Input;

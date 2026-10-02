@@ -5,7 +5,7 @@ expression: "render_to_string(&snapshot_model(), 160, 50)"
 demo  local  public                                                                                                                                             
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾  [offline]     ││   1▸select 1                                                                                                                     │
+│  ● local▾                ││   1▸select 1                                                                                                                     │
 │>   ▸ public              ││                                                                                                                                  │
 │      mysql.users [restric││                                                                                                                                  │
 │                          ││                                                                                                                                  │

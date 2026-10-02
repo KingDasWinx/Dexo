@@ -59,6 +59,13 @@ impl SqlDocument {
         self.revision
     }
 
+    /// Counts as an edit without changing the text: a buffer restored from a draft is
+    /// not what any file holds, and says so by differing from the revision last saved.
+    /// It leaves no undo step, so an undo cannot empty the restored draft.
+    pub fn mark_modified(&mut self) {
+        self.revision += 1;
+    }
+
     pub fn cursor(&self) -> usize {
         self.cursor
     }
