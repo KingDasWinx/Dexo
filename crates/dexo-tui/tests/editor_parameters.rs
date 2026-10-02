@@ -92,3 +92,22 @@ fn a_run_with_values_from_before_says_which_and_how_to_change_them() {
         "{shown}"
     );
 }
+
+/// `:id` is Dexo's parameter, not the server's: an explain says so before asking it.
+#[test]
+fn an_explain_of_a_named_parameter_says_what_to_do_without_asking_the_server() {
+    let mut model = Model::default();
+    model.apply_size(120, 30);
+    model.active_session = Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)));
+    model.active_document_mut().sql =
+        dexo_sql::SqlDocument::new("select * from orders where id = :id");
+    let effects = update(&mut model, Action::OpenExplain);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::RunExplain { .. })),
+        "{effects:?}"
+    );
+    let said = model.messages.toast.expect("a message").message;
+    assert!(said.contains(":id") && said.contains("values"), "{said}");
+}

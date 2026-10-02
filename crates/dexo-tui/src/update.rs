@@ -1754,6 +1754,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.unavailable_reason(dexo_driver_api::Capability::ExplainAnalyze)
             {
                 model.messages.warn(reason.to_string());
+            } else if explain_parameters_refused(model) {
+                // It said which parameter needs a value.
             } else if analyzed_write(model).is_some() && on_production(model) {
                 // The name typed is the confirmation; a second dialog before it would
                 // only be one more Enter to press out of habit.
@@ -1778,7 +1780,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             execute_on_document_connection(model, action)
         }
         Action::OpenTryIndex => {
-            if model.results.explain.plan.is_none() {
+            if model.connection.driver != "postgres" {
+                model.messages.warn(
+                    "Trying an index before building it needs Postgres with the hypopg extension."
+                        .into(),
+                );
+            } else if model.results.explain.plan.is_none() {
                 model.messages.warn(
                     "Try index compares with the statement's plan: explain it first (F7).".into(),
                 );
@@ -10073,6 +10080,29 @@ fn results_of_document<'a>(
 /// EXPLAIN ANALYZE runs the statement under the cursor, so on a read-only connection
 /// a statement that is not a read is refused here, before anything is sent, with the
 /// editor's own words. It used to reach the server, which refused it.
+/// A `:name` is for Dexo's own parameter prompt: sent to the server it is a syntax error,
+/// where `$1` is answered with what to do. Said before the server is asked.
+fn explain_parameters_refused(model: &mut Model) -> bool {
+    let dialect = crate::screens::editor::editor_dialect(model);
+    let document = model.active_document();
+    let text = document.text();
+    let Some(span) = dexo_sql::statement_at_in(&text, document.byte_cursor(), dialect) else {
+        return false;
+    };
+    let names: Vec<String> = dexo_sql::named_parameters(&text[span.byte_range], dialect)
+        .into_iter()
+        .map(|parameter| format!(":{}", parameter.name))
+        .collect();
+    if names.is_empty() {
+        return false;
+    }
+    model.messages.warn(format!(
+        "This statement has parameters ({}), and its plan needs their values: write them into the statement to explain it.",
+        names.join(", ")
+    ));
+    true
+}
+
 fn analyze_refused(model: &mut Model) -> bool {
     if !model.connection.read_only {
         return false;
@@ -10113,6 +10143,9 @@ fn explain_effect(
         return Vec::new();
     };
     if analyze && analyze_refused(model) {
+        return Vec::new();
+    }
+    if statement.is_none() && explain_parameters_refused(model) {
         return Vec::new();
     }
     if model.active_operation.is_some() {
@@ -13783,6 +13816,7 @@ mod tests {
                 },
             );
         };
+        model.connection.driver = "postgres".into();
         loaded(&mut model, 2084.0, Vec::new());
         let end = text.chars().count();
         model.active_document_mut().sql.set_cursor(end).unwrap();

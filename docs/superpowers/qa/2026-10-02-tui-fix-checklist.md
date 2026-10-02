@@ -189,10 +189,10 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ES-36** `MINOR` There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
 - [=] SL-16 **ES-37** `MINOR` After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
 - [ ] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
-- [ ] **ES-42** `MINOR` `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error
+- [x] **ES-42** `MINOR` `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error
 - [=] PC-15 **ES-43** `MINOR` Explain error toasts are wider than the screen and are cut at the right edge
 - [ ] **ES-44** `MINOR` Explain: plan comparison says "now" without naming what it replaced; internal names leak into the node text
-- [ ] **ES-45** `MINOR` Try an index: the dialog is offered everywhere and only refuses after you type the index
+- [x] **ES-45** `MINOR` Try an index: the dialog is offered everywhere and only refuses after you type the index
 - [ ] **ES-46** `MINOR` Manage Grants panel is transparent and empty on MySQL; unsupported tools are offered in the menu of SQLite / DuckDB
 - [ ] **ES-47** `MINOR` Tree keys: Home, End, PageUp, PageDown do nothing; Show Favorites Only is empty after a restart until the tree is expanded
 - [x] **ES-06** `COSMETIC` Object actions menu: half of the actions show no hotkey
