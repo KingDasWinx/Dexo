@@ -802,7 +802,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "settings.mode",
-            title: "Toggle Light/Dark Mode",
+            title: "Cycle Color Mode",
             keywords: &["dark", "light", "contrast"],
             shortcut: None,
             requirements: &[],

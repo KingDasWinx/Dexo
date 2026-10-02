@@ -2869,10 +2869,7 @@ fn mouse_palette(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 fn mouse_help(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    if matches!(
-        hit,
-        Some(HitTarget::Overlay | HitTarget::Button(HitButton::Close)) | None
-    ) {
+    if matches!(hit, Some(HitTarget::Button(HitButton::Close)) | None) {
         model.help.open = false;
         model.help.scroll = 0;
         model.help.query.clear();
@@ -5758,6 +5755,12 @@ fn click_results_row(model: &mut Model, row: usize, extend: bool) {
 
 fn apply_layout_preset(model: &mut Model, preset: crate::layout::LayoutPreset) {
     model.layout_preset = preset;
+    // Said, so F10 shows which of the layouts it is on and when the cycle wraps.
+    model.messages.info(format!(
+        "Layout {} of 4: {}",
+        preset.position() + 1,
+        preset.label()
+    ));
     model.panes = preset.apply(model.width, model.height);
     model.sync_grid_viewport();
     model.layout_dirty = true;

@@ -488,13 +488,24 @@ fn register_pane_dividers(hits: &mut HitMap, plan: LayoutPlan) {
     if plan.explorer.width > 0 {
         hits.register(
             HitTarget::PaneDivider(PaneEdge::Explorer),
-            Rect::new(plan.content.x, plan.explorer.y, 1, plan.explorer.height),
+            // Both border cells of the divider, the explorer's and the editor's.
+            Rect::new(
+                plan.content.x.saturating_sub(1),
+                plan.explorer.y,
+                2,
+                plan.explorer.height,
+            ),
         );
     }
     if plan.results.height > 0 {
         hits.register(
             HitTarget::PaneDivider(PaneEdge::Results),
-            Rect::new(plan.results.x, plan.results.y, plan.results.width, 1),
+            Rect::new(
+                plan.results.x,
+                plan.results.y.saturating_sub(1),
+                plan.results.width,
+                2,
+            ),
         );
     }
 }

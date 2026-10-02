@@ -96,10 +96,15 @@ impl ExplainScreen {
     /// output.
     pub fn lines(&self, width: u16, styles: &ExplainStyles) -> Vec<Line<'static>> {
         let Some(plan) = &self.plan else {
-            return vec![Line::styled(
-                "No plan yet. F7 explains the statement under the cursor; Shift+F7 runs it with ANALYZE; then i tries an index.",
-                styles.muted,
-            )];
+            // Three short lines, so the sentence is not cut at the pane's edge.
+            return [
+                "No plan yet.",
+                "F7 explains the statement under the cursor;",
+                "Shift+F7 runs it with ANALYZE; then i tries an index.",
+            ]
+            .into_iter()
+            .map(|line| Line::styled(line, styles.muted))
+            .collect();
         };
         let width = width as usize;
         let view = plan_view(plan, styles.unicode);

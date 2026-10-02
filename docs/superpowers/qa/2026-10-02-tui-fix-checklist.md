@@ -360,21 +360,21 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **SL-03** `MINOR` Unicode = Off still draws non-ASCII glyphs
 - [x] **SL-08** `MINOR` Alt+= / Alt+- mean different things depending on focus, but the hotkey is shown only as "Grow/Shrink Results Pane"
 - [ ] **SL-09** `MINOR` Panes can be shrunk until they are useless
-- [ ] **SL-10** `MINOR` Only one of the two border cells of a divider is draggable
-- [ ] **SL-18** `MINOR` "Toggle Light/Dark Mode" cycles through three modes
+- [x] **SL-10** `MINOR` Only one of the two border cells of a divider is draggable
+- [x] **SL-18** `MINOR` "Toggle Light/Dark Mode" cycles through three modes
 - [ ] **SL-19** `MINOR` The terminal's colour depth (TERM / COLORTERM) is ignored; only NO_COLOR works
 - [x] **SL-20** `MINOR` Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
-- [ ] **SL-21** `MINOR` Help: any click closes the overlay, even a click on the Search field
+- [x] **SL-21** `MINOR` Help: any click closes the overlay, even a click on the Search field
 - [x] **SL-22** `MINOR` "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling
 - [ ] **SL-23** `MINOR` "Search History" is not searchable and shows duplicates
 - [ ] **SL-24** `MINOR` Key hints behind and inside modals are inconsistent
 - [ ] **SL-04** `COSMETIC` Modals sit at different heights and have different sizes
-- [ ] **SL-11** `COSMETIC` Layout and settings commands give no feedback about what they did
+- [x] **SL-11** `COSMETIC` Layout and settings commands give no feedback about what they did
 - [x] **SL-12** `COSMETIC` Command name case differs: "Reset layout" vs "Cycle Layout" / "Reset Settings"
 - [x] **SL-13** `COSMETIC` Settings footer does not list `e` (cycle theme) which the docs describe
-- [ ] **SL-14** `COSMETIC` Explain placeholder is cut off at the pane edge instead of wrapped
+- [x] **SL-14** `COSMETIC` Explain placeholder is cut off at the pane edge instead of wrapped
 - [ ] **SL-15** `COSMETIC` Right click: grid and tree respond, editor, tabs and status bar do not
 - [ ] **SL-25** `COSMETIC` Button rows differ between dialogs
 - [ ] **SL-26** `COSMETIC` Muted text and Light-mode accents have low contrast
 - [ ] **SL-27** `COSMETIC` Compact status bar, 40x12 cut-offs
-- [ ] **SL-28** `COSMETIC` F10 cycles four unnamed layouts and one of them leaves 3 inner rows for results
+- [x] **SL-28** `COSMETIC` F10 cycles four unnamed layouts and one of them leaves 3 inner rows for results

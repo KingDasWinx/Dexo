@@ -26,6 +26,15 @@ impl LayoutPreset {
         }
     }
 
+    pub fn position(self) -> usize {
+        match self {
+            Self::Normal => 0,
+            Self::ResultsWide => 1,
+            Self::EditorWide => 2,
+            Self::ExplorerWide => 3,
+        }
+    }
+
     pub fn next(self) -> Self {
         match self {
             Self::Normal => Self::ResultsWide,
