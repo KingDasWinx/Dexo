@@ -2611,16 +2611,28 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 /// Messages used to be appended to the status bar, which is the one place a user never
-/// looks after acting. This lands where the eye already is, and gets out of the way --
-/// except for an error, which stays until dismissed because nothing else records it.
+/// looks after acting. This lands where the eye already is, and gets out of the way: it
+/// ages out, and Esc clears it sooner. The Messages view keeps every one in full.
 fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let Some(toast) = &model.messages.toast else {
         return;
     };
     let area = frame.area();
-    let text = format!(" {} ", toast.message);
-    let width = (text.chars().count() as u16 + 2).min(area.width.saturating_sub(2));
-    if width < 6 || area.height < 4 {
+    if area.width < 10 || area.height < 4 {
+        return;
+    }
+    // A long sentence wraps onto a few lines inside the screen, and ends in an ellipsis
+    // when even that is not enough: it ran off the right edge mid-word before.
+    let room = usize::from(area.width.saturating_sub(6)).min(72);
+    let lines = wrap_toast(&toast.message, room, 3);
+    let text_width = lines
+        .iter()
+        .map(|line| line.chars().count())
+        .max()
+        .unwrap_or(0);
+    let width = (text_width as u16 + 4).min(area.width.saturating_sub(2));
+    let height = lines.len() as u16 + 2;
+    if height > area.height {
         return;
     }
     // The label carries the severity on its own, so the colour is reinforcement and
@@ -2639,11 +2651,65 @@ fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         area.x + area.width.saturating_sub(width + 1),
         area.y + 1,
         width,
-        3,
+        height,
     );
+    let body: Vec<Line> = lines
+        .into_iter()
+        .map(|line| Line::raw(format!(" {line} ")))
+        .collect();
     frame.render_widget(Clear, popup);
-    frame.render_widget(Paragraph::new(text).block(block), popup);
+    frame.render_widget(Paragraph::new(body).block(block), popup);
     register_overlay(hits, popup);
+}
+
+/// `message` broken at spaces into lines of at most `width` columns, `max_lines` of
+/// them; what does not fit ends the last line with an ellipsis.
+fn wrap_toast(message: &str, width: usize, max_lines: usize) -> Vec<String> {
+    let width = width.max(8);
+    let mut lines: Vec<String> = Vec::new();
+    let mut current = String::new();
+    for word in message.split_whitespace() {
+        let word_len = word.chars().count();
+        let needed = if current.is_empty() {
+            word_len
+        } else {
+            current.chars().count() + 1 + word_len
+        };
+        if needed <= width {
+            if !current.is_empty() {
+                current.push(' ');
+            }
+            current.push_str(word);
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        // A word longer than a line (a path, a long identifier) is cut where the line ends.
+        let mut rest = word;
+        while rest.chars().count() > width {
+            let cut = rest
+                .char_indices()
+                .nth(width)
+                .map_or(rest.len(), |(index, _)| index);
+            lines.push(rest[..cut].to_string());
+            rest = &rest[cut..];
+        }
+        current.push_str(rest);
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    if lines.len() > max_lines {
+        lines.truncate(max_lines);
+        if let Some(last) = lines.last_mut() {
+            while last.chars().count() >= width {
+                last.pop();
+            }
+            last.push('…');
+        }
+    }
+    lines
 }
 
 fn render_value_viewer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

@@ -39,7 +39,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-09** `MINOR` F1 search is a loose subsequence match and shows unrelated rows
 - [ ] **PC-13** `MINOR` Query running: no sign anywhere that something is running; a second Ctrl+Enter is silently queued
 - [ ] **PC-14** `MINOR` Cancelling a query is reported as an error, and a timeout hits after 30 s with no hint
-- [ ] **PC-15** `MINOR` Error toast never goes away by itself
+- [x] **PC-15** `MINOR` Error toast never goes away by itself
 - [ ] **PC-16** `MINOR` Confirmation for an unparsable statement is titled "Run destructive statements"
 - [x] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
 - [ ] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears

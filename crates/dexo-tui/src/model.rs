@@ -437,13 +437,14 @@ pub enum Severity {
 }
 
 impl Severity {
-    /// Ticks the toast survives. Zero means it stays until dismissed: an error is the one
-    /// thing here you cannot afford to blink and miss.
+    /// Ticks the toast survives, a tick being a second. An error stays the longest, long
+    /// enough to read a sentence; it is in the Messages view after that. One that stayed
+    /// until Esc covered the editor for minutes and outlived the action that fixed it.
     pub fn ticks(self) -> u8 {
         match self {
             Self::Info => 4,
             Self::Warn => 6,
-            Self::Error => 0,
+            Self::Error => 12,
         }
     }
 
@@ -633,15 +634,14 @@ impl Notifications {
         self.toast = None;
     }
 
-    /// True while a toast is up that will age out on its own -- the clock runs for those
-    /// only, so a sticky error costs nothing.
+    /// True while a toast is up that will age out on its own -- the clock runs only then.
     pub fn expires(&self) -> bool {
         self.toast
             .as_ref()
             .is_some_and(|toast| toast.ticks_left > 0)
     }
 
-    /// Ages the visible toast. A sticky one (`ticks_left == 0`) is left alone.
+    /// Ages the visible toast.
     pub fn tick(&mut self) {
         match &mut self.toast {
             Some(toast) if toast.ticks_left > 1 => toast.ticks_left -= 1,

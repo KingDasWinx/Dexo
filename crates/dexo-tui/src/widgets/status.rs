@@ -472,7 +472,7 @@ mod tests {
 
     /// Nothing else in the app records a message, so an error that blinks out is lost.
     #[test]
-    fn an_error_toast_stays_until_it_is_dismissed() {
+    fn an_error_toast_outlasts_an_info_one_but_goes_by_itself() {
         use crate::action::Action;
         use crate::render::render_to_string;
         use crate::update::update;
@@ -481,20 +481,30 @@ mod tests {
         model
             .messages
             .error("relation \"orders\" does not exist".into());
-        for _ in 0..50 {
+        for _ in 0..10 {
             update(&mut model, Action::ToastTick);
         }
         let view = render_to_string(&model, 120, 40);
-        assert!(view.contains("does not exist"), "the error aged out");
+        assert!(view.contains("does not exist"), "the error aged out early");
         assert!(
             view.contains("error"),
             "the toast never said it was an error"
         );
+        assert!(model.messages.expires(), "the toast has no clock");
+
+        for _ in 0..5 {
+            update(&mut model, Action::ToastTick);
+        }
+        assert!(model.messages.toast.is_none(), "the error never went away");
         assert!(
-            !model.messages.expires(),
-            "a sticky toast is running the clock"
+            model
+                .messages
+                .last()
+                .is_some_and(|entry| entry.message.contains("does not exist")),
+            "the Messages view lost the error"
         );
 
+        model.messages.error("again".into());
         update(&mut model, Action::DismissToast);
         assert!(model.messages.toast.is_none());
     }

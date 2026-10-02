@@ -124,7 +124,6 @@ async fn run_loop(
     let mut onboarding_tick = tokio::time::interval(Duration::from_millis(66));
     onboarding_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Only runs while a toast that can age out is up, the same shape as onboarding_tick.
-    // A sticky error toast never starts the clock.
     let mut toast_tick = toast_clock(Duration::from_secs(1));
     let mut toast_ageing = false;
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
