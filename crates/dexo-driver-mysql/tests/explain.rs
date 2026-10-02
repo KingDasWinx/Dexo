@@ -206,3 +206,129 @@ async fn subqueries_derived_tables_and_ctes_keep_their_tables() {
         }
     }
 }
+
+async fn connect(
+    pair: &dexo_test_support::DatabasePair,
+    user: &str,
+) -> Box<dyn dexo_driver_api::Session> {
+    use dexo_driver_api::{ConnectRequest, ConnectionFactory};
+    dexo_driver_mysql::MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            user.into(),
+            secrecy::SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap()
+}
+
+async fn run(session: &dyn dexo_driver_api::Session, sql: &str) -> Vec<String> {
+    use futures_util::StreamExt;
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::write(sql))
+        .await
+        .unwrap();
+    let mut values = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            for row in batch.rows {
+                values.extend(row.into_iter().map(|value| format!("{value:?}")));
+            }
+        }
+    }
+    values
+}
+
+/// The rollback after EXPLAIN ANALYZE undoes nothing in a table without transactions:
+/// a DELETE, an UPDATE or an INSERT ... SELECT explained that way stayed for good. Such
+/// a write is refused before it runs, and one a trigger may carry there too.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn analyze_refuses_a_write_no_rollback_undoes() {
+    use dexo_driver_api::{DriverErrorCategory, ExplainRequest};
+
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let session = connect(&pair, "dexo").await;
+    // Binary logging keeps a trigger to an account with SUPER.
+    let root = connect(&pair, "root").await;
+    let mariadb = run(&*session, "select version()").await[0].contains("MariaDB");
+    let mut engines = vec!["MyISAM", "MEMORY"];
+    if mariadb {
+        engines.push("Aria");
+    }
+    for engine in engines {
+        run(&*session, "drop table if exists mi").await;
+        run(
+            &*session,
+            &format!("create table mi (id int primary key, v int) engine = {engine}"),
+        )
+        .await;
+        run(&*session, "insert into mi values (1, 1), (2, 2)").await;
+        for sql in [
+            "delete from mi where id = 1",
+            "delete mi from mi where id = 1",
+            "update mi set v = 99",
+            "insert into mi select id + 10, v from mi",
+            "insert into dexo.mi values (3, 3)",
+        ] {
+            let refused = session
+                .explain()
+                .unwrap()
+                .explain(ExplainRequest::analyzed(sql))
+                .await
+                .unwrap_err();
+            assert_eq!(refused.category(), DriverErrorCategory::Capability, "{sql}");
+            assert!(refused.to_string().contains("`mi`"), "{sql}: {refused}");
+        }
+        assert_eq!(
+            run(&*session, "select count(*), sum(v) from mi").await,
+            ["I64(2)", "Decimal(\"3\")"],
+            "{engine}"
+        );
+    }
+
+    // A transactional table still runs, and is rolled back.
+    run(
+        &*session,
+        "create table ii (id int primary key, v int) engine = InnoDB",
+    )
+    .await;
+    run(&*session, "insert into ii values (1, 1), (2, 2)").await;
+    let analyzed = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("delete ii from ii where id = 1"))
+        .await;
+    assert!(analyzed.is_ok(), "{analyzed:?}");
+    assert_eq!(run(&*session, "select count(*) from ii").await, ["I64(2)"]);
+
+    // A trigger may write where no rollback reaches, while such a table exists.
+    let trigger = "create trigger ii_log after delete on ii for each row insert into mi values (old.id + 100, 0)";
+    run(&*root, trigger).await;
+    let refused = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("delete ii from ii where id = 1"))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("triggers"), "{refused}");
+    assert_eq!(run(&*session, "select count(*) from mi").await, ["I64(2)"]);
+    run(&*root, "drop trigger ii_log").await;
+    run(&*session, "drop table mi").await;
+    run(
+        &*session,
+        "create table mi (id int primary key, v int) engine = InnoDB",
+    )
+    .await;
+    run(&*root, trigger).await;
+    session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("delete ii from ii where id = 1"))
+        .await
+        .unwrap();
+    assert_eq!(run(&*session, "select count(*) from mi").await, ["I64(0)"]);
+    assert_eq!(run(&*session, "select count(*) from ii").await, ["I64(2)"]);
+}

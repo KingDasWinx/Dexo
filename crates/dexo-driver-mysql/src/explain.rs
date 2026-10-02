@@ -611,6 +611,7 @@ impl MysqlSession {
         let format = select_format(request.analyze, caps)?;
         let sql = wrap_explain(&request.sql, format, request.analyze);
         if request.analyze {
+            self.analyze_rolls_back(&request.sql).await?;
             let raw = self.fetch_explain_analyzed(&sql).await?;
             // MySQL answers this, instead of an error, for a statement ANALYZE cannot run
             // (a single-table UPDATE or DELETE, for one); it is not a plan to draw.
@@ -652,6 +653,106 @@ impl MysqlSession {
         let parameters = statement.num_params();
         let _ = conn.close(statement).await;
         parameters > 0
+    }
+
+    /// Refuses to analyze a write the fence cannot undo. EXPLAIN ANALYZE runs the
+    /// statement, and the rollback after it leaves a change to a table whose engine has
+    /// no transactions -- MyISAM, Aria, MEMORY -- in place: a DELETE explained that way
+    /// deleted the rows for good. A write is analyzed only when every table it names is
+    /// known to roll back; one Dexo cannot look up, or a view, it cannot vouch for. A
+    /// trigger may write anywhere, so a table with one counts only while the server
+    /// holds no table without transactions.
+    async fn analyze_rolls_back(&self, sql: &str) -> Result<(), DriverError> {
+        use dexo_sql::Dialect;
+        if dexo_sql::is_read(sql, Dialect::Mysql) {
+            return Ok(());
+        }
+        let refuse = |why: String| {
+            DriverError::unsupported(format!(
+                "EXPLAIN ANALYZE runs the statement, and the rollback after it may not undo the change: {why}. Use the estimated plan"
+            ))
+        };
+        let relations = dexo_sql::inspect_data_write(sql, Dialect::Mysql)
+            .map(|inspection| inspection.relations)
+            .unwrap_or_default();
+        if relations.is_empty() {
+            return Err(refuse("Dexo cannot tell which tables it writes".into()));
+        }
+        let mut params = Vec::new();
+        let named = relations
+            .iter()
+            .map(|path| {
+                let (schema, name) = match path.as_slice() {
+                    [.., schema, name] => (mysql_async::Value::from(schema.as_str()), name),
+                    [name] => (mysql_async::Value::NULL, name),
+                    [] => unreachable!("a relation has a name"),
+                };
+                params.push(schema);
+                params.push(mysql_async::Value::from(name.as_str()));
+                "SELECT CAST(? AS CHAR) AS db, CAST(? AS CHAR) AS name"
+            })
+            .collect::<Vec<_>>()
+            .join(" UNION ALL ");
+        let lookup = format!(
+            "SELECT r.name, t.TABLE_TYPE, t.ENGINE, e.TRANSACTIONS,
+                    EXISTS (SELECT 1 FROM information_schema.TRIGGERS g
+                            WHERE g.EVENT_OBJECT_SCHEMA = t.TABLE_SCHEMA
+                              AND g.EVENT_OBJECT_TABLE = t.TABLE_NAME)
+             FROM ({named}) AS r
+             LEFT JOIN information_schema.TABLES t
+               ON t.TABLE_SCHEMA = COALESCE(r.db, DATABASE()) AND t.TABLE_NAME = r.name
+             LEFT JOIN information_schema.ENGINES e ON e.ENGINE = t.ENGINE"
+        );
+        type Found = (String, Option<String>, Option<String>, Option<String>, i64);
+        let mut conn = self.conn.lock().await;
+        let found: Vec<Found> = conn
+            .exec(lookup, mysql_async::Params::Positional(params))
+            .await
+            .map_err(map_error)?;
+        let mut triggered = None;
+        for (name, kind, engine, transactions, triggers) in found {
+            match (kind.as_deref(), transactions.as_deref()) {
+                (None, _) => {
+                    return Err(refuse(format!(
+                        "Dexo cannot look `{name}` up (a temporary table, say)"
+                    )));
+                }
+                (Some("BASE TABLE"), Some("YES")) => {}
+                (Some("BASE TABLE"), _) => {
+                    return Err(refuse(format!(
+                        "`{name}` is a {} table, which has no transactions",
+                        engine.as_deref().unwrap_or("non-transactional")
+                    )));
+                }
+                (Some(_), _) => {
+                    return Err(refuse(format!(
+                        "`{name}` is a view, and Dexo cannot tell what it writes through"
+                    )));
+                }
+            }
+            if triggers != 0 {
+                triggered.get_or_insert(name);
+            }
+        }
+        let Some(name) = triggered else {
+            return Ok(());
+        };
+        let unsafe_tables: Option<i64> = conn
+            .query_first(
+                "SELECT 1 FROM information_schema.TABLES t
+                 JOIN information_schema.ENGINES e ON e.ENGINE = t.ENGINE
+                 WHERE t.TABLE_TYPE = 'BASE TABLE' AND e.TRANSACTIONS <> 'YES'
+                   AND t.TABLE_SCHEMA NOT IN ('mysql', 'information_schema', 'performance_schema', 'sys')
+                 LIMIT 1",
+            )
+            .await
+            .map_err(map_error)?;
+        match unsafe_tables {
+            Some(_) => Err(refuse(format!(
+                "`{name}` has triggers, and this server has tables without transactions they may write"
+            ))),
+            None => Ok(()),
+        }
     }
 
     async fn fetch_explain_text(&self, sql: &str) -> Result<String, DriverError> {
