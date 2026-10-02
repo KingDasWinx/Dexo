@@ -138,44 +138,57 @@ impl McpClient {
     }
 }
 
+/// A JSON value whose objects keep their keys in the file's order. serde_json's own map
+/// sorts them, which would reorder a committed `.mcp.json` on every setup; its
+/// `preserve_order` feature would do the same for every hash and payload in the build.
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(untagged)]
+enum Json {
+    Object(indexmap::IndexMap<String, Json>),
+    Array(Vec<Json>),
+    Other(serde_json::Value),
+}
+
+impl Json {
+    fn object() -> Self {
+        Self::Object(indexmap::IndexMap::new())
+    }
+
+    fn as_object_mut(&mut self) -> Option<&mut indexmap::IndexMap<String, Json>> {
+        match self {
+            Self::Object(object) => Some(object),
+            _ => None,
+        }
+    }
+}
+
 fn merged_json(existing: Option<&str>, command: &str, args: &[String]) -> Result<String, AppError> {
+    let left = |what: String| {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("{what}, so it was left as it is"),
+        )
+    };
     let mut root = match existing.map(str::trim).filter(|text| !text.is_empty()) {
-        Some(text) => serde_json::from_str::<serde_json::Value>(text).map_err(|error| {
-            AppError::new(
-                ErrorCategory::Configuration,
-                format!("it is not JSON Dexo can read ({error}), so it was left as it is"),
-            )
-        })?,
-        None => serde_json::json!({}),
+        Some(text) => serde_json::from_str::<Json>(text)
+            .map_err(|error| left(format!("it is not JSON Dexo can read ({error})")))?,
+        None => Json::object(),
     };
-    let Some(object) = root.as_object_mut() else {
-        return Err(AppError::new(
-            ErrorCategory::Configuration,
-            "it is not a JSON object, so it was left as it is",
-        ));
-    };
-    let servers = object
-        .entry("mcpServers")
-        .or_insert_with(|| serde_json::json!({}));
-    let Some(servers) = servers.as_object_mut() else {
-        return Err(AppError::new(
-            ErrorCategory::Configuration,
-            "its mcpServers is not an object, so it was left as it is",
-        ));
-    };
-    // Only the keys Dexo writes change: the entry's env, cwd, timeouts and the rest stay.
-    let Some(entry) = servers
-        .entry("dexo")
-        .or_insert_with(|| serde_json::json!({}))
+    let servers = root
         .as_object_mut()
-    else {
-        return Err(AppError::new(
-            ErrorCategory::Configuration,
-            "its mcpServers.dexo is not an object, so it was left as it is",
-        ));
-    };
-    entry.insert("command".into(), serde_json::json!(command));
-    entry.insert("args".into(), serde_json::json!(args));
+        .ok_or_else(|| left("it is not a JSON object".into()))?
+        .entry("mcpServers".into())
+        .or_insert_with(Json::object)
+        .as_object_mut()
+        .ok_or_else(|| left("its mcpServers is not an object".into()))?;
+    // Only the keys Dexo writes change: the entry's env, cwd, timeouts and the rest stay.
+    let entry = servers
+        .entry("dexo".into())
+        .or_insert_with(Json::object)
+        .as_object_mut()
+        .ok_or_else(|| left("its mcpServers.dexo is not an object".into()))?;
+    entry.insert("command".into(), Json::Other(serde_json::json!(command)));
+    entry.insert("args".into(), Json::Other(serde_json::json!(args)));
     let mut text = serde_json::to_string_pretty(&root)
         .map_err(|error| AppError::new(ErrorCategory::Internal, error.to_string()))?;
     text.push('\n');
@@ -475,5 +488,40 @@ mod tests {
             );
             assert_eq!(merged.contains("dexo = {"), toml.contains("dexo = {"));
         }
+    }
+
+    /// Keys stay in the order the file has them, at every depth, so a committed
+    /// `.mcp.json` changes only where Dexo's entry does.
+    #[test]
+    fn a_json_config_keeps_its_key_order() {
+        let existing = "{\n  \"zeta\": {\"b\": 1, \"a\": 2.5},\n  \"mcpServers\": {\n    \"zz\": {\"command\": \"z\"},\n    \"dexo\": {\"type\": \"stdio\", \"command\": \"old\"}\n  },\n  \"alpha\": [true, null]\n}\n";
+        let merged = McpClient::ClaudeCode
+            .merged(Some(existing), "/bin/dexo", &args())
+            .unwrap();
+        let order = |text: &str, keys: &[&str]| {
+            let at: Vec<usize> = keys
+                .iter()
+                .map(|key| text.find(&format!("\"{key}\"")).unwrap())
+                .collect();
+            at.windows(2).all(|pair| pair[0] < pair[1])
+        };
+        assert!(
+            order(
+                &merged,
+                &["zeta", "b", "a", "mcpServers", "zz", "dexo", "alpha"]
+            ),
+            "{merged}"
+        );
+        assert!(
+            order(
+                &merged[merged.find("\"dexo\"").unwrap()..],
+                &["type", "command", "args"]
+            ),
+            "{merged}"
+        );
+        assert!(
+            merged.contains("2.5") && merged.contains("null"),
+            "{merged}"
+        );
     }
 }

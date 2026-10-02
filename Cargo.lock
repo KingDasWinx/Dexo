@@ -1968,6 +1968,7 @@ dependencies = [
  "encoding_rs",
  "futures-util",
  "image",
+ "indexmap 2.14.0",
  "libc",
  "proptest",
  "secrecy",
