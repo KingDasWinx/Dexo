@@ -275,13 +275,13 @@ fn rows_label(model: &Model) -> String {
         .as_ref()
         .filter(|count| crate::update::count_key(model).as_ref() == Some(&count.key));
     if let Some(CountState::Exact(rows)) = counted.map(|count| count.state) {
-        return format!("{} rows", grouped(rows));
+        return rows_of(&grouped(rows), rows);
     }
     let shown = model.results.row_count() as u64;
     let label = if model.active_document().kind.is_table() {
         let seen = model.data.page_offset + shown;
         match (model.data.has_more, model.data.estimated_total) {
-            (false, _) => format!("{} rows", grouped(seen)),
+            (false, _) => rows_of(&grouped(seen), seen),
             (true, Some(total)) if total > seen => format!("~{} rows", compact(total)),
             (true, _) => format!("{}+ rows", grouped(seen)),
         }
@@ -293,12 +293,26 @@ fn rows_label(model: &Model) -> String {
     {
         format!("{}+ rows, limit reached", grouped(shown))
     } else {
-        format!("{} rows", grouped(shown))
+        rows_of(&grouped(shown), shown)
     };
     if counted.is_some() {
-        format!("{label}, counting…")
+        let dots = if model.capabilities.unicode {
+            "…"
+        } else {
+            "..."
+        };
+        format!("{label}, counting{dots}")
     } else {
         label
+    }
+}
+
+/// `1 row`, `12 rows`.
+fn rows_of(number: &str, count: u64) -> String {
+    if count == 1 {
+        format!("{number} row")
+    } else {
+        format!("{number} rows")
     }
 }
 
@@ -315,14 +329,20 @@ fn grouped(number: u64) -> String {
     out
 }
 
-/// An estimate as it reads best: `843`, `12.4K`, `4.3M`, `1.2B`.
+/// An estimate as it reads best: `843`, `12.4K`, `4.3M`, `1.2B`. A number that rounds
+/// up to the next unit is written in it: 999,950 is `1.0M`, not `1000.0K`.
 fn compact(number: u64) -> String {
-    match number {
-        0..1_000 => number.to_string(),
-        1_000..1_000_000 => format!("{:.1}K", number as f64 / 1_000.0),
-        1_000_000..1_000_000_000 => format!("{:.1}M", number as f64 / 1_000_000.0),
-        _ => format!("{:.1}B", number as f64 / 1_000_000_000.0),
+    if number < 1_000 {
+        return number.to_string();
     }
+    let mut value = number as f64;
+    for unit in ["K", "M", "B"] {
+        value /= 1_000.0;
+        if (value * 10.0).round() < 10_000.0 || unit == "B" {
+            return format!("{value:.1}{unit}");
+        }
+    }
+    unreachable!("B is the last unit")
 }
 
 fn result_banner(model: &Model) -> String {
@@ -575,6 +595,19 @@ fn message_lines(model: &Model) -> Vec<Line<'static>> {
 
 #[cfg(test)]
 mod tests {
+    /// Estimates roll over to the next unit when they round up to it, and one row is a
+    /// row.
+    #[test]
+    fn labels_read_right_at_their_edges() {
+        assert_eq!(super::compact(999), "999");
+        assert_eq!(super::compact(12_400), "12.4K");
+        assert_eq!(super::compact(999_949), "999.9K");
+        assert_eq!(super::compact(999_950), "1.0M");
+        assert_eq!(super::compact(999_999_999), "1.0B");
+        assert_eq!(super::rows_of("1", 1), "1 row");
+        assert_eq!(super::rows_of("2", 2), "2 rows");
+    }
+
     use super::*;
     use crate::action::Action;
     use crate::model::{GridModel, truncate_cell};
