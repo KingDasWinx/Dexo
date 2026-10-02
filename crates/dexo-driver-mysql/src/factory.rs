@@ -50,7 +50,9 @@ impl ConnectionFactory for MysqlFactory {
             builder = builder.ssl_opts(Some(ssl_opts(tls, &original_host, routed)?));
         }
         let opts = mysql_async::Opts::from(builder);
-        let mut conn = Conn::new(opts.clone()).await.map_err(map_error)?;
+        let mut conn = Conn::new(opts.clone())
+            .await
+            .map_err(|error| connect_error(error, &transport, lease.as_ref()))?;
         let conn_id = conn.id();
         // MariaDB answers the MySQL handshake; its version string is how it says so.
         let version: Option<String> = conn
@@ -86,6 +88,39 @@ impl ConnectionFactory for MariadbFactory {
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError> {
         MysqlFactory.connect(request).await
     }
+}
+
+/// A failed connect, said in terms of the address it tried. A server's own answer keeps
+/// its words; a failure before one names the host and the reason, where the driver's
+/// text read `Input/output error: Input/output error: ...`.
+fn connect_error(
+    error: mysql_async::Error,
+    transport: &TransportRequest,
+    lease: Option<&TransportLease>,
+) -> DriverError {
+    // A proxy or tunnel that would not carry the connection shows to the driver only as
+    // a socket that closed; the lease knows why.
+    if let Some(message) = lease
+        .and_then(TransportLease::failure)
+        .and_then(|cause| transport.route.failure_message(&cause))
+    {
+        return DriverError::new(DriverErrorCategory::Transport, message);
+    }
+    if !matches!(error, mysql_async::Error::Io(_)) {
+        return map_error(error);
+    }
+    let (host, port) = (transport.target_host.as_str(), transport.target_port);
+    let cause = dexo_driver_api::root_cause(&error);
+    if cause.contains("invalid peer certificate") || cause.contains("certificate") {
+        return DriverError::new(
+            DriverErrorCategory::Configuration,
+            format!(
+                "{host}:{port} sent a TLS certificate this connection does not trust ({cause}): \
+                 set ca_file to the certificate that signed it, or lower tls_mode"
+            ),
+        );
+    }
+    DriverError::unreachable(host, port, &cause)
 }
 
 fn ssl_opts(tls: &TlsRequest, original_host: &str, routed: bool) -> Result<SslOpts, DriverError> {

@@ -28,7 +28,7 @@ pub use connection::{
     ConnectRequest, ConnectionFactory, ConnectionOptions, DriverDescriptor, Session,
 };
 pub use ddl::{DdlExecutor, DdlOutcome, DdlPlan, DdlStatement, ObjectDdl, SecurityAdmin};
-pub use error::{DriverError, DriverErrorCategory};
+pub use error::{DriverError, DriverErrorCategory, plain_cause, root_cause};
 pub use explain::{
     ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode, hypothetical_unsupported,
     parameters_unsupported,

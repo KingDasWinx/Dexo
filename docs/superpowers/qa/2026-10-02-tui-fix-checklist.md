@@ -209,7 +209,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **CP-08** `MAJOR` Typing a password in "Edit connection" says "saved" but the password is not stored
 - [ ] **CP-09** `MAJOR` Duplicate Connection silently drops the password
 - [ ] **CP-11** `MAJOR` No way to test a connection before saving; Submit always saves, and a failed connect leaves a broken saved connection and an open dialog
-- [ ] **CP-12** `MAJOR` "Unreachable host" error has no cause and no address
+- [x] **CP-12** `MAJOR` "Unreachable host" error has no cause and no address
 - [ ] **CP-13** `MAJOR` Validation errors in the connection form are invisible while the Advanced section is scrolled
 - [ ] **CP-14** `MAJOR` pre_connect: the one error that explains it is cut off; the command must stay in the foreground
 - [ ] **CP-15** `MAJOR` The driver field of the connection form cannot be focused or changed with the mouse
@@ -233,7 +233,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **CP-19** `MINOR` The export/import file picker opens in the process's working directory and has no "up to home / jump to path" key besides Backspace/Left
 - [ ] **CP-28** `MINOR` Projects list: which project is active is not shown; single click only selects, Enter/double-click switches; no hint line
 - [ ] **CP-31** `MINOR` After a restart the header and status bar show another connection than the visible document's
-- [ ] **CP-33** `MINOR` Proxy failures name neither the proxy nor the cause
+- [x] **CP-33** `MINOR` Proxy failures name neither the proxy nor the cause
 - [ ] **CP-34** `MINOR` Connection groups are never shown in the sidebar
 - [ ] **CP-36** `MINOR` Find Databases in Docker hides containers that already have a saved connection, without saying so
 - [ ] **CP-38** `MINOR` Deleting a connection leaves its documents open and unbound; running one silently rebinds it to whatever connection is active

@@ -107,6 +107,29 @@ impl ConnectionProfile {
         config_str(&self.config, &["username", "user"])
     }
 
+    /// Where the connection dials, as `host:port` -- or the file it opens -- for a message
+    /// that says what did not answer.
+    pub fn target(&self) -> String {
+        if self.is_file() {
+            return config_str(&self.config, &["path"]).unwrap_or_default();
+        }
+        dial_target(&self.config, &self.driver)
+            .map(|(host, port, _)| format!("{host}:{port}"))
+            .unwrap_or_default()
+    }
+
+    /// Where the SSH password is kept, when the connection tunnels through SSH without a
+    /// key file and so needs one: next to the database password's entry, under a key
+    /// derived from it, so deleting the connection can find both.
+    pub fn ssh_password_key(&self) -> Option<String> {
+        match parse_route(&self.config) {
+            Ok(RouteRequest::Ssh(ssh)) if ssh.key_file.is_none() => {
+                Some(format!("{}:ssh_password", self.secret_ref.as_str()))
+            }
+            _ => None,
+        }
+    }
+
     /// A file's request is its `config.path` and nothing else: no host, user or secret,
     /// and no transport to validate. A policy's verified-TLS requirement guards a network
     /// path, so production and staging do not refuse a file for having none.
