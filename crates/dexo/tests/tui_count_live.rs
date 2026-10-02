@@ -96,6 +96,7 @@ async fn a_count_answers_beside_the_session_and_stops_when_cancelled() {
                 "SELECT COUNT(*) FROM (SELECT * FROM \"main\".\"t\") AS _dexo_derived WHERE (n > ?)"
                     .into(),
             parameters: vec![dexo_driver_api::DbValue::I64(1)],
+            on_session: false,
         })
         .await;
     let counted = next_matching(&mut rx, Duration::from_secs(10), |action| match action {
@@ -120,6 +121,7 @@ async fn a_count_answers_beside_the_session_and_stops_when_cancelled() {
                   SELECT i + 1 FROM n WHERE i < 2000000000) SELECT i FROM n) AS _dexo_derived"
                 .into(),
             parameters: Vec::new(),
+            on_session: false,
         })
         .await;
     tokio::time::sleep(Duration::from_millis(300)).await;

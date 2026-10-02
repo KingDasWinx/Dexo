@@ -273,7 +273,7 @@ fn rows_label(model: &Model) -> String {
         .data
         .count
         .as_ref()
-        .filter(|count| crate::update::count_sql(model).as_deref() == Some(count.sql.as_str()));
+        .filter(|count| crate::update::count_key(model).as_ref() == Some(&count.key));
     if let Some(CountState::Exact(rows)) = counted.map(|count| count.state) {
         return format!("{} rows", grouped(rows));
     }

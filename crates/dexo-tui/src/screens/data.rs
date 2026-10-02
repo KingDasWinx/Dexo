@@ -124,8 +124,19 @@ pub struct RelatedLink {
 /// grid still pages through that statement.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RowCount {
-    pub sql: String,
+    /// What it counts. The grid shows the count only while it shows these rows.
+    pub key: CountKey,
     pub state: CountState,
+}
+
+/// What a count counts: the rows' source -- a table, or the statement a result came
+/// from -- and what narrows them, values included. Compared rather than rendered: the
+/// count's SQL, rendered on every frame, cost ~11 ms on a long statement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CountKey {
+    pub source: String,
+    pub filter: Option<dexo_driver_api::Filter>,
+    pub clauses: dexo_driver_api::RawClauses,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

@@ -371,7 +371,11 @@ impl WorkbenchRuntime {
                 operation,
                 sql,
                 parameters,
-            } => self.count_rows(session, operation, sql, parameters).await,
+                on_session,
+            } => {
+                self.count_rows(session, operation, sql, parameters, on_session)
+                    .await
+            }
             crate::Effect::LoadNote {
                 connection_id,
                 object,
@@ -1048,6 +1052,7 @@ impl WorkbenchRuntime {
         operation: OperationId,
         sql: String,
         parameters: Vec<dexo_driver_api::DbValue>,
+        on_session: bool,
     ) {
         let fail = |message: String| Action::RowsCounted {
             operation,
@@ -1058,8 +1063,9 @@ impl WorkbenchRuntime {
         };
         // What the session connected with, kept in memory -- a password command's
         // answer too -- before asking the keychain or the command again.
+        // A password command is asked again: its answer may have rotated since.
         let password = match self.secrets.memory.get(profile.secret_ref.as_str()) {
-            Ok(Some(secret)) => Password::Ready(secret),
+            Ok(Some(secret)) if profile.password_command().is_none() => Password::Ready(secret),
             _ => match Password::for_profile(&profile, &self.secrets) {
                 Ok(password) => password,
                 Err(_) => {
@@ -1081,12 +1087,30 @@ impl WorkbenchRuntime {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .insert(operation, CountTask::default());
         let slots = Arc::clone(&counts);
+        // A result's count reads what its session reads: its search path, temporary
+        // tables, open transaction.
+        let live = on_session
+            .then(|| {
+                self.sessions
+                    .get(session)
+                    .map(|active| Arc::clone(&active.session))
+            })
+            .flatten();
         let task = tokio::spawn(async move {
             let result = async {
-                let (session, ..) = dial(factory, &profile, password, &memory, false).await?;
-                let session: Arc<dyn dexo_driver_api::Session> = Arc::from(session);
+                let session: Arc<dyn dexo_driver_api::Session> = match live {
+                    Some(session) => session,
+                    None => {
+                        let (session, ..) =
+                            dial(factory, &profile, password, &memory, false).await?;
+                        Arc::from(session)
+                    }
+                };
                 let mut request = dexo_driver_api::QueryRequest::read(sql, 1);
                 request.parameters = parameters;
+                // No limit of its own: an exact count of a big table takes what it takes,
+                // and `t` stops it.
+                request.timeout = Duration::ZERO;
                 {
                     let mut slots = slots
                         .lock()

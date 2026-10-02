@@ -747,13 +747,16 @@ pub struct FlushedDocument {
 pub enum Effect {
     StartScript(ScriptRequest),
     CancelOperation(OperationId),
-    /// `sql` counts rows on a connection opened for it, so the count never waits on,
-    /// nor cancels, the session's own queries.
+    /// `sql` counts rows. A table's on a connection opened for it, so the count never
+    /// waits on, nor cancels, the session's own queries; a result's on the session it
+    /// came from (`on_session`), whose search path, temporary tables and open
+    /// transaction it read.
     CountRows {
         session: SessionId,
         operation: OperationId,
         sql: String,
         parameters: Vec<DbValue>,
+        on_session: bool,
     },
     CancelCount {
         operation: OperationId,

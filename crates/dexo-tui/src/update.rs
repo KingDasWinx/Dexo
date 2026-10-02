@@ -898,17 +898,34 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::CountRows => count_rows(model),
         Action::RowsCounted { operation, result } => {
             use crate::screens::data::CountState;
-            // An answer for a count since cancelled, or for another table, is dropped.
-            if let Some(count) = model
-                .data
-                .count
-                .as_mut()
-                .filter(|count| count.state == CountState::Running(operation))
-            {
+            // The count is the document's, on screen or parked: one that ends while
+            // another document is active lands in its own. An answer for a count since
+            // cancelled is dropped.
+            let running = |count: &Option<crate::screens::data::RowCount>| {
+                count
+                    .as_ref()
+                    .is_some_and(|count| count.state == CountState::Running(operation))
+            };
+            let slot = if running(&model.data.count) {
+                Some(&mut model.data.count)
+            } else {
+                let active = model.active_document;
+                model
+                    .documents
+                    .iter_mut()
+                    .enumerate()
+                    .find(|(index, document)| *index != active && running(&document.browse.count))
+                    .map(|(_, document)| &mut document.browse.count)
+            };
+            if let Some(count) = slot {
                 match result {
-                    Ok(rows) => count.state = CountState::Exact(rows),
+                    Ok(rows) => {
+                        if let Some(count) = count.as_mut() {
+                            count.state = CountState::Exact(rows);
+                        }
+                    }
                     Err(message) => {
-                        model.data.count = None;
+                        *count = None;
                         model.messages.error(format!("The count failed: {message}"));
                     }
                 }
@@ -2023,7 +2040,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                         .iter()
                         .position(|candidate| candidate.id == document)
                 {
-                    remove_document(model, index);
+                    effects.extend(remove_document(model, index));
                 }
             }
             effects
@@ -6540,36 +6557,55 @@ fn rerun_refused(model: &mut Model) -> bool {
 }
 
 /// `t`: counts the rows the grid pages through, exactly; `t` while it runs cancels it.
-/// The count runs on a connection of its own, so the live query keeps its slot.
+/// A table's count runs on a connection of its own, so the live query keeps its slot; a
+/// result's runs on the session it came from. Offline, the document's connection is
+/// dialled first.
 fn count_rows(model: &mut Model) -> Vec<Effect> {
     use crate::screens::data::{CountState, RowCount};
+    if let Some(effects) = when_connected(model, Action::CountRows) {
+        return effects;
+    }
+    let key = count_key(model);
+    let mut effects = Vec::new();
     if let Some(RowCount {
+        key: counting,
         state: CountState::Running(operation),
-        ..
-    }) = model.data.count
+    }) = model.data.count.clone()
     {
         model.data.count = None;
-        model.messages.info("Count cancelled.".into());
-        return vec![Effect::CancelCount { operation }];
+        effects.push(Effect::CancelCount { operation });
+        // The same rows: `t` again cancels. Other rows -- a WHERE changed since -- are
+        // counted in its place.
+        if Some(&counting) == key.as_ref() {
+            model.messages.info("Count cancelled.".into());
+            return effects;
+        }
     }
     let Some(session) = model.active_session else {
         model
             .messages
             .warn("Connect a session to count the rows.".into());
-        return Vec::new();
+        return effects;
     };
-    let Some(sql) = count_sql(model) else {
+    let (Some(key), Some(sql)) = (key, count_sql(model)) else {
         model.messages.warn(
             "Counting needs a table's rows, or the result of a statement that only reads.".into(),
         );
-        return Vec::new();
+        return effects;
     };
+    let on_session = !model.active_document().kind.is_table();
+    if on_session && model.active_operation.is_some() {
+        model
+            .messages
+            .warn("A statement is still running; count when it finishes, or cancel it.".into());
+        return effects;
+    }
     let operation = crate::runtime::OperationId::new();
     model.data.count = Some(RowCount {
-        sql: sql.clone(),
+        key,
         state: CountState::Running(operation),
     });
-    vec![Effect::CountRows {
+    effects.push(Effect::CountRows {
         session,
         operation,
         sql,
@@ -6579,7 +6615,64 @@ fn count_rows(model: &mut Model) -> Vec<Effect> {
             .as_ref()
             .map(dexo_sql::filter_values)
             .unwrap_or_default(),
-    }]
+        on_session,
+    });
+    effects
+}
+
+/// What the grid pages through, as a count compares it: see [`CountKey`].
+///
+/// [`CountKey`]: crate::screens::data::CountKey
+pub(crate) fn count_key(model: &Model) -> Option<crate::screens::data::CountKey> {
+    let source = if model.active_document().kind.is_table() {
+        model.data.target.display_unquoted()
+    } else {
+        model
+            .results
+            .tabs
+            .get(model.results.active)?
+            .source_sql
+            .clone()?
+    };
+    Some(crate::screens::data::CountKey {
+        source,
+        filter: model.data.filter.clone(),
+        clauses: model.data.bars.applied.clone(),
+    })
+}
+
+/// The count the grid shows no longer holds: its rows were read again or changed. One
+/// still running is stopped.
+fn drop_count(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::data::CountState;
+    match model.data.count.take().map(|count| count.state) {
+        Some(CountState::Running(operation)) => vec![Effect::CancelCount { operation }],
+        _ => Vec::new(),
+    }
+}
+
+/// An action that needs the document's session: `None` to go on now -- the session is
+/// live, or there is no connection to dial -- else what dials the document's connection,
+/// after which the action runs. Offline actions connect by themselves.
+fn when_connected(model: &mut Model, action: Action) -> Option<Vec<Effect>> {
+    if model.active_session.is_some() {
+        return None;
+    }
+    match switch_to_document_connection(model, model.active_document) {
+        Switch::Ready => None,
+        Switch::Activated(mut effects) => {
+            effects.extend(update(model, action));
+            Some(effects)
+        }
+        Switch::Dialling(effects) => {
+            model.pending_execute = Some(crate::model::PendingExecute {
+                document: model.active_document().id.clone(),
+                action,
+                token: model.connect_token,
+            });
+            Some(effects)
+        }
+    }
 }
 
 /// The `SELECT COUNT(*)` for what the grid pages through: a table document's rows, or
@@ -7368,9 +7461,9 @@ fn data_nav_back(model: &mut Model) -> Vec<Effect> {
     };
     let hop = model.active_document;
     model.set_active_document(index);
-    remove_document(model, hop);
+    let effects = remove_document(model, hop);
     model.focus = Focus::Results;
-    Vec::new()
+    effects
 }
 
 fn copy_grid(model: &mut Model, format: dexo_app::data::CopyFormat) -> Vec<Effect> {
@@ -7787,8 +7880,7 @@ fn close_active_document(model: &mut Model) -> Vec<Effect> {
         });
         return Vec::new();
     }
-    remove_document(model, model.active_document);
-    Vec::new()
+    remove_document(model, model.active_document)
 }
 
 fn resolve_close(model: &mut Model, choice: crate::model::CloseChoice) -> Vec<Effect> {
@@ -7806,10 +7898,11 @@ fn resolve_close(model: &mut Model, choice: crate::model::CloseChoice) -> Vec<Ef
     match choice {
         CloseChoice::Cancel => Vec::new(),
         CloseChoice::Discard => {
-            remove_document(model, index);
-            vec![Effect::DiscardRecovery {
+            let mut effects = remove_document(model, index);
+            effects.push(Effect::DiscardRecovery {
                 document: prompt.document,
-            }]
+            });
+            effects
         }
         CloseChoice::Save => {
             model.active_document = index;
@@ -7938,10 +8031,26 @@ fn mouse_close_prompt(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
     }
 }
 
-fn remove_document(model: &mut Model, index: usize) {
+fn remove_document(model: &mut Model, index: usize) -> Vec<Effect> {
     if index >= model.documents.len() {
-        return;
+        return Vec::new();
     }
+    // A count still running for it is stopped on the server, not left counting.
+    let effects = if index == model.active_document {
+        drop_count(model)
+    } else {
+        match model.documents[index]
+            .browse
+            .count
+            .take()
+            .map(|count| count.state)
+        {
+            Some(crate::screens::data::CountState::Running(operation)) => {
+                vec![Effect::CancelCount { operation }]
+            }
+            _ => Vec::new(),
+        }
+    };
     model.documents.remove(index);
     if model.documents.is_empty() {
         model
@@ -7956,6 +8065,7 @@ fn remove_document(model: &mut Model, index: usize) {
     }
     model.focus_active_document_tab();
     model.focus = Focus::Editor;
+    effects
 }
 
 /// Steps through Dexo's own theme, the presets and the user's files; each applies the
