@@ -25,7 +25,7 @@ pub use context::{
     TriggerOrigin, analyze, should_open,
 };
 pub use derived::{derive_page, derive_page_in, filter_values};
-pub use diagnose::{KnownObjects, created_table, diagnose};
+pub use diagnose::{Diagnoser, KnownObjects, created_table, diagnose};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};

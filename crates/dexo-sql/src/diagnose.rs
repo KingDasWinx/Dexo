@@ -3,7 +3,8 @@
 //! place they would be, never guessed.
 
 use std::collections::{HashMap, HashSet};
-use std::ops::ControlFlow;
+use std::ops::{ControlFlow, Range};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use sqlparser::ast::{Expr, Ident, ObjectNamePart, Query, Statement, TableFactor, Visit, Visitor};
 use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
@@ -15,15 +16,31 @@ use crate::{Diagnostic, Dialect};
 
 /// What the catalog has loaded, lowercased: which schemas, the tables in each, and the
 /// columns of the tables whose columns it knows.
-#[derive(Clone, Debug, Default)]
+#[derive(Clone, Debug)]
 pub struct KnownObjects {
+    /// Changes with every change to what is known, so a [`Diagnoser`] can tell.
+    stamp: u64,
     schemas: HashSet<String>,
     tables: HashMap<String, HashSet<String>>,
     columns: HashMap<(String, String), HashSet<String>>,
 }
 
+static STAMPS: AtomicU64 = AtomicU64::new(0);
+
+impl Default for KnownObjects {
+    fn default() -> Self {
+        Self {
+            stamp: STAMPS.fetch_add(1, Ordering::Relaxed),
+            schemas: HashSet::new(),
+            tables: HashMap::new(),
+            columns: HashMap::new(),
+        }
+    }
+}
+
 impl KnownObjects {
     pub fn add_table(&mut self, schema: &str, table: &str) {
+        self.stamp = STAMPS.fetch_add(1, Ordering::Relaxed);
         let schema = schema.to_lowercase();
         self.schemas.insert(schema.clone());
         self.tables
@@ -33,6 +50,7 @@ impl KnownObjects {
     }
 
     pub fn add_column(&mut self, schema: &str, table: &str, column: &str) {
+        self.stamp = STAMPS.fetch_add(1, Ordering::Relaxed);
         self.columns
             .entry((schema.to_lowercase(), table.to_lowercase()))
             .or_default()
@@ -74,52 +92,131 @@ pub fn diagnose(
     known: Option<&KnownObjects>,
     cursor: usize,
 ) -> Vec<Diagnostic> {
-    let spans = split_statements_in(sql, dialect);
-    // Tables the document creates itself are known before the catalog hears of them.
-    let created: HashSet<String> = spans
-        .iter()
-        .filter_map(|span| created_table(&sql[span.byte_range.clone()], dialect))
-        .collect();
-    let mut found = Vec::new();
-    let mut grammar = None;
-    for span in &spans {
-        let body = &sql[span.byte_range.clone()];
-        let checked = matches!(
-            first_keyword(body).as_deref(),
-            Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "VALUES")
-        );
-        if !checked {
-            continue;
+    Diagnoser::default().diagnose(sql, dialect, known, cursor)
+}
+
+/// [`diagnose`] for a document checked on every key: each statement's answer is kept
+/// until its text, the catalog, the dialect or the tables the document creates change,
+/// so a keystroke parses the statement it lands in and not the whole script.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Diagnoser {
+    /// The dialect, catalog stamp and created tables the kept answers were found with.
+    against: Option<(Dialect, Option<u64>, Vec<String>)>,
+    /// Each statement's problems, offsets within it.
+    answers: HashMap<String, Vec<(String, Range<usize>)>>,
+    /// The table each statement creates.
+    creates: HashMap<String, Option<String>>,
+}
+
+impl Diagnoser {
+    pub fn diagnose(
+        &mut self,
+        sql: &str,
+        dialect: Dialect,
+        known: Option<&KnownObjects>,
+        cursor: usize,
+    ) -> Vec<Diagnostic> {
+        let spans = split_statements_in(sql, dialect);
+        let bodies: Vec<&str> = spans
+            .iter()
+            .map(|span| &sql[span.byte_range.clone()])
+            .collect();
+        if self
+            .against
+            .as_ref()
+            .is_some_and(|(kept, _, _)| *kept != dialect)
+        {
+            self.creates.clear();
         }
-        let start = span.byte_range.start;
-        match parse(body, dialect) {
-            Err(error) => {
-                let message = error.to_string();
-                let located =
-                    location(&message).and_then(|(line, column)| offset(body, line, column));
-                // Ended too soon: the last word is where something more was wanted.
-                let at = located.unwrap_or_else(|| last_word_start(body));
-                let end = token_end(body, at);
-                // The statement being typed is not told off for what is at or past the
-                // cursor: that part is not written yet.
-                let typing = cursor >= start && cursor <= span.byte_range.end + 1;
-                if typing && start + end >= cursor {
-                    continue;
+        // Tables the document creates itself are known before the catalog hears of them.
+        let mut created: Vec<String> = bodies
+            .iter()
+            .filter_map(|body| match self.creates.get(*body) {
+                Some(kept) => kept.clone(),
+                None => {
+                    let creates = created_table(body, dialect);
+                    self.creates.insert(body.to_string(), creates.clone());
+                    creates
                 }
-                if located.is_some() && !beyond_doubt(body, at, &mut grammar) {
-                    continue;
+            })
+            .collect();
+        created.sort();
+        created.dedup();
+        let against = (dialect, known.map(|known| known.stamp), created);
+        if self.against.as_ref() != Some(&against) {
+            self.answers.clear();
+        }
+        let present: HashSet<&str> = bodies.iter().copied().collect();
+        self.answers
+            .retain(|body, _| present.contains(body.as_str()));
+        self.creates
+            .retain(|body, _| present.contains(body.as_str()));
+        let created: HashSet<String> = against.2.iter().cloned().collect();
+        self.against = Some(against);
+        let mut found = Vec::new();
+        for (span, body) in spans.iter().zip(&bodies) {
+            let start = span.byte_range.start;
+            let typing =
+                (cursor >= start && cursor <= span.byte_range.end + 1).then(|| cursor - start);
+            let answer = match (typing, self.answers.get(*body)) {
+                (None, Some(kept)) => kept.clone(),
+                _ => {
+                    let answer = statement_problems(body, dialect, known, &created, typing);
+                    if typing.is_none() {
+                        self.answers.insert(body.to_string(), answer.clone());
+                    }
+                    answer
                 }
-                found.push(Diagnostic::local(clean(&message), start + at..start + end));
+            };
+            found.extend(answer.into_iter().map(|(message, range)| {
+                Diagnostic::local(message, start + range.start..start + range.end)
+            }));
+        }
+        found
+    }
+}
+
+/// One statement's problems, offsets within it. `typing` is where the cursor is in it,
+/// when it is the statement being typed.
+fn statement_problems(
+    body: &str,
+    dialect: Dialect,
+    known: Option<&KnownObjects>,
+    created: &HashSet<String>,
+    typing: Option<usize>,
+) -> Vec<(String, Range<usize>)> {
+    let checked = matches!(
+        first_keyword(body).as_deref(),
+        Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "VALUES")
+    );
+    if !checked {
+        return Vec::new();
+    }
+    let mut found = Vec::new();
+    match parse(body, dialect) {
+        Err(error) => {
+            let message = error.to_string();
+            let located = location(&message).and_then(|(line, column)| offset(body, line, column));
+            // Ended too soon: the last word is where something more was wanted.
+            let at = located.unwrap_or_else(|| last_word_start(body));
+            let end = token_end(body, at);
+            // The statement being typed is not told off for what is at or past the
+            // cursor: that part is not written yet.
+            if typing.is_some_and(|cursor| end >= cursor) {
+                return found;
             }
-            Ok(statements) => {
-                let Some(known) = known else {
-                    continue;
-                };
+            if located.is_some() && !beyond_doubt(body, at) {
+                return found;
+            }
+            found.push((clean(&message), at..end));
+        }
+        Ok(statements) => {
+            if let Some(known) = known {
                 let mut refs = References::default();
                 for statement in &statements {
                     let _ = statement.visit(&mut refs);
                 }
-                check(&refs, known, &created, body, start, &mut found);
+                check(&refs, known, created, body, &mut found);
             }
         }
     }
@@ -130,7 +227,7 @@ pub fn diagnose(
 /// part of each dialect, so an error is believed only when the highlighting grammar
 /// fails the statement too and the statement uses none of the constructs sqlparser is
 /// known to lack.
-fn beyond_doubt(body: &str, at: usize, grammar: &mut Option<tree_sitter::Parser>) -> bool {
+fn beyond_doubt(body: &str, at: usize) -> bool {
     // ponytail: a list of what sqlparser fails on in each dialect; extend it as more
     // valid SQL turns up underlined.
     const UNPARSED: &[&[&str]] = &[
@@ -165,13 +262,10 @@ fn beyond_doubt(body: &str, at: usize, grammar: &mut Option<tree_sitter::Parser>
     if lacking || at_using {
         return false;
     }
-    let grammar = grammar.get_or_insert_with(|| {
-        let mut parser = tree_sitter::Parser::new();
-        parser
-            .set_language(&tree_sitter_sequel::LANGUAGE.into())
-            .expect("tree-sitter-sequel language");
-        parser
-    });
+    let mut grammar = tree_sitter::Parser::new();
+    grammar
+        .set_language(&tree_sitter_sequel::LANGUAGE.into())
+        .expect("tree-sitter-sequel language");
     grammar
         .parse(body, None)
         .is_none_or(|tree| tree.root_node().has_error())
@@ -260,8 +354,7 @@ fn check(
     known: &KnownObjects,
     created: &HashSet<String>,
     body: &str,
-    start: usize,
-    found: &mut Vec<Diagnostic>,
+    found: &mut Vec<(String, Range<usize>)>,
 ) {
     // One map for the whole statement, scopes and all: a name that stands for two
     // different tables somewhere in it -- `o` in a query and in its subquery -- stands
@@ -314,10 +407,7 @@ fn check(
             && let Some(range) = span_of(body, first, last)
         {
             let shown: Vec<&str> = parts.iter().map(|ident| ident.value.as_str()).collect();
-            found.push(Diagnostic::local(
-                format!("unknown table {}", shown.join(".")),
-                start + range.start..start + range.end,
-            ));
+            found.push((format!("unknown table {}", shown.join(".")), range));
         }
     }
     for (qualifier, column) in &refs.columns {
@@ -337,10 +427,7 @@ fn check(
             && !SYSTEM_COLUMNS.contains(&name.as_str())
             && let Some(range) = span_of(body, column, column)
         {
-            found.push(Diagnostic::local(
-                format!("unknown column {} in {table}", column.value),
-                start + range.start..start + range.end,
-            ));
+            found.push((format!("unknown column {} in {table}", column.value), range));
         }
     }
 }
@@ -585,6 +672,38 @@ mod tests {
         let sql = "select o. from orders o";
         assert!(diagnose(sql, Dialect::Postgres, None, 9).is_empty());
         assert!(!diagnose(sql, Dialect::Postgres, None, usize::MAX).is_empty());
+    }
+
+    /// A kept answer is the one a fresh look gives: after the statement, the catalog or
+    /// the created tables change, and wherever the statement moves in the document.
+    #[test]
+    fn kept_answers_follow_what_they_depend_on() {
+        let mut diagnoser = super::Diagnoser::default();
+        let mut known = known();
+        let mut run = |sql: &str, known: &KnownObjects| {
+            diagnoser
+                .diagnose(sql, Dialect::Postgres, Some(known), usize::MAX)
+                .into_iter()
+                .map(|found| (found.message, found.byte_range.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        let sql = "select * from ghosts;\nselect * frm orders";
+        assert_eq!(run(sql, &known), diagnose_all(sql, &known));
+        let moved = "select 1;\nselect * from ghosts;\nselect * frm orders";
+        assert_eq!(run(moved, &known), diagnose_all(moved, &known));
+        known.add_table("public", "ghosts");
+        assert_eq!(run(moved, &known), diagnose_all(moved, &known));
+        assert_eq!(run(moved, &known).len(), 1);
+        let creates = "create table fresh (id int);\nselect * from fresh";
+        assert_eq!(run(creates, &known), diagnose_all(creates, &known));
+        assert!(run(creates, &known).is_empty());
+    }
+
+    fn diagnose_all(sql: &str, known: &KnownObjects) -> Vec<(String, std::ops::Range<usize>)> {
+        diagnose(sql, Dialect::Postgres, Some(known), usize::MAX)
+            .into_iter()
+            .map(|found| (found.message, found.byte_range.unwrap()))
+            .collect()
     }
 
     #[test]

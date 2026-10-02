@@ -32,6 +32,8 @@ pub struct EditorState {
     /// The catalog as the diagnostics read it, and the catalog revision and number of
     /// session tables it was built with.
     known: Option<((u64, usize), dexo_sql::KnownObjects)>,
+    /// Keeps each statement's diagnostics until it changes.
+    diagnoser: dexo_sql::Diagnoser,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
     pub completion_open: bool,
@@ -98,6 +100,7 @@ impl Clone for EditorState {
             diagnostics: self.diagnostics.clone(),
             server_diagnostic: self.server_diagnostic.clone(),
             known: self.known.clone(),
+            diagnoser: self.diagnoser.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
             completion_open: self.completion_open,
@@ -157,6 +160,7 @@ impl Default for EditorState {
             diagnostics: Vec::new(),
             server_diagnostic: None,
             known: None,
+            diagnoser: dexo_sql::Diagnoser::default(),
             parameters: Vec::new(),
             completions: Vec::new(),
             completion_open: false,
@@ -337,13 +341,10 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
         }
         model.editor.known = Some(((model.catalog_revision, session_tables(model).len()), known));
     }
-    let found = dexo_sql::diagnose(
-        sql,
-        editor_dialect(model),
-        model.editor.known.as_ref().map(|(_, known)| known),
-        byte_cursor,
-    );
-    model.editor.diagnostics = found;
+    let dialect = editor_dialect(model);
+    let editor = &mut model.editor;
+    let known = editor.known.as_ref().map(|(_, known)| known);
+    editor.diagnostics = editor.diagnoser.diagnose(sql, dialect, known, byte_cursor);
 }
 
 /// The diagnostics on screen for the active document: its own, and the server's from

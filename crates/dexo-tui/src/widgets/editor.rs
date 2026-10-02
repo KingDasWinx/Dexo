@@ -80,6 +80,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
             .iter()
             .map(|line| line.len() + 1)
             .sum::<usize>();
+    let (window_start, window_chars) = (byte_at, char_at);
     // Only the spans that touch the window, still in the parser's order: the first one
     // containing a byte wins, and nested captures depend on that order.
     let window_highlights: Vec<&dexo_sql::HighlightSpan> = model
@@ -147,13 +148,25 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         .style(Role::Warning, model.capabilities)
         .add_modifier(Modifier::UNDERLINED | Modifier::BOLD);
     paint(frame, &window, &found, lit);
+    // Only the underlines in the window, counted in chars from its start: counting from
+    // the start of the document cost a frame as much as the document was long, for
+    // every underline in it.
+    let window_text = &text[window_start.min(text.len())..window_end.min(text.len())];
+    let chars_to = |byte: usize| {
+        let within = byte.clamp(window_start, window_start + window_text.len()) - window_start;
+        window_chars + window_text[..within].chars().count()
+    };
     let wrong: Vec<std::ops::Range<usize>> = crate::screens::editor::current_diagnostics(model)
         .into_iter()
         .filter_map(|diagnostic| diagnostic.byte_range.clone())
+        .filter(|range| range.start < window_end && range.end >= window_start)
+        .filter(|range| {
+            text.is_char_boundary(range.start.min(text.len()))
+                && text.is_char_boundary(range.end.min(text.len()))
+        })
         .map(|range| {
-            let start = text[..range.start.min(text.len())].chars().count();
-            let end = text[..range.end.min(text.len())].chars().count();
-            start..end.max(start + 1)
+            let start = chars_to(range.start);
+            start..chars_to(range.end).max(start + 1)
         })
         .collect();
     let squiggle = model
