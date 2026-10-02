@@ -697,6 +697,16 @@ impl WorkbenchRuntime {
             }
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
+            crate::Effect::CreateMcpGrant { profile, request } => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let action = match create_mcp_grant(&profile, &request) {
+                        Ok(message) => Action::McpGrantCreated { message },
+                        Err(message) => Action::McpGrantFailed { message },
+                    };
+                    let _ = action_tx.blocking_send(action);
+                });
+            }
             crate::Effect::WriteDiagnostics { path, bundle } => {
                 diagnostic_manager::write(bundle, path, self.action_tx.clone()).await;
             }
@@ -2274,8 +2284,50 @@ fn grant_lines(
                     .collect::<Vec<_>>()
                     .join(" ")
             ),
+            ask_secs: grant.ask_secs,
         })
         .collect()
+}
+
+/// New MCP Grant: the grant `dexo mcp grant create` would make with the same answers,
+/// written where the MCP server reads it. Says what was made, or why not.
+fn create_mcp_grant(
+    profile: &str,
+    request: &dexo_app::mcp::GrantRequest,
+) -> Result<String, String> {
+    use dexo_app::mcp::GrantLedger;
+    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+    let loaded = dexo_storage::McpProfileRepository::new(db.connection())
+        .get_by_name(profile)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("unknown MCP profile '{profile}'"))?;
+    let saved = ConnectionRepository::new(db.connection())
+        .get_by_name(&request.connection)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("unknown connection '{}'", request.connection))?;
+    let grant = request
+        .issue(&loaded, &saved, unix_seconds())
+        .map_err(|error| error.to_string())?;
+    let message = if grant.asks() {
+        format!(
+            "Granted {} on {}: each write waits up to {}s for you in Agent Activity.",
+            grant.tools.join(", "),
+            request.selector,
+            grant.ask_secs
+        )
+    } else {
+        format!(
+            "Granted {} on {} for one write.",
+            grant.tools.join(", "),
+            request.selector
+        )
+    };
+    dexo_storage::SqliteGrantLedger::open(&paths.database)
+        .map_err(|error| error.to_string())?
+        .insert_grant(grant)
+        .map_err(|error| error.to_string())?;
+    Ok(message)
 }
 
 #[cfg(test)]

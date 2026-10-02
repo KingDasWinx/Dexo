@@ -1517,12 +1517,44 @@ fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    if let Some(form) = &model.mcp_profiles.grant_form {
+        render_grant_form(frame, model, form, hits);
+        return;
+    }
     for_popup_lines(popup, &lines, |i, line, rect| {
         if i < model.mcp_profiles.profiles.len() {
             hits.register(HitTarget::ListRow(i), rect);
         }
         if line.contains("revoke") {
             hits.register(HitTarget::Button(HitButton::Revoke), rect);
+        }
+    });
+}
+
+/// New MCP Grant, over MCP profiles.
+fn render_grant_form(
+    frame: &mut Frame,
+    model: &Model,
+    form: &crate::screens::mcp_profiles::GrantForm,
+    hits: &mut HitMap,
+) {
+    let area = frame.area();
+    let lines = form.lines(&model.mcp_profiles.name);
+    let popup = centered(area, 84, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, "New MCP grant"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |index, line, rect| {
+        // The fields start on the second line.
+        if (1..=form.fields.len()).contains(&index) {
+            hits.register(HitTarget::FormField(index - 1), rect);
+        } else if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Create");
         }
     });
 }

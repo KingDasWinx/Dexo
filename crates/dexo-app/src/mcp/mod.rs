@@ -13,7 +13,7 @@ pub mod service;
 pub use approval::{Approval, ApprovalDecision};
 pub use audit::{AuditEvent, SqlAuditMode};
 pub use connection::McpConnection;
-pub use grant::{Grant, GrantCapability, WRITE_TOOLS, parse_ttl};
+pub use grant::{Grant, GrantCapability, GrantRequest, WRITE_TOOLS, parse_ttl};
 pub use ledger::{GrantLedger, MemoryGrantLedger};
 pub use operation::{OperationRecord, OperationState, SideEffect};
 pub use policy::{Decision, ObjectPolicy};

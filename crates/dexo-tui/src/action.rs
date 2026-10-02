@@ -462,6 +462,15 @@ pub enum Action {
     McpRevokeFailed {
         message: String,
     },
+    /// `g` in MCP Profiles: a new grant for the selected profile.
+    OpenMcpGrantForm,
+    /// The grant was made: what to say about it.
+    McpGrantCreated {
+        message: String,
+    },
+    McpGrantFailed {
+        message: String,
+    },
     OpenSettings,
     ConfirmResetSettings,
     OpenRecovery,
@@ -973,6 +982,10 @@ pub enum Effect {
         profile: String,
     },
     RevokeAllMcpGrants,
+    CreateMcpGrant {
+        profile: String,
+        request: dexo_app::mcp::GrantRequest,
+    },
     WriteDiagnostics {
         path: std::path::PathBuf,
         bundle: dexo_app::diagnostic_service::DiagnosticBundle,

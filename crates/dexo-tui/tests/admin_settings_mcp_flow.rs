@@ -220,6 +220,7 @@ fn selecting_a_profile_shows_its_own_grants() {
         tools: tools.into(),
         expires_in_secs: 900,
         diff: "prod db.public.items".into(),
+        ask_secs: 0,
     };
     let profile = |name: &str, grants: Vec<GrantLine>| McpProfileSummary {
         name: name.into(),

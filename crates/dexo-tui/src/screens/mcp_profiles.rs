@@ -16,6 +16,168 @@ pub struct GrantLine {
     pub tools: String,
     pub expires_in_secs: i64,
     pub diff: String,
+    /// Above zero, each write the grant covers waits this long for a person.
+    pub ask_secs: u32,
+}
+
+use crate::screens::schema_editor::FormField;
+use crate::widgets::form::{FooterFocus, footer_line};
+
+/// The grant form's rows, in the order they are walked.
+pub const GRANT_CONNECTION: usize = 0;
+pub const GRANT_CAPABILITY: usize = 1;
+pub const GRANT_TOOLS: usize = 2;
+pub const GRANT_SELECTOR: usize = 3;
+pub const GRANT_EXPIRES: usize = 4;
+pub const GRANT_ASK: usize = 5;
+pub const GRANT_ASK_SECS: usize = 6;
+pub const GRANT_CONFIRM: usize = 7;
+
+/// New MCP Grant, for the profile picked: what `dexo mcp grant create` asks, "ask before
+/// each write" included, so the TUI can make the grant Agent Activity then decides on.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GrantForm {
+    pub fields: Vec<FormField>,
+    /// A field, then Create, then Cancel.
+    pub focus: usize,
+    pub ask: bool,
+    pub error: Option<String>,
+}
+
+impl GrantForm {
+    pub fn new(connection: &str) -> Self {
+        let field = |label: &str, value: &str| FormField {
+            label: label.into(),
+            value: value.into(),
+            secret: false,
+        };
+        Self {
+            fields: vec![
+                field("connection", connection),
+                field("capability", "data_write"),
+                field("tools", ""),
+                field("selector", ""),
+                field("expires", "15m"),
+                field("ask before each write", ""),
+                field("approval timeout (s)", "120"),
+                field("confirm", ""),
+            ],
+            focus: GRANT_TOOLS,
+            ask: false,
+            error: None,
+        }
+    }
+
+    fn slots(&self) -> usize {
+        self.fields.len() + 2
+    }
+
+    pub fn focus_next(&mut self) {
+        self.focus = (self.focus + 1) % self.slots();
+    }
+
+    pub fn focus_prev(&mut self) {
+        self.focus = (self.focus + self.slots() - 1) % self.slots();
+    }
+
+    /// Left and Right step between the two buttons once one of them has the focus.
+    pub fn toggle_button(&mut self) {
+        self.focus = match self.footer_focus() {
+            FooterFocus::Submit => self.fields.len() + 1,
+            FooterFocus::Cancel => self.fields.len(),
+            FooterFocus::Input => self.focus,
+        };
+    }
+
+    pub fn footer_focus(&self) -> FooterFocus {
+        match self.focus.checked_sub(self.fields.len()) {
+            None => FooterFocus::Input,
+            Some(0) => FooterFocus::Submit,
+            Some(_) => FooterFocus::Cancel,
+        }
+    }
+
+    /// A typed character: text for a field, or on the ask row Space flips it and `y`/`n`
+    /// set it.
+    pub fn type_char(&mut self, ch: char) {
+        match self.focus {
+            GRANT_ASK => match ch {
+                ' ' => self.ask = !self.ask,
+                'y' | 'Y' => self.ask = true,
+                'n' | 'N' => self.ask = false,
+                _ => {}
+            },
+            index => {
+                if let Some(field) = self.fields.get_mut(index) {
+                    field.value.push(ch);
+                }
+            }
+        }
+    }
+
+    pub fn backspace(&mut self) {
+        if let Some(field) = self.fields.get_mut(self.focus)
+            && self.focus != GRANT_ASK
+        {
+            field.value.pop();
+        }
+    }
+
+    /// The request the CLI would make with the same answers.
+    pub fn request(&self) -> Result<dexo_app::mcp::GrantRequest, String> {
+        let value = |index: usize| self.fields[index].value.trim().to_string();
+        let tools: Vec<String> = value(GRANT_TOOLS)
+            .split([',', ' '])
+            .filter(|tool| !tool.is_empty())
+            .map(str::to_string)
+            .collect();
+        if tools.is_empty() {
+            return Err("name the tools the grant allows".into());
+        }
+        let ask_secs = if self.ask {
+            match value(GRANT_ASK_SECS).parse::<u32>() {
+                Ok(secs) if (1..=dexo_app::mcp::approval::MAX_TIMEOUT_SECS).contains(&secs) => {
+                    Some(secs)
+                }
+                _ => return Err("the approval timeout is 1 to 3600 seconds".into()),
+            }
+        } else {
+            None
+        };
+        Ok(dexo_app::mcp::GrantRequest {
+            connection: value(GRANT_CONNECTION),
+            capability: value(GRANT_CAPABILITY),
+            tools,
+            selector: value(GRANT_SELECTOR),
+            expires: value(GRANT_EXPIRES),
+            confirm_target: value(GRANT_CONFIRM),
+            ask_secs,
+        })
+    }
+
+    /// The form's lines; the first field is on the second line.
+    pub fn lines(&self, profile: &str) -> Vec<String> {
+        let mut lines = vec![format!("For MCP profile {profile}")];
+        for (index, field) in self.fields.iter().enumerate() {
+            let marker = if index == self.focus { ">" } else { " " };
+            let value = match index {
+                GRANT_ASK if self.ask => "[x] each write waits for you in Agent Activity",
+                GRANT_ASK => "[ ] one write, then the grant is spent",
+                _ => field.value.as_str(),
+            };
+            lines.push(format!("{marker} {}: {value}", field.label));
+        }
+        lines.push(
+            "  tools: data_insert data_update data_delete data_execute_sql · schema_apply_ddl"
+                .into(),
+        );
+        lines.push("  confirm: type the connection or the selector again".into());
+        if let Some(error) = &self.error {
+            lines.push(format!("  {error}"));
+        }
+        lines.push(footer_line("Create", self.footer_focus()));
+        lines
+    }
 }
 
 /// What a pending revoke confirmation applies to. One shared bool let a confirmation
@@ -40,6 +202,8 @@ pub struct McpProfilesScreen {
     pub preview: String,
     pub profiles: Vec<McpProfileSummary>,
     pub selected: usize,
+    /// `g`: a new grant for the selected profile, being filled in.
+    pub grant_form: Option<GrantForm>,
 }
 
 impl McpProfilesScreen {
@@ -59,6 +223,7 @@ impl McpProfilesScreen {
                 tools: "data_insert".into(),
                 expires_in_secs: 900,
                 diff: "profile db.public.* -> grant db.public.items".into(),
+                ask_secs: 0,
             }],
             preview: "enable requires local confirmation".into(),
             ..Self::default()
@@ -216,8 +381,13 @@ impl McpProfilesScreen {
             lines.push(format!("resource {resource}"));
         }
         for grant in &self.grants {
+            let asks = if grant.ask_secs > 0 {
+                format!(" asks ({}s)", grant.ask_secs)
+            } else {
+                String::new()
+            };
             lines.push(format!(
-                "grant {} {} {}s",
+                "grant {} {} {}s{asks}",
                 grant.capability, grant.tools, grant.expires_in_secs
             ));
             lines.push(format!("diff {}", grant.diff));
@@ -225,9 +395,7 @@ impl McpProfilesScreen {
         if !self.preview.is_empty() {
             lines.push(self.preview.clone());
         }
-        lines.push(
-            "e enable/disable  r revoke profile  R revoke all  up/down select  esc close".into(),
-        );
+        lines.push("e enable/disable  g new grant  r revoke  R revoke all  esc close".into());
         lines
     }
 }

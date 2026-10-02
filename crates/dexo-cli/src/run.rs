@@ -9,7 +9,7 @@ use crate::args::{
 };
 use crate::presenter;
 use dexo_app::mcp::{
-    Effect, Grant, GrantCapability, GrantLedger, McpConnection, McpProfile, McpService, QueryMode,
+    Effect, GrantCapability, GrantLedger, McpConnection, McpProfile, McpService, QueryMode,
     SelectorRule, ToolRule, advertised_tools, known_tools,
 };
 use dexo_app::schema_diff::{RenameMapping, SchemaSnapshot, plan_migration, render_unquoted};
@@ -1941,36 +1941,21 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             ask,
             approval_timeout,
         } => {
-            if confirm_target.as_deref() != Some(connection.as_str())
-                && confirm_target.as_deref() != Some(selector.as_str())
-            {
-                anyhow::bail!("type the connection or selector as --confirm-target");
-            }
             let loaded = load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
-            if !loaded.connections.is_empty()
-                && !loaded.connections.iter().any(|name| name == &connection)
-            {
-                anyhow::bail!("connection is not allowed for this profile");
-            }
             let saved = ConnectionRepository::new(db.connection())
                 .get_by_name(&connection)?
                 .ok_or_else(|| anyhow::anyhow!("unknown connection '{connection}'"))?;
-            McpConnection::from_profile(&saved)?.accepts_writes()?;
-            let ttl = dexo_app::mcp::parse_ttl(&expires)?;
-            let grant = Grant::new(
-                &loaded,
+            // The same request the TUI's New MCP Grant makes, so both make one grant.
+            let grant = dexo_app::mcp::GrantRequest {
                 connection,
-                GrantCapability::parse(&capability)?,
-                tool,
-                vec![SelectorRule::parse(Effect::Allow, &selector)?],
-                now,
-                ttl,
-            )?;
-            let grant = if ask {
-                grant.asking(approval_timeout)
-            } else {
-                grant
-            };
+                capability,
+                tools: tool,
+                selector,
+                expires,
+                confirm_target: confirm_target.unwrap_or_default(),
+                ask_secs: ask.then_some(approval_timeout),
+            }
+            .issue(&loaded, &saved, now)?;
             if grant.asks() {
                 println!(
                     "grant {} expires_at={} asks: each write waits up to {}s for approval",

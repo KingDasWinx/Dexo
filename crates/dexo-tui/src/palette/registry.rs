@@ -1145,6 +1145,23 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenMcpAudit),
         },
         CommandSpec {
+            id: "mcp.grant",
+            title: "New MCP Grant…",
+            keywords: &[
+                "mcp",
+                "agent",
+                "grant",
+                "write",
+                "ask",
+                "approve",
+                "approval",
+                "permission",
+            ],
+            shortcut: Some("g"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenMcpGrantForm),
+        },
+        CommandSpec {
             id: "mcp.revoke_all",
             title: "Revoke All MCP Grants",
             keywords: &["mcp", "grant"],

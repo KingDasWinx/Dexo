@@ -24,7 +24,7 @@ default  no connection  —
 │                          ││ │a approve  d deny  up/down pick  PgDn scroll  r revoke all grants  esc close                      │                             │
 │                          ││ └──────────────────────────────────────────────────────────────────────────────────────────────────┘                             │
 │                          ││               │enable requires local confirmation                                    │                                           │
-│                          ││               │e enable/disable  r revoke profile  R revoke all  up/down select  esc │                                           │
+│                          ││               │e enable/disable  g new grant  r revoke  R revoke all  esc close      │                                           │
 │                          ││               │                                                                      │                                           │
 │                          ││               │                                                                      │                                           │
 │                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │

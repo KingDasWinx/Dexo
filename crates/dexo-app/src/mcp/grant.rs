@@ -4,7 +4,7 @@ use uuid::Uuid;
 use crate::error::{AppError, ErrorCategory};
 use crate::mcp::policy::{Decision, ObjectPolicy};
 use crate::mcp::profile::McpProfile;
-use crate::mcp::selector::{ObjectRef, Segment, Selector, SelectorRule};
+use crate::mcp::selector::{Effect, ObjectRef, Segment, Selector, SelectorRule};
 
 pub const WRITE_TOOLS: &[&str] = &[
     "data_insert",
@@ -205,6 +205,66 @@ pub fn parse_ttl(spec: &str) -> Result<i64, AppError> {
         .map_err(|_| AppError::new(ErrorCategory::Configuration, "invalid ttl"))
 }
 
+/// A grant as a person asks for one: `dexo mcp grant create` and the TUI's New MCP Grant
+/// take the same fields and make the same grant.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct GrantRequest {
+    pub connection: String,
+    pub capability: String,
+    pub tools: Vec<String>,
+    pub selector: String,
+    /// How long the grant lasts, as `15m`, `2h` or seconds.
+    pub expires: String,
+    /// The connection or the selector, typed again to confirm.
+    pub confirm_target: String,
+    /// Each write the grant covers waits up to this many seconds for a person to
+    /// approve it; without it, the grant is spent by one write.
+    pub ask_secs: Option<u32>,
+}
+
+impl GrantRequest {
+    /// The grant, once the target was typed again and the connection is one the profile
+    /// may use and one that accepts writes at all. `saved` is the connection named.
+    pub fn issue(
+        &self,
+        profile: &McpProfile,
+        saved: &crate::connection_profile::ConnectionProfile,
+        now: i64,
+    ) -> Result<Grant, AppError> {
+        if self.confirm_target != self.connection && self.confirm_target != self.selector {
+            return Err(AppError::new(
+                ErrorCategory::Configuration,
+                "type the connection or the selector to confirm",
+            ));
+        }
+        if !profile.connections.is_empty()
+            && !profile
+                .connections
+                .iter()
+                .any(|name| name == &self.connection)
+        {
+            return Err(AppError::new(
+                ErrorCategory::McpPolicy,
+                "connection is not allowed for this profile",
+            ));
+        }
+        crate::mcp::McpConnection::from_profile(saved)?.accepts_writes()?;
+        let grant = Grant::new(
+            profile,
+            self.connection.clone(),
+            GrantCapability::parse(&self.capability)?,
+            self.tools.clone(),
+            vec![SelectorRule::parse(Effect::Allow, &self.selector)?],
+            now,
+            parse_ttl(&self.expires)?,
+        )?;
+        Ok(match self.ask_secs {
+            Some(secs) => grant.asking(secs),
+            None => grant,
+        })
+    }
+}
+
 fn sample_object(selector: &Selector) -> ObjectRef {
     ObjectRef {
         path: selector
@@ -251,6 +311,51 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// The CLI's and the TUI's grant: confirmed by typing the target, inside the
+    /// profile's connections, and asking before each write when told to.
+    #[test]
+    fn a_grant_request_makes_the_grant_the_cli_makes() {
+        use super::GrantRequest;
+        let saved = crate::connection_profile::ConnectionProfile::new(
+            crate::ConnectionId(uuid::Uuid::from_u128(1)),
+            None,
+            "local",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h", "port": 5432, "username": "u", "database": "db"}),
+            crate::SecretRef::new("r".into()),
+        );
+        let request = GrantRequest {
+            connection: "local".into(),
+            capability: "data_write".into(),
+            tools: vec!["data_insert".into()],
+            selector: "db.public.items".into(),
+            expires: "15m".into(),
+            confirm_target: "local".into(),
+            ask_secs: Some(90),
+        };
+        let asking = request.issue(&profile(), &saved, 0).unwrap();
+        assert!(asking.asks());
+        assert_eq!(asking.ask_secs, 90);
+        assert_eq!(asking.expires_at, DEFAULT_TTL_SECS);
+        let once = GrantRequest {
+            ask_secs: None,
+            ..request.clone()
+        }
+        .issue(&profile(), &saved, 0)
+        .unwrap();
+        assert!(!once.asks());
+        assert_eq!(once.remaining_uses, 1);
+        let unconfirmed = GrantRequest {
+            confirm_target: "loca".into(),
+            ..request.clone()
+        };
+        assert!(unconfirmed.issue(&profile(), &saved, 0).is_err());
+        let mut elsewhere = profile();
+        elsewhere.connections = vec!["staging".into()];
+        assert!(request.issue(&elsewhere, &saved, 0).is_err());
     }
 
     /// An asking grant waits at least a second and at most an hour per write.

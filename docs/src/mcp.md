@@ -74,6 +74,8 @@ dexo mcp grant create --profile assistant --connection local --capability data_w
   --tool data_insert --selector 'app.public.orders' --expires 15m --confirm-target local
 ```
 
+The TUI makes the same grants: in MCP Profiles, `g` (or **New MCP Grant…** in the palette) opens a form with the same fields for the selected profile, "ask before each write" included, and the connection or the selector typed again to confirm.
+
 - Capabilities are `data_write`, `ddl` and `admin`; each allows only its own tools.
 - A grant is used once and expires after `--expires` (15 minutes by default, 24 hours at most). `dexo mcp grant list`, `revoke --id` and `revoke-all` manage them; revoking hides the tools at once.
 - A grant is bound to one connection and narrows the profile; it can never reach an object the profile denies. A SQL write or DDL statement has every table it touches held to both.
