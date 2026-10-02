@@ -51,6 +51,9 @@ pub async fn run_script(
         } else {
             QueryRequest::read(sql.clone(), 10_000)
         };
+        // Whatever it is taken for, what it returns stops at the grid's limit: a
+        // `with recursive` the splitter cannot read went out as a write with none.
+        query_request.row_limit = 10_000;
         query_request.parameters = request.parameters.clone();
         query_request.timeout = request.timeout;
         let timeout = if request.timeout == Duration::ZERO {
@@ -253,5 +256,70 @@ pub async fn cancel_live(
     if let Some(active) = live.lock().await.take() {
         query.registry().cancel(active.task);
         let _ = active.session.cancel(active.query).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::{Arc, Mutex};
+
+    use dexo_driver_api::{
+        CapabilityState, DriverError, QueryEvent, QueryId, QueryRequest, QueryStream, Session,
+    };
+
+    /// Remembers the row limit each statement was sent with.
+    #[derive(Default)]
+    struct Limits(Mutex<Vec<u64>>);
+
+    #[async_trait::async_trait]
+    impl Session for Limits {
+        fn capabilities(&self) -> &[CapabilityState] {
+            &[]
+        }
+
+        async fn execute(&self, request: QueryRequest) -> Result<QueryStream, DriverError> {
+            self.0.lock().unwrap().push(request.row_limit);
+            let done: Vec<Result<QueryEvent, DriverError>> = vec![Ok(QueryEvent::Finished {
+                rows_affected: None,
+            })];
+            Ok(Box::pin(futures_util::stream::iter(done)))
+        }
+
+        async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), DriverError> {
+            Ok(())
+        }
+    }
+
+    /// A statement the splitter cannot read still has its rows stopped at the limit.
+    #[tokio::test]
+    async fn every_statement_keeps_the_row_limit() {
+        let session = Arc::new(Limits::default());
+        let (action_tx, mut actions) = tokio::sync::mpsc::channel(64);
+        let request = crate::action::ScriptRequest {
+            key: crate::runtime::OperationKey::new(crate::runtime::OperationId::new(), "s", "d", 1),
+            statements: vec![
+                "with recursive t(n) as (select 1 union all select n + 1 from t) select n from t"
+                    .into(),
+                "select 1".into(),
+            ],
+            dialect: dexo_sql::Dialect::Postgres,
+            policy: dexo_app::ScriptPolicy::ContinueOnError,
+            parameters: Vec::new(),
+            timeout: std::time::Duration::from_secs(5),
+        };
+        super::run_script(
+            dexo_app::QueryService::new(Arc::new(dexo_runtime::TaskRegistry::default())),
+            Arc::clone(&session) as Arc<dyn Session>,
+            request,
+            action_tx,
+            Arc::new(tokio::sync::Mutex::new(None)),
+        )
+        .await;
+        while actions.try_recv().is_ok() {}
+        assert_eq!(*session.0.lock().unwrap(), [10_000, 10_000]);
     }
 }
