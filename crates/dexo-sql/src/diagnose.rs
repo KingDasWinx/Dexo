@@ -85,7 +85,8 @@ impl KnownObjects {
 
 /// The problems in `sql`. `known` is the catalog, when it has been loaded whole; without
 /// it only parse errors are reported. A statement still being typed -- the one holding
-/// `cursor`, a byte offset -- is not told it ends too soon.
+/// `cursor`, a byte offset -- is not told off for an error at the cursor: that part is
+/// not written yet.
 pub fn diagnose(
     sql: &str,
     dialect: Dialect,
@@ -106,6 +107,9 @@ pub struct Diagnoser {
     answers: HashMap<String, Vec<Problem>>,
     /// The table each statement creates.
     creates: HashMap<String, Option<String>>,
+    /// Where the cursor may go while the parse errors left out for it at the last look
+    /// stay left out: each error and the blank before it.
+    hidden: Vec<Range<usize>>,
 }
 
 /// One problem in a statement, offsets within it.
@@ -113,6 +117,8 @@ pub struct Diagnoser {
 struct Problem {
     message: String,
     range: Range<usize>,
+    /// A parse error, which a statement still being typed may just not have finished.
+    parse: bool,
     /// The table an `unknown table` names, which the document may create. Read when the
     /// answers are put together, not kept in them: the created tables were part of what
     /// the kept answers depended on, and each key typed in a CREATE TABLE's name threw
@@ -162,50 +168,69 @@ impl Diagnoser {
         self.creates
             .retain(|body, _| present.contains(body.as_str()));
         self.against = Some(against);
+        self.hidden.clear();
         let mut found = Vec::new();
         for (span, body) in spans.iter().zip(&bodies) {
             let start = span.byte_range.start;
             let typing =
                 (cursor >= start && cursor <= span.byte_range.end + 1).then(|| cursor - start);
-            let answer = match (typing, self.answers.get(*body)) {
-                (None, Some(kept)) => kept.clone(),
-                _ => {
-                    let answer = statement_problems(body, dialect, known, typing);
-                    if typing.is_none() {
-                        self.answers.insert(body.to_string(), answer.clone());
-                    }
+            let answer = match self.answers.get(*body) {
+                Some(kept) => kept.clone(),
+                None => {
+                    let answer = statement_problems(body, dialect, known);
+                    self.answers.insert(body.to_string(), answer.clone());
                     answer
                 }
             };
-            found.extend(
-                answer
-                    .into_iter()
-                    .filter(|problem| {
-                        problem
-                            .table
-                            .as_ref()
-                            .is_none_or(|table| !created.contains(table))
-                    })
-                    .map(|problem| {
-                        Diagnostic::local(
-                            problem.message,
-                            start + problem.range.start..start + problem.range.end,
-                        )
-                    }),
-            );
+            for problem in answer {
+                if problem
+                    .table
+                    .as_ref()
+                    .is_some_and(|table| created.contains(table))
+                {
+                    continue;
+                }
+                // Only an error near the cursor is left out: past it on its line or the
+                // next -- what is being typed throws the parser off a few words on, as
+                // `o.| from orders o` errs at the last `o`. Anything past the cursor was,
+                // so an error lines further down stayed hidden while the cursor sat
+                // above it.
+                if let Some(cursor) = typing.filter(|_| problem.parse) {
+                    let line = body[..problem.range.start]
+                        .rfind('\n')
+                        .map_or(0, |at| at + 1);
+                    let from = body[..line.saturating_sub(1)]
+                        .rfind('\n')
+                        .map_or(0, |at| at + 1);
+                    let to = if body[problem.range.end..].trim().is_empty() {
+                        body.len() + 1
+                    } else {
+                        problem.range.end
+                    };
+                    if (from..=to).contains(&cursor) {
+                        self.hidden.push(start + from..start + to + 1);
+                        continue;
+                    }
+                }
+                found.push(Diagnostic::local(
+                    problem.message,
+                    start + problem.range.start..start + problem.range.end,
+                ));
+            }
         }
         found
     }
+
+    /// Whether an error left out for the cursor at the last look is away from `cursor`
+    /// now: the document is to be looked at again, or the error stays hidden until the
+    /// next edit.
+    pub fn hidden_away_from(&self, cursor: usize) -> bool {
+        self.hidden.iter().any(|near| !near.contains(&cursor))
+    }
 }
 
-/// One statement's problems, offsets within it. `typing` is where the cursor is in it,
-/// when it is the statement being typed.
-fn statement_problems(
-    body: &str,
-    dialect: Dialect,
-    known: Option<&KnownObjects>,
-    typing: Option<usize>,
-) -> Vec<Problem> {
+/// One statement's problems, offsets within it.
+fn statement_problems(body: &str, dialect: Dialect, known: Option<&KnownObjects>) -> Vec<Problem> {
     let checked = matches!(
         first_keyword(body).as_deref(),
         Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "VALUES")
@@ -221,17 +246,13 @@ fn statement_problems(
             // Ended too soon: the last word is where something more was wanted.
             let at = located.unwrap_or_else(|| last_word_start(body));
             let end = token_end(body, at);
-            // The statement being typed is not told off for what is at or past the
-            // cursor: that part is not written yet.
-            if typing.is_some_and(|cursor| end >= cursor) {
-                return found;
-            }
             if located.is_some() && !beyond_doubt(body, at, dialect) {
                 return found;
             }
             found.push(Problem {
                 message: clean(&message),
                 range: at..end,
+                parse: true,
                 table: None,
             });
         }
@@ -442,6 +463,7 @@ fn check(
             found.push(Problem {
                 message: format!("unknown table {}", shown.join(".")),
                 range,
+                parse: false,
                 table: Some(table),
             });
         }
@@ -466,6 +488,7 @@ fn check(
             found.push(Problem {
                 message: format!("unknown column {} in {table}", column.value),
                 range,
+                parse: false,
                 table: None,
             });
         }
@@ -787,6 +810,43 @@ mod tests {
         assert!(!diagnose(sql, Dialect::Postgres, None, usize::MAX).is_empty());
     }
 
+    /// Only an error at the cursor is left out of the statement being typed, and moving
+    /// the cursor away says the document is to be looked at again.
+    #[test]
+    fn only_an_error_at_the_cursor_waits() {
+        // The error lines below the cursor: not what is being typed.
+        let later = "select id,\n  total,\n  customer_id\nfrom orders where id = = 1";
+        assert_eq!(diagnose(later, Dialect::Postgres, None, 10).len(), 1);
+        assert!(diagnose(later, Dialect::Postgres, None, 30).is_empty());
+        let mut diagnoser = super::Diagnoser::default();
+        // Typing `o.` on the line above throws the parser off on the next one.
+        let typing = "select o.\nfrom orders o;\nselect 1";
+        assert!(
+            diagnoser
+                .diagnose(typing, Dialect::Postgres, None, 9)
+                .is_empty()
+        );
+        assert!(!diagnoser.hidden_away_from(9) && !diagnoser.hidden_away_from(3));
+        // The cursor gone to another statement: the error is to be shown, and is.
+        let elsewhere = typing.len();
+        assert!(diagnoser.hidden_away_from(elsewhere));
+        assert_eq!(
+            diagnoser
+                .diagnose(typing, Dialect::Postgres, None, elsewhere)
+                .len(),
+            1
+        );
+        assert!(!diagnoser.hidden_away_from(elsewhere));
+        // Ending too soon at the end, a blank typed after it or not.
+        let open = "select * from orders where ";
+        assert!(
+            diagnoser
+                .diagnose(open, Dialect::Postgres, None, open.len())
+                .is_empty()
+        );
+        assert!(!diagnoser.hidden_away_from(open.len()));
+    }
+
     /// A kept answer is the one a fresh look gives: after the statement, the catalog or
     /// the created tables change, and wherever the statement moves in the document.
     #[test]
@@ -837,6 +897,7 @@ mod tests {
             .push(super::Problem {
                 message: "kept".into(),
                 range: 0..1,
+                parse: false,
                 table: None,
             });
         let typed = "select * from ghosts;\ncreate table gho (id int)";

@@ -255,7 +255,8 @@ pub fn follow_cursor(model: &mut Model) {
     }
 }
 
-/// Whether the highlights on screen were built for the text the active document holds.
+/// Whether the highlights on screen were built for the text the active document holds,
+/// and no error left out for the cursor is away from it now.
 pub fn highlights_are_current(model: &Model) -> bool {
     let document = model.active_document();
     model
@@ -263,6 +264,10 @@ pub fn highlights_are_current(model: &Model) -> bool {
         .painted
         .as_ref()
         .is_some_and(|(id, revision)| *id == document.id && *revision == document.sql.revision())
+        && !model
+            .editor
+            .diagnoser
+            .hidden_away_from(document.byte_cursor())
 }
 
 pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
