@@ -1295,7 +1295,22 @@ fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> 
             remove,
         } => mcp_allow(&profile, &selector, deny, remove)?,
         McpCommand::Policy { profile } => mcp_policy(&profile)?,
-        McpCommand::Doctor { profile, json } => mcp_doctor(profile.as_deref(), json)?,
+        McpCommand::Doctor {
+            profile,
+            json,
+            probe,
+        } => {
+            mcp_doctor(profile.as_deref(), json)?;
+            if probe {
+                mcp_probe(profile.as_deref())?;
+            }
+        }
+        McpCommand::Setup {
+            client,
+            profile,
+            dry_run,
+            skill,
+        } => mcp_setup(&client, &profile, dry_run, skill)?,
         McpCommand::Config { command } => match command {
             McpConfigCommand::Print { profile, client } => {
                 mcp_config_print(&profile, client.as_deref())?
@@ -1500,6 +1515,232 @@ fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
         }
     }
     Ok(())
+}
+
+/// `dexo mcp setup`: Dexo's server merged into the client's config file, the old file
+/// backed up first; with `--skill`, the skill file beside it.
+fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Result<()> {
+    use dexo_app::mcp::clients::{McpClient, Places, skill_text, write_with_backup};
+    let client =
+        McpClient::parse(client).ok_or_else(|| anyhow::anyhow!("unknown client {client}"))?;
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
+    let places = Places::discover()?;
+    let exe = std::env::current_exe()?.display().to_string();
+    let args: Vec<String> = ["mcp", "serve", "--profile", name]
+        .map(String::from)
+        .to_vec();
+    let path = client.config_path(&places);
+    let existing = std::fs::read_to_string(&path).ok();
+    let merged = client
+        .merged(existing.as_deref(), &exe, &args)
+        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+    let skill_file = skill.then(|| client.skill_path(&places)).flatten();
+    if dry_run {
+        println!(
+            "would write {}:
+{merged}",
+            path.display()
+        );
+        if let Some(skill_path) = &skill_file {
+            println!(
+                "would write {}:
+{}",
+                skill_path.display(),
+                skill_text(client, name)
+            );
+        }
+    } else {
+        let backup = write_with_backup(&path, &merged)?;
+        match backup {
+            Some(backup) => println!(
+                "wrote {} (the old one is {})",
+                path.display(),
+                backup.display()
+            ),
+            None => println!("wrote {}", path.display()),
+        }
+        if let Some(skill_path) = &skill_file {
+            write_with_backup(skill_path, &skill_text(client, name))?;
+            println!("wrote {}", skill_path.display());
+        }
+    }
+    if skill && skill_file.is_none() {
+        println!(
+            "{} has no folder for skill files; nothing else was written",
+            client.id()
+        );
+    }
+    if !profile.enabled {
+        println!("the profile {name} is disabled: dexo mcp profile enable --name {name} --confirm");
+    }
+    if client == McpClient::ClaudeCode {
+        println!(
+            "Claude Code asks to approve a project's MCP servers the first time it starts here"
+        );
+    }
+    Ok(())
+}
+
+/// `dexo mcp doctor --probe`: each enabled profile's server started and asked for its
+/// tools the way an agent would, then every client's config checked for Dexo.
+fn mcp_probe(name: Option<&str>) -> anyhow::Result<()> {
+    use dexo_app::mcp::clients::{McpClient, Places};
+    let paths = AppPaths::discover()?;
+    let db = Database::open(&paths.database)?;
+    let repo = McpProfileRepository::new(db.connection());
+    let profiles = match name {
+        Some(name) => vec![load_profile(&repo, name)?],
+        None => repo
+            .list()?
+            .into_iter()
+            .filter(|profile| profile.enabled)
+            .collect(),
+    };
+    let exe = std::env::current_exe()?;
+    for profile in &profiles {
+        match probe_server(&exe, &profile.name, std::time::Duration::from_secs(10)) {
+            Ok((server, tools)) => println!(
+                "probe {}: ok, {server} answered with {} tools: {}",
+                profile.name,
+                tools.len(),
+                tools.join(",")
+            ),
+            Err(error) => println!("probe {}: failed: {error}", profile.name),
+        }
+    }
+    let places = Places::discover()?;
+    for client in McpClient::ALL {
+        let path = client.config_path(&places);
+        let state = match std::fs::read_to_string(&path) {
+            Err(_) => "no config file".to_string(),
+            Ok(contents) => match client.configured_command(&contents) {
+                None => "no dexo entry; dexo mcp setup adds one".to_string(),
+                Some(command) if std::path::Path::new(&command).exists() => {
+                    format!("dexo entry runs {command}")
+                }
+                Some(command) => format!("dexo entry runs {command}, which does not exist"),
+            },
+        };
+        println!("client {}: {} ({state})", client.id(), path.display());
+    }
+    Ok(())
+}
+
+/// Starts `dexo mcp serve --profile name`, sends initialize, initialized and tools/list
+/// as JSON lines, and returns the server's name and its tools. The server is stopped
+/// whatever happens.
+fn probe_server(
+    exe: &std::path::Path,
+    name: &str,
+    timeout: std::time::Duration,
+) -> anyhow::Result<(String, Vec<String>)> {
+    use std::io::{BufRead, Write as _};
+    let mut child = std::process::Command::new(exe)
+        .args(["mcp", "serve", "--profile", name])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()?;
+    // What the server said on stderr, for when it stops before answering.
+    let said = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    if let Some(stderr) = child.stderr.take() {
+        let said = std::sync::Arc::clone(&said);
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stderr)
+                .lines()
+                .map_while(Result::ok)
+            {
+                if let Ok(mut said) = said.lock() {
+                    *said = line;
+                }
+            }
+        });
+    }
+    let result = (|| -> anyhow::Result<(String, Vec<String>)> {
+        let mut stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("no stdout"))?;
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            for line in std::io::BufReader::new(stdout).lines() {
+                let Ok(line) = line else { break };
+                if sender.send(line).is_err() {
+                    break;
+                }
+            }
+        });
+        let deadline = std::time::Instant::now() + timeout;
+        let answer = |id: u64| -> anyhow::Result<serde_json::Value> {
+            loop {
+                let left = deadline.saturating_duration_since(std::time::Instant::now());
+                let line = match receiver.recv_timeout(left) {
+                    Ok(line) => line,
+                    Err(std::sync::mpsc::RecvTimeoutError::Timeout) => {
+                        anyhow::bail!("no answer within {}s", timeout.as_secs())
+                    }
+                    Err(std::sync::mpsc::RecvTimeoutError::Disconnected) => {
+                        std::thread::sleep(std::time::Duration::from_millis(100));
+                        let said = said.lock().map(|said| said.clone()).unwrap_or_default();
+                        anyhow::bail!("the server stopped before it answered: {said}")
+                    }
+                };
+                let Ok(message) = serde_json::from_str::<serde_json::Value>(&line) else {
+                    continue;
+                };
+                if message["id"] == id {
+                    if let Some(error) = message.get("error") {
+                        anyhow::bail!("{}", error["message"].as_str().unwrap_or("error"));
+                    }
+                    return Ok(message["result"].clone());
+                }
+            }
+        };
+        let mut send = |message: serde_json::Value| -> anyhow::Result<()> {
+            writeln!(stdin, "{message}")?;
+            stdin.flush()?;
+            Ok(())
+        };
+        send(serde_json::json!({
+            "jsonrpc": "2.0", "id": 1, "method": "initialize",
+            "params": {
+                "protocolVersion": "2025-11-25",
+                "capabilities": {},
+                "clientInfo": {"name": "dexo-doctor", "version": env!("CARGO_PKG_VERSION")}
+            }
+        }))?;
+        let initialized = answer(1)?;
+        let server = format!(
+            "{} {}",
+            initialized["serverInfo"]["name"]
+                .as_str()
+                .unwrap_or("server"),
+            initialized["serverInfo"]["version"].as_str().unwrap_or("")
+        )
+        .trim()
+        .to_string();
+        send(serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}))?;
+        send(serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}))?;
+        let tools = answer(2)?["tools"]
+            .as_array()
+            .map(|tools| {
+                tools
+                    .iter()
+                    .filter_map(|tool| tool["name"].as_str().map(str::to_string))
+                    .collect()
+            })
+            .unwrap_or_default();
+        Ok((server, tools))
+    })();
+    let _ = child.kill();
+    let _ = child.wait();
+    result
 }
 
 fn mcp_config_print(name: &str, client: Option<&str>) -> anyhow::Result<()> {

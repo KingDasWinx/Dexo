@@ -14,8 +14,11 @@ dexo mcp profile set --name assistant --connection local --query-mode raw-read
 dexo mcp allow --profile assistant --selector 'app.public.*'
 dexo mcp allow --profile assistant --selector 'app.public.secrets' --deny
 dexo mcp profile enable --name assistant --confirm
-dexo mcp config print --profile assistant --client claude-code
+dexo mcp setup --client claude-code --profile assistant --skill
+dexo mcp doctor --probe
 ```
+
+`mcp setup --client claude-code|codex|cursor|claude-desktop` merges a `dexo` server entry -- the running binary, `mcp serve --profile <name>` -- into that client's config file and leaves every other entry as it was: the project's `.mcp.json` for Claude Code, `~/.codex/config.toml` for Codex (edited in place, comments kept), `~/.cursor/mcp.json` for Cursor, and `claude_desktop_config.json` in the platform's config directory for Claude Desktop. The old file is copied to `<file>.dexo-backup` first, a file Dexo cannot parse is left alone, and `--dry-run` prints what would be written. `--skill` also writes a skill file (`.claude/skills/dexo/SKILL.md`, `~/.codex/skills/dexo/SKILL.md`, or a Cursor rule) telling the agent that access is read-only, how grants work, and to read the notes on tables. `mcp doctor --probe` starts each enabled profile's server, asks it for its tools the way an agent would, and checks every client's file for a `dexo` entry whose command exists.
 
 `profile set` also takes `--max-rows`, `--max-bytes`, `--timeout-secs`, `--max-concurrency`, `--allow-tool` and `--deny-tool`; it refuses unknown connections and misspelt tool names. `mcp allow --remove` takes a rule back, and `mcp policy --profile assistant` shows the result. `config print` prints a JSON `mcpServers` entry by default, or a `claude mcp add` line with `--client claude-code`, naming the running binary by its full path.
 

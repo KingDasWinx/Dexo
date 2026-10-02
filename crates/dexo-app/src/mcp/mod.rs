@@ -1,4 +1,5 @@
 pub mod audit;
+pub mod clients;
 pub mod connection;
 pub mod grant;
 pub mod ledger;

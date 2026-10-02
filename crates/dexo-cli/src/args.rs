@@ -344,11 +344,28 @@ pub enum McpCommand {
         #[arg(long)]
         profile: String,
     },
+    /// List each profile's tools; --probe starts the server and asks it, then checks
+    /// every client's config.
     Doctor {
         #[arg(long)]
         profile: Option<String>,
         #[arg(long)]
         json: bool,
+        #[arg(long)]
+        probe: bool,
+    },
+    /// Write Dexo's server into an agent's MCP config, merged with what is there.
+    Setup {
+        #[arg(long, value_parser = ["claude-code", "codex", "cursor", "claude-desktop"])]
+        client: String,
+        #[arg(long)]
+        profile: String,
+        /// Print what would be written, and write nothing.
+        #[arg(long)]
+        dry_run: bool,
+        /// Also write a skill file telling the agent how Dexo behaves.
+        #[arg(long)]
+        skill: bool,
     },
     Config {
         #[command(subcommand)]
