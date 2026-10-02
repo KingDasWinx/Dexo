@@ -205,7 +205,7 @@ fn statement_problems(
             if typing.is_some_and(|cursor| end >= cursor) {
                 return found;
             }
-            if located.is_some() && !beyond_doubt(body, at) {
+            if located.is_some() && !beyond_doubt(body, at, dialect) {
                 return found;
             }
             found.push((clean(&message), at..end));
@@ -227,28 +227,36 @@ fn statement_problems(
 /// part of each dialect, so an error is believed only when the highlighting grammar
 /// fails the statement too and the statement uses none of the constructs sqlparser is
 /// known to lack.
-fn beyond_doubt(body: &str, at: usize) -> bool {
+fn beyond_doubt(body: &str, at: usize, dialect: Dialect) -> bool {
     // ponytail: a list of what sqlparser fails on in each dialect; extend it as more
     // valid SQL turns up underlined.
-    const UNPARSED: &[&[&str]] = &[
-        &["rows", "from"],
-        &["symmetric"],
-        &["asymmetric"],
-        &["lock", "in"],
-        &["share", "mode"],
-        &["with", "rollup"],
-        &["outfile"],
-        &["dumpfile"],
-        &["indexed", "by"],
-        &["not", "indexed"],
-        &["glob"],
-    ];
-    let words: Vec<String> = body
-        .split(|ch: char| !ch.is_alphanumeric() && ch != '_')
-        .filter(|word| !word.is_empty())
-        .map(str::to_lowercase)
+    let unparsed: &[&[&str]] = match dialect {
+        Dialect::Postgres => &[&["rows", "from"], &["symmetric"], &["asymmetric"]],
+        Dialect::Mysql => &[
+            &["lock", "in"],
+            &["share", "mode"],
+            &["with", "rollup"],
+            &["outfile"],
+            &["dumpfile"],
+        ],
+        Dialect::Sqlite => &[&["indexed", "by"], &["not", "indexed"], &["glob"]],
+    };
+    // The statement's own words, read as the dialect reads them: one in a string, a
+    // comment or a quoted name, or another dialect's construct, hid a real error.
+    let tokens = match dialect {
+        Dialect::Postgres => Tokenizer::new(&PostgreSqlDialect {}, body).tokenize(),
+        Dialect::Mysql => Tokenizer::new(&MySqlDialect {}, body).tokenize(),
+        Dialect::Sqlite => Tokenizer::new(&SQLiteDialect {}, body).tokenize(),
+    };
+    let words: Vec<String> = tokens
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|token| match token {
+            Token::Word(word) if word.quote_style.is_none() => Some(word.value.to_lowercase()),
+            _ => None,
+        })
         .collect();
-    let lacking = UNPARSED.iter().any(|construct| {
+    let lacking = unparsed.iter().any(|construct| {
         words.windows(construct.len()).any(|run| {
             run.iter()
                 .zip(construct.iter())
@@ -722,6 +730,25 @@ mod tests {
             "select * from orders where id = = 1",
         ] {
             assert_eq!(in_dialect(wrong, Dialect::Postgres).len(), 1, "{wrong}");
+        }
+        // A construct sqlparser lacks counts only as code of its own dialect: not in a
+        // string, a comment or a quoted name, nor another dialect's.
+        for (dialect, wrong) in [
+            (Dialect::Postgres, "select * frm orders -- rows from"),
+            (
+                Dialect::Postgres,
+                "select * frm orders where note = 'symmetric'",
+            ),
+            (Dialect::Postgres, "select \"glob\" frm orders"),
+            (Dialect::Postgres, "select * frm orders where a glob b"),
+            (
+                Dialect::Mysql,
+                "select * frm orders where note = 'with rollup'",
+            ),
+            (Dialect::Mysql, "select * frm orders # into outfile"),
+            (Dialect::Sqlite, "select * frm orders /* not indexed */"),
+        ] {
+            assert_eq!(in_dialect(wrong, dialect).len(), 1, "{dialect:?}: {wrong}");
         }
         // Typing `o.` in the middle: what follows the cursor is not written yet.
         let sql = "select o. from orders o";
