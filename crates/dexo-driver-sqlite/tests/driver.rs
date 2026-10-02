@@ -846,3 +846,19 @@ async fn a_read_only_request_cannot_write() {
         .is_ok()
     );
 }
+
+/// `:memory:` is SQLite's in-memory database, not a file by that name.
+#[tokio::test]
+async fn memory_is_an_in_memory_database() {
+    let session = open(Path::new(":memory:"), false).await;
+    let events = run(
+        &*session,
+        QueryRequest::read(
+            "select file from pragma_database_list where name = 'main'",
+            0,
+        ),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows(&events), [vec![DbValue::Text(String::new())]]);
+}

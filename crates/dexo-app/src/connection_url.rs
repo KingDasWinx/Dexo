@@ -398,6 +398,9 @@ mod tests {
         let memory = parse("duckdb://:memory:").unwrap();
         assert_eq!(memory.profile.config["path"], ":memory:");
         assert_eq!(memory.profile.name, "memory");
+        // SQLite's in-memory database too, not a file called `:memory:` in the directory.
+        let memory = parse("sqlite://:memory:").unwrap();
+        assert_eq!(memory.profile.config["path"], ":memory:");
 
         let parsed = parse("sqlite:///tmp/shop%20copy.db").unwrap();
         assert_eq!(parsed.profile.driver, "sqlite");
