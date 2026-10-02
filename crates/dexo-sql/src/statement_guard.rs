@@ -268,7 +268,7 @@ pub fn clauses_read(clauses: &dexo_driver_api::RawClauses, dialect: Dialect) -> 
     match inspect_read(&probe, dialect) {
         Ok(_) => Ok(()),
         Err(GuardRejection::Unparsed(reason)) => Err(format!("not valid SQL: {reason}")),
-        Err(rejection) => Err(format!("not a read: {rejection:?}")),
+        Err(rejection) => Err(format!("not a read: {rejection}")),
     }
 }
 
@@ -557,6 +557,11 @@ mod tests {
         assert!(check("", "id; drop table t").is_err());
         assert!(check("pg_terminate_backend(42)", "").is_err());
         assert!(check("id = (", "").is_err());
+        // The refusal reads as a sentence, not as Rust's debug form.
+        assert_eq!(
+            check("pg_sleep(1) is null", "").unwrap_err(),
+            "not a read: function pg_sleep is not allowed"
+        );
     }
 
     /// MariaDB runs `/*M! … */` as MySQL runs `/*! … */`: in a bar's text either is
