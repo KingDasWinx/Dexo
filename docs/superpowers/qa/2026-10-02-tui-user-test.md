@@ -770,3 +770,359 @@ Binary: dev build 1.4.2. Terminal: tmux 120x36 unless stated. Findings are appen
 - Keychain behaviour beyond "password typed in Add is stored, typed in Edit is not" (checked through `dexo connections test`); the OS keyring is shared with the user's session, so I deleted my test connections (their secrets) at the end.
 - Connect-time Secret prompt focus order for the CLI `--password-prompt` flow beyond the first prompt; Windows/macOS keychains.
 - The very first state seen (Add form opened with `host: customers` and an error already shown right after a sidebar click) happened once and could not be reproduced.
+
+### Results grid and table data (results-data)
+
+
+
+Binary: dexo 1.4.2 dev build. Terminal 120x36 unless noted.
+
+#### Findings (appended as found)
+
+##### [MAJOR] Copy as CSV never quotes fields: commas, quotes and newlines break the file
+- **Where:** data.copy.csv (palette and Results actions menu "Copy as CSV")
+- **Steps:** pg-dev, run `select * from customers where id > 198 order by id`, Alt+3, Down Down, Shift+Down Shift+Down (rows 201-203), Enter, pick "Copy as CSV", then `qa.sh clipboard`
+- **Expected:** RFC 4180 CSV: `201,"Ana, ""the"" Silva",ana@example.com,,...` and `"multi\nline name"` wrapped in quotes.
+- **Actual:** fields are written raw, so the name `Ana, "the" Silva` becomes two columns and the newline splits the record in two:
+  ```
+  201,Ana, "the" Silva,ana@example.com,\N,2026-10-02 15:18:03.414311+00,\N
+  203,multi
+  line name,ml@example.com,east,2026-10-02 15:18:03.414311+00,\N
+  ```
+  The jsonb column (`{"tags": ["a", "b"], "tier": 1}`) is also unquoted, so every row with a jsonb value has extra columns. NULL is written as `\N` (not an empty field), which Excel/Sheets show literally.
+
+##### [MINOR] Copy as Text is space-separated; no tab-separated copy is reachable
+- **Where:** data.copy.text
+- **Steps:** same selection as above, C-p, "Copy as Text", `qa.sh clipboard`
+- **Expected:** text that pastes into a spreadsheet as columns (tab-separated), or aligned columns.
+- **Actual:** columns are joined by a single space: `201 Ana, "the" Silva ana@example.com \N 2026-10-02 15:18:03.414311+00 \N`, so values with spaces are indistinguishable from column breaks. NULL again `\N`. (The code has a Tsv format, but no palette command or menu item uses it.)
+
+##### [MINOR] Copy as JSON reorders keys alphabetically
+- **Where:** data.copy.json
+- **Steps:** same selection, Enter, "Copy as JSON"
+- **Expected:** keys in column order (id, name, email, region, created_at, profile).
+- **Actual:** `created_at, email, id, name, profile, region` (alphabetical), `id` ends up in the middle.
+
+##### [MINOR] Copy as SQL uses the placeholder table name `tbl`
+- **Where:** data.copy.sql
+- **Steps:** result of `select * from customers ...`, copy row as SQL
+- **Expected:** `INSERT INTO customers (...)` (at least the table of a single-table query / of an opened table), or a prompt for the name.
+- **Actual:** `INSERT INTO tbl ("id", "name", ...) VALUES (...)` and it is not schema-qualified. The user must edit every line. Same in a table-data tab where the table is known: open `products`, Enter -> Copy as SQL gives `INSERT INTO tbl ("id", "sku", ...) VALUES (1, 'SKU-1', 'Product 1', 3.17, '{tag1}', TRUE);`. Also the last statement has no trailing newline whereas the CSV/Markdown copies do.
+
+##### [MINOR] Copy as Markdown does not escape a newline or a `|` inside a cell
+- **Where:** data.copy.markdown
+- **Steps:** same selection, "Copy as Markdown"
+- **Expected:** the cell stays on one row (newline -> `<br>` or space; `|` escaped).
+- **Actual:** the row is split: `| 203 | multi` / `line name | ml@example.com | ...`, the table is broken. A cell `a|b` is written as `| a|b |` (should be `a\|b`).
+
+##### [MINOR] "copied to clipboard" toast does not say what was copied
+- **Where:** Results actions menu -> Copy cell / Copy as ...
+- **Steps:** Enter on a row, "Copy cell"
+- **Expected:** "copied cell" / "copied 3 rows as CSV" (standard 7).
+- **Actual:** toast `copied to clipboard`; for multi-line formats `copied 5 lines to clipboard` (lines, not rows: a 3-row selection says 5 lines, 26 lines for JSON).
+
+##### [COSMETIC] A newline inside a cell shifts the rest of that row one column to the left
+- **Where:** results grid
+- **Steps:** `select * from customers where id > 198 order by id`; row 203 has name `multi\nline name`
+- **Expected:** newline shown as a symbol/space; columns stay aligned.
+- **Actual:** the newline occupies no cell, `multiline name` is displayed glued and the row's remaining columns are 1 column left of the other rows (selection highlight of that row also ends 1 column early):
+  ```
+  │▸ 202 Línea Ñandú        nandu@example.com  south    ...
+  │▸ 203 multiline name    ml@example.com     east     ...
+  ```
+
+##### [COSMETIC] Results actions menu truncates "Add this column to the sort"
+- **Where:** results.actions (Enter in the grid)
+- **Actual:** `  Add this column to the … Shift+S` (menu is 36 cols wide although the Record panel next to it has 50 spare columns).
+
+##### [MINOR] Row actions menu does not offer "Copy as Text"
+- **Where:** results.actions
+- **Actual:** the menu has Copy cell, JSON, CSV, Markdown, SQL, but not Text, which only exists in the palette. Title says "Row 5" even when 3 rows are selected (and the copy does use the 3 rows), so the menu never tells you how many rows an action applies to.
+
+##### [MAJOR] No way to jump to the first/last row or column of a result; Home/End/G/Ctrl+End do nothing; "Results Top" is unreachable
+- **Where:** results.top, results.pageup/pagedown, grid navigation
+- **Steps:** `select * from events` (10,000 loaded rows), Alt+3, PageDown, then try Home, End, Ctrl+Home, Ctrl+End, Ctrl+Down, g, G; C-p, type "Results Top"
+- **Expected:** Home/End (or Ctrl+Home/End) go to the first/last column or row; "Results Top" is runnable from the palette.
+- **Actual:** none of those keys does anything. `Results Top` (results.top) is in the command list but the palette shows no match for "Results Top" or "top". Reaching row 10,000 needs ~590 PageDowns; going back needs the same in PageUp. The same applies to columns on the 40-column table: only Left/Right one by one. hjkl (vim keys) do nothing either (not documented, so only noted).
+
+##### [MAJOR] After `t` (count) the title says "(20,000 rows)" but only 10,000 rows can be reached
+- **Where:** results title / results.count
+- **Steps:** `select * from events` -> title `Results (10,000+ rows, limit reached)`; Alt+3, `t` -> `Results (20,000 rows)`; hold PageDown to the end
+- **Expected:** after the count the title keeps telling that only 10,000 are loaded (`10,000 of 20,000 rows`), and there is a way to get the rest (page, or a hint like "add LIMIT/OFFSET or use WHERE").
+- **Actual:** title reads `Results (20,000 rows)`, the grid stops at row 10000 (`▸ 10000 k4 ...`) and PageDown/`n` do nothing, no message. The status bar advertises `n/p page` on this result but `n` is silently ignored.
+
+##### [MINOR] Status bar and keybindings help advertise `n/p page` on results that cannot page (and `p` on the first page, `n` on the last, are silent)
+- **Where:** status bar hint in Results; data.page_next / data.page_prev
+- **Steps:** `select * from events` + Alt+3 + `n` (nothing, no message). Open table `orders`, `p` on page 1: nothing, no message.
+- **Expected:** a toast such as "first page" / "not a paged result", or the hint absent.
+
+##### [MAJOR] `n` on the last page (or on a table smaller than one page) loads a nonexistent empty page and blanks the grid
+- **Where:** data.page_next, table data `orders` (1,000 rows)
+- **Steps:** open `orders` (Explorer, `o`), press `n` 9 times (title `Results (1,000 rows) page:900+100`, no "more"), press `n` once more
+- **Expected:** nothing happens (title already knows there is no "more"), or a "last page" message.
+- **Actual:** title becomes `Results page:1000+100`, the grid is completely empty (no header either), Console logs `0 rows retrieved starting from 1001 in 0 ms`. `p` returns. The same happens on a table with fewer rows than a page: `products` (51 rows, title `Results (51 rows)`), `n` -> `Results page:100+100`, empty grid, Console `0 rows retrieved starting from 101`.
+
+##### [MINOR] Page indicator is a raw offset+limit dump: `page:100+100 more`, `page:200+100`
+- **Where:** results title of table data / filtered results
+- **Actual:** `Results (~1.0K rows) page:100+100 more`, `Results (300+ rows) page:200+100`. Users expect "rows 101-200" or "page 2". `300+ rows` on page 3 is also odd.
+
+##### [MINOR] Stale `page:200+100` label stays on later, unrelated results
+- **Where:** results title
+- **Steps:** `select * from events`, w -> `id > 15000` Enter, `n` `n` (title `page:200+100`); then edit the editor to `select 1 as a` and run; also Execute Document with 4 statements
+- **Expected:** a plain `Results (1 row)`.
+- **Actual:** title `Results (1 row) page:200+100` on `select 1 as a`, and on every one of the 4 result tabs (`Results (3 rows) page:200+100`).
+
+##### [MINOR] Palette shows `\x` as the hotkey of Toggle Record View, but typing `\x` in the grid does nothing
+- **Where:** results.record_view
+- **Steps:** Alt+3 on a result, type `\` then `x` (as one string and as two keys); also `x`
+- **Expected:** record view toggles (standard 2), or the palette shows no key / "type \x in the editor".
+- **Actual:** nothing happens in the grid. `\x` only works as an SQL meta-command in the editor (Ctrl+Enter on a line `\x` -> toast `Expanded display is off.`), and running it clears the Results pane (`Results` with an empty grid) instead of leaving the last result.
+
+##### [MINOR] Record view (one field per line): no field cursor, Left/Right do nothing, "Copy cell" copies an invisible column
+- **Where:** results record view, results.actions
+- **Steps:** Toggle Record View from the palette; Left/Right; Enter -> Copy cell
+- **Expected:** a visible current field (or Copy cell disabled/relabelled).
+- **Actual:** Left/Right ignored; the Row actions modal still offers "Copy cell", "Filter rows", "Sort by this column" with a column that is not shown.
+
+##### [MINOR] After sorting (`s`, `S`, header click) the cursor resets to the first row and first column, so pressing `s` again sorts a different column
+- **Where:** results.sort_column / results.sort_add_column
+- **Steps:** result of `select id, name, region, created_at from customers where id between 195 and 203 order by id`, Alt+3, Right Right (cursor on region), `s` -> `ORDER BY region ASC`, `s` again
+- **Expected:** `s` cycles ASC -> DESC -> none on the same column (as header clicks do).
+- **Actual:** after the first `s` the header cursor jumps to `id`, so the 2nd `s` gives `ORDER BY id ASC`, the 3rd `ORDER BY id DESC`, the 4th clears. To flip region you must move back with Right Right each time. Row cursor also returns to row 1.
+
+##### [COSMETIC] The ORDER BY bar is only ~34 columns wide and clips the start of the text
+- **Where:** results ORDER BY bar
+- **Steps:** sort by region, then `S` on name, then `S` on id
+- **Actual:** `ORDER BY ion ASC, name ASC, id ASC` (the word `region` is cut at the left without an ellipsis) while the WHERE half of the same row has 55 columns and the line has ~20 spare columns.
+
+##### [MAJOR] A failed WHERE/ORDER BY leaves the bar showing the rejected text while the grid still shows the previous filter
+- **Where:** data.filter / data.sort bars on query results
+- **Steps:** `w`, `id > 200` Enter (3 rows). `w`, Ctrl+A, `nonexistent = 1`, Enter
+- **Expected:** the bar goes back to the active filter or marks itself as failed; Esc/re-edit keeps what is really applied.
+- **Actual:** toast `column "nonexistent" does not exist`, results jump to the Messages tab, and when you return to Grid the bar reads `WHERE nonexistent = 1` while the 3 rows shown are those of `id > 200`. Same with `ORDER BY nope desc` (bar says nope, header arrows still show the old name/id sort), and `WHERE aaa ddd` ("Not applied: ... `ddd` follows it").
+
+##### [MINOR] Filter/sort errors expose the internal wrapper query (`_dexo_derived`) and its column offsets
+- **Where:** Messages tab after a bad WHERE / ORDER BY
+- **Actual:**
+  ```
+  [12:30:36] error column "nonexistent" does not exist
+                   SQLSTATE 42703 · line 1, column 133
+                   LINE 1: SELECT * FROM (SELECT id, name, region, created_at FROM customers
+  WHERE id BETWEEN 195 AND 203 ORDER BY id) AS _dexo_derived WHERE (nonexistent = 1)
+  ```
+  The caret and `column 133` refer to a query the user never wrote; the continuation line is also not indented like the others.
+
+##### [MINOR] Messages tab and "Cycle Output View" order
+- **Where:** results.cycle_view (`v`)
+- **Actual:** `v` cycles Grid -> Explain (Tree) -> Explain (Table) -> Explain (Summary) -> Messages -> Grid, so getting from Grid to Messages takes 4 presses, and each tool-tip toast `copied ...` is added to the Messages tab (Messages(14) after a few copies).
+  Also `v` does not show on the palette: Cycle Output View, Select Grid Row, Select Grid Column, Next/Previous Result Tab, Results Up/Down/Left/Right/PageUp/PageDown/Top, Extend Selection, Row Actions, Toggle Row Pick, Next/Prev Data Page and Toggle Row Delete are all absent from C-p (typing their title gives an empty list), so the command list and the palette disagree (standard 2).
+
+##### [MAJOR] Inspect Value shows Rust debug text for integers and decimals (`I64(198)`, `Decimal("4477.50")`)
+- **Where:** data.inspect (palette "Inspect Value", Results actions "Inspect value")
+- **Steps:** open table `orders` (Explorer, `o`), Alt+2 (results), cursor on `customer_id`, C-p "Inspect Value" Enter; again on `total`
+- **Expected:** `198` and `4477.50` (standard 7: no Rust Debug output).
+- **Actual:** modal `Value` shows `I64(198)` and `Decimal("4477.50")`. Text, enum, timestamp, NULL and jsonb render correctly (`paid`, `2026-10-02 15:18:03.416165`, `NULL`, pretty JSON); `customers.id` shows `I64(1)`.
+
+##### [MINOR] Pane hotkeys do not match their names in a table-data tab: Alt+3 "Focus Results" focuses the Console, Alt+2 "Focus Editor" focuses Results
+- **Where:** focus.results / focus.editor, tab opened with Explorer `o` (orders)
+- **Steps:** open `orders`; press Alt+3 (palette and F1 call it Focus Results); press Alt+2
+- **Actual:** Alt+3 puts focus on the Console pane (title `▸ Console`), Alt+2 on Results. The status bar becomes just `○DEV pg-dev` (no hints). In a SQL tab Alt+2 = Editor, Alt+3 = Results, so the numbers move with the tab type. Typing "Focus" in the palette (from any pane) lists no Focus ... commands, so they cannot be run from the palette either.
+
+##### [COSMETIC] "1 rows retrieved" in the Console and FK navigation title uses lowercase `where`
+- **Where:** Console of table data tab; `Results (1 row) where id = 198`
+- **Actual:** `[12:33:03] 1 rows retrieved starting from 1 in 1 ms`. After following a foreign key the WHERE bar still says `WHERE w to filter` although the rows are filtered (`where id = 198` only appears in the title).
+
+##### [MAJOR] Review Changes shows placeholders, not the data: `DELETE ... WHERE id = $n`, `INSERT ... VALUES ($1)`, and long statements are cut at the modal edge
+- **Where:** data.review (Ctrl+S), data.apply
+- **Steps:** open `orders`, press Delete on two rows, Ctrl+S. Or `i`, fill customer_id=5, status=paid, total=12.34, note=text, Enter, Ctrl+S
+- **Expected:** a diff that says which rows go (`DELETE ... id = 597`, `id = 593`) and which values are inserted; long lines wrapped or scrollable.
+- **Actual:**
+  ```
+  ops: 2
+  status: Pending
+  ready
+  DELETE FROM qa3.public.orders WHERE id = $n
+  DELETE FROM qa3.public.orders WHERE id = $n
+  ```
+  Two identical lines: the user cannot tell which rows will be deleted. The INSERT is `INSERT INTO qa3.public.orders (customer_id, status, total, note) VALUE` and cut at the border (Right/End do not scroll it); with only id typed it is `(id) VALUES ($1)`. The modal also has stray lines `ready` and `status: Pending` with no explanation.
+
+##### [MAJOR] Review Changes dialog has no buttons or key hints; Enter applies immediately, and the dialog stays open afterwards
+- **Where:** data.review / data.apply (standard 1)
+- **Steps:** mark a row with Delete, Ctrl+S, press Enter
+- **Expected:** [Apply] [Revert] [Close] buttons or at least `Enter apply  Esc close`; focus visible; Tab/arrows walk the buttons.
+- **Actual:** the modal shows only text. Tab/Up/Down/Left/Right do nothing. Enter runs the DELETEs at once (`status: Applied`), no confirmation, the dialog stays open showing the same statements, and the grid silently reloads on page 1 (a user on page 2 of a filtered+sorted view loses their place). Esc closes. On failure it shows `status: Failed` and `error: null value in column "customer_id" of relation "orders" violate` (cut at the border).
+
+##### [MAJOR] Closing a table-data tab with pending changes (Ctrl+W) drops them without asking
+- **Where:** document close on a table tab (product rule: unsaved close asks Save / Don't save / Cancel; standard 5)
+- **Steps:** pg-dev, Explorer `o` on `orders`, Delete on row 1 (Ctrl+S shows `ops: 1`), Esc, Ctrl+W
+- **Expected:** a prompt "Apply / Discard / Cancel" because rows are staged for deletion; the tab shows a modified marker.
+- **Actual:** the tab closes at once, the staged DELETE is lost, no message. The tab title never shows a `*`/changes marker while changes are pending (`pg-dev·orders`), nor does the Results title or status bar show a count of pending changes.
+
+##### [MINOR] Pending changes are almost invisible in the grid
+- **Where:** data.toggle_delete, data.insert_row
+- **Actual:** a row marked for deletion is only drawn in red text (no strike-through, no marker), and the cursor highlight (blue background) disappears on it, so you cannot see which row you are on except for `▸`. A pending INSERT is appended as the last row of the current page (on a 100-row page you do not see it unless you scroll to the bottom, so right after the form closes nothing seems to have happened) and is drawn exactly like a stored row, just with `NULL` in the id column (MySQL orders: `NULL   999   paid   5   NULL`); no colour/marker/`+`. No toast says it was queued (the form just closes). Palette items Apply/Revert/Discard are the only feedback channel: `Revert Changes` and `Discard All Pending Changes` (Ctrl+Shift+R) clear everything silently (no toast, Messages unchanged).
+
+##### [MINOR] Review Changes with nothing pending opens an empty modal; Apply/Revert in the palette say "no pending changes" but Ctrl+S does not
+- **Steps:** after Discard All, Ctrl+S
+- **Actual:** `ops: 0`, `status: Pending`, `ready`, no statements. Expected a toast "No pending changes".
+
+##### [MAJOR] There is no way to edit an existing cell's value
+- **Where:** table data (orders, customers) grid and record/actions menu
+- **Steps:** open `orders`, move to `status`/`total`/`note`; try Enter (menu has only Copy/Inspect/Filter/Sort/Count/Related/Back/Refresh), F2 (opens "Rename document" for the tab!), `e` (opens the Export "Transfer" dialog), double-click on the cell, typing a character
+- **Expected:** Enter/F2/double-click edits the cell and queues an UPDATE for the Review screen (users expect it from any data grid). At minimum the status bar/menu should say so.
+- **Actual:** none of these edits. Only Insert (`i`) and Delete are possible; to change a value you must write an UPDATE in the SQL editor. F2 renaming a table-data tab is surprising.
+
+##### [MINOR] Insert form gives no type, default or nullability hints and does not validate
+- **Where:** data.insert_row ("New row" dialog)
+- **Steps:** `i`; fields id, customer_id, status, total, placed_at, note (no `*`, no types); put `abc` in total and Insert
+- **Actual:** the dialog closes silently (no toast, nothing in the grid) and the invalid value is only discovered when applying: `invalid input syntax for type numeric: "abc"` (no column name). An empty field is omitted from the INSERT (defaults apply), which is good but not explained. The dialog works with mouse (fields and [Insert]/[Cancel] clickable, Esc cancels and the typed values are discarded, Enter inside a field submits the form).
+
+##### [MINOR] Ctrl+N does nothing in a table-data grid; the hotkey the command list gives for Insert Row is not the real one
+- **Where:** data.insert_row
+- **Steps:** focus the grid of `orders`, press Ctrl+N
+- **Expected:** the hotkey shown by the palette. Palette and F1 show `i`; the command list says Ctrl+N. Ctrl+N does nothing (no "New SQL" either, which the status bar advertises elsewhere).
+- **Also:** the status bar in a table tab shows `Enter actions  v view  n/p page  Ctrl+W close` and never mentions Insert, Delete, Review (Ctrl+S), Refresh, WHERE/ORDER BY.
+
+##### [COSMETIC] Table title after switching tabs loses the paging info
+- **Steps:** open `customers` (title `Results (~203 rows) page:0+100 more`), open `orders` in another tab, come back to `customers` via the tab
+- **Actual:** the title is now `Results (100 rows)` (and Console logs `SELECT * FROM qa3.public.customers LIMIT 100` again) although 103 more rows exist; `n` still works.
+
+##### [MINOR] Messages tab opens at the oldest message and the newest ones are off screen
+- **Where:** results.cycle_view -> Messages
+- **Steps:** after ~20 messages press `v` until Messages
+- **Actual:** the list starts at `Connecting to pg-dev…` (12:22) and ends at the 12:30 errors; the newer messages (apply errors, etc.) are below the pane with no scroll indicator; Down/mouse wheel scroll it, End/PageDown do not jump to the newest.
+
+##### [MINOR] Export dialog (`e` in table data) shows raw `key=value` text
+- **Where:** Transfer dialog opened from Results
+- **Actual:** `format=csv (Ctrl+F to cycle) strategy=Stop` and `progress rows=0 bytes=0 running=false` (standard 7). (Probably covered by the transfer tester; noted because `e` is listed as "Export Data" in F1 under Results.)
+
+##### [BLOCKER] Production apply confirmation can be satisfied by one mouse click, without typing the name; by keyboard it cannot be completed at all
+- **Where:** data.review / data.apply on `pg-prod` (production)
+- **Steps:** pg-prod, Explorer `o` on `orders`, Delete on a row, Ctrl+S, Enter. A warn toast says `type the target to confirm production apply` and the dialog shows `confirm production to apply`. (a) Type `pg-prod` (or `qa3.public.orders`), Enter: nothing is accepted, no input field is drawn, Tab/Down do nothing. (b) Instead click once on the line `confirm production to apply` (no typing): the line turns into `ready`; press Enter: `status: Applied`
+- **Expected:** a visible input labelled with the connection name that has focus on open; applying only when the exact name is typed (standard 8: production asks for the connection's name before any write); keyboard-only users can do it.
+- **Actual:** the confirmation field is invisible and not focused (typed text is lost and not echoed), the toast does not say which text is required ("the target": connection or table?), and a plain click on the label confirms it. Verified: row id 3 of `orders` was deleted from pg-prod by Delete, Ctrl+S, one click on the label, Enter, with nothing typed at all; row id 2 was deleted after typing the wrong word `wrong` (after the click).
+
+##### [MAJOR] A table opened from one connection's tree can be bound to a different connection (safety guards of the wrong connection apply)
+- **Where:** Explorer `o` (explorer.data) while another connection is the active one
+- **Steps:** with `pg-readonly` active (status bar `pg-readonly`), Alt+1, move with Up/Down (without Enter) onto `no_pk` under `pg-dev`, press `o`
+- **Expected:** a tab `pg-dev·no_pk` bound to pg-dev (documents belong to the connection of the tree node).
+- **Actual:** the tab is `pg-read…·no_pk` and the status bar says `pg-readonly`; applying a change then fails with `connection is read-only` although the table was opened from the pg-dev node. (When the node's connection is activated by Enter first, the tab is bound correctly.) The binding follows the connection that was last connected/clicked, not the node: with `pg-dev` active, `o` on `orders` under the `pg-readonly` node just focuses the existing `pg-dev·orders` tab, so a user who believes they are on the read-only connection edits pg-dev (and the reverse: a user on a pg-dev node can end up on pg-prod or pg-readonly). Pressing Enter on a child node does not activate its connection; only Enter on the connection root does. Worse: with `sqlite-shop` active, `o` on `events` under the `pg-readonly` node opens a tab bound to sqlite-shop that runs the Postgres query `SELECT * FROM qa3.public.events LIMIT 100` against SQLite and fails with `unknown database 'public'`. Tab labels are also cut (`pg-read…·orders`, `mysql-d…·orders`) so the two `pg-read…` tabs and `pg-prod`/`pg-dev` are hard to tell apart.
+
+##### [MAJOR] Insert on a table without key or on a view: the form opens, accepts input, closes, then says `table is read-only`; nothing is queued
+- **Where:** data.insert_row on `no_pk` (no primary key) and on view `paid_orders`
+- **Steps:** open `no_pk` (pg-dev), `i`, type 9 in `a`, Enter
+- **Expected:** `i` refuses before the form (as Delete does) with an accurate reason, or the INSERT works (INSERT does not need a key).
+- **Actual:** error toast `table is read-only` after the form closed, the Review shows `ops: 0`. Delete on the same table says `this table has no primary key or unique column, so rows cannot be deleted`, and on the view the same message says "table" (`paid_orders` is a view): `this table has no primary key...`. The wording differs per action, "read-only" is wrong for no_pk. Rows of `no_pk` with identical content (1/x, 1/x) are shown and cannot be told apart.
+
+##### [MINOR] Read-only connection accepts staged changes and says `ready`; only Apply refuses
+- **Where:** pg-readonly, data.toggle_delete / data.insert_row / data.review
+- **Steps:** open `orders` on pg-readonly, Delete on a row (or `i` + customer_id + Enter), Ctrl+S, Enter
+- **Actual:** the row is marked, the Review says `status: Pending` and `ready` (nothing says the connection is read-only), Enter then shows `warn: connection is read-only`. Refusal works, but late; the status bar shows `○DEV pg-readonly` with no read-only badge.
+
+##### [MINOR] Review lists composite-key deletes as invalid SQL, and error toasts are cut at the edge
+- **Where:** data.review on SQLite `order_items` (composite PK); MySQL FK error
+- **Actual:** `DELETE FROM main.order_items WHERE order_id, product_id = $n`. MySQL insert with a bad FK: toast `...: a foreign key constraint fails (`qa3`.`orders`, CONSTRAINT `orders_ibfk_1` FOREIG│` cut with no ellipsis, and the Review `error:` line is cut at the dialog border (`error: Cannot add or update a child row: a foreign key constraint fail`), so the user cannot read what failed. The Review also says `ready` next to `status: Failed`.
+
+##### [MAJOR] After switching to another tab and back, Delete says "this table has no primary key" on a table that has one (and Insert says "table is read-only")
+- **Where:** data.toggle_delete / data.insert_row on a table-data tab (tab switch reloads the document)
+- **Steps:** pg-dev, Explorer `o` on `orders`; Delete works (`ops: 1` in Ctrl+S). Discard (Ctrl+Shift+R). Click another tab (e.g. `mysql-d…·orders`), click `pg-dev·orders` again (title is now `Results (100 rows)`, console logs `SELECT * FROM qa3.public.orders LIMIT 100` again), Alt+2, Delete
+- **Expected:** same behaviour as before the switch (orders has `orders_pkey`).
+- **Actual:** toast `this table has no primary key or unique column, so rows cannot be deleted`, `Ctrl+S` shows `ops: 0`; `i` + Enter gives `table is read-only`. Ctrl+R does not fix it (title returns to `~1.0K rows page:0+100 more`, Delete still refused). Only pressing `o` on the table in the Explorer again (re-opening) restores editing. The same happened to `customers` (which has `customers_pkey` and a unique email). A user will think the table lost its key.
+
+##### [MAJOR] A 40-column table is unreadable in the grid at 120 columns, and its record view cannot be scrolled
+- **Where:** results grid / record view, `select * from wide` (id + c01..c40)
+- **Steps:** pg-dev, `select * from wide limit 5`, Alt+3. Then palette "Toggle Record View"
+- **Expected:** readable column widths with horizontal scrolling (as with `customers`), or at least headers; every field reachable.
+- **Actual:** every column is squeezed to 1-2 characters: header `… … … … …` and values `… … …`, column names invisible; Right moves a hidden cursor column by column but the view never scrolls. Only at ~250 columns do names (`c01 c02 ...`) appear (values still `val…`). Record view shows 17 of 41 fields in a 36-row terminal (25 when the results pane is grown with Alt+Up x8); PageDown/Down move to the next record, the mouse wheel does nothing, so fields `c26..c40` can never be seen. Inspect Value works per cell but needs the invisible cursor.
+
+##### [MAJOR] NULL and the text `NULL` look identical; empty string and a single space look identical
+- **Where:** results grid and record view
+- **Steps:** `select null as n, '' as empty, 'NULL' as txt, ' ' as sp, null::jsonb as nj, 'null'::jsonb as jnull`
+- **Expected:** NULL drawn differently (dim/italic or `∅`) so `NULL` the text can be told apart (and an empty string from NULL).
+- **Actual:** record view: `n │ NULL`, `txt │ NULL` both in the same colour/style (checked colours: identical); `empty │` and `sp │` both blank. jsonb `null` shows lowercase `null`, SQL NULL in a jsonb column `NULL`. In the grid the NULL cell shows `N…` when the column is narrow.
+
+##### [MAJOR] Inspect Value shows only the first line, cut at the modal border: long text cannot be read
+- **Where:** data.inspect on a text cell of 400 characters
+- **Steps:** `select repeat('long text ', 40) as longtxt`, Alt+3, Inspect Value from the palette
+- **Expected:** wrapped and scrollable (Down/PageDown/wheel) text, with the length.
+- **Actual:** one line of ~70 characters (`long text long text ... long text `), the rest is lost; Down, End and the wheel do nothing. In the record view the same value is also cut at the border without wrap or `…`. Tab characters in values are dropped (`E'tab\there'` shows `tabhere`).
+
+##### [MINOR] Row/column "select" commands give no visible feedback
+- **Where:** results.select_row (`r`), results.select_column (`c`)
+- **Steps:** Alt+2 on `orders`, Right Right, press `c`; then `r`
+- **Actual:** nothing changes on screen after `c` (the column is not highlighted, only the header stays reversed), and `r` moves the column cursor to `id` while the row was already highlighted. They only reveal themselves when you copy: after `c`, Copy as CSV copies `status` plus all 100 rows (`copied 101 lines`); after `r`, the full row. The status bar does not say either mode is active. Shift+Left/Right, Shift+Home/End do nothing (selection is rows only).
+
+##### [MINOR] Ctrl+C in the grid does nothing
+- **Where:** results grid
+- **Steps:** Alt+3 on a query result, Ctrl+C, `qa.sh clipboard`
+- **Expected:** copy the current cell/selection like every grid (the editor binds Ctrl+C = Copy).
+- **Actual:** silent no-op; the clipboard keeps its old content. Copying requires Enter -> Copy cell or the palette.
+
+##### [MINOR] After over-shooting Alt+Up/Alt+Down on the Results pane, the grid cursor leaves the screen and the view stops following it
+- **Where:** results grid after pane resizing (works normally in the default layout: the wheel moves the cursor one row per notch and the view follows)
+- **Steps:** Results pane showing 9 rows (after Alt+Up x13 then Alt+Down x8, Alt+Up/Down are not clamped), run a 60-row query, Alt+3, press Down 14 times or wheel down 14 notches
+- **Expected:** the view follows the selection (standard 6).
+- **Actual:** rows 1..9 stay on screen and the `▸` cursor disappears below the pane (cursor row 15 invisible); another 30 wheel notches scroll the view to rows 23-31 with no visible cursor either. Related: Alt+Up/Alt+Down count presses beyond the limits (pressing Alt+Down 19 times leaves the pane with 3 lines: title, tabs, WHERE bar, zero grid rows, no bottom border, `└WHERE w to filter` overlapping the sidebar corner), so the first Alt+Up/Down presses after hitting a limit do nothing visible.
+
+##### [COSMETIC] Status bar at 60x20 reorders and lower-cases hints; sidebar hides itself and does not come back
+- **Where:** layout at small size
+- **Steps:** resize 60x20 then 120x36
+- **Actual:** the 60-col bar reads `pg-dev  ctrl+p  F1  Enter actions  v view  n/p page  Ctrl+W` (lowercase `ctrl+p`, `F1` moved before the hints, `Ctrl+W close` cut to `Ctrl+W`; at 80 cols it is `Ctrl+P  F1` right-aligned). At 60 columns the Explorer and Console panes are removed (fine, the grid and Review fit); back at 120x36 the Explorer stays hidden until Alt+E.
+
+##### [COSMETIC] Empty result shows only the header and no "0 rows" text; Esc in the grid does not clear a multi-row selection
+- **Where:** `select * from orders where false`; grid selection
+- **Actual:** header row only, empty body (title says `(0 rows)`). After Shift+Down selection, Esc does nothing (Up/Down collapse it; Esc does not even move focus).
+
+##### [MAJOR] After closing a document the status bar and the actions keep the closed tab's connection: the Insert form is empty and Delete says "no primary key"
+- **Where:** tabs / data.insert_row / data.toggle_delete (standard 5: switching tabs switches the session)
+- **Steps:** with `pg-dev·products` (table data, 51 rows) focused, C-p "New Document" Enter (a new tab `sqlite-…·New Docume…` appears and the status bar changes to `sqlite-shop` because the explorer cursor was on sqlite-shop, not on the active tab's connection), Ctrl+W to close it, back on `pg-dev·products`
+- **Expected:** status bar `pg-dev`, and `i` shows the 6 fields of `products`.
+- **Actual:** the header and the bottom bar stay `sqlite-shop` while the grid shows pg-dev rows; `i` opens a "New row" dialog with no fields at all (only `[Insert] [Cancel]`); Delete says `this table has no primary key or unique column`; Ctrl+S shows `target: qa3.public.products`, `ops: 0`. (Same family as "after switching tabs Delete says no primary key".)
+- **Also:** Ctrl+N (listed as New Document in the palette) does nothing while the Results pane has focus (only the palette entry works), and the document it creates is bound to the Explorer's connection, not to the tab you are in, and is named `New Document.sql` instead of `query-N.sql`.
+
+##### [MAJOR] "Copy as CSV/JSON/Markdown/SQL/Text" from the palette copies only the cursor cell; the same names in the Enter menu copy the whole row
+- **Where:** data.copy.csv / .json / .markdown / .sql / .text (palette) vs results.actions menu
+- **Steps:** `select 1 as a, 2 as b, 3 as c union all select 4,5,6 union all select 7,8,9`, Alt+3 (3 rows x 3 columns), Down (cursor on row 2, column a). C-p "Copy as JSON" Enter, `qa.sh clipboard`. Then Enter -> Copy as Markdown, `qa.sh clipboard`
+- **Expected:** the same scope for the same command name (the selected rows, or the whole result), and a toast that says what was copied.
+- **Actual:** palette: `[ { "a": 4 } ]` (one cell, one key); `Copy as CSV` gives `a` / `1`. Enter menu: `| a | b | c |` / `| 4 | 5 | 6 |` (the row). After `r` the palette copies the row (`x,y,z` / `a|b,q"r,k,l`), after `c` the whole column, and the mode survives into other results and tabs until another key resets it (a later query in another tab copied only column `x` of a 3-column result). The toast only says `copied 2 lines to clipboard`, so the user cannot tell they exported 1 of 9 cells.
+
+##### [COSMETIC] Palette `New Document` asks for a name; Ctrl+N does not
+- **Where:** palette "New Document" vs Ctrl+N in the editor
+- **Actual:** the palette item opens `New document  name: ...  [Create] [Cancel]`; Ctrl+N creates `query-N.sql` at once. No hint in the palette tells them apart.
+
+
+#### Checked and fine
+
+- results.up / results.down / results.left / results.right (arrows): move the cursor, header of the current column reversed, selected row highlighted with a blue background and `▸`.
+- results.pageup / results.pagedown: move one page (17 rows at 120x36), fast (61 PageDowns in <1 s on a 10,000-row result, no crash).
+- results.extend_up / results.extend_down (Shift+Up/Down): rows 201-203 selected, selected range drawn in a darker blue, cursor row lighter; Up/Down collapse it; a copy of the selection exports all selected rows.
+- results.toggle_pick (Ctrl+Enter): picks non-contiguous rows (rows 5 and 7 both marked `▸`).
+- results.actions (Enter): modal with Record panel plus Actions; Copy cell / JSON / CSV / Markdown / SQL / Inspect / Filter / Sort / Sort by this column / Add this column / Count / Related / Back / Refresh all run; mouse click on an item runs it; Esc closes.
+- results.record_view (palette): one field per line, values aligned, NULL/jsonb/arrays/booleans/unicode shown correctly; Up/Down switch record.
+- results.cycle_view (`v`): Grid -> Explain (Tree/Table/Summary) -> Messages -> Grid; clicking Grid/Explain/Messages tabs works.
+- results.next_tab / results.prev_tab (`]`, `[`) and clicking `result 1..4`: switch the 4 result tabs of an Execute Document run, wrap around.
+- results.count (`t`): `10,000+ rows, limit reached` becomes `20,000 rows` on `events`; `~1.0K rows` becomes `996 rows` on orders.
+- results.sort_column / results.sort_add_column (`s`, `S`) and header click / Shift+click on header (sent as SGR with the shift bit): ASC -> DESC -> none, second column adds `▲2`, sort is server-side and shows `ORDER BY ...`.
+- data.filter (`w`) and data.sort (`o`) bars: typing, Enter applies, Esc restores the previous text, clearing the text and Enter removes the filter; Ctrl+A shows reverse video and typing replaces it, Ctrl+W, Ctrl+Backspace, Ctrl+Left/Right, Home/End work; clicking the bar focuses it; `;` is refused (`Not applied: a clause is one part of one statement: no ;`); quoted mixed-case column `"Label"` works.
+- data.page_next / data.page_prev (`n`/`p`) on table data: 100-row pages, `page:100+100 more`, fast (50 pages of `events` in <3 s); `~20.0K rows` estimate for events.
+- data.refresh (Ctrl+R): reloads; with pending changes it says `Apply or discard the pending changes before reloading the table.`
+- data.related (`f`) and data.nav_back (`b`): modal lists `← order_items (order_id)` and `→ customers (customer_id)`; Enter opens the related rows in a new tab with the filter in the title; `b` closes it and restores the page, filter and sort; `b` on a tab not opened that way says `These rows were not opened from a related row; there is no way back.`; `f` on a query result says `Related rows are a table's; open a table's rows first.`
+- data.inspect on text, enum, timestamp, NULL and jsonb (pretty-printed) values (integers and decimals are broken, see findings).
+- data.toggle_delete (Delete) on orders / MySQL legacy_log / SQLite order_items (composite key): row marked in red, applied by Review; works on pg-dev, MySQL (MyISAM table too) and SQLite; refuses on `no_pk` with a clear message.
+- data.insert_row (`i`) form: Up/Down walk fields, Esc cancels and discards, Enter submits, clicking fields and [Insert]/[Cancel] works; inserts with defaults omitted (id serial, placed_at now()), text with quotes and commas, array `{a,b}` and boolean values, mixed-case table `"MixedCase"`, MySQL.
+- data.apply / data.revert / data.discard_all (Ctrl+Shift+R sent as CSI-u): apply works on pg-dev, MySQL, SQLite, DuckDB view is refused as read-only; failures show `status: Failed` plus the database error and keep the change pending; Revert/Discard clear it.
+- pg-readonly: Apply refuses with `connection is read-only` (late, see findings).
+- Production connection: apply asks for confirmation (but see the blocker).
+- Mouse: clicking a cell selects row and column; clicking a tab switches; clicking the WHERE/ORDER BY bars; wheel scrolls the grid (moves the cursor one row per notch in the default layout); clicking Insert form fields/buttons and menu items.
+- Small terminals: 80x24 grid and Review fit; 60x20 hides the sidebar/console, grid and Review still fit and work.
+- `events` (20,000 rows) in a query: 10,000 loaded with `limit reached`, count button, PageDown speed fine; as table data paging is fast.
+- No crash or freeze in the whole session (`qa.sh alive` always `running`).
+
+#### Not testable
+
+- Ctrl+Shift+R, Shift+click on headers: tmux cannot send them; sent as raw CSI-u / SGR sequences instead (worked).
+- DuckDB `sales`: only filter, sort, paging, Delete/Insert refusal checked (it is a view over a CSV).
+- Row actions on a result of a multi-statement run through every tab combination, and `results.top` (no palette entry, no key bound: reported).
+- Copy via the real system clipboard (disabled): checked through OSC 52 and `qa.sh clipboard` only.
+- Typing the production connection's name in the review dialog by keyboard: no input is shown or focused, so it could not be completed that way (see blocker).
+- Behaviour of Delete/Insert on MySQL views and of MySQL/SQLite `WHERE` syntax errors beyond one FK error.
