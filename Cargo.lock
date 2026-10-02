@@ -2025,6 +2025,7 @@ name = "dexo-driver-duckdb"
 version = "1.4.1"
 dependencies = [
  "async-trait",
+ "chrono",
  "dexo-driver-api",
  "dexo-sql",
  "duckdb",

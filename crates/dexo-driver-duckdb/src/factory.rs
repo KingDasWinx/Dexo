@@ -78,7 +78,11 @@ fn databases() -> &'static Mutex<HashMap<PathBuf, Weak<SharedDatabase>>> {
 /// and a read-only session refuses the SET, PRAGMA, INSTALL and LOAD that would change
 /// them, which are not queries.
 fn config(read_only: bool) -> Result<Config, duckdb::Error> {
-    let config = Config::default().with("autoinstall_known_extensions", "false")?;
+    // Types Arrow has none for -- TIMETZ, UHUGEINT, BIGNUM -- arrive as their own bytes,
+    // not as a nearest Arrow type that loses the offset or wraps the number.
+    let config = Config::default()
+        .with("autoinstall_known_extensions", "false")?
+        .with("arrow_lossless_conversion", "true")?;
     if read_only {
         config.access_mode(AccessMode::ReadOnly)
     } else {

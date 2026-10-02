@@ -6,7 +6,7 @@ use duckdb::types::Value;
 use duckdb::{Connection, OptionalExt, params};
 
 use crate::catalog::{place_of, rows};
-use crate::decode::{column_meta, qualify, quote, to_sql};
+use crate::decode::{column_meta, compared_as_text, qualify, quote, to_sql};
 use crate::error::{map_error, writes_refused};
 use crate::session::{DuckdbSession, begin_own, decode_rows};
 
@@ -160,6 +160,13 @@ fn predicate<'a>(
     columns
         .map(|(column, value)| match value {
             DbValue::Null => format!("{} IS NULL", quote(&column.0)),
+            DbValue::Native {
+                type_name, text, ..
+            } if compared_as_text(type_name) => format!(
+                "CAST({} AS VARCHAR) = {}",
+                quote(&column.0),
+                binder.push(&DbValue::Text(text.clone()))
+            ),
             _ => format!("{} = {}", quote(&column.0), binder.push(value)),
         })
         .collect::<Vec<_>>()
@@ -264,6 +271,37 @@ fn table_keys(conn: &Connection, name: &QualifiedName) -> Result<Vec<ColumnKeyIn
     Ok(infos)
 }
 
+/// A table's columns by the names `duckdb_columns()` gives their types, which carry an
+/// ARRAY's size and an ENUM's values that a result's column types do not.
+fn exact_types(
+    conn: &Connection,
+    table: &QualifiedName,
+    columns: &mut [ColumnMeta],
+    page: &mut [Vec<DbValue>],
+) -> Result<(), DriverError> {
+    let (database, schema) = place_of(conn, table)?;
+    let types = rows(
+        conn,
+        "SELECT column_name, data_type FROM duckdb_columns()
+         WHERE lower(database_name) = lower($1) AND lower(schema_name) = lower($2)
+           AND lower(table_name) = lower($3)",
+        params![database, schema, table.object()],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
+    )?;
+    for (index, column) in columns.iter_mut().enumerate() {
+        let Some((_, exact)) = types.iter().find(|(name, _)| *name == column.name) else {
+            continue;
+        };
+        column.type_name.clone_from(exact);
+        for row in page.iter_mut() {
+            if let Some(DbValue::Native { type_name, .. }) = row.get_mut(index) {
+                type_name.clone_from(exact);
+            }
+        }
+    }
+    Ok(())
+}
+
 /// Runs a SELECT Dexo wrote around the user's clauses: in a read-only transaction rolled
 /// back after it, unless the user has one open. DuckDB's own parser has to read it as the
 /// one query it was written as; clause text that ends it early is refused.
@@ -301,7 +339,7 @@ fn read_rows(
             .collect();
         let mut rows = Vec::new();
         while let Some(chunk) = statement.step().map_err(map_error)? {
-            rows.extend(decode_rows(chunk.columns(), &type_names)?);
+            rows.extend(decode_rows(chunk.columns(), &schema, &type_names));
         }
         Ok((columns, rows))
     })();
@@ -369,7 +407,8 @@ impl DataMutator for DuckdbSession {
         self.with_conn(move |conn| {
             let rowid = request.columns.is_empty() && keyed_by_rowid(conn, &request.object)?;
             let (sql, binder) = render_fetch(&request, rowid);
-            let (columns, rows) = read_rows(conn, &sql, binder.values)?;
+            let (mut columns, mut rows) = read_rows(conn, &sql, binder.values)?;
+            exact_types(conn, &request.object, &mut columns, &mut rows)?;
             let rows = rows
                 .into_iter()
                 .map(|row| row.into_iter().map(cap_value).collect())

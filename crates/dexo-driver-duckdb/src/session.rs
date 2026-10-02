@@ -457,7 +457,7 @@ fn run_statements(
         let mut truncated = false;
         let mut batch_rows = Vec::new();
         'chunks: while let Some(chunk) = statement.step().map_err(map_error)? {
-            let rows = decode_rows(chunk.columns(), &type_names)?;
+            let rows = decode_rows(chunk.columns(), &schema, &type_names);
             for row in rows {
                 if row_limit > 0 && emitted == row_limit {
                     truncated = true;
@@ -495,18 +495,21 @@ fn run_statements(
 }
 
 /// The rows of one chunk, its columns decoded together.
+/// The rows of one chunk, its columns decoded together. `schema` is the result's, whose
+/// fields name the DuckDB types Arrow has none for.
 pub(crate) fn decode_rows(
     arrays: &[ArrayRef],
+    schema: &Schema,
     type_names: &[String],
-) -> Result<Vec<Vec<DbValue>>, DriverError> {
+) -> Vec<Vec<DbValue>> {
     let len = arrays.first().map_or(0, |array| array.len());
     let mut rows: Vec<Vec<DbValue>> = (0..len).map(|_| Vec::with_capacity(arrays.len())).collect();
-    for (array, type_name) in arrays.iter().zip(type_names) {
-        for (row, cell) in rows.iter_mut().zip(decode_column(array, type_name)?) {
+    for ((array, field), type_name) in arrays.iter().zip(schema.fields()).zip(type_names) {
+        for (row, cell) in rows.iter_mut().zip(decode_column(array, field, type_name)) {
             row.push(cell);
         }
     }
-    Ok(rows)
+    rows
 }
 
 /// What DuckDB answers a statement that returns no rows of its own with: a `Count` of

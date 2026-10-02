@@ -165,77 +165,153 @@ async fn queries_bind_parameters_honour_the_row_limit_and_report_writes() {
     assert!(events.contains(&QueryEvent::Columns(Vec::new())));
 }
 
+/// Every value reads as DuckDB writes it cast to VARCHAR -- which DuckDB reads back as
+/// the same value. Arrow's formatter wrote a struct as `{a: 1}`, strings in a list
+/// unquoted, a UHUGEINT past 2^127 negative, and failed on an infinite date.
 #[tokio::test(flavor = "multi_thread")]
 async fn duckdb_types_read_as_duckdb_writes_them() {
     let session = DuckdbFactory
         .connect(request(":memory:", false))
         .await
         .unwrap();
+    let values = [
+        "true",
+        "170141183460469231731687303715884105727::HUGEINT",
+        "(-170141183460469231731687303715884105727)::HUGEINT - 1",
+        "340282366920938463463374607431768211455::UHUGEINT",
+        "'-123456789012345678901234567890'::BIGNUM",
+        "1.50::DECIMAL(10,2)",
+        "['a', 'a b', 'a,b', 'NULL', NULL, '', ' x', 'it''s', '[x]', 'a:b']",
+        "{'a': 'x y', 'b': NULL, 'c': [1, 2]}",
+        "MAP {'k': 'v,1', 'z': NULL}",
+        "union_value(str := 'a b,c')::UNION(num INT, str VARCHAR)",
+        "[1, 2]::INTEGER[2]",
+        "'6ea0f862-6093-4e90-8e8d-7b3d3d9d0416'::UUID",
+        "INTERVAL '1 year 2 months 3 days 04:05:06.5'",
+        "INTERVAL '-36 hours'",
+        "'2020-01-01 10:00:00.5+00'::TIMESTAMPTZ",
+        "'2020-01-01 10:00:00.5'::TIMESTAMP",
+        "'2020-01-01 10:00:00.123456789'::TIMESTAMP_NS",
+        "'infinity'::TIMESTAMP",
+        "'0044-03-15 (BC)'::DATE",
+        "'12345-01-01'::DATE",
+        "'-infinity'::DATE",
+        "'12:00:00.25'::TIME",
+        "'12:00:00+05:30'::TIMETZ",
+        "'0101'::BIT",
+        "3::UBIGINT",
+        "'a'::ENUM('a', 'b')",
+        "'{\"a\": 1}'::JSON",
+        "['{\"a\": 1}'::JSON]",
+        "0.1::FLOAT",
+        "1e300::DOUBLE",
+        "1e-7::DOUBLE",
+        "'nan'::DOUBLE",
+        "[1.5::DOUBLE, 1e16]",
+        "['2020-01-01'::DATE, '0044-03-15 (BC)'::DATE]",
+        "[{'a': 'x,y'}]",
+    ];
+    let select = values
+        .iter()
+        .map(|value| format!("{value}, ({value})::VARCHAR"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let events = run(&*session, QueryRequest::read(format!("select {select}"), 0))
+        .await
+        .unwrap();
+    let row = &rows(&events)[0];
+    for (index, value) in values.iter().enumerate() {
+        let read = match &row[index * 2] {
+            DbValue::Null => "NULL".to_string(),
+            DbValue::Bool(value) => value.to_string(),
+            DbValue::I64(value) => value.to_string(),
+            DbValue::U64(value) => value.to_string(),
+            DbValue::Decimal(text) | DbValue::Text(text) | DbValue::Json(text) => text.clone(),
+            DbValue::Native { text, .. } => text.clone(),
+            DbValue::Bytes(bytes) => format!("{bytes:?}"),
+        };
+        let DbValue::Text(written) = &row[index * 2 + 1] else {
+            panic!("{value}: DuckDB wrote {:?}", row[index * 2 + 1]);
+        };
+        assert_eq!(&read, written, "{value}");
+    }
+    let QueryEvent::Columns(columns) = &events[1] else {
+        panic!("columns follow the start: {events:?}");
+    };
+    assert_eq!(columns[2].type_name, "HUGEINT");
+    assert_eq!(columns[12].type_name, "VARCHAR[]");
+    assert_eq!(
+        columns[14].type_name,
+        "STRUCT(a VARCHAR, b INTEGER, c INTEGER[])"
+    );
+    assert_eq!(row[0], DbValue::Bool(true));
+    assert_eq!(row[48], DbValue::U64(3));
+    // A union holding a NULL member is NULL.
     let events = run(
         &*session,
-        QueryRequest::read(
-            "select 170141183460469231731687303715884105727::HUGEINT h, 1.50::DECIMAL(10,2) d,
-                    [1, NULL]::INTEGER[] l, {'a': 1} s, MAP {'k': 1} m,
-                    '6ea0f862-6093-4e90-8e8d-7b3d3d9d0416'::UUID u, INTERVAL 1 DAY i,
-                    '2020-01-01 10:00:00+00'::TIMESTAMPTZ tz, '2020-01-01 10:00:00.5'::TIMESTAMP ts,
-                    '2020-01-02'::DATE dt, '\\xAA'::BLOB b, '0101'::BIT bits, 3::UBIGINT ub,
-                    'a'::ENUM('a', 'b') e, '{\"a\": 1}'::JSON j, 0.1::FLOAT f",
-            0,
+        QueryRequest::read("select NULL::UNION(num INT, str VARCHAR)", 0),
+    )
+    .await
+    .unwrap();
+    assert_eq!(rows(&events), [vec![DbValue::Null]]);
+}
+
+/// A row of every awkward type is found again by the values it was read with: an edit
+/// is keyed by them, and one that missed its row reported a conflict.
+#[tokio::test(flavor = "multi_thread")]
+async fn rows_of_every_type_are_found_by_the_values_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("types.duckdb");
+    let session = open(&path, false).await;
+    run(
+        &*session,
+        QueryRequest::write(
+            "create table t (
+                l VARCHAR[], s STRUCT(a INTEGER, b VARCHAR), m MAP(VARCHAR, INTEGER),
+                u UNION(num INTEGER, str VARCHAR), z TIMETZ, h UHUGEINT, b BIGNUM,
+                d DATE, ts TIMESTAMP, f DOUBLE, i INTERVAL, a INTEGER[2], e ENUM('x', 'y'));
+             insert into t values (
+                ['a, b', 'NULL', NULL], {'a': 1, 'b': 'x:y'}, MAP {'k': 1},
+                union_value(str := 'a b'), '12:00:00+05:30',
+                340282366920938463463374607431768211455, '-123456789012345678901234567890',
+                'infinity', '2020-01-01 10:00:00.5', 0.1, INTERVAL '1 day -01:00:00',
+                [1, 2], 'y')",
         ),
     )
     .await
     .unwrap();
-    let QueryEvent::Columns(columns) = &events[1] else {
-        panic!("columns follow the start: {events:?}");
-    };
-    let types: Vec<&str> = columns
+    let data = session.data().unwrap();
+    let page = data
+        .fetch(DataRequest {
+            object: QualifiedName::new(Some("types"), Some("main"), "t"),
+            columns: Vec::new(),
+            filter: None,
+            sort: Vec::new(),
+            page: Page::new(0, 10).unwrap(),
+            clauses: Default::default(),
+        })
+        .await
+        .unwrap();
+    assert_eq!(page.columns[0].name, "rowid");
+    assert_eq!(page.columns[12].type_name, "INTEGER[2]");
+    let identity: Vec<(ColumnId, DbValue)> = page
+        .columns
         .iter()
-        .map(|column| column.type_name.as_str())
+        .zip(&page.rows[0])
+        .skip(1)
+        .map(|(column, value)| (ColumnId(column.name.clone()), value.clone()))
         .collect();
-    assert_eq!(
-        types,
-        [
-            "HUGEINT",
-            "DECIMAL(10,2)",
-            "INTEGER[]",
-            "STRUCT(a INTEGER)",
-            "MAP(VARCHAR, INTEGER)",
-            "UUID",
-            "INTERVAL",
-            "TIMESTAMP WITH TIME ZONE",
-            "TIMESTAMP",
-            "DATE",
-            "BLOB",
-            "BIT",
-            "UBIGINT",
-            "ENUM",
-            "JSON",
-            "FLOAT"
-        ]
-    );
-    let row = &rows(&events)[0];
-    assert_eq!(
-        row[0],
-        DbValue::Decimal("170141183460469231731687303715884105727".into())
-    );
-    assert_eq!(row[1], DbValue::Decimal("1.50".into()));
-    assert_eq!(
-        row[5],
-        DbValue::Text("6ea0f862-6093-4e90-8e8d-7b3d3d9d0416".into())
-    );
-    assert_eq!(row[10], DbValue::Bytes(vec![0xAA]));
-    assert_eq!(row[12], DbValue::U64(3));
-    assert_eq!(row[13], DbValue::Text("a".into()));
-    assert_eq!(row[14], DbValue::Json("{\"a\": 1}".into()));
-    let text = &texts(&events)[0];
-    assert_eq!(text[2], "[1, NULL]");
-    assert_eq!(text[3], "{a: 1}");
-    assert_eq!(text[4], "{k: 1}");
-    assert_eq!(text[7], "2020-01-01 10:00:00+00:00");
-    assert_eq!(text[8], "2020-01-01 10:00:00.500");
-    assert_eq!(text[9], "2020-01-02");
-    assert_eq!(text[11], "0101");
-    assert_eq!(text[15], "0.1");
+    data.apply(&[Mutation::Delete {
+        table: QualifiedName::new(Some("types"), Some("main"), "t"),
+        identity,
+        original: Vec::new(),
+    }])
+    .await
+    .unwrap();
+    let events = run(&*session, QueryRequest::read("select count(*) from t", 0))
+        .await
+        .unwrap();
+    assert_eq!(texts(&events), [["0"]]);
 }
 
 #[tokio::test(flavor = "multi_thread")]

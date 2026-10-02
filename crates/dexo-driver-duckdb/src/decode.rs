@@ -1,16 +1,10 @@
-use std::sync::Arc;
-
-use dexo_driver_api::{ColumnMeta, DbValue, DriverError};
-use duckdb::arrow::array::{Array, ArrayData, ArrayRef, AsArray, make_array};
-use duckdb::arrow::compute::cast;
-use duckdb::arrow::datatypes::{
-    DataType, Decimal128Type, Field, Fields, Float32Type, Float64Type, Int64Type, UInt64Type,
-};
-use duckdb::arrow::util::display::{ArrayFormatter, FormatOptions};
+use dexo_driver_api::{ColumnMeta, DbValue};
+use duckdb::arrow::array::{Array, ArrayRef, AsArray};
+use duckdb::arrow::datatypes::{DataType, Field, UInt64Type};
 use duckdb::core::{LogicalTypeHandle, LogicalTypeId};
 use duckdb::types::Value;
 
-use crate::error::internal;
+use crate::render;
 
 pub fn column_meta(name: &str, logical: &LogicalTypeHandle) -> ColumnMeta {
     ColumnMeta {
@@ -20,8 +14,10 @@ pub fn column_meta(name: &str, logical: &LogicalTypeHandle) -> ColumnMeta {
     }
 }
 
-/// DuckDB's own name for a type, as `duckdb_columns()` writes it: `DECIMAL(10,2)`,
-/// `INTEGER[]`, `STRUCT(a INTEGER)`, and an alias such as `JSON` by its alias.
+/// DuckDB's name for a result column's type: `DECIMAL(10,2)`, `INTEGER[]`,
+/// `STRUCT(a INTEGER)`, and an alias such as `JSON` by its alias. The C API gives neither
+/// an ARRAY's size nor an ENUM's values, so those read `INTEGER[]` and `ENUM`; a table's
+/// columns take their names from `duckdb_columns()`, which has both.
 pub fn type_name(logical: &LogicalTypeHandle) -> String {
     if let Some(alias) = logical.get_alias() {
         return alias;
@@ -98,176 +94,98 @@ fn simple_type_name(id: LogicalTypeId) -> &'static str {
 }
 
 /// The cells of one column of a chunk. Integers, booleans, text, JSON and blobs arrive
-/// as themselves; a DECIMAL or HUGEINT as its digits; a float as the shortest text that
-/// reads back as the same number; anything else -- dates, intervals, lists, structs,
-/// maps -- as DuckDB writes it, under `type_name`.
-pub fn decode_column(array: &ArrayRef, type_name: &str) -> Result<Vec<DbValue>, DriverError> {
-    let len = array.len();
-    let cells = |value: &dyn Fn(usize) -> DbValue| -> Vec<DbValue> {
-        (0..len)
-            .map(|row| {
-                if array.is_null(row) {
-                    DbValue::Null
-                } else {
-                    value(row)
+/// as themselves; a DECIMAL, HUGEINT or BIGNUM as its digits; anything else -- floats,
+/// dates, intervals, lists, structs, maps -- as DuckDB writes it cast to VARCHAR, under
+/// `type_name`, which DuckDB reads back as the same value.
+pub fn decode_column(array: &ArrayRef, field: &Field, type_name: &str) -> Vec<DbValue> {
+    let opaque = render::opaque_type(field);
+    (0..array.len())
+        .map(|row| {
+            if array.is_null(row) {
+                return DbValue::Null;
+            }
+            match (array.data_type(), opaque) {
+                (DataType::Boolean, _) => DbValue::Bool(array.as_boolean().value(row)),
+                (_, Some("bool8")) => DbValue::Bool(
+                    render::render(array.as_ref(), field, row).as_deref() == Some("true"),
+                ),
+                (DataType::UInt64, _) => {
+                    DbValue::U64(array.as_primitive::<UInt64Type>().value(row))
                 }
-            })
-            .collect()
-    };
-    let native = |text: String| DbValue::Native {
+                (
+                    DataType::Int8
+                    | DataType::Int16
+                    | DataType::Int32
+                    | DataType::Int64
+                    | DataType::UInt8
+                    | DataType::UInt16
+                    | DataType::UInt32,
+                    _,
+                ) => render::render(array.as_ref(), field, row)
+                    .and_then(|text| text.parse().ok())
+                    .map_or(DbValue::Null, DbValue::I64),
+                (
+                    DataType::Utf8
+                    | DataType::LargeUtf8
+                    | DataType::Utf8View
+                    | DataType::Dictionary(..),
+                    _,
+                ) => {
+                    let text = render::render(array.as_ref(), field, row).unwrap_or_default();
+                    if type_name == "JSON" {
+                        DbValue::Json(text)
+                    } else {
+                        DbValue::Text(text)
+                    }
+                }
+                (_, Some("uuid")) => {
+                    DbValue::Text(render::render(array.as_ref(), field, row).unwrap_or_default())
+                }
+                (_, Some("hugeint" | "uhugeint" | "bignum")) | (DataType::Decimal128(..), _) => {
+                    DbValue::Decimal(render::render(array.as_ref(), field, row).unwrap_or_default())
+                }
+                (DataType::Binary | DataType::LargeBinary | DataType::BinaryView, None) => {
+                    let bytes = blob(array, row);
+                    if type_name == "BIT" {
+                        native(type_name, render::bit_text(&bytes))
+                    } else {
+                        DbValue::Bytes(bytes)
+                    }
+                }
+                _ => match render::render(array.as_ref(), field, row) {
+                    Some(text) => native(type_name, text),
+                    // A union holding a NULL member.
+                    None => DbValue::Null,
+                },
+            }
+        })
+        .collect()
+}
+
+fn native(type_name: &str, text: String) -> DbValue {
+    DbValue::Native {
         type_name: type_name.to_string(),
         bytes: Vec::new(),
         text,
-    };
-    Ok(match array.data_type() {
-        DataType::Boolean => {
-            let values = array.as_boolean();
-            cells(&|row| DbValue::Bool(values.value(row)))
-        }
-        DataType::Int8
-        | DataType::Int16
-        | DataType::Int32
-        | DataType::Int64
-        | DataType::UInt8
-        | DataType::UInt16
-        | DataType::UInt32 => {
-            let wide = cast(array, &DataType::Int64).map_err(internal)?;
-            let values = wide.as_primitive::<Int64Type>();
-            cells(&|row| DbValue::I64(values.value(row)))
-        }
-        DataType::UInt64 => {
-            let values = array.as_primitive::<UInt64Type>();
-            cells(&|row| DbValue::U64(values.value(row)))
-        }
-        DataType::Float32 => {
-            let values = array.as_primitive::<Float32Type>();
-            cells(&|row| native(format!("{:?}", values.value(row))))
-        }
-        DataType::Float64 => {
-            let values = array.as_primitive::<Float64Type>();
-            cells(&|row| native(format!("{:?}", values.value(row))))
-        }
-        DataType::Utf8 | DataType::LargeUtf8 | DataType::Utf8View | DataType::Dictionary(..) => {
-            let text = cast(array, &DataType::LargeUtf8).map_err(internal)?;
-            let values = text.as_string::<i64>();
-            let json = type_name == "JSON";
-            cells(&|row| {
-                let text = values.value(row).to_string();
-                if json {
-                    DbValue::Json(text)
-                } else {
-                    DbValue::Text(text)
-                }
-            })
-        }
-        DataType::Binary | DataType::LargeBinary | DataType::BinaryView => {
-            let bytes = cast(array, &DataType::LargeBinary).map_err(internal)?;
-            let values = bytes.as_binary::<i64>();
-            if type_name == "BIT" {
-                cells(&|row| native(bit_text(values.value(row))))
-            } else {
-                cells(&|row| DbValue::Bytes(values.value(row).to_vec()))
-            }
-        }
-        // Arrow's formatter cuts a value to the type's precision, and DuckDB hands over a
-        // HUGEINT as a DECIMAL(38,0) whose largest values have 39 digits.
-        DataType::Decimal128(_, scale) => {
-            let values = array.as_primitive::<Decimal128Type>();
-            cells(&|row| DbValue::Decimal(decimal_text(values.value(row), *scale)))
-        }
-        DataType::Decimal256(..) => {
-            let texts = formatted(array)?;
-            cells(&|row| DbValue::Decimal(texts[row].clone()))
-        }
-        _ => {
-            let texts = formatted(array)?;
-            cells(&|row| native(texts[row].clone()))
-        }
-    })
-}
-
-/// Each cell as DuckDB's shell writes it, a NULL inside a list or struct as `NULL`.
-fn formatted(array: &ArrayRef) -> Result<Vec<String>, DriverError> {
-    let array = with_offsets(array)?;
-    let options = FormatOptions::new()
-        .with_null("NULL")
-        .with_timestamp_format(Some("%Y-%m-%d %H:%M:%S%.f"))
-        .with_timestamp_tz_format(Some("%Y-%m-%d %H:%M:%S%.f%:z"));
-    let formatter = ArrayFormatter::try_new(array.as_ref(), &options).map_err(internal)?;
-    Ok((0..array.len())
-        .map(|row| formatter.value(row).to_string())
-        .collect())
-}
-
-/// Arrow names the zone of a TIMESTAMPTZ, and formats a named zone only with chrono-tz.
-/// The values are UTC instants whatever the name, so the zone is written as its offset,
-/// in lists and structs too.
-fn with_offsets(array: &ArrayRef) -> Result<ArrayRef, DriverError> {
-    if offsets(array.data_type()) == *array.data_type() {
-        return Ok(Arc::clone(array));
-    }
-    Ok(make_array(retyped(array.to_data())?))
-}
-
-fn retyped(data: ArrayData) -> Result<ArrayData, DriverError> {
-    let data_type = offsets(data.data_type());
-    let children = data
-        .child_data()
-        .iter()
-        .cloned()
-        .map(retyped)
-        .collect::<Result<Vec<_>, _>>()?;
-    data.into_builder()
-        .data_type(data_type)
-        .child_data(children)
-        .build()
-        .map_err(internal)
-}
-
-fn offsets(data_type: &DataType) -> DataType {
-    let field = |field: &Field| Arc::new(field.clone().with_data_type(offsets(field.data_type())));
-    match data_type {
-        DataType::Timestamp(unit, Some(_)) => DataType::Timestamp(*unit, Some("+00:00".into())),
-        DataType::List(inner) => DataType::List(field(inner)),
-        DataType::LargeList(inner) => DataType::LargeList(field(inner)),
-        DataType::FixedSizeList(inner, size) => DataType::FixedSizeList(field(inner), *size),
-        DataType::Map(inner, sorted) => DataType::Map(field(inner), *sorted),
-        DataType::Struct(fields) => {
-            DataType::Struct(fields.iter().map(|inner| field(inner)).collect::<Fields>())
-        }
-        other => other.clone(),
     }
 }
 
-/// `value` with `scale` digits after the point.
-fn decimal_text(value: i128, scale: i8) -> String {
-    let sign = if value < 0 { "-" } else { "" };
-    let digits = value.unsigned_abs().to_string();
-    let Ok(scale) = usize::try_from(scale) else {
-        return format!(
-            "{sign}{digits}{}",
-            "0".repeat(usize::from(scale.unsigned_abs()))
-        );
-    };
-    if scale == 0 {
-        return format!("{sign}{digits}");
+fn blob(array: &ArrayRef, row: usize) -> Vec<u8> {
+    match array.data_type() {
+        DataType::Binary => array.as_binary::<i32>().value(row).to_vec(),
+        DataType::LargeBinary => array.as_binary::<i64>().value(row).to_vec(),
+        _ => array.as_binary_view().value(row).to_vec(),
     }
-    let padded = format!("{digits:0>width$}", width = scale + 1);
-    let (whole, fraction) = padded.split_at(padded.len() - scale);
-    format!("{sign}{whole}.{fraction}")
 }
 
-/// DuckDB keeps a BIT as one byte counting the unused leading bits, then the bits.
-fn bit_text(raw: &[u8]) -> String {
-    let Some((&padding, bytes)) = raw.split_first() else {
-        return String::new();
-    };
-    bytes
-        .iter()
-        .flat_map(|byte| (0..8).rev().map(move |bit| (byte >> bit) & 1))
-        .skip(usize::from(padding))
-        .map(|bit| if bit == 1 { '1' } else { '0' })
-        .collect()
+/// A type whose value goes back as DuckDB's text of it, compared as text: a list, an
+/// array, a struct, a map or a union, which a cast from text reads less surely than
+/// their text compares.
+pub fn compared_as_text(type_name: &str) -> bool {
+    type_name.ends_with(']')
+        || ["STRUCT(", "MAP(", "UNION("]
+            .iter()
+            .any(|prefix| type_name.starts_with(prefix))
 }
 
 /// What a value binds as. A float read from the file goes back as the same float, so a
@@ -316,21 +234,20 @@ pub fn qualify(name: &dexo_driver_api::QualifiedName) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{bit_text, decimal_text, quote};
+    use super::{compared_as_text, quote};
 
     #[test]
-    fn decimals_keep_every_digit() {
-        assert_eq!(decimal_text(150, 2), "1.50");
-        assert_eq!(decimal_text(-5, 2), "-0.05");
-        assert_eq!(decimal_text(i128::MAX, 0), i128::MAX.to_string());
-        assert_eq!(decimal_text(12, -2), "1200");
-    }
-
-    #[test]
-    fn bits_skip_their_padding() {
-        // `0101`: four unused bits, then 0101.
-        assert_eq!(bit_text(&[4, 0b0000_0101]), "0101");
-        assert_eq!(bit_text(&[]), "");
+    fn nested_types_compare_as_text() {
+        for name in [
+            "INTEGER[]",
+            "INTEGER[2]",
+            "STRUCT(a INTEGER)",
+            "MAP(VARCHAR, INTEGER)",
+            "UNION(n INTEGER)",
+        ] {
+            assert!(compared_as_text(name), "{name}");
+        }
+        assert!(!compared_as_text("VARCHAR") && !compared_as_text("DATE"));
         assert_eq!(quote("a\"b"), "\"a\"\"b\"");
     }
 }

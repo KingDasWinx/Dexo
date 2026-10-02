@@ -8,6 +8,7 @@ repository.workspace = true
 
 [dependencies]
 async-trait.workspace = true
+chrono.workspace = true
 dexo-driver-api = { path = "../dexo-driver-api" }
 dexo-sql = { path = "../dexo-sql" }
 duckdb = { version = "1.10506.0", features = ["bundled", "parquet", "json"] }
