@@ -21,7 +21,7 @@ dexo --demo
 Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, with DuckDB as a build option. It ships as a terminal UI, a command-line interface, and a local MCP server, all on the same application layer, so the guardrails hold everywhere: a `DELETE` without a `WHERE` on production waits for you to type the connection's name, a read-only connection is read-only on the server too, and an AI agent writes only through a grant you made, each write waiting for your approval if you ask for that. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
 
 <div align="center">
-  <img src="assets/guardrails.gif" alt="Dexo stopping a DELETE without WHERE on a production connection until its name is typed, then an AI agent's UPDATE waiting in Agent Activity until it is approved">
+  <img src="assets/guardrails.gif" alt="Dexo holding a DELETE without WHERE on the production connection shop-prod: a wrong name runs nothing, the full name runs it and four rows are deleted; then an AI agent's UPDATE waits in Agent Activity until it is approved">
 </div>
 
 <div align="center">
