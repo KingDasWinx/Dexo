@@ -6679,17 +6679,22 @@ fn when_connected(model: &mut Model, action: Action) -> Option<Vec<Effect>> {
 /// the statement a result came from, under the WHERE that ran.
 pub(crate) fn count_sql(model: &Model) -> Option<String> {
     let dialect = crate::screens::editor::editor_dialect(model);
-    let source = if model.active_document().kind.is_table() {
-        dexo_sql::table_select(&model.data.target, dialect)
-    } else {
-        // Only a plain read keeps its statement (see `launch_script`).
-        model
-            .results
-            .tabs
-            .get(model.results.active)?
-            .source_sql
-            .clone()?
-    };
+    if model.active_document().kind.is_table() {
+        return dexo_sql::table_count_in(
+            &model.data.target,
+            &model.data.filter,
+            &model.data.bars.applied,
+            dialect,
+        )
+        .ok();
+    }
+    // Only a plain read keeps its statement (see `launch_script`).
+    let source = model
+        .results
+        .tabs
+        .get(model.results.active)?
+        .source_sql
+        .clone()?;
     dexo_sql::derive_count_in(
         &source,
         &model.data.filter,

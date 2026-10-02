@@ -804,10 +804,8 @@ fn row_counts_say_whether_they_are_exact_estimated_or_open() {
             _ => None,
         })
         .expect("a count started");
-    assert!(
-        sql.starts_with("SELECT COUNT(*) FROM (SELECT * FROM \"public\".\"orders\")"),
-        "{sql}"
-    );
+    // The table itself, as its page names it.
+    assert_eq!(sql, "SELECT COUNT(*) FROM \"public\".\"orders\"");
     assert_eq!(title(&model), "Results (~4.3M rows, counting…)");
     // `t` again cancels it, and its late answer is dropped.
     let effects = update(&mut model, Action::CountRows);

@@ -79,7 +79,6 @@ fn filtered(
     if trimmed.is_empty() {
         return Err("empty query".into());
     }
-    let quote = |ident: &str| quote(ident, dialect);
     let statements = split_statements_in(trimmed, dialect);
     if statements.len() != 1 {
         return Err("only one statement can be re-run remotely".into());
@@ -101,8 +100,19 @@ fn filtered(
         ")"
     };
     let mut wrapped = format!("SELECT {select} FROM ({body}{close} AS _dexo_derived");
-    // The dialect's own placeholders, numbered here: rewriting `?` afterwards also
-    // rewrote the user's `'%?%'` and jsonb's `?` operator.
+    wrapped.push_str(&where_clause(filter, clauses, dialect)?);
+    Ok(wrapped)
+}
+
+/// ` WHERE (raw) AND (typed)`, or nothing: the bars' text and the typed filter, its
+/// values bound with the dialect's own placeholders -- numbered here, as rewriting `?`
+/// afterwards also rewrote the user's `'%?%'` and jsonb's `?` operator.
+fn where_clause(
+    filter: &Option<Filter>,
+    clauses: &RawClauses,
+    dialect: Dialect,
+) -> Result<String, String> {
+    let quote = |ident: &str| quote(ident, dialect);
     let mut bound = 0;
     let mut placeholder = || {
         bound += 1;
@@ -115,11 +125,27 @@ fn filtered(
         .as_ref()
         .map(|filter| render_filter(filter, &quote, &mut placeholder))
         .transpose()?;
-    if let Some(condition) = clauses.condition(typed) {
-        wrapped.push_str(" WHERE ");
-        wrapped.push_str(&condition);
-    }
-    Ok(wrapped)
+    Ok(clauses
+        .condition(typed)
+        .map(|condition| format!(" WHERE {condition}"))
+        .unwrap_or_default())
+}
+
+/// How many rows a table document pages through: `SELECT COUNT(*) FROM schema.table`
+/// under the same WHERE, the table named as the page names it -- so a WHERE written
+/// with the table's name (`orders.id > 1`) counts as it filters.
+pub fn table_count_in(
+    name: &dexo_driver_api::QualifiedName,
+    filter: &Option<Filter>,
+    clauses: &RawClauses,
+    dialect: Dialect,
+) -> Result<String, String> {
+    let from = table_select(name, dialect);
+    let table = from.trim_start_matches("SELECT * FROM ");
+    Ok(format!(
+        "SELECT COUNT(*) FROM {table}{}",
+        where_clause(filter, clauses, dialect)?
+    ))
 }
 
 /// `SELECT * FROM schema.table` for `name`, each part quoted: what a table document's
@@ -280,6 +306,15 @@ mod tests {
             .unwrap(),
             "SELECT * FROM (select * from orders -- all of them\n) AS _dexo_derived \
              WHERE (total > 5 -- big\n) ORDER BY id # newest\nLIMIT 50 OFFSET 0"
+        );
+        // A table's count names the table as its page does, so the WHERE can too.
+        let qualified = dexo_driver_api::RawClauses {
+            where_sql: Some("orders.total > 5".into()),
+            order_by: None,
+        };
+        assert_eq!(
+            super::table_count_in(&table, &filter(), &qualified, Dialect::Postgres).unwrap(),
+            "SELECT COUNT(*) FROM \"public\".\"orders\" WHERE (orders.total > 5) AND (\"id\" = $1)"
         );
         let mysql = dexo_driver_api::QualifiedName::new(Some("shop"), None::<String>, "orders");
         assert_eq!(
