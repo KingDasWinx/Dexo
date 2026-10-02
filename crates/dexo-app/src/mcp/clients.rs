@@ -272,7 +272,8 @@ fn set_toml(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::V
     }
 }
 
-/// Writes `contents` to `path`, the old file copied to `<file>.dexo-backup` first. A
+/// Writes `contents` to `path`, the old file copied to `<file>.dexo-backup` first, or to
+/// `<file>.dexo-backup.1`, `.2` and on when that is taken; unchanged text writes nothing. A
 /// symlink is written through, so it stays a link to the file it named; the file keeps
 /// its permissions, since it may hold other servers' keys, and a new one is the user's
 /// alone.
@@ -291,10 +292,23 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>,
         std::fs::create_dir_all(parent).map_err(storage)?;
     }
     let existing = std::fs::metadata(path).ok();
+    if std::fs::read(path).is_ok_and(|old| old == contents.as_bytes()) {
+        return Ok(None);
+    }
+    // An earlier backup is never replaced: the first one is the file as it was before
+    // Dexo ever touched it.
     let backup = if existing.is_some() {
-        let mut name = path.as_os_str().to_owned();
-        name.push(".dexo-backup");
-        let backup = PathBuf::from(name);
+        let backup = (0..)
+            .map(|number| {
+                let mut name = path.as_os_str().to_owned();
+                name.push(".dexo-backup");
+                if number > 0 {
+                    name.push(format!(".{number}"));
+                }
+                PathBuf::from(name)
+            })
+            .find(|name| name.symlink_metadata().is_err())
+            .expect("an unused backup name");
         std::fs::copy(path, &backup).map_err(storage)?;
         Some(backup)
     } else {
@@ -572,7 +586,23 @@ mod tests {
         let shared = dir.path().join("shared.json");
         std::fs::write(&shared, "{}").unwrap();
         std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o644)).unwrap();
-        super::write_with_backup(&shared, "{}").unwrap();
+        super::write_with_backup(&shared, "[]").unwrap();
         assert_eq!(mode(&shared), 0o644);
+    }
+
+    /// Running setup again never loses the file as it was before Dexo: each old version
+    /// gets a backup of its own, and text that did not change writes nothing.
+    #[test]
+    fn a_backup_is_never_overwritten() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        std::fs::write(&path, "original").unwrap();
+        let first = super::write_with_backup(&path, "second").unwrap().unwrap();
+        let again = super::write_with_backup(&path, "third").unwrap().unwrap();
+        assert_ne!(first, again);
+        assert_eq!(std::fs::read_to_string(&first).unwrap(), "original");
+        assert_eq!(std::fs::read_to_string(&again).unwrap(), "second");
+        assert_eq!(super::write_with_backup(&path, "third").unwrap(), None);
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "third");
     }
 }
