@@ -304,11 +304,23 @@ impl DataMutator for MysqlSession {
         let _ = Page::new(request.page.offset, request.page.limit)?;
         request.validate()?;
         let (sql, binder) = render_fetch(&request);
-        let mut conn = self.conn.lock().await;
-        let rows: Vec<mysql_async::Row> = conn
-            .exec(sql, Params::Positional(binder.values))
-            .await
-            .map_err(map_error)?;
+        // Text typed in the bars runs where it cannot write.
+        let typed = request.clauses.where_sql.is_some() || request.clauses.order_by.is_some();
+        let guard = if typed {
+            Some(crate::session::ReadOnly::start(&self.conn).await?)
+        } else {
+            None
+        };
+        let rows: Result<Vec<mysql_async::Row>, DriverError> = {
+            let mut conn = self.conn.lock().await;
+            conn.exec(sql, Params::Positional(binder.values))
+                .await
+                .map_err(map_error)
+        };
+        if let Some(guard) = guard {
+            guard.end(&self.conn).await;
+        }
+        let rows = rows?;
         let columns = rows
             .first()
             .map(|row| row.columns_ref().iter().map(column_meta).collect())

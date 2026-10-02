@@ -5690,6 +5690,7 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
             .map(|parameter| parameter.value.clone())
             .collect(),
         timeout: std::time::Duration::from_secs(30),
+        read_only: false,
     }));
     effects
 }
@@ -6879,6 +6880,7 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
         policy: model.script_policy,
         parameters,
         timeout: std::time::Duration::from_secs(30),
+        read_only: true,
     })]
 }
 

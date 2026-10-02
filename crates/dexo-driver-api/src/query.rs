@@ -16,6 +16,11 @@ pub struct QueryRequest {
     pub row_limit: u64,
     pub timeout: Duration,
     pub mutating: bool,
+    /// Text the user typed around Dexo's own -- a WHERE bar, a re-run's ORDER BY, a
+    /// count of a result: run where it cannot write. Outside a transaction it runs in a
+    /// read-only one of its own; inside one it runs behind a savepoint rolled back after
+    /// it. Parsing never sees what a user-defined function does.
+    pub read_only: bool,
 }
 
 impl QueryRequest {
@@ -27,6 +32,7 @@ impl QueryRequest {
             row_limit,
             timeout: Duration::from_secs(30),
             mutating: false,
+            read_only: false,
         }
     }
 

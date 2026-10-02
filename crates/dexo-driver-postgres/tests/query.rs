@@ -261,3 +261,56 @@ async fn a_timed_out_query_stops_on_the_server() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 }
+
+/// Text asked to only read runs where it cannot write: alone, in a read-only transaction
+/// of its own; inside the user's transaction, behind a savepoint rolled back after it.
+/// Either way the session is as it was afterwards.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Docker"]
+async fn a_read_only_request_cannot_write() {
+    let fixture = connect_postgres_fixture().await;
+    let run = |sql: &str, read_only: bool| {
+        let mut request = QueryRequest::write(sql);
+        request.read_only = read_only;
+        let session = &fixture.session;
+        async move { collect_results(session.execute(request).await.unwrap()).await }
+    };
+    run("create table ro_probe (id int)", false).await;
+    let refused = run("insert into ro_probe values (1)", true).await;
+    assert!(refused.iter().any(Result::is_err), "{refused:?}");
+    assert!(
+        run("insert into ro_probe values (2)", false)
+            .await
+            .iter()
+            .all(Result::is_ok),
+        "the session stayed read-only"
+    );
+    let transactions = fixture.session.transactions().unwrap();
+    transactions
+        .begin(dexo_driver_api::TransactionMode::ReadWrite)
+        .await
+        .unwrap();
+    run("insert into ro_probe values (3)", false).await;
+    run("insert into ro_probe values (4)", true).await;
+    transactions.commit().await.unwrap();
+    let rows = collect(
+        fixture
+            .session
+            .execute(QueryRequest::read(
+                "select string_agg(id::text, ',' order by id) from ro_probe",
+                1,
+            ))
+            .await
+            .unwrap(),
+    )
+    .await
+    .into_iter()
+    .find_map(|event| match event {
+        QueryEvent::Rows(batch) => batch.rows.into_iter().next(),
+        _ => None,
+    });
+    assert_eq!(
+        rows,
+        Some(vec![dexo_driver_api::DbValue::Text("2,3".into())])
+    );
+}

@@ -34,6 +34,8 @@ pub enum GuardRejection {
     NestedStatement,
     #[error("function {0} is not allowed")]
     Function(String),
+    #[error("assigning a variable (:=) is not a read")]
+    Assignment,
 }
 
 /// Functions with side effects, or that run SQL passed as text and so would slip past the
@@ -57,13 +59,47 @@ const DENIED_FUNCTIONS: &[&str] = &[
     "lo_export",
     "lo_unlink",
     "lo_create",
+    "lo_creat",
     "lo_from_bytea",
+    "lo_put",
+    "lo_truncate",
+    "lo_truncate64",
+    "lo_open",
+    "lowrite",
+    "pg_stat_reset",
+    "pg_stat_reset_shared",
+    "pg_stat_reset_single_table_counters",
+    "pg_stat_reset_single_function_counters",
+    "pg_stat_reset_slru",
+    "pg_stat_reset_replication_slot",
+    "pg_stat_reset_subscription_stats",
+    "pg_logical_emit_message",
+    "pg_create_logical_replication_slot",
+    "pg_create_physical_replication_slot",
+    "pg_drop_replication_slot",
+    "pg_replication_origin_create",
+    "pg_replication_origin_drop",
+    "pg_backup_start",
+    "pg_backup_stop",
+    "pg_start_backup",
+    "pg_stop_backup",
+    "pg_wal_replay_pause",
+    "pg_wal_replay_resume",
+    "pg_log_backend_memory_contexts",
+    "txid_current",
+    "pg_current_xact_id",
     "set_config",
     "pg_advisory_lock",
     "pg_advisory_xact_lock",
     "pg_advisory_lock_shared",
+    "pg_advisory_xact_lock_shared",
     "pg_try_advisory_lock",
+    "pg_try_advisory_lock_shared",
     "pg_try_advisory_xact_lock",
+    "pg_try_advisory_xact_lock_shared",
+    "pg_advisory_unlock",
+    "pg_advisory_unlock_shared",
+    "pg_advisory_unlock_all",
     "pg_sleep",
     "pg_sleep_for",
     "pg_sleep_until",
@@ -553,6 +589,14 @@ impl Visitor for Guard {
     }
 
     fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
+        // MySQL's `@a := 1` sets a session variable from inside a SELECT.
+        if let Expr::BinaryOp {
+            op: sqlparser::ast::BinaryOperator::Assignment,
+            ..
+        } = expr
+        {
+            return self.reject(GuardRejection::Assignment);
+        }
         if let Expr::Function(function) = expr {
             let name = self
                 .path(&function.name)
@@ -593,6 +637,26 @@ mod tests {
         assert!(check("1=1; delete from t", "").is_err());
         assert!(check("", "id; drop table t").is_err());
         assert!(check("pg_terminate_backend(42)", "").is_err());
+        for writes in [
+            "lo_put(1, 0, 'x') is not null",
+            "lo_truncate(1, 0) = 0",
+            "pg_stat_reset() is null",
+            "pg_logical_emit_message(true, 'p', 'x') is not null",
+            "pg_advisory_unlock_all() is null",
+            "txid_current() > 0",
+        ] {
+            assert!(check(writes, "").is_err(), "{writes}");
+        }
+        assert!(
+            super::clauses_read(
+                &dexo_driver_api::RawClauses {
+                    where_sql: Some("(@a := 1) = 1".into()),
+                    order_by: None,
+                },
+                Dialect::Mysql,
+            )
+            .is_err()
+        );
         assert!(check("id = (", "").is_err());
         // A bar holds its clause and no more: a parenthesis cannot close the wrapper a
         // page puts it in, and a sort list cannot run on into LIMIT.

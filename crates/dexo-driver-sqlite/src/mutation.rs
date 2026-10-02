@@ -326,6 +326,13 @@ impl DataMutator for SqliteSession {
             };
             let (sql, binder) = render_fetch(&request, rowid);
             let mut statement = conn.prepare(&sql).map_err(map_error)?;
+            // Text typed in the bars only reads: SQLite knows whether a statement writes.
+            if !statement.readonly() {
+                return Err(DriverError::new(
+                    DriverErrorCategory::Permission,
+                    "the WHERE or ORDER BY writes, and it may only read",
+                ));
+            }
             let columns: Vec<_> = statement.columns().iter().map(column_meta).collect();
             let width = columns.len();
             let rows = statement

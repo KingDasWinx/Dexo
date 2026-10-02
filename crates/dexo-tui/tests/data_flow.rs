@@ -1327,3 +1327,17 @@ fn a_result_run_again_with_the_bars_pages() {
     assert!(title.contains("Results (107 rows)"), "{title}");
     assert!(update(&mut model, Action::NextDataPage).is_empty());
 }
+
+/// A re-run around the bars' text is sent to run where it cannot write.
+#[test]
+fn a_re_run_with_the_bars_only_reads() {
+    let mut model = Model::default();
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id from users".into());
+    model.results.tabs = vec![tab];
+    let effects = apply_bars(&mut model);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        dexo_tui::Effect::StartScript(request) if request.read_only
+    )));
+}

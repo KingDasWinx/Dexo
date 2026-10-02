@@ -70,6 +70,54 @@ impl MysqlSession {
     }
 }
 
+/// Where a read that must not write runs: the session's next transactions read-only --
+/// the statement's own when no transaction is open -- and a savepoint rolled back after
+/// it, which undoes what a function wrote inside the user's open transaction. A
+/// `START TRANSACTION READ ONLY` would have committed that transaction instead.
+pub(crate) struct ReadOnly {
+    /// The session's own setting before, put back after.
+    was_read_only: bool,
+}
+
+impl ReadOnly {
+    pub(crate) async fn start(conn: &Mutex<Conn>) -> Result<Self, DriverError> {
+        let mut conn = conn.lock().await;
+        // MariaDB before 11.1 knows the setting only as `tx_read_only`.
+        let was_read_only: Option<i64> = match conn
+            .query_first("SELECT @@session.transaction_read_only")
+            .await
+        {
+            Ok(value) => value,
+            Err(_) => conn
+                .query_first("SELECT @@session.tx_read_only")
+                .await
+                .map_err(map_error)?,
+        };
+        for sql in [
+            "SET SESSION TRANSACTION READ ONLY",
+            "SAVEPOINT dexo_read_only",
+        ] {
+            conn.query_drop(sql).await.map_err(map_error)?;
+        }
+        Ok(Self {
+            was_read_only: was_read_only == Some(1),
+        })
+    }
+
+    pub(crate) async fn end(self, conn: &Mutex<Conn>) {
+        let mut conn = conn.lock().await;
+        // Outside a transaction the savepoint went with its own: these then fail, as
+        // there is nothing to undo.
+        let _ = conn
+            .query_drop("ROLLBACK TO SAVEPOINT dexo_read_only")
+            .await;
+        let _ = conn.query_drop("RELEASE SAVEPOINT dexo_read_only").await;
+        if !self.was_read_only {
+            let _ = conn.query_drop("SET SESSION TRANSACTION READ WRITE").await;
+        }
+    }
+}
+
 /// Stops the query connection `conn_id` is running, from a connection of its own.
 async fn kill_query(opts: Opts, conn_id: u32) -> Result<(), DriverError> {
     let mut killer = Conn::new(opts).await.map_err(map_error)?;
@@ -91,18 +139,40 @@ impl Session for MysqlSession {
         let row_limit = request.row_limit;
         let parameters = request.parameters;
         let timeout = request.timeout;
+        let read_only = request.read_only;
         let (opts, conn_id) = (self.opts.clone(), self.conn_id);
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         tokio::spawn(async move {
+            let guard = if read_only {
+                match ReadOnly::start(&conn).await {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        let _ = tx.send(Err(error)).await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let ended = Arc::clone(&conn);
             let run = run_mysql_query(conn, sql, parameters, row_limit, tx.clone());
-            if timeout == Duration::ZERO {
+            let timed_out = if timeout == Duration::ZERO {
                 run.await;
-                return;
-            }
-            if tokio::time::timeout(timeout, run).await.is_err() {
+                false
+            } else {
+                tokio::time::timeout(timeout, run).await.is_err()
+            };
+            if timed_out {
                 // Dropping the future stopped only the waiting: the server goes on with
                 // the query until it is told to stop.
                 let _ = kill_query(opts, conn_id).await;
+            }
+            // Ended after the run, and after a kill too: the session never stays read-only
+            // on Dexo's account.
+            if let Some(guard) = guard {
+                guard.end(&ended).await;
+            }
+            if timed_out {
                 let _ = tx
                     .send(Err(DriverError::new(
                         DriverErrorCategory::Timeout,

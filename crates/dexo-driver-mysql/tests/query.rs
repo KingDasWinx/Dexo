@@ -559,3 +559,48 @@ async fn an_exported_insert_replays_backslashes_as_themselves() {
         row[3]
     );
 }
+
+/// Text asked to only read runs where it cannot write: alone, the statement's own
+/// transaction is read-only; inside the user's, a savepoint undoes it. The session's
+/// setting is as it was afterwards.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Docker"]
+async fn a_read_only_request_cannot_write() {
+    let fixture = connect_mysql_fixture().await;
+    let run = |sql: &str, read_only: bool| {
+        let mut request = QueryRequest::write(sql);
+        request.read_only = read_only;
+        let session = &fixture.session;
+        async move {
+            let mut stream = session.execute(request).await.unwrap();
+            let mut failed = false;
+            while let Some(event) = stream.next().await {
+                failed |= event.is_err();
+            }
+            failed
+        }
+    };
+    assert!(!run("create table ro_probe2 (id int)", false).await);
+    assert!(run("insert into ro_probe2 values (1)", true).await);
+    assert!(
+        !run("insert into ro_probe2 values (2)", false).await,
+        "the session stayed read-only"
+    );
+    let transactions = fixture.session.transactions().unwrap();
+    transactions
+        .begin(dexo_driver_api::TransactionMode::ReadWrite)
+        .await
+        .unwrap();
+    run("insert into ro_probe2 values (3)", false).await;
+    run("insert into ro_probe2 values (4)", true).await;
+    transactions.commit().await.unwrap();
+    let mut stream = fixture
+        .session
+        .execute(QueryRequest::read(
+            "select group_concat(id order by id) from ro_probe2",
+            1,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first_value(&mut stream).await, DbValue::Text("2,3".into()));
+}

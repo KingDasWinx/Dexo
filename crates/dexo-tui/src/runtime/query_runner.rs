@@ -56,6 +56,7 @@ pub async fn run_script(
         query_request.row_limit = 10_000;
         query_request.parameters = request.parameters.clone();
         query_request.timeout = request.timeout;
+        query_request.read_only = request.read_only;
         let timeout = if request.timeout == Duration::ZERO {
             Duration::from_secs(30)
         } else {
@@ -310,6 +311,7 @@ mod tests {
             policy: dexo_app::ScriptPolicy::ContinueOnError,
             parameters: Vec::new(),
             timeout: std::time::Duration::from_secs(5),
+            read_only: false,
         };
         super::run_script(
             dexo_app::QueryService::new(Arc::new(dexo_runtime::TaskRegistry::default())),

@@ -314,6 +314,7 @@ fn script_request(sql: &str) -> ScriptRequest {
         policy: ScriptPolicy::StopOnError,
         parameters: Vec::new(),
         timeout: std::time::Duration::from_secs(5),
+        read_only: false,
     }
 }
 

@@ -137,8 +137,13 @@ impl Session for SqliteSession {
             parameters,
             row_limit,
             timeout,
+            read_only: reads_only,
             ..
         } = request;
+        // SQLite knows of each prepared statement whether it writes, functions included
+        // (an application registers its own; Dexo registers none): a statement asked to
+        // only read is refused as a read-only file's is.
+        let read_only = read_only || reads_only;
         let events = tx.clone();
         let running = Arc::clone(&live);
         tokio::spawn(async move {
@@ -234,12 +239,12 @@ fn run_statements(
     let mut last_affected = None;
     while let Some(mut statement) = batch.next().map_err(map_error)? {
         let writes = !statement.readonly() && statement.is_explain() == 0;
-        // The file is opened read-only, so SQLite would refuse the write itself; this
-        // says so before a VACUUM INTO writes a copy somewhere else.
+        // A read-only file, where SQLite would refuse the write itself -- this says so
+        // before a VACUUM INTO writes a copy somewhere else -- or text asked to only read.
         if read_only && writes {
             return Err(DriverError::new(
                 DriverErrorCategory::Permission,
-                "the connection is read-only, and this statement writes",
+                "this statement writes, and here it may only read",
             ));
         }
         bind(&mut statement, parameters)?;

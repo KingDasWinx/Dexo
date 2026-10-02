@@ -332,7 +332,18 @@ impl DataMutator for PostgresSession {
         let boxed = binder.boxed();
         let refs: Vec<&(dyn ToSql + Sync)> =
             boxed.iter().map(|value| value.as_ref() as _).collect();
-        let rows = self.client.query(&sql, &refs).await.map_err(map_error)?;
+        // Text typed in the bars runs where it cannot write.
+        let typed = request.clauses.where_sql.is_some() || request.clauses.order_by.is_some();
+        let guard = if typed {
+            Some(crate::session::ReadOnly::start(&self.client).await?)
+        } else {
+            None
+        };
+        let rows = self.client.query(&sql, &refs).await.map_err(map_error);
+        if let Some(guard) = guard {
+            guard.end(&self.client).await;
+        }
+        let rows = rows?;
         let columns = rows
             .first()
             .map(|row| row.columns().iter().map(column_meta).collect())

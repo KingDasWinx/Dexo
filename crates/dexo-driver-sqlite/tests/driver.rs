@@ -813,3 +813,27 @@ async fn foreign_keys_are_listed_from_and_to_a_table() {
     assert_eq!(own.len(), 1, "{own:?}");
     assert_eq!(own[0].from_columns, ["boss"]);
 }
+
+/// Text asked to only read cannot write, in a statement or in the bars, and the
+/// connection writes as before afterwards.
+#[tokio::test]
+async fn a_read_only_request_cannot_write() {
+    let (_dir, path) = seeded().await;
+    let session = open(&path, false).await;
+    let mut request = QueryRequest::write("INSERT INTO notes (body) VALUES ('x')");
+    request.read_only = true;
+    let mut stream = session.execute(request).await.unwrap();
+    let mut refused = false;
+    while let Some(event) = stream.next().await {
+        refused |= event.is_err();
+    }
+    assert!(refused);
+    assert!(
+        run(
+            &*session,
+            QueryRequest::write("INSERT INTO notes (body) VALUES ('y')")
+        )
+        .await
+        .is_ok()
+    );
+}

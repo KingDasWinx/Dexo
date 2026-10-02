@@ -1108,6 +1108,8 @@ impl WorkbenchRuntime {
                 };
                 let mut request = dexo_driver_api::QueryRequest::read(sql, 1);
                 request.parameters = parameters;
+                // Its WHERE is text from the bars: run where it cannot write.
+                request.read_only = true;
                 // No limit of its own: an exact count of a big table takes what it takes,
                 // and `t` stops it.
                 request.timeout = Duration::ZERO;

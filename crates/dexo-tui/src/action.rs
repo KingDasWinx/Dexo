@@ -646,6 +646,9 @@ pub struct ScriptRequest {
     pub policy: ScriptPolicy,
     pub parameters: Vec<DbValue>,
     pub timeout: std::time::Duration,
+    /// Dexo's own re-run around text from the bars: it runs where it cannot write (see
+    /// `QueryRequest::read_only`).
+    pub read_only: bool,
 }
 
 #[derive(Clone, Debug)]

@@ -58,6 +58,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
             timeout: Duration::from_secs(10),
+            read_only: false,
         }))
         .await;
     assert!(wait_rows(&mut rx).await, "{driver} select 1 returned rows");
@@ -79,6 +80,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
             timeout: Duration::from_secs(30),
+            read_only: false,
         }))
         .await;
     runtime

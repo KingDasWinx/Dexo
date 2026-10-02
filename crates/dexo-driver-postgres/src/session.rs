@@ -49,6 +49,45 @@ impl PostgresSession {
     }
 }
 
+/// Where a read that must not write runs: a read-only transaction of its own, or --
+/// inside the user's open transaction, where no read-only one can start -- a savepoint
+/// rolled back after it, so whatever a function in it wrote is undone.
+pub(crate) enum ReadOnly {
+    Transaction,
+    Savepoint,
+}
+
+impl ReadOnly {
+    pub(crate) async fn start(client: &tokio_postgres::Client) -> Result<Self, DriverError> {
+        match client.batch_execute("SAVEPOINT dexo_read_only").await {
+            Ok(()) => Ok(Self::Savepoint),
+            // Not in a transaction block: one of its own, read-only.
+            Err(error)
+                if error.code()
+                    == Some(&tokio_postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+            {
+                client
+                    .batch_execute("BEGIN READ ONLY")
+                    .await
+                    .map_err(map_error)?;
+                Ok(Self::Transaction)
+            }
+            // A failed transaction, say: left as it is, for the user to end.
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
+    pub(crate) async fn end(self, client: &tokio_postgres::Client) {
+        let sql = match self {
+            Self::Transaction => "ROLLBACK",
+            Self::Savepoint => {
+                "ROLLBACK TO SAVEPOINT dexo_read_only; RELEASE SAVEPOINT dexo_read_only"
+            }
+        };
+        let _ = client.batch_execute(sql).await;
+    }
+}
+
 /// Tells the server to stop the query the session is running, over the same TLS.
 async fn cancel_with(
     token: &tokio_postgres::CancelToken,
@@ -76,27 +115,48 @@ impl Session for PostgresSession {
         let sql = request.sql;
         let parameters = request.parameters;
         let timeout = request.timeout;
+        let read_only = request.read_only;
         let token = client.cancel_token();
         let tls = self.cancel.tls.clone();
         tokio::spawn(async move {
+            let guard = if read_only {
+                match ReadOnly::start(&client).await {
+                    Ok(guard) => Some(guard),
+                    Err(error) => {
+                        let _ = tx.send(Err(error)).await;
+                        return;
+                    }
+                }
+            } else {
+                None
+            };
+            let ended = Arc::clone(&client);
             let run = run_postgres_query(client, sql, parameters, row_limit, tx.clone());
             if timeout == Duration::ZERO {
                 run.await;
+                if let Some(guard) = guard {
+                    guard.end(&ended).await;
+                }
                 return;
             }
-            match tokio::time::timeout(timeout, run).await {
-                Ok(()) => {}
-                Err(_) => {
-                    // Dropping the future stopped only the waiting: the server goes on
-                    // with the query until it is told to stop.
-                    let _ = cancel_with(&token, tls).await;
-                    let _ = tx
-                        .send(Err(DriverError::new(
-                            DriverErrorCategory::Timeout,
-                            "query timed out",
-                        )))
-                        .await;
-                }
+            let outcome = tokio::time::timeout(timeout, run).await;
+            if outcome.is_err() {
+                // Dropping the future stopped only the waiting: the server goes on with
+                // the query until it is told to stop.
+                let _ = cancel_with(&token, tls).await;
+            }
+            // Ended after the run, and after a cancel too: the session never stays in a
+            // read-only transaction of Dexo's.
+            if let Some(guard) = guard {
+                guard.end(&ended).await;
+            }
+            if outcome.is_err() {
+                let _ = tx
+                    .send(Err(DriverError::new(
+                        DriverErrorCategory::Timeout,
+                        "query timed out",
+                    )))
+                    .await;
             }
         });
         Ok(Box::pin(futures_util::stream::unfold(rx, |mut rx| async {
