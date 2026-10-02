@@ -254,23 +254,80 @@ async fn timeout_or_cancel_mysql_sleep() {
 #[ignore = "requires Docker"]
 async fn a_result_cut_at_the_row_limit_says_so() {
     let fixture = connect_mysql_fixture().await;
-    let five = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 5) \
-                select i from n";
-    for (limit, cut) in [(3, true), (5, false), (0, false)] {
+    // Up to 100,000 rows from five joined digits; no recursion limit to raise.
+    let numbers = |count: u64| {
+        format!(
+            "with d(i) as (select 0 union all select 1 union all select 2 union all select 3 \
+             union all select 4 union all select 5 union all select 6 union all select 7 \
+             union all select 8 union all select 9) \
+             select a.i + 10 * b.i + 100 * c.i + 1000 * e.i + 10000 * f.i as n \
+             from d a, d b, d c, d e, d f \
+             where a.i + 10 * b.i + 100 * c.i + 1000 * e.i + 10000 * f.i < {count}"
+        )
+    };
+    for (count, limit) in [
+        (5, 3),
+        (5, 5),
+        (5, 0),
+        (10_000, 10_000),
+        (10_001, 10_000),
+        (25_000, 10_000),
+    ] {
         let stream = fixture
             .session
-            .execute(QueryRequest::read(five, limit))
+            .execute(QueryRequest::read(numbers(count), limit))
             .await
             .unwrap();
-        let truncated = collect(stream)
-            .await
-            .into_iter()
-            .find_map(|event| match event {
-                QueryEvent::ResultSetFinished { truncated, .. } => Some(truncated),
+        // Every event, not only the first set's: the rest of a cut set once came back
+        // as a second one, which the first `ResultSetFinished` never showed.
+        let events = collect(stream).await;
+        let started = events
+            .iter()
+            .filter(|event| matches!(event, QueryEvent::ResultSetStarted { .. }))
+            .count();
+        let rows: u64 = events
+            .iter()
+            .map(|event| match event {
+                QueryEvent::Rows(batch) => batch.rows.len() as u64,
+                _ => 0,
+            })
+            .sum();
+        let finished: Vec<bool> = events
+            .iter()
+            .filter_map(|event| match event {
+                QueryEvent::ResultSetFinished { truncated, .. } => Some(*truncated),
                 _ => None,
-            });
-        assert_eq!(truncated, Some(cut), "limit {limit}");
+            })
+            .collect();
+        let cut = limit > 0 && count > limit;
+        let shown = if limit == 0 { count } else { count.min(limit) };
+        assert_eq!(started, 1, "{count} rows, limit {limit}");
+        assert_eq!(rows, shown, "{count} rows, limit {limit}");
+        assert_eq!(finished, [cut], "{count} rows, limit {limit}");
     }
+    // A cut set does not eat the one after it.
+    let stream = fixture
+        .session
+        .execute(QueryRequest::read(format!("{}; select 42", numbers(5)), 3))
+        .await
+        .unwrap();
+    let events = collect(stream).await;
+    let finished: Vec<bool> = events
+        .iter()
+        .filter_map(|event| match event {
+            QueryEvent::ResultSetFinished { truncated, .. } => Some(*truncated),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(finished, [true, false]);
+    let last = events.iter().rev().find_map(|event| match event {
+        QueryEvent::Rows(batch) => batch.rows.first().cloned(),
+        _ => None,
+    });
+    assert!(
+        matches!(last.as_deref(), Some([DbValue::I64(42) | DbValue::U64(42)])),
+        "{last:?}"
+    );
 }
 
 async fn collect(mut stream: dexo_driver_api::QueryStream) -> Vec<QueryEvent> {

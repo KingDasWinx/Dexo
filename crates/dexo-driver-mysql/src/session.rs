@@ -331,7 +331,19 @@ async fn emit_mysql_sets<P>(
                         return;
                     }
                     if row_limit > 0 && emitted >= row_limit {
-                        truncated = matches!(result.next().await, Ok(Some(_)));
+                        // The server sends the whole set whatever is read of it. Left
+                        // unread, its rest came back as a second result set: the limit
+                        // stopped holding and the last `truncated: false` won.
+                        loop {
+                            match result.next().await {
+                                Ok(Some(_)) => truncated = true,
+                                Ok(None) => break,
+                                Err(error) => {
+                                    let _ = tx.send(Err(map_error(error))).await;
+                                    return;
+                                }
+                            }
+                        }
                         break;
                     }
                 }
