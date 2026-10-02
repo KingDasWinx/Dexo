@@ -163,10 +163,19 @@ fn merged_json(existing: Option<&str>, command: &str, args: &[String]) -> Result
             "its mcpServers is not an object, so it was left as it is",
         ));
     };
-    servers.insert(
-        "dexo".into(),
-        serde_json::json!({ "command": command, "args": args }),
-    );
+    // Only the keys Dexo writes change: the entry's env, cwd, timeouts and the rest stay.
+    let Some(entry) = servers
+        .entry("dexo")
+        .or_insert_with(|| serde_json::json!({}))
+        .as_object_mut()
+    else {
+        return Err(AppError::new(
+            ErrorCategory::Configuration,
+            "its mcpServers.dexo is not an object, so it was left as it is",
+        ));
+    };
+    entry.insert("command".into(), serde_json::json!(command));
+    entry.insert("args".into(), serde_json::json!(args));
     let mut text = serde_json::to_string_pretty(&root)
         .map_err(|error| AppError::new(ErrorCategory::Internal, error.to_string()))?;
     text.push('\n');
@@ -194,19 +203,24 @@ fn merged_toml(existing: &str, command: &str, args: &[String]) -> Result<String,
     let servers = servers
         .as_table_like_mut()
         .ok_or_else(|| left("its mcp_servers is not a table".into()))?;
-    let mut entry = toml_edit::Table::new();
-    entry.insert("command", toml_edit::value(command));
-    entry.insert(
-        "args",
-        toml_edit::value(args.iter().collect::<toml_edit::Array>()),
-    );
-    servers.insert(
-        "dexo",
-        if inline {
-            toml_edit::value(entry.into_inline_table())
+    if !servers.contains_key("dexo") {
+        let entry = if inline {
+            toml_edit::value(toml_edit::InlineTable::new())
         } else {
-            toml_edit::Item::Table(entry)
-        },
+            toml_edit::Item::Table(toml_edit::Table::new())
+        };
+        servers.insert("dexo", entry);
+    }
+    // Only the keys Dexo writes change: the entry's env, cwd, timeouts and the rest stay.
+    let entry = servers
+        .get_mut("dexo")
+        .and_then(toml_edit::Item::as_table_like_mut)
+        .ok_or_else(|| left("its mcp_servers.dexo is not a table".into()))?;
+    set_toml(entry, "command", command.into());
+    set_toml(
+        entry,
+        "args",
+        args.iter().collect::<toml_edit::Array>().into(),
     );
     let text = document.to_string();
     // What was written must read back as the entry it meant to write.
@@ -229,6 +243,20 @@ fn merged_toml(existing: &str, command: &str, args: &[String]) -> Result<String,
         return Err(left("Dexo could not write its entry into it".into()));
     }
     Ok(text)
+}
+
+/// `key` set to `value`, with the comment and spacing around the old value kept.
+fn set_toml(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::Value) {
+    match table.get_mut(key).and_then(toml_edit::Item::as_value_mut) {
+        Some(old) => {
+            let decor = old.decor().clone();
+            *old = value;
+            *old.decor_mut() = decor;
+        }
+        None => {
+            table.insert(key, toml_edit::Item::Value(value));
+        }
+    }
 }
 
 /// Writes `contents` to `path`, the old file copied to `<file>.dexo-backup` first.
@@ -406,5 +434,46 @@ mod tests {
                 .merged(Some("mcp_servers = 3\n"), "/bin/dexo", &args())
                 .is_err()
         );
+    }
+
+    /// An existing dexo entry keeps every key Dexo does not write -- its environment,
+    /// working directory, timeouts -- in JSON and in TOML, inline or not.
+    #[test]
+    fn an_existing_entry_keeps_its_other_keys() {
+        let json = r#"{"mcpServers": {"dexo": {"type": "stdio", "command": "old", "cwd": "/w", "env": {"DEXO_DATA_HOME": "/d"}}}}"#;
+        let merged = McpClient::ClaudeCode
+            .merged(Some(json), "/bin/dexo", &args())
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        let dexo = &value["mcpServers"]["dexo"];
+        assert_eq!(dexo["command"], "/bin/dexo");
+        assert_eq!(dexo["args"][3], "agent");
+        assert_eq!(dexo["type"], "stdio");
+        assert_eq!(dexo["cwd"], "/w");
+        assert_eq!(dexo["env"]["DEXO_DATA_HOME"], "/d");
+        assert!(
+            McpClient::Cursor
+                .merged(Some(r#"{"mcpServers": {"dexo": 1}}"#), "/bin/dexo", &args())
+                .is_err()
+        );
+        for toml in [
+            "[mcp_servers.dexo]\ncommand = \"old\" # where it lives\nstartup_timeout_sec = 30\nenv = { DEXO_DATA_HOME = \"/d\" }\nmatrix = [\n  [1, 2],\n]\n",
+            "[mcp_servers]\ndexo = { command = \"old\", startup_timeout_sec = 30, env = { DEXO_DATA_HOME = \"/d\" }, matrix = [[1, 2]] }\n",
+        ] {
+            let merged = McpClient::Codex
+                .merged(Some(toml), "/bin/dexo", &args())
+                .unwrap();
+            let table: toml::Table = merged.parse().unwrap();
+            let dexo = &table["mcp_servers"]["dexo"];
+            assert_eq!(dexo["command"].as_str(), Some("/bin/dexo"), "{merged}");
+            assert_eq!(dexo["startup_timeout_sec"].as_integer(), Some(30));
+            assert_eq!(dexo["env"]["DEXO_DATA_HOME"].as_str(), Some("/d"));
+            assert_eq!(dexo["matrix"][0][1].as_integer(), Some(2));
+            assert_eq!(
+                merged.contains("# where it lives"),
+                toml.contains("# where")
+            );
+            assert_eq!(merged.contains("dexo = {"), toml.contains("dexo = {"));
+        }
     }
 }
