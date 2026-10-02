@@ -233,7 +233,8 @@ fn word_jump(text: &str, cursor: usize, delta: i32) -> usize {
     let chars: Vec<char> = text.chars().collect();
     let len = chars.len();
     let mut index = cursor.min(len);
-    let is_word = |ch: char| ch.is_ascii_alphanumeric() || ch == '_';
+    // `ç`, `ã` and `é` are letters: an ASCII test ended a word at each of them.
+    let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
     if delta < 0 {
         if index == 0 {
             return 0;
@@ -302,6 +303,18 @@ mod tests {
         input.handle_key(key(KeyCode::End));
         input.handle_key(ctrl(KeyCode::Left));
         assert_eq!(input.labeled_line("name:", true), "> name:my-file.█sql");
+    }
+
+    #[test]
+    fn a_word_keeps_its_accented_letters() {
+        let mut input = TextInput::new("relatório mensal");
+        input.handle_key(key(KeyCode::Home));
+        input.handle_key(ctrl(KeyCode::Right));
+        assert_eq!(input.cursor(), "relatório ".chars().count());
+        input.handle_key(key(KeyCode::End));
+        input.handle_key(ctrl(KeyCode::Left));
+        input.handle_key(ctrl(KeyCode::Left));
+        assert_eq!(input.cursor(), 0);
     }
 
     #[test]

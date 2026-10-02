@@ -323,7 +323,7 @@ pub fn filter_entries<'a>(entries: &'a [PaletteEntry], query: &str) -> Vec<&'a P
 }
 
 fn score(entry: &PaletteEntry, query: &str) -> Option<u8> {
-    let query = query.to_ascii_lowercase();
+    let query = query.to_lowercase();
     let haystacks = std::iter::once(entry.title)
         .chain(entry.keywords.iter().copied())
         .chain(std::iter::once(entry.id));
@@ -336,17 +336,19 @@ pub(crate) fn matches_any(texts: &[&str], query: &str) -> bool {
     if query.is_empty() {
         return true;
     }
-    let query = query.to_ascii_lowercase();
+    let query = query.to_lowercase();
     texts.iter().any(|text| score_text(text, &query).is_some())
 }
 
+/// `query` comes lowercased. Words and case are Unicode's, so `Relatório` is one word
+/// and `RELATÓRIO` matches `relatório`.
 fn score_text(text: &str, query: &str) -> Option<u8> {
-    let text = text.to_ascii_lowercase();
+    let text = text.to_lowercase();
     if text.starts_with(query) {
         return Some(3);
     }
     if text
-        .split(|c: char| !c.is_ascii_alphanumeric())
+        .split(|c: char| !c.is_alphanumeric())
         .any(|word| word.starts_with(query))
     {
         return Some(2);
@@ -531,5 +533,13 @@ mod tests {
         update(&mut model, Action::Focus(FocusTarget::Editor));
         let view = crate::render::render_to_string(&model, 100, 40);
         assert!(view.contains("▸ SQL") || view.contains("> SQL"));
+    }
+
+    /// A name with accents is words like any other, in any case.
+    #[test]
+    fn accented_names_match_by_word_and_case() {
+        assert!(super::matches_any(&["Relatório Mensal"], "mensal"));
+        assert!(super::matches_any(&["Relatório Mensal"], "RELATÓ"));
+        assert!(super::matches_any(&["vendas_por_região"], "região"));
     }
 }
