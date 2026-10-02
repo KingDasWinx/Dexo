@@ -806,8 +806,13 @@ impl WorkbenchRuntime {
                 generation,
             } => {
                 if let Some(active) = self.sessions.get(session) {
+                    let user = self
+                        .session_profiles
+                        .get(&session)
+                        .and_then(ConnectionProfile::username);
                     catalog_manager::load_inspector(
                         Arc::clone(&active.session),
+                        user,
                         id,
                         generation,
                         session,

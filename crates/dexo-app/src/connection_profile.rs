@@ -99,6 +99,14 @@ impl ConnectionProfile {
         store.get(self.secret_ref.as_str())
     }
 
+    /// The user the connection logs in as; a file has none.
+    pub fn username(&self) -> Option<String> {
+        if self.is_file() {
+            return None;
+        }
+        config_str(&self.config, &["username", "user"])
+    }
+
     /// A file's request is its `config.path` and nothing else: no host, user or secret,
     /// and no transport to validate. A policy's verified-TLS requirement guards a network
     /// path, so production and staging do not refuse a file for having none.

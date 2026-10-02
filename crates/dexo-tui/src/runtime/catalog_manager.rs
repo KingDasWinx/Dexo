@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use dexo_app::CatalogService;
-use dexo_driver_api::{CatalogListOptions, ObjectId, Session};
+use dexo_driver_api::{CatalogListOptions, ObjectId, QualifiedName, SecurityAdmin, Session};
 
 use crate::action::Action;
 use crate::runtime::{OperationId, SessionId};
@@ -60,8 +60,30 @@ pub async fn load_children(
     }
 }
 
+/// What the connected user may do with `object`. The principal is the user the
+/// connection logs in as: it used to be the object's own name, so the inspector of a
+/// table `orders` asked about a role `orders`. Without a user there is no one to ask about.
+async fn privileges_of(
+    security: &dyn SecurityAdmin,
+    user: Option<&str>,
+    object: &QualifiedName,
+) -> Result<Vec<String>, String> {
+    let Some(user) = user else {
+        return Ok(Vec::new());
+    };
+    security
+        .effective_privileges(
+            &QualifiedName::new(None::<String>, None::<String>, user),
+            object,
+        )
+        .await
+        .map_err(|error| error.to_string())
+}
+
+/// `user` is the one the session logged in as, whose privileges the inspector shows.
 pub async fn load_inspector(
     session: Arc<dyn Session>,
+    user: Option<String>,
     id: ObjectId,
     generation: u64,
     session_id: SessionId,
@@ -98,12 +120,9 @@ pub async fn load_inspector(
         restrictions.push(message);
     }
     if let (Some(object), Some(security)) = (object.as_ref(), session.security()) {
-        match security
-            .effective_privileges(&object.qualified_name, &object.qualified_name)
-            .await
-        {
+        match privileges_of(security, user.as_deref(), &object.qualified_name).await {
             Ok(values) => privileges = values,
-            Err(error) => restrictions.push(error.to_string()),
+            Err(error) => restrictions.push(error),
         }
     }
     let _ = action_tx
