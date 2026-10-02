@@ -692,3 +692,47 @@ fn wheel_scrolls_transfer_preview_without_changing_focus() {
         dexo_tui::widgets::form::FooterFocus::Input
     );
 }
+
+/// Clicking a row of the completion list accepts that row, as Enter does.
+#[test]
+fn a_click_on_a_completion_row_accepts_it() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    let mut model = Model::default();
+    model.apply_size(120, 30);
+    model.focus = dexo_tui::model::Focus::Editor;
+    let table = |name: &str| {
+        CatalogObject::new(
+            ObjectId::new(format!("table:{name}")),
+            ObjectKind::Table,
+            QualifiedName::new(None::<String>, Some("public"), name),
+            None,
+        )
+    };
+    model.absorb_catalog(&[table("orders"), table("order_items")]);
+    for ch in "select * from o".chars() {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        );
+    }
+    assert!(model.editor.completion_open);
+    paint(&mut model);
+    let (x, y) = model.hits.center(HitTarget::ListRow(1));
+    let second = model.editor.completions[1].label.clone();
+    update(
+        &mut model,
+        mouse(
+            crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+            x,
+            y,
+            KeyModifiers::NONE,
+        ),
+    );
+    assert!(!model.editor.completion_open);
+    assert!(
+        model.active_document().text().ends_with(&second),
+        "{:?}",
+        model.active_document().text()
+    );
+}

@@ -81,7 +81,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ED-19** `MINOR` Insert Snippet is a dead end
 - [x] **ED-21** `MINOR` Ctrl+A in an empty document swallows the next typed character
 - [x] **ED-23** `MINOR` Completion in a join inserts an ambiguous bare column name
-- [ ] **ED-24** `MINOR` Clicking an item in the completion popup does not accept it
+- [x] **ED-24** `MINOR` Clicking an item in the completion popup does not accept it
 - [x] **ED-27** `MINOR` History is not scoped to the connection, but "Clear History" is
 - [=] SL-16 **ED-28** `MINOR` After the window was shrunk to 60x20, explorer and results stay hidden when it grows again
 - [ ] **ED-32** `MINOR` Tabs of documents on an offline connection do not say which connection they belong to
