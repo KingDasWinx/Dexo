@@ -93,6 +93,23 @@ fn right_reaches_the_last_column_before_the_view_moves() {
     assert!(at_end >= 400 - shown);
 }
 
+/// A long line deleted back to a short one: the view went back only as far as the
+/// cursor, and the start of the line stayed out of sight.
+#[test]
+fn a_line_shrunk_back_into_view_shows_from_its_start() {
+    let long = "x".repeat(400);
+    let mut model = editor_with(&long, 100, 30);
+    press(&mut model, KeyCode::End);
+    assert!(model.active_document().viewport_column > 0);
+    for _ in 0..390 {
+        press(&mut model, KeyCode::Backspace);
+    }
+    assert_eq!(model.active_document().viewport_column, 0);
+    let frame = dexo_tui::render::render_to_string(&model, 100, 30);
+    let row = frame.lines().find(|row| row.contains("   1")).unwrap();
+    assert_eq!(row.matches('x').count(), 10, "{frame}");
+}
+
 /// The wheel looks elsewhere without the cursor; the next frame must not snap back.
 #[test]
 fn the_wheel_moves_the_view_and_it_stays_put() {

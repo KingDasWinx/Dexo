@@ -248,8 +248,11 @@ pub fn follow_cursor(model: &mut Model) {
         .take(col)
         .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
         .sum();
+    // Back to the start of the line once the cursor fits on its first screen, and else
+    // half a screen short of the cursor: scrolled to the cursor itself, a long line
+    // deleted back to a short one kept its start out of view.
     if x < doc.viewport_column {
-        doc.viewport_column = x;
+        doc.viewport_column = if x < cols { 0 } else { x - cols / 2 };
     } else if x >= doc.viewport_column + cols {
         doc.viewport_column = x + 1 - cols;
     }
