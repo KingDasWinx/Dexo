@@ -106,7 +106,81 @@ fn parse_value(value: &serde_json::Value) -> PlanNode {
     parse_block(value)
 }
 
+/// A query block's plan, with the subqueries MariaDB lists beside it under it.
 fn parse_block(value: &serde_json::Value) -> PlanNode {
+    let mut node = parse_step(value);
+    if let Some(subqueries) = value
+        .get("subqueries")
+        .and_then(serde_json::Value::as_array)
+    {
+        node.children
+            .extend(subqueries.iter().map(|subquery| PlanNode {
+                kind: "Subquery".into(),
+                relation: None,
+                detail: None,
+                estimates: PlanMetrics::default(),
+                actual: PlanMetrics::default(),
+                loops: None,
+                children: vec![parse_value(subquery)],
+                native: subquery.clone(),
+            }));
+    }
+    node
+}
+
+fn parse_step(value: &serde_json::Value) -> PlanNode {
+    if let Some(union) = value.get("union_result") {
+        let parts = union
+            .get("query_specifications")
+            .and_then(serde_json::Value::as_array)
+            .map(|parts| parts.iter().map(parse_value).collect())
+            .unwrap_or_default();
+        return PlanNode {
+            kind: "Union".into(),
+            relation: None,
+            detail: union
+                .get("table_name")
+                .and_then(serde_json::Value::as_str)
+                .map(|name| format!("into {name}")),
+            estimates: cost_metrics(value),
+            actual: analyzed_metrics(union),
+            loops: None,
+            children: parts,
+            native: value.clone(),
+        };
+    }
+    // MariaDB's `window_functions_computation`, MySQL's `windowing`: the window
+    // functions are computed over the rows of what is inside.
+    if let Some(inner) = value
+        .get("window_functions_computation")
+        .or_else(|| value.get("windowing"))
+    {
+        let order = inner
+            .pointer("/sorts/0/filesort/sort_key")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or_else(|| {
+                inner
+                    .pointer("/windows/0/filesort_key")
+                    .and_then(serde_json::Value::as_array)
+                    .map(|keys| {
+                        keys.iter()
+                            .filter_map(serde_json::Value::as_str)
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    })
+            });
+        return PlanNode {
+            kind: "Window".into(),
+            relation: None,
+            detail: order.map(|order| format!("by {order}")),
+            estimates: cost_metrics(value),
+            actual: PlanMetrics::default(),
+            loops: None,
+            children: vec![parse_block(inner)],
+            native: value.clone(),
+        };
+    }
     if let Some(nested) = value
         .get("nested_loop")
         .and_then(serde_json::Value::as_array)
@@ -181,6 +255,27 @@ fn parse_block(value: &serde_json::Value) -> PlanNode {
             native: value.clone(),
         };
     }
+    // A step this does not know by name still shows what is under it: each member
+    // that holds a plan becomes a child, named after its key.
+    let children = value
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, inner)| key.as_str() != "subqueries" && holds_plan(inner))
+        .map(|(key, inner)| PlanNode {
+            kind: humanize(key),
+            relation: None,
+            detail: None,
+            estimates: PlanMetrics::default(),
+            actual: PlanMetrics::default(),
+            loops: None,
+            children: match inner {
+                serde_json::Value::Array(items) => items.iter().map(parse_value).collect(),
+                _ => vec![parse_block(inner)],
+            },
+            native: inner.clone(),
+        })
+        .collect();
     PlanNode {
         kind: "Query block".into(),
         relation: None,
@@ -188,9 +283,30 @@ fn parse_block(value: &serde_json::Value) -> PlanNode {
         estimates: cost_metrics(value),
         actual: PlanMetrics::default(),
         loops: None,
-        children: Vec::new(),
+        children,
         native: value.clone(),
     }
+}
+
+/// Whether a table, a join or a query block is somewhere inside `value`.
+fn holds_plan(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(members) => members.iter().any(|(key, inner)| {
+            matches!(key.as_str(), "table" | "nested_loop" | "query_block") || holds_plan(inner)
+        }),
+        serde_json::Value::Array(items) => items.iter().any(holds_plan),
+        _ => false,
+    }
+}
+
+/// `materialized_from_subquery` as `Materialized from subquery`.
+fn humanize(key: &str) -> String {
+    let words = key.replace('_', " ");
+    let mut chars = words.chars();
+    chars
+        .next()
+        .map(|first| first.to_uppercase().chain(chars).collect())
+        .unwrap_or_default()
 }
 
 fn parse_table(value: &serde_json::Value) -> PlanNode {
@@ -517,6 +633,68 @@ mod tests {
             sort.children[0].children[0].children[0].relation.as_deref(),
             Some("o")
         );
+    }
+
+    /// A UNION, window functions and subqueries showed as an empty "Query block".
+    #[test]
+    fn unions_windows_and_subqueries_keep_their_tables() {
+        let relations = |node: &dexo_driver_api::PlanNode| {
+            fn walk(node: &dexo_driver_api::PlanNode, out: &mut Vec<String>) {
+                out.extend(node.relation.clone());
+                for child in &node.children {
+                    walk(child, out);
+                }
+            }
+            let mut out = Vec::new();
+            walk(node, &mut out);
+            out
+        };
+        for (fixture, kind, tables) in [
+            (
+                include_str!("../tests/fixtures/mariadb-explain-union.json"),
+                "Union",
+                vec!["o", "c"],
+            ),
+            (
+                include_str!("../tests/fixtures/mysql-explain-union.json"),
+                "Union",
+                vec!["o", "c"],
+            ),
+            (
+                include_str!("../tests/fixtures/mariadb-explain-window.json"),
+                "Window",
+                vec!["o"],
+            ),
+            (
+                include_str!("../tests/fixtures/mysql-explain-window.json"),
+                "Window",
+                vec!["o"],
+            ),
+        ] {
+            let plan = parse_json(fixture).unwrap();
+            assert_eq!(plan.root.kind, kind, "{fixture}");
+            assert_eq!(relations(&plan.root), tables, "{fixture}");
+            if kind == "Window" {
+                assert!(
+                    plan.root
+                        .detail
+                        .as_deref()
+                        .is_some_and(|detail| detail.starts_with("by "))
+                );
+            }
+        }
+        let plan = parse_json(include_str!(
+            "../tests/fixtures/mariadb-explain-subqueries.json"
+        ))
+        .unwrap();
+        assert_eq!(relations(&plan.root), ["o", "o2", "c"]);
+        assert_eq!(plan.root.children.last().unwrap().kind, "Subquery");
+        // An unknown wrapper is descended into, not left empty.
+        let wrapped =
+            parse_json(r#"{"query_block": {"some_new_step": {"table": {"table_name": "t"}}}}"#)
+                .unwrap();
+        assert_eq!(relations(&wrapped.root), ["t"]);
+        assert_eq!(wrapped.root.children[0].kind, "Some new step");
     }
 
     #[test]
