@@ -2224,6 +2224,7 @@ dependencies = [
  "toml",
  "tracing",
  "ttfx",
+ "unicode-segmentation",
  "unicode-width",
  "uuid",
 ]

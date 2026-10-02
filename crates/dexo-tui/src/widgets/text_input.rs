@@ -274,33 +274,48 @@ fn char_byte_index(text: &str, char_index: usize) -> usize {
         .unwrap_or(text.len())
 }
 
+/// Where Ctrl+Left (`delta < 0`) or Ctrl+Right lands from `cursor`, in characters.
+/// The text is walked a grapheme at a time, so an accent typed as a combining mark --
+/// `e` then U+0301 -- stays with its letter instead of ending the word there.
 fn word_jump(text: &str, cursor: usize, delta: i32) -> usize {
-    let chars: Vec<char> = text.chars().collect();
-    let len = chars.len();
-    let mut index = cursor.min(len);
-    // `ç`, `ã` and `é` are letters: an ASCII test ended a word at each of them.
-    let is_word = |ch: char| ch.is_alphanumeric() || ch == '_';
+    use unicode_segmentation::UnicodeSegmentation;
+    // Each grapheme's first character, and whether it is part of a word: `ç`, `ã` and
+    // `é` are letters, where an ASCII test ended a word at each of them.
+    let mut starts = Vec::new();
+    let mut words = Vec::new();
+    let mut chars = 0;
+    for grapheme in text.graphemes(true) {
+        starts.push(chars);
+        words.push(
+            grapheme
+                .chars()
+                .next()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_'),
+        );
+        chars += grapheme.chars().count();
+    }
+    let len = words.len();
+    let mut index = starts.partition_point(|start| *start < cursor);
     if delta < 0 {
         if index == 0 {
             return 0;
         }
         index -= 1;
-        while index > 0 && !is_word(chars[index]) {
+        while index > 0 && !words[index] {
             index -= 1;
         }
-        while index > 0 && is_word(chars[index - 1]) {
+        while index > 0 && words[index - 1] {
             index -= 1;
         }
-        index
     } else {
-        while index < len && is_word(chars[index]) {
+        while index < len && words[index] {
             index += 1;
         }
-        while index < len && !is_word(chars[index]) {
+        while index < len && !words[index] {
             index += 1;
         }
-        index
     }
+    starts.get(index).copied().unwrap_or(chars)
 }
 
 #[cfg(test)]
@@ -383,6 +398,26 @@ mod tests {
         assert_eq!(input.cursor(), "relatório ".chars().count());
         input.handle_key(key(KeyCode::End));
         input.handle_key(ctrl(KeyCode::Left));
+        input.handle_key(ctrl(KeyCode::Left));
+        assert_eq!(input.cursor(), 0);
+    }
+
+    /// An accent typed as a combining mark (NFD) ended the word at it.
+    #[test]
+    fn a_word_keeps_its_combining_accents() {
+        let mut input = TextInput::new("cafe\u{301}s x");
+        input.handle_key(key(KeyCode::Home));
+        input.handle_key(ctrl(KeyCode::Right));
+        assert_eq!(input.cursor(), "cafe\u{301}s ".chars().count());
+        input.handle_key(key(KeyCode::End));
+        input.handle_key(ctrl(KeyCode::Left));
+        input.handle_key(ctrl(KeyCode::Left));
+        assert_eq!(input.cursor(), 0);
+
+        let mut input = TextInput::new("cafe\u{301} x");
+        input.handle_key(key(KeyCode::Home));
+        input.handle_key(ctrl(KeyCode::Right));
+        assert_eq!(input.cursor(), "cafe\u{301} ".chars().count());
         input.handle_key(ctrl(KeyCode::Left));
         assert_eq!(input.cursor(), 0);
     }
