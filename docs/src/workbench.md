@@ -6,6 +6,8 @@ SQL execution streams result pages. Manual transactions stay visible. Closing a 
 
 Theme, keymap, mouse capture, Unicode, and animation persist in a local settings file and apply immediately. Mouse clicks map to the same commands as the keyboard.
 
+Every single-line field -- the palette, the F1 search, the WHERE and ORDER BY bars, form fields, names and paths, the typed confirmations -- edits the same way: Ctrl+A selects the whole text, shown in reverse, and what you type next replaces it; Ctrl+Left and Ctrl+Right move by words, accents included; Ctrl+Backspace, Alt+Backspace or Ctrl+W delete the word before the cursor and Ctrl+Delete the one after it; Home and End go to either end. Deleting a project asks for its name; Alt+C there chooses whether its connections go with it.
+
 ## Themes
 
 Settings' Theme row (`e`, or "Cycle Theme" in a keymap) steps through Dexo's own theme, five presets -- Dracula, Gruvbox, Nord, Catppuccin and Tokyo Night -- and your own files, applying each as it is shown. Mode and Accent belong to Dexo's own theme, and changing either goes back to it.
