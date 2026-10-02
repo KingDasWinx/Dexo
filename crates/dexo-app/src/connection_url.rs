@@ -113,24 +113,53 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
 }
 
 /// The user and password, and what follows them. A password is pasted as it is, `/`,
-/// `?`, `#` and `@` in it unencoded, so they end at the last `@` before the host's `/`
-/// or `?` -- splitting at `?` first sent half the password to the parameters, and the
-/// error quoted it.
+/// `?`, `#` and `@` in it unencoded, and no host has an `@`: so they end at the last
+/// `@` that is not in a parameter's value. Ending at the first `/` or `?` after an `@`
+/// split `u:p@ss/x@h/db` into the password `p` and the host `ss`, and put pieces of
+/// the password in the errors about parameters.
 fn split_userinfo(rest: &str) -> (Option<&str>, &str) {
-    let Some(first) = rest.find('@') else {
-        return (None, rest);
-    };
-    let end = rest[first..]
-        .find(['/', '?'])
-        .map_or(rest.len(), |at| first + at);
-    let at = rest[..end].rfind('@').unwrap_or(first);
-    let userinfo = &rest[..at];
-    // An `@` past the host -- in a parameter -- is not the user's: no user has a `/`.
-    let user = userinfo.split(':').next().unwrap_or("");
-    if user.contains(['/', '?', '#']) {
-        return (None, rest);
+    let mut end = rest.len();
+    while let Some(at) = rest[..end].rfind('@') {
+        if in_parameter(&rest[..at]) {
+            end = at;
+            continue;
+        }
+        let userinfo = &rest[..at];
+        // No user has a `/`: the `@` is past the host, where nothing is the user's.
+        let user = userinfo.split(':').next().unwrap_or("");
+        if user.contains(['/', '?', '#']) {
+            return (None, rest);
+        }
+        return (Some(userinfo), &rest[at + 1..]);
     }
-    (Some(userinfo), &rest[at + 1..])
+    (None, rest)
+}
+
+/// Whether `before`, the URL up to an `@`, ends inside a parameter Dexo reads: past a
+/// `?`, nothing but `key=value` pairs with keys of its own -- `?sslrootcert=/me@work`.
+fn in_parameter(before: &str) -> bool {
+    const KEYS: &[&str] = &[
+        "mode",
+        "sslmode",
+        "ssl_mode",
+        "ssl-mode",
+        "ssl",
+        "host",
+        "sslrootcert",
+        "sslcert",
+        "sslkey",
+        "application_name",
+        "fallback_application_name",
+        "connect_timeout",
+        "client_encoding",
+        "charset",
+    ];
+    before.rsplit_once('?').is_some_and(|(_, query)| {
+        query.split('&').all(|pair| {
+            pair.split_once('=')
+                .is_some_and(|(key, _)| KEYS.contains(&key.to_ascii_lowercase().as_str()))
+        })
+    })
 }
 
 /// `sqlite:///abs/path` and `sqlite://relative/path`: the rest is the file, and
@@ -379,6 +408,11 @@ mod tests {
             ("postgres://u:pa/ss@h/db", "pa/ss"),
             ("postgres://u:pa#ss@h/db", "pa#ss"),
             ("postgres://u:p@ss@h/db?sslmode=require", "p@ss"),
+            // An `@` and then a `/` or `?`: the host is past the last `@`.
+            ("postgres://u:p@ss/x@h/db", "p@ss/x"),
+            ("postgres://u:p@ss?x@h/db", "p@ss?x"),
+            ("postgres://u:p@s?s=x@h/db", "p@s?s=x"),
+            ("postgres://u:a/b@c?d#e@h/db?sslmode=require", "a/b@c?d#e"),
         ] {
             let parsed = parse(url).unwrap_or_else(|error| panic!("{url}: {error}"));
             assert_eq!(parsed.password.unwrap().expose_secret(), password, "{url}");
@@ -391,6 +425,17 @@ mod tests {
         assert!(!error.contains("cret"), "{error}");
         // A parameter's `@` is not a user's.
         assert!(parse("postgres://h/db?application_name=a@b").is_err());
+        let parsed = parse("postgres://u:pw@h/db?sslrootcert=/certs/me@work.pem").unwrap();
+        assert_eq!(parsed.password.unwrap().expose_secret(), "pw");
+        assert_eq!(parsed.profile.config["host"], "h");
+        assert_eq!(
+            parsed.profile.config["tls"]["ca_file"],
+            "/certs/me@work.pem"
+        );
+        let error = parse("postgres://u:p@ss?x@h/db?bogus=1")
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("ss?x") && !error.contains("p@"), "{error}");
         // `#` in a SQLite path would open another file; it must be written %23.
         assert!(parse("sqlite:///data/sales#2.db").is_err());
         assert_eq!(
