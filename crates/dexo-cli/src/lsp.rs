@@ -169,10 +169,12 @@ impl Server {
     }
 
     /// The connection's cached catalog: the command line's cache first (by the
-    /// connection's id and database), then the workbench's (by its name).
+    /// connection's id and database), then the workbench's (by its name). Dexo's
+    /// database is only read: a server an editor started never migrates, creates or
+    /// archives it, and a lock held by Dexo means no catalog until the file changes.
     fn load(&self, connection: &str) -> Option<Schema> {
         let path = self.database.as_ref()?;
-        let db = dexo_storage::Database::open(path).ok()?;
+        let db = dexo_storage::Database::open_read_only(path).ok()?;
         let profile = dexo_storage::ConnectionRepository::new(db.connection())
             .get_by_name(connection)
             .ok()??;

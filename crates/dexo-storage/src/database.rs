@@ -65,6 +65,25 @@ impl Database {
         Ok(Self { conn })
     }
 
+    /// An existing database opened only to be read, by a process that must leave it as
+    /// it is -- the language server an editor keeps running: nothing is created, migrated
+    /// or archived, and a lock another process holds is an error at once rather than a
+    /// wait. A database at a schema version other than this build's is refused, since
+    /// its tables may not read the way this build expects.
+    pub fn open_read_only(path: impl AsRef<Path>) -> anyhow::Result<Self> {
+        let conn = Connection::open_with_flags(
+            path,
+            rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY | rusqlite::OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(std::time::Duration::from_millis(50))?;
+        let version = migrations::read_schema_version(&conn);
+        anyhow::ensure!(
+            version == LATEST_SCHEMA_VERSION,
+            "the database is at schema version {version}, and this build reads {LATEST_SCHEMA_VERSION}"
+        );
+        Ok(Self { conn })
+    }
+
     pub fn connection(&self) -> &Connection {
         &self.conn
     }
@@ -220,6 +239,43 @@ mod tests {
         let db = Database::open(&path).unwrap();
         assert_eq!(db.schema_version().unwrap(), 16);
         assert!(unsupported_archive_path(&path, 23).exists());
+    }
+
+    /// Opening to read never creates, migrates or archives anything, and does not wait
+    /// on a lock another connection holds.
+    #[test]
+    fn open_read_only_changes_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("none/dexo.db");
+        assert!(Database::open_read_only(&missing).is_err());
+        assert!(!missing.parent().unwrap().exists());
+
+        let path = dir.path().join("dexo.db");
+        Database::open(&path).unwrap();
+        let db = Database::open_read_only(&path).unwrap();
+        assert!(
+            db.connection()
+                .execute("DELETE FROM schema_migrations", [])
+                .is_err()
+        );
+        drop(db);
+
+        let writer = rusqlite::Connection::open(&path).unwrap();
+        writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
+        let started = std::time::Instant::now();
+        assert!(Database::open_read_only(&path).is_err());
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+        writer.execute_batch("ROLLBACK").unwrap();
+
+        writer
+            .execute(
+                "INSERT INTO schema_migrations(version, applied_at) VALUES(23, datetime('now'))",
+                [],
+            )
+            .unwrap();
+        assert!(Database::open_read_only(&path).is_err());
+        assert!(path.exists());
+        assert!(!unsupported_archive_path(&path, 23).exists());
     }
 
     #[test]
