@@ -227,6 +227,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(focus) = model.explain_prompt {
         render_explain_prompt(frame, model, focus, hits);
     }
+    if let Some(focus) = model.quit_prompt {
+        render_quit_prompt(frame, model, focus, hits);
+    }
     if let Some(prompt) = &model.run_prompt {
         render_run_prompt(frame, model, prompt, hits);
     }
@@ -331,6 +334,35 @@ fn render_run_prompt(
             crate::widgets::form::register_footer(hits, rect, line, "Run");
         }
     });
+}
+
+fn render_quit_prompt(
+    frame: &mut Frame,
+    model: &Model,
+    focus: crate::widgets::form::FooterFocus,
+    hits: &mut HitMap,
+) {
+    let mut lines = crate::update::quit_losses(model);
+    lines.push(String::new());
+    lines.push(crate::widgets::form::footer_line("Quit", focus));
+    let width = lines
+        .iter()
+        .map(|line| line.chars().count() as u16 + 2)
+        .max()
+        .unwrap_or(0)
+        .clamp(30, 76)
+        .min(frame.area().width);
+    let popup = centered(frame.area(), width, lines.len() as u16 + 2);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        Block::bordered().title("Quit Dexo?"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    let footer = crate::mouse::line_rect(popup_inner(popup), lines.len() - 1);
+    crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], "Quit");
 }
 
 fn render_explain_prompt(

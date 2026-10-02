@@ -1715,6 +1715,9 @@ pub struct Model {
     /// Asked before EXPLAIN ANALYZE runs the statement under the cursor; the focused
     /// footer button while it is open.
     pub explain_prompt: Option<crate::widgets::form::FooterFocus>,
+    /// Asked before quitting drops an open transaction or grid edits not yet applied;
+    /// the focused footer button while it is open.
+    pub quit_prompt: Option<crate::widgets::form::FooterFocus>,
     /// Asked before the editor runs a write on production or a destructive statement.
     pub run_prompt: Option<crate::screens::run_prompt::RunPrompt>,
     pub layout_preset: LayoutPreset,
@@ -1857,6 +1860,7 @@ impl Default for Model {
             pending_execute: None,
             close_prompt: None,
             explain_prompt: None,
+            quit_prompt: None,
             run_prompt: None,
             layout_preset: LayoutPreset::Normal,
             panes: PaneLayout {

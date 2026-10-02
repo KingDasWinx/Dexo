@@ -173,3 +173,40 @@ fn the_buttons_answer_the_mouse() {
         }
     }
 }
+
+fn shuts_down(effects: &[Effect]) -> bool {
+    effects
+        .iter()
+        .any(|effect| matches!(effect, Effect::Shutdown))
+}
+
+/// Quitting used to roll back an open transaction and drop grid edits without a word.
+/// With nothing to lose it quits at once; otherwise it says what would be lost, and
+/// Enter on the dialog cancels until Quit is picked.
+#[test]
+fn quitting_asks_before_it_drops_a_transaction() {
+    let mut model = Model::default();
+    assert!(shuts_down(&update(&mut model, Action::Quit)));
+
+    let mut model = Model::default();
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(7)),
+            connection: "shop".into(),
+            transaction: dexo_driver_api::TransactionState::Active,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    assert!(!shuts_down(&update(&mut model, Action::Quit)));
+    assert!(model.quit_prompt.is_some());
+    let view = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(view.contains("A transaction is open on shop"), "{view}");
+    assert!(!shuts_down(&update(&mut model, key(KeyCode::Enter))));
+    assert!(model.quit_prompt.is_none());
+    update(&mut model, Action::Quit);
+    update(&mut model, key(KeyCode::Left));
+    assert!(shuts_down(&update(&mut model, key(KeyCode::Enter))));
+}

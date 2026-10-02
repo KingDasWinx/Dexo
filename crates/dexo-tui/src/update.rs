@@ -2248,6 +2248,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::Quit => {
+            // Documents are kept for recovery whatever happens; an open transaction and
+            // grid edits are not, so quitting asks first when there are any.
+            if model.quit_prompt.is_none() && !quit_losses(model).is_empty() {
+                model.quit_prompt = Some(crate::widgets::form::FooterFocus::Cancel);
+                return Vec::new();
+            }
+            model.quit_prompt = None;
             let mut effects = checkpoint_dirty(model);
             effects.push(flush_documents_effect(model));
             effects.push(persist_layout_effect(model));
@@ -2490,6 +2497,14 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             Some(HitTarget::FooterSubmit) => submit_run_prompt(model),
             Some(HitTarget::FooterCancel) => {
                 model.run_prompt = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        Some(OverlayKind::QuitPrompt) => match hit {
+            Some(HitTarget::FooterSubmit) => update(model, Action::Quit),
+            Some(HitTarget::FooterCancel) => {
+                model.quit_prompt = None;
                 Vec::new()
             }
             _ => Vec::new(),
@@ -3752,6 +3767,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.explain_prompt.is_some() {
         return handle_explain_prompt_key(model, key);
+    }
+    if model.quit_prompt.is_some() {
+        return handle_quit_prompt_key(model, key);
     }
     if model.connections.delete_target.is_some() {
         return handle_delete_connection_key(model, key);
@@ -8403,6 +8421,54 @@ fn submit_run_prompt(model: &mut Model) -> Vec<Effect> {
 }
 
 /// Run and Cancel, nothing to type.
+fn handle_quit_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, confirm_key};
+    let Some(focus) = model.quit_prompt.as_mut() else {
+        return Vec::new();
+    };
+    match confirm_key(focus, &key) {
+        FooterKey::Submit => update(model, Action::Quit),
+        FooterKey::Cancel => {
+            model.quit_prompt = None;
+            Vec::new()
+        }
+        FooterKey::Moved | FooterKey::Pass => Vec::new(),
+    }
+}
+
+/// What quitting would throw away: each open transaction, rolled back when its session
+/// closes, and the grid edits not yet applied, in every document.
+pub(crate) fn quit_losses(model: &Model) -> Vec<String> {
+    let mut losses: Vec<String> = model
+        .connections
+        .sessions
+        .iter()
+        .filter(|row| row.transaction != dexo_driver_api::TransactionState::Idle)
+        .map(|row| {
+            format!(
+                "A transaction is open on {}: it is rolled back.",
+                row.connection
+            )
+        })
+        .collect();
+    let parked: usize = model
+        .documents
+        .iter()
+        .enumerate()
+        .filter(|(index, _)| *index != model.active_document)
+        .map(|(_, document)| document.browse.changes.pending().len())
+        .sum();
+    let edits = model.data.changes.pending().len() + parked;
+    if edits > 0 {
+        losses.push(format!(
+            "{edits} grid {} not applied: {} lost.",
+            if edits == 1 { "edit is" } else { "edits are" },
+            if edits == 1 { "it is" } else { "they are" },
+        ));
+    }
+    losses
+}
+
 fn handle_explain_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     use crate::widgets::form::{FooterKey, confirm_key};
     let Some(focus) = model.explain_prompt.as_mut() else {

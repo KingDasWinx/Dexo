@@ -89,6 +89,7 @@ pub enum OverlayKind {
     ClosePrompt,
     RunPrompt,
     ExplainPrompt,
+    QuitPrompt,
     DeleteConnection,
     Review,
     DdlPreview,
@@ -215,6 +216,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.close_prompt.is_some(), OverlayKind::ClosePrompt),
         (model.run_prompt.is_some(), OverlayKind::RunPrompt),
         (model.explain_prompt.is_some(), OverlayKind::ExplainPrompt),
+        (model.quit_prompt.is_some(), OverlayKind::QuitPrompt),
         (
             model.connections.delete_target.is_some(),
             OverlayKind::DeleteConnection,
