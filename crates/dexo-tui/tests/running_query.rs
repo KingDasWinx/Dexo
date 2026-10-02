@@ -108,3 +108,28 @@ fn cancel_with_nothing_running_says_so() {
     assert!(effects.is_empty());
     assert_eq!(last_message(&model), "No query is running.");
 }
+
+/// A run the user stopped is not a failure: it was a red `error query cancelled`.
+#[test]
+fn a_cancelled_query_is_reported_as_cancelled_not_as_an_error() {
+    let mut model = connected();
+    model.set_sql("select pg_sleep(20);");
+    update(&mut model, Action::ExecuteStatement);
+    let key = model.results.tabs[0].key.operation.clone();
+
+    update(
+        &mut model,
+        Action::QueryFailed {
+            key,
+            index: 0,
+            message: "query cancelled".into(),
+            details: Vec::new(),
+            position: None,
+        },
+    );
+
+    let last = model.messages.last().expect("no message");
+    assert_eq!(last.message, "Query cancelled.");
+    assert_eq!(last.severity, dexo_tui::model::Severity::Info);
+    assert!(model.active_query.is_none());
+}

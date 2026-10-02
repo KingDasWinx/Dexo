@@ -285,6 +285,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 bars.failed = true;
                 derived = true;
             }
+            // A run the user stopped did not fail: `error query cancelled` in red said it
+            // had, and the grid has nothing to explain.
+            if message.eq_ignore_ascii_case("query cancelled") {
+                model.messages.info("Query cancelled.".into());
+                return finish_schema_run(model, key.operation, Some(index));
+            }
             // The statement that failed is Dexo's wrapper around the user's clause: its
             // position, and the line it quotes, mean nothing in what the user typed.
             let details = if derived {

@@ -104,7 +104,8 @@ pub async fn run_script(
             Err(_) => {
                 let _ = session.cancel(task.query).await;
                 query.registry().cancel(task.task);
-                let error = DriverError::new(DriverErrorCategory::Timeout, "query timed out");
+                let error =
+                    DriverError::new(DriverErrorCategory::Timeout, timeout_message(timeout));
                 report_failure(&action_tx, &key, index, sql, &error, statements).await;
                 failed = true;
             }
@@ -113,6 +114,14 @@ pub async fn run_script(
     if !failed {
         let _ = action_tx.send(Action::ScriptFinished { key }).await;
     }
+}
+
+/// Said with its limit and what to do: it hit after 30 s with a bare `query timed out`.
+fn timeout_message(limit: Duration) -> String {
+    format!(
+        "Query timed out after {} s, the limit for a statement here. Cancel stops one sooner.",
+        limit.as_secs()
+    )
 }
 
 /// Sends the failure to the model with what the server said about it, and leaves a line in
@@ -267,6 +276,13 @@ pub async fn cancel_live(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_timeout_names_its_limit() {
+        let message = super::timeout_message(std::time::Duration::from_secs(30));
+        assert!(message.contains("30 s"), "{message}");
+        assert!(!message.eq_ignore_ascii_case("query timed out"));
+    }
+
     use std::sync::{Arc, Mutex};
 
     use dexo_driver_api::{
