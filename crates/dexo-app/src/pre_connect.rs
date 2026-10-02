@@ -361,6 +361,18 @@ mod tests {
             .is_ok_and(|output| !output.stdout.is_empty())
     }
 
+    /// Whether the command is gone, given a loaded machine a few seconds to reap it.
+    fn gone(marker: &str) -> bool {
+        let deadline = std::time::Instant::now() + Duration::from_secs(5);
+        while running(marker) {
+            if std::time::Instant::now() >= deadline {
+                return false;
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        true
+    }
+
     /// `${port}` becomes a free port the profile then dials on localhost; the command
     /// runs until the process is dropped, and its children with it.
     #[tokio::test]
@@ -380,8 +392,7 @@ mod tests {
         assert!(std::net::TcpStream::connect(("127.0.0.1", port as u16)).is_ok());
         assert!(running(marker));
         drop(process);
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(!running(marker), "the command outlived its process");
+        assert!(gone(marker), "the command outlived its process");
     }
 
     /// A command that gives up says why, in its own last words.
@@ -434,11 +445,7 @@ mod tests {
             error.contains("background") || error.contains("stopped"),
             "{error}"
         );
-        std::thread::sleep(Duration::from_millis(200));
-        assert!(
-            !running(marker),
-            "what the command left running outlived it"
-        );
+        assert!(gone(marker), "what the command left running outlived it");
     }
 
     /// A profile routed through SSH is refused; a port written as text is read the way
@@ -502,7 +509,6 @@ mod tests {
         let slow = profile(&format!("sleep 30 {marker} # ${{port}}"));
         let pending = prepare(&slow, Duration::from_secs(20));
         let _ = tokio::time::timeout(Duration::from_millis(400), pending).await;
-        std::thread::sleep(Duration::from_millis(600));
-        assert!(!running(marker), "the command outlived the connect");
+        assert!(gone(marker), "the command outlived the connect");
     }
 }

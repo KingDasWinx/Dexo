@@ -6,7 +6,13 @@ use dexo_driver_api::{CatalogObject, Session};
 /// SQLite belong to `dexo`; the adapter crate reaches them only through this.
 #[async_trait::async_trait]
 pub trait McpBackend: Send + Sync {
-    async fn connect(&self, connection: &str) -> Result<Box<dyn Session>, AppError>;
+    /// Dials the connection, the driver given `timeout` to answer. A password or
+    /// pre-connect command keeps its own limit, so a slow tunnel says why it failed.
+    async fn connect(
+        &self,
+        connection: &str,
+        timeout: std::time::Duration,
+    ) -> Result<Box<dyn Session>, AppError>;
     /// The connection's indexed catalog; the first call on a connection may build it.
     async fn catalog_snapshot(&self, connection: &str) -> Result<Vec<CatalogObject>, AppError>;
     fn schema_snapshot(&self, name: &str) -> Result<Option<SchemaSnapshot>, AppError>;

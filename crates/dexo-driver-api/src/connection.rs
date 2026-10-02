@@ -145,6 +145,9 @@ pub trait ConnectionFactory: Send + Sync {
     async fn connect(&self, request: ConnectRequest) -> Result<Box<dyn Session>, DriverError>;
 }
 
+/// A database session. A wrapper -- `dexo_app::pre_connect`'s, which keeps a tunnel
+/// with its session -- forwards every method: an optional one added here that it does
+/// not forward reads as `None` through it.
 #[async_trait::async_trait]
 pub trait Session: Send + Sync {
     fn capabilities(&self) -> &[CapabilityState];

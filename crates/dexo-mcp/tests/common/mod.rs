@@ -39,7 +39,11 @@ impl FakeBackend {
 
 #[async_trait::async_trait]
 impl McpBackend for FakeBackend {
-    async fn connect(&self, connection: &str) -> Result<Box<dyn Session>, AppError> {
+    async fn connect(
+        &self,
+        connection: &str,
+        _timeout: std::time::Duration,
+    ) -> Result<Box<dyn Session>, AppError> {
         self.connects.lock().unwrap().push(connection.into());
         if self.fail_next_connect.swap(false, Ordering::SeqCst) {
             return Err(AppError::new(ErrorCategory::Network, "connection refused"));

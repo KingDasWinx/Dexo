@@ -218,20 +218,20 @@ async fn dial(
     let secret = password.resolve().await?;
     // A pre-connect command opens the way first; the session keeps it running, and the
     // profile it hands back dials that way, for the connections that follow.
-    let (effective, process) =
-        dexo_app::pre_connect::prepare(profile, dexo_app::pre_connect::TIMEOUT)
-            .await
-            .map_err(|error| error.to_string())?;
-    let (connect, _) = effective
-        .connect_request(SecretString::from(secret.expose_secret().to_string()))
-        .map_err(|error| error.to_string())?;
-    match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await {
-        Ok(Ok(session)) => Ok((
-            dexo_app::pre_connect::attach(session, process),
-            secret,
-            effective,
-        )),
-        Ok(Err(error)) => {
+    let opened = dexo_app::connect::open(
+        factory.as_ref(),
+        profile,
+        SecretString::from(secret.expose_secret().to_string()),
+        Some(CONNECT_TIMEOUT),
+    )
+    .await;
+    match opened {
+        Ok(opened) => Ok((opened.session, secret, opened.profile)),
+        Err(
+            dexo_app::connect::ConnectError::PreConnect(error)
+            | dexo_app::connect::ConnectError::Setup(error),
+        ) => Err(error.to_string()),
+        Err(dexo_app::connect::ConnectError::Driver(error)) => {
             let rejected = error.category() == dexo_driver_api::DriverErrorCategory::Authentication;
             let message = map_driver_error(error).to_string();
             let key = profile.secret_ref.as_str();
@@ -241,10 +241,10 @@ async fn dial(
             }
             Err(message)
         }
-        Err(_) => Err(format!(
+        Err(dexo_app::connect::ConnectError::TimedOut(limit)) => Err(format!(
             "{} did not answer within {}s",
             profile.name,
-            CONNECT_TIMEOUT.as_secs()
+            limit.as_secs()
         )),
     }
 }

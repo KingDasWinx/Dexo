@@ -897,7 +897,7 @@ async fn collect_snapshot(
 
 /// The connection's password: from its password command when it has one, run off the
 /// async workers because it may take seconds, otherwise from the keychain.
-async fn profile_secret(
+pub(crate) async fn profile_secret(
     profile: &dexo_app::ConnectionProfile,
 ) -> anyhow::Result<secrecy::SecretString> {
     if let Some(command) = profile.password_command() {
@@ -921,11 +921,10 @@ pub(crate) async fn connect_session(
 ) -> anyhow::Result<Box<dyn dexo_driver_api::Session>> {
     let secret = profile_secret(profile).await?;
     let factory = registry.get(&profile.driver)?;
-    let (profile, process) =
-        dexo_app::pre_connect::prepare(profile, dexo_app::pre_connect::TIMEOUT).await?;
-    let (connect, _) = profile.connect_request(secret)?;
-    let session = factory.connect(connect).await.map_err(map_driver_error)?;
-    Ok(dexo_app::pre_connect::attach(session, process))
+    let opened = dexo_app::connect::open(factory.as_ref(), profile, secret, None)
+        .await
+        .map_err(AppError::from)?;
+    Ok(opened.session)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1003,11 +1002,13 @@ async fn execute_script(
         })?;
     let secret = profile_secret(&profile).await?;
     let factory = registry.get(&profile.driver)?;
-    let (profile, process) =
-        dexo_app::pre_connect::prepare(&profile, dexo_app::pre_connect::TIMEOUT).await?;
-    let (connect, conn_policy) = profile.connect_request(secret)?;
-    let session = factory.connect(connect).await.map_err(map_driver_error)?;
-    let session = dexo_app::pre_connect::attach(session, process);
+    let dexo_app::connect::Opened {
+        session,
+        profile,
+        policy: conn_policy,
+    } = dexo_app::connect::open(factory.as_ref(), &profile, secret, None)
+        .await
+        .map_err(AppError::from)?;
     let service = QueryService::new(Arc::new(TaskRegistry::default()));
     let batches = service
         .execute_script(

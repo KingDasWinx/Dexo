@@ -1,5 +1,6 @@
 pub mod admin_service;
 pub mod catalog_service;
+pub mod connect;
 pub mod connection_policy;
 pub mod connection_profile;
 pub mod connection_service;
