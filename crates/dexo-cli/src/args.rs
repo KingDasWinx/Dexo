@@ -362,7 +362,7 @@ pub enum ConnectionsCommand {
 pub enum ConfigCommand {
     /// Print the projects and connections, as `config export` writes them
     Show,
-    /// Print the path of Dexo's config file
+    /// Print the path of Dexo's settings file
     Path,
     /// Write the projects and connections to a TOML file, without passwords
     Export {

@@ -439,7 +439,10 @@ fn run_config(command: ConfigCommand) -> anyhow::Result<()> {
             print!("{}", export_portable(db.connection())?);
         }
         ConfigCommand::Path => {
-            println!("{}", paths.config.display());
+            println!(
+                "{}",
+                dexo_app::settings::settings_path(&paths.data_dir).display()
+            );
         }
         ConfigCommand::Export { output } => {
             let db = Database::open(&paths.database)?;

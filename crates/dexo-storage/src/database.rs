@@ -9,14 +9,12 @@ use crate::migrations::{self, LATEST_SCHEMA_VERSION};
 pub struct AppPaths {
     pub data_dir: PathBuf,
     pub database: PathBuf,
-    pub config: PathBuf,
 }
 
 impl AppPaths {
     pub fn from_data_home(data_dir: PathBuf) -> Self {
         Self {
             database: data_dir.join("dexo.db"),
-            config: data_dir.join("config.toml"),
             data_dir,
         }
     }
@@ -282,7 +280,6 @@ mod tests {
     fn explicit_data_home_wins() {
         let paths = AppPaths::from_data_home("C:/tmp/dexo-test".into());
         assert_eq!(paths.database.file_name().unwrap(), "dexo.db");
-        assert_eq!(paths.config.file_name().unwrap(), "config.toml");
     }
 
     #[test]

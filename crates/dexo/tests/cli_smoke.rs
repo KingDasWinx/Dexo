@@ -255,3 +255,19 @@ fn the_command_line_holds_sql_to_the_connection_policy() {
     );
     assert_eq!(count("lite"), "{\"n\":0}\n");
 }
+
+/// `config path` names the settings file Dexo reads and writes.
+#[test]
+fn config_path_names_the_settings_file() {
+    let dir = tempfile::tempdir().unwrap();
+    Command::cargo_bin("dexo")
+        .unwrap()
+        .env("DEXO_DATA_HOME", dir.path())
+        .args(["config", "path"])
+        .assert()
+        .success()
+        .stdout(format!(
+            "{}\n",
+            dexo_app::settings::settings_path(dir.path()).display()
+        ));
+}
