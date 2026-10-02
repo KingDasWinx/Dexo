@@ -107,71 +107,64 @@ impl TextInput {
         (shown, at)
     }
 
+    /// Whether `key` edits or moves in an input. A field whose keys would otherwise reach
+    /// the keymap -- a bar, a prompt on the status line -- hands it these first, so Ctrl+A,
+    /// Ctrl+W and the word keys act on the text rather than on the window around it.
+    pub fn owns(key: &KeyEvent) -> bool {
+        edit_for(key).is_some()
+    }
+
+    /// Applies `key` to the text; false for a key that is not an input's.
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
-        let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
-        if key.code == KeyCode::Char('a') && key.modifiers == KeyModifiers::CONTROL {
+        let Some(edit) = edit_for(&key) else {
+            return false;
+        };
+        if edit == Edit::SelectAll {
             self.select_all();
             return true;
         }
         if std::mem::take(&mut self.selected) {
-            match key.code {
-                KeyCode::Char(_) if plain => self.clear(),
-                KeyCode::Backspace | KeyCode::Delete => {
+            match edit {
+                Edit::Insert(_) => self.clear(),
+                Edit::DeleteBack
+                | Edit::DeleteForward
+                | Edit::DeleteWordBack
+                | Edit::DeleteWordForward => {
                     self.clear();
                     return true;
                 }
-                KeyCode::Left | KeyCode::Home => {
+                Edit::Left | Edit::WordLeft | Edit::Home => {
                     self.cursor = 0;
                     return true;
                 }
-                KeyCode::Right | KeyCode::End => {
+                Edit::Right | Edit::WordRight | Edit::End => {
                     self.cursor = self.len();
                     return true;
                 }
-                _ => {}
+                Edit::SelectAll => {}
             }
         }
-        match key.code {
-            KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.move_word(-1);
-                true
+        match edit {
+            Edit::SelectAll => {}
+            Edit::Insert(ch) => self.insert(ch),
+            Edit::DeleteBack => self.backspace(),
+            Edit::DeleteForward => self.delete(),
+            Edit::DeleteWordBack => {
+                let start = word_jump(&self.text, self.cursor, -1);
+                self.remove(start, self.cursor);
             }
-            KeyCode::Right if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                self.move_word(1);
-                true
+            Edit::DeleteWordForward => {
+                let end = word_jump(&self.text, self.cursor, 1);
+                self.remove(self.cursor, end);
             }
-            KeyCode::Left => {
-                self.move_char(-1);
-                true
-            }
-            KeyCode::Right => {
-                self.move_char(1);
-                true
-            }
-            KeyCode::Home => {
-                self.cursor = 0;
-                true
-            }
-            KeyCode::End => {
-                self.cursor = self.len();
-                true
-            }
-            KeyCode::Backspace => {
-                self.backspace();
-                true
-            }
-            KeyCode::Delete => {
-                self.delete();
-                true
-            }
-            KeyCode::Char(ch)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                self.insert(ch);
-                true
-            }
-            _ => false,
+            Edit::Left => self.move_char(-1),
+            Edit::Right => self.move_char(1),
+            Edit::WordLeft => self.move_word(-1),
+            Edit::WordRight => self.move_word(1),
+            Edit::Home => self.cursor = 0,
+            Edit::End => self.cursor = self.len(),
         }
+        true
     }
 
     pub fn labeled_line(&self, label: &str, focused: bool) -> String {
@@ -232,23 +225,22 @@ impl TextInput {
     }
 
     fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let start = char_byte_index(&self.text, self.cursor - 1);
-        let end = char_byte_index(&self.text, self.cursor);
-        self.text.replace_range(start..end, "");
-        self.cursor -= 1;
+        self.remove(self.cursor.saturating_sub(1), self.cursor);
     }
 
     fn delete(&mut self) {
-        if self.cursor >= self.len() {
+        self.remove(self.cursor, self.cursor + 1);
+    }
+
+    /// Removes the characters from `start` to `end`, leaving the cursor where they were.
+    fn remove(&mut self, start: usize, end: usize) {
+        let end = end.min(self.len());
+        if start >= end {
             return;
         }
-        let start = char_byte_index(&self.text, self.cursor);
-        let end = char_byte_index(&self.text, self.cursor + 1);
-        self.text.replace_range(start..end, "");
-        self.cursor = self.cursor.min(self.len());
+        let range = char_byte_index(&self.text, start)..char_byte_index(&self.text, end);
+        self.text.replace_range(range, "");
+        self.cursor = start;
     }
 
     fn move_char(&mut self, delta: i32) {
@@ -262,6 +254,47 @@ impl TextInput {
     fn move_word(&mut self, delta: i32) {
         self.cursor = word_jump(&self.text, self.cursor, delta);
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Edit {
+    SelectAll,
+    Insert(char),
+    DeleteBack,
+    DeleteForward,
+    DeleteWordBack,
+    DeleteWordForward,
+    Left,
+    Right,
+    WordLeft,
+    WordRight,
+    Home,
+    End,
+}
+
+/// What `key` does to an input. A letter typed with Ctrl or Alt is a shortcut, never
+/// text; Alt with an arrow is left to the keymap, which moves between documents with it.
+fn edit_for(key: &KeyEvent) -> Option<Edit> {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let plain = key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT;
+    Some(match key.code {
+        KeyCode::Char('a') if key.modifiers == KeyModifiers::CONTROL => Edit::SelectAll,
+        // The shell's word delete, beside Ctrl+Backspace and Alt+Backspace.
+        KeyCode::Char('w') if key.modifiers == KeyModifiers::CONTROL => Edit::DeleteWordBack,
+        KeyCode::Char(ch) if plain => Edit::Insert(ch),
+        KeyCode::Backspace if ctrl || alt => Edit::DeleteWordBack,
+        KeyCode::Backspace => Edit::DeleteBack,
+        KeyCode::Delete if ctrl => Edit::DeleteWordForward,
+        KeyCode::Delete if !alt => Edit::DeleteForward,
+        KeyCode::Left if ctrl => Edit::WordLeft,
+        KeyCode::Right if ctrl => Edit::WordRight,
+        KeyCode::Left if !alt => Edit::Left,
+        KeyCode::Right if !alt => Edit::Right,
+        KeyCode::Home => Edit::Home,
+        KeyCode::End => Edit::End,
+        _ => return None,
+    })
 }
 
 fn char_byte_index(text: &str, char_index: usize) -> usize {
@@ -400,6 +433,46 @@ mod tests {
         input.handle_key(ctrl(KeyCode::Left));
         input.handle_key(ctrl(KeyCode::Left));
         assert_eq!(input.cursor(), 0);
+    }
+
+    /// Ctrl+Backspace deleted one character; it, Alt+Backspace and Ctrl+W delete back to
+    /// where Ctrl+Left lands, and Ctrl+Delete forward to where Ctrl+Right does.
+    #[test]
+    fn word_keys_delete_whole_words() {
+        let alt = |code| KeyEvent::new(code, KeyModifiers::ALT);
+        let mut input = TextInput::new("select relatório mensal");
+        input.handle_key(ctrl(KeyCode::Backspace));
+        assert_eq!(input.as_str(), "select relatório ");
+        input.handle_key(alt(KeyCode::Backspace));
+        assert_eq!(input.as_str(), "select ");
+        input.handle_key(ctrl(KeyCode::Char('w')));
+        assert_eq!((input.as_str(), input.cursor()), ("", 0));
+
+        let mut input = TextInput::new("cafe\u{301}s com leite");
+        input.handle_key(key(KeyCode::Home));
+        input.handle_key(ctrl(KeyCode::Delete));
+        assert_eq!((input.as_str(), input.cursor()), ("com leite", 0));
+        input.handle_key(key(KeyCode::End));
+        input.handle_key(ctrl(KeyCode::Delete));
+        assert_eq!(input.as_str(), "com leite");
+
+        input.select_all();
+        input.handle_key(ctrl(KeyCode::Backspace));
+        assert_eq!(input.as_str(), "");
+    }
+
+    /// A letter typed with Ctrl or Alt is a shortcut: the input neither takes it as
+    /// text nor drops its selection for it.
+    #[test]
+    fn a_shortcut_is_not_text_and_keeps_the_selection() {
+        let mut input = TextInput::new("abc");
+        input.select_all();
+        assert!(!input.handle_key(ctrl(KeyCode::Char('s'))));
+        assert!(!input.handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::ALT)));
+        assert!(input.is_selected());
+        assert_eq!(input.as_str(), "abc");
+        assert!(TextInput::owns(&ctrl(KeyCode::Char('w'))));
+        assert!(!TextInput::owns(&ctrl(KeyCode::Char('p'))));
     }
 
     /// An accent typed as a combining mark (NFD) ended the word at it.

@@ -108,6 +108,13 @@ pub fn pending(model: &Model) -> &str {
     }
 }
 
+/// Whether a `:` or `/` line is open in the active document.
+pub fn prompt_open(model: &Model) -> bool {
+    active(model)
+        && model.vim.prompt.is_some()
+        && model.vim.document.as_deref() == Some(model.active_document().id.as_str())
+}
+
 /// A block cursor everywhere but Insert mode, as Vim draws it.
 pub fn block_cursor(model: &Model) -> bool {
     active(model) && mode(model) != Mode::Insert && model.vim.prompt.is_none()
@@ -1639,6 +1646,22 @@ mod tests {
             Action::Key(KeyEvent::new(KeyCode::Right, KeyModifiers::CONTROL)),
         );
         assert!(model.active_document().cursor() > 0);
+    }
+
+    /// Ctrl+W on the `:` line closed the document: the keymap had it before the line.
+    /// It deletes the word before the cursor, as in Vim.
+    #[test]
+    fn ctrl_w_on_the_command_line_deletes_a_word() {
+        let mut model = vim("select 1");
+        let documents = model.documents.len();
+        keys(&mut model, ":s/a/b");
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('w'), KeyModifiers::CONTROL)),
+        );
+        assert_eq!(model.documents.len(), documents, "the document closed");
+        let prompt = model.vim.prompt.as_ref().expect("the line stays open");
+        assert_eq!(prompt.input.as_str(), "s/a/");
     }
 
     /// Another document starts in Normal mode, and says so before its first key.

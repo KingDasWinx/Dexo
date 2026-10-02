@@ -4234,6 +4234,15 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     {
         return Vec::new();
     }
+    // Vim's `:` and `/` lines take the keys an input edits with before the keymap: Ctrl+W
+    // deletes a word there, as in Vim, where it used to close the document.
+    if crate::screens::vim::prompt_open(model)
+        && model.effective_focus() == Focus::Editor
+        && crate::widgets::text_input::TextInput::owns(&key)
+    {
+        let _ = crate::screens::vim::handle_key(model, key);
+        return Vec::new();
+    }
     // A terminal sends Alt+key as Esc and the key, so Esc then `o` typed fast in Insert
     // mode arrives as Alt+O and opened the saved queries. Vim reads it as the two keys
     // wherever Esc changes the mode, and so does Dexo.
