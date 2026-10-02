@@ -168,6 +168,33 @@ impl DexoMcpServer {
     }
 }
 
+/// An argument the client got wrong, in words: the deserializer's own text is
+/// `failed to deserialize parameters: missing field `name``, which names the Rust side.
+pub(crate) fn plain_params_error(message: &str) -> String {
+    let Some(detail) = message.strip_prefix("failed to deserialize parameters: ") else {
+        return message.to_string();
+    };
+    let quoted = |text: &str| {
+        text.split('`')
+            .nth(1)
+            .map(str::to_string)
+            .unwrap_or_default()
+    };
+    if detail.starts_with("missing field") {
+        format!(
+            "the required argument `{}` is missing; the tool's inputSchema lists its arguments",
+            quoted(detail)
+        )
+    } else if detail.starts_with("unknown field") {
+        format!(
+            "`{}` is not an argument of this tool; the tool's inputSchema lists its arguments",
+            quoted(detail)
+        )
+    } else {
+        format!("an argument has the wrong type or value: {detail}")
+    }
+}
+
 impl ServerHandler for DexoMcpServer {
     fn get_info(&self) -> ServerInfo {
         let profile = &self.inner.service.profile;
@@ -249,7 +276,21 @@ impl ServerHandler for DexoMcpServer {
             response.as_ref().ok(),
             started,
         );
-        response
+        // The deserializer's refusal of a call's arguments arrives as an error result.
+        let wrong_arguments = match &response {
+            Ok(CallToolResponse::Complete(result)) if result.is_error == Some(true) => result
+                .content
+                .first()
+                .and_then(|block| block.as_text())
+                .map(|text| text.text.as_str())
+                .filter(|text| text.contains("failed to deserialize parameters: "))
+                .map(|text| plain_params_error(text.trim_start_matches("Error [INVALID_INPUT]: "))),
+            _ => None,
+        };
+        match wrong_arguments {
+            Some(message) => Ok(tool_error("INVALID_INPUT", &message).into()),
+            None => response,
+        }
     }
 
     async fn list_resources(

@@ -63,14 +63,13 @@ fn objects_result(objects: &[CatalogObject]) -> CallToolResult {
         .iter()
         .map(|object| {
             vec![
-                object.id.as_str().to_string(),
-                format!("{:?}", object.kind),
+                object.kind.as_str().to_string(),
                 object.qualified_name.display_unquoted(),
             ]
         })
         .collect();
     rows_result(&RowsPage::new(
-        ["id", "kind", "name"].map(String::from).to_vec(),
+        ["kind", "name"].map(String::from).to_vec(),
         rows,
     ))
 }
@@ -489,15 +488,14 @@ impl DexoMcpServer {
             .iter()
             .map(|object| {
                 vec![
-                    object.id.as_str().to_string(),
-                    format!("{:?}", object.kind),
+                    object.kind.as_str().to_string(),
                     object.qualified_name.display_unquoted(),
                     note_of(object, &notes).unwrap_or_default(),
                 ]
             })
             .collect();
         rows_result(&RowsPage::new(
-            ["id", "kind", "name", "note"].map(String::from).to_vec(),
+            ["kind", "name", "note"].map(String::from).to_vec(),
             rows,
         ))
     }

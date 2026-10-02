@@ -970,3 +970,38 @@ async fn a_grant_on_a_production_connection_publishes_no_write_tool() {
         "{tools:?}"
     );
 }
+
+/// A wrong argument is told in words, not in the deserializer's `failed to deserialize
+/// parameters: missing field`.
+#[tokio::test]
+async fn a_missing_argument_is_named_in_words() {
+    let (mut client, _, _) = client_with(FakeBackend::with_session("local", users())).await;
+    let response = client
+        .request(
+            "tools/call",
+            json!({"name": "object_describe", "arguments": {"object": "users"}}),
+        )
+        .await;
+    let message = response["error"]["message"]
+        .as_str()
+        .map(str::to_string)
+        .unwrap_or_else(|| text(&response["result"]));
+    assert!(message.contains("`name` is missing"), "{message}");
+    assert!(!message.contains("deserialize"), "{message}");
+}
+
+/// catalog_search names what it found, in the names an agent passes to the other tools, and
+/// carries no catalog ids.
+#[tokio::test]
+async fn catalog_search_returns_names_not_internal_ids() {
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(catalog()));
+    backend.catalog = catalog();
+    let (mut client, _, _) = client_with(backend).await;
+    let found = client
+        .call("catalog_search", json!({"query": "pkey"}))
+        .await;
+    let shown = text(&found);
+    assert!(shown.contains("users_pkey"), "{shown}");
+    assert!(!shown.contains("| id |"), "{shown}");
+    assert!(!shown.contains("Table"), "no Debug names: {shown}");
+}
