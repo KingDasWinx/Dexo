@@ -500,3 +500,273 @@ Binary: dev build 1.4.2. Terminal: tmux 120x36 unless stated. Findings are appen
 - Animation On/Off (qa.sh sets DEXO_NO_ANIMATION=1) and Updates On/Off (DEXO_NO_UPDATE_CHECK=1): the settings toggle and persist, but I could not observe their effect.
 - Double-click timing and Shift/Alt/middle-click variants beyond what `qa.sh click` can send; mouse drag selection of text in the editor.
 - Quit prompt with unsaved work: Ctrl+Q quit at once with a dirty untitled document (content recovered on restart), so the asking path was not reached.
+
+### Connections and projects (connections-projects)
+
+
+
+(Findings are appended as testing proceeds.)
+
+##### [MAJOR] "[offline]" tags appear on every connection after Shift+D and stay, even on connected ones
+- **Where:** connection.close_session (Shift+D) / sidebar
+- **Steps:** click pg-readonly (connects), focus sidebar, press `D` (Shift+D), then Enter on pg-readonly to reconnect.
+- **Expected:** only the disconnected connection is marked, and the mark goes away on reconnect (3, 7).
+- **Actual:** all six connections, including ones never connected (duck-sales) get `[offline]`; after reconnecting, the connected row reads `● pg-readonly▾  [offline`  (tag stays and is cut off at the sidebar edge: `[offline` without `]`). A toast said "offline catalog from 2026-10-02 15:22:29". The tags persist for the whole session (also after reconnecting pg-dev).
+
+##### [MAJOR] Changing the driver between server drivers does not change the port (MySQL on 5432, PostgreSQL on 3306)
+- **Where:** connection.new / Add connection form, driver field
+- **Steps:** `n`, Tab to driver, press Right once (PostgreSQL -> MySQL); keep pressing Right/Left.
+- **Expected:** port default follows the driver (5432 / 3306 / 3306) while the user has not typed a port.
+- **Actual:** PostgreSQL -> MySQL -> MariaDB keeps `port: 5432`. The port is only reset when coming from SQLite/DuckDB into a server driver (DuckDB -> PostgreSQL gives 5432, SQLite -> MariaDB with Left gives 3306). Going Left from MariaDB to PostgreSQL ends with `driver: < PostgreSQL >` and `port: 3306`. A user who picks MySQL and does not look at the port gets a wrong one.
+
+##### [MAJOR] "Add connection": empty submit says only "password is required"; the error stays after the driver changes to one with no password
+- **Where:** connection.new / Add connection form
+- **Steps:** `n`, Tab x8 to [Submit] (or just Enter from there), Enter. Then Shift+Tab to the driver field and Right to SQLite.
+- **Expected:** the message names what is missing (name, host) in field order; it clears when the form changes (7).
+- **Actual:** `error: password is required` although name and host are also empty (fill the name only and Submit: same message). The line is also drawn flush against the dialog border (`│error: ...`, no 2-space indent like the fields) and stays on screen on the SQLite/DuckDB form, which has no password field at all.
+
+##### [MAJOR] The form lets you save a custom environment that then cannot connect; the error is internal jargon with no way out
+- **Where:** connection.new / connection.edit, Advanced options, `environment`
+- **Steps:** `n`, fill name/host/port/db/user, Advanced options, set `environment: dev`, Submit (saved, "saved x1"). Disconnect, select it and press Enter (or click it).
+- **Expected:** the form says which environments exist (local, development, production...) or, for a custom one, asks for read_only right there; the connect error says what to do (7).
+- **Actual:** the form accepts any text (the field is prefilled `local`, no list of valid values). Connecting shows the error toast `custom environment requires persisted read_only` (the word "persisted" is internal; nothing says "open Edit, Advanced options, set read_only"). The connection stays unusable.
+
+##### [MAJOR] Submit saves the connection but the dialog stays open when the automatic connect fails; the next Submit says "already exists"
+- **Where:** connection.new / Add connection
+- **Steps:** `n`, fill name `x3`, host 127.0.0.1, port 55601, db qa5, user dexo, Advanced: `environment: dev`, `password_command: cat $QA/pw`; Tab to the end, Enter (or Tab to [Submit], Enter).
+- **Expected:** the dialog closes (the connection is saved) and the connect error is shown as an error, or the dialog stays and nothing is saved (7).
+- **Actual:** `x3` appears in the sidebar (saved) but the Add connection dialog stays open with the same values and no error line inside it. Submitting again gives `error: connection 'x3' already exists`. A user will think the save failed.
+
+##### [MINOR] Enter in a text field submits the whole form; nothing in the dialog says so, and the long form has no shortcut to Submit
+- **Where:** connection.new / Add connection
+- **Steps:** `n`, type a name, Tab Tab, type a host, Enter.
+- **Expected:** a footer hint (`Enter save  Esc cancel`) or Enter moving to the next field (1).
+- **Actual:** Enter submits at once (`error: password is required`). The dialog has no hint line at all; with Advanced options open it has 25 fields and Tab is the only way to reach [Submit] besides Enter in a field.
+
+##### [MAJOR] tls_mode is a free-text field: any value is saved, a wrong one fails only at connect time with a serde error, and Postgres ignores the setting
+- **Where:** connection.new / connection.edit, Advanced options, `tls_mode`; Test Connection
+- **Steps:** (1) type `foo` or `require` in `tls_mode`, Submit (saved: `tls = {"mode":"foo"}`), then palette > Test Connection. (2) Set `tls_mode: verify_full` on the Postgres connection `x2` (server has `ssl = off`), `dexo connections test --name x2`, then `dexo query --connection x2 --sql "select ssl from pg_stat_ssl where pid = pg_backend_pid()"`.
+- **Expected:** a picker or validation with the real modes (`disable`, `preferred`, `required`, `verify_ca`, `verify_full`); `required`/`verify_full` refuse a server without TLS (8).
+- **Actual:** (1) the toast reads `x2: invalid tls config: unknown variant `require`, expected one of `disable`, `preferred`, `required`, `verify_ca`, `verify_full`` (serde text; the allowed values are only in this error, and it is clipped at 120 columns after `req`). (2) Postgres: `ok`, and `ssl` is `false`: verify_full on a plaintext server is accepted and the session is unencrypted (the setting is saved but not applied). MySQL does honour it (`verify_full` against the self-signed server: `Error: Input/output error: Input/output error: invalid peer certificate: UnknownIssuer`, the prefix repeated twice and no hint to set `ca_file`).
+- No field has a hint of its values: `proxy_kind`, `read_only`, `confirm_destructive`, `require_verified_tls`, `max_rows`, `timeout_secs` are raw snake_case names too.
+
+##### [MAJOR] Typing a password in "Edit connection" says "saved" but the password is not stored
+- **Where:** connection.edit / Edit connection, `password`
+- **Steps:** Duplicate a connection (palette "Duplicate Connection" on one whose password is stored: `pwtest` made with the Add form), select the copy, `e`, Tab x6 to `password`, type `abc`, Enter. Toast `saved pwtest (copy)`. Run `dexo connections test --name 'pwtest (copy)'` or connect it in the TUI.
+- **Expected:** the new password is kept (or the dialog says it was not).
+- **Actual:** `Error: secret is missing for this connection` (also in the TUI: Test Connection says `bad-creds: secret is missing for this connection`). Done twice on `bad-creds`, once on the copy. The same password typed in the Add form IS stored (`pwtest`). So the only way to give a connection a password after creation is the connect-time prompt.
+
+##### [MAJOR] Duplicate Connection silently drops the password
+- **Where:** connection.duplicate
+- **Steps:** a connection with a stored password (`pwtest`), select it, palette > Duplicate Connection.
+- **Expected:** either the copy keeps the password, or the toast says "password not copied".
+- **Actual:** toast `saved pwtest (copy)` only. The copy fails with `secret is missing for this connection`. The duplicate also has no chance to edit the name first (it is saved at once as `<name> (copy)` and the selection stays on the original).
+
+##### [MINOR] The password prompt at connect time: "save to the keychain" checkbox is not in the Tab order; a rejected password is stored anyway; a wrong password closes the prompt
+- **Where:** "Secret" dialog (Password for <name>) shown when connecting a connection with no stored password
+- **Steps:** Browse Connections, select `pwtest (copy)`, Enter. Tab: password -> Submit -> Cancel -> password (the checkbox is skipped). Alt+K and a mouse click toggle it. Type `abc`, tick, Submit.
+- **Expected:** Tab/arrows reach the checkbox (1); a failed login does not overwrite the stored secret; the prompt stays open with the error so the password can be retyped (7).
+- **Actual:** the toast says `password authentication failed for user "dexo"`, the dialog closes, and `dexo connections test` afterwards still reports authentication failure (the wrong password was written to the keychain).
+
+##### [MAJOR] No way to test a connection before saving; Submit always saves, and a failed connect leaves a broken saved connection and an open dialog
+- **Where:** connection.new / Add connection (driver Postgres)
+- **Steps:** `n`, name `unreach`, host 127.0.0.1, port 1, db qa5, user dexo, password x, Enter. Then Enter again.
+- **Expected:** a [Test] button in the form (the brief and the palette have "Test Connection" only for saved ones), or a clear choice "Save anyway"; the dialog closes or says it saved.
+- **Actual:** toast `saved unreach`, the dialog stays open with `error: error connecting to server`; Enter again says `error: connection 'unreach' already exists`. Esc closes it and `unreach` is in the sidebar. The same happens with wrong credentials (`error: password authentication failed for user "dexo"`).
+
+##### [MAJOR] "Unreachable host" error has no cause and no address
+- **Where:** Add connection error line, Test Connection toast, `dexo connections test`
+- **Steps:** Test/connect a Postgres connection to 127.0.0.1:1.
+- **Expected:** `could not connect to 127.0.0.1:1: connection refused` (what happened, to what) (7).
+- **Actual:** `unreach: error connecting to server` (TUI) / `Error: error connecting to server` (CLI): the underlying driver text, with no reason (refused / timed out / DNS) and no address.
+
+##### [MAJOR] Validation errors in the connection form are invisible while the Advanced section is scrolled
+- **Where:** connection.edit / connection.new, Advanced options open
+- **Steps:** Edit a connection (Advanced is open when it has advanced values), Tab to `port`, Ctrl+A, type `abc`, Enter.
+- **Expected:** a visible error next to the field or in a fixed line above the buttons (7).
+- **Actual:** nothing happens; no message. The error line (`error: port must be a number`) is part of the scrolling field list and is only drawn after the last field (`timeout_secs`), so it appears only when focus is on `timeout_secs` or [Submit] (checked: Tab x20 later it shows `error: port must be a number`). The same hides `password is required`, `already exists`, and connect errors on any submit made from a field in the middle of a long form.
+
+##### [MAJOR] pre_connect: the one error that explains it is cut off; the command must stay in the foreground
+- **Where:** connection.new / Add connection, `pre_connect`; connecting the saved connection
+- **Steps:** Add MySQL `my-new` with `pre_connect: touch <file>` (a command that exits at once), Submit; then select it and press Enter.
+- **Expected:** the whole message visible (7); a field hint saying what pre_connect is for (a tunnel/proxy that must keep running).
+- **Actual:** at 120 columns the error toast is one unwrapped line: `pre-connect command `touch /tmp/claude-1000/-home-win...` and is cut at the right border, and the box starts over the sidebar border (`┌┌error`, `││ pre-connect...`, `│└───`). The text that tells the user what to do (`went to the background; it has to keep running in the foreground (drop -f or &), so Dexo can stop it with the session`) can be read only at 300+ columns or in the Messages tab (which does wrap it). The dialog from Add also stays open after Submit with no inline error (the connect failed after the save).
+
+##### [MAJOR] The driver field of the connection form cannot be focused or changed with the mouse
+- **Where:** connection.new / Add connection
+- **Steps:** `n`; click anywhere on the `driver: < PostgreSQL >  left/right` row (on the label, on `<`, on the name, on `>`, to the right).
+- **Expected:** the row takes focus; clicking `<` / `>` cycles the driver (1).
+- **Actual:** nothing happens, focus stays on the previous field. Every other field and both buttons respond to clicks. A mouse-only user cannot choose MySQL/SQLite/DuckDB.
+
+##### [COSMETIC] The buttons jump one row down when the error line appears; a click made where the button was lands on the error text
+- **Where:** Add connection
+- **Steps:** `n`, click [Submit] (row 14): `error: password is required` appears and [Submit]/[Cancel] move to row 15.
+- **Actual:** a second click at the same place does not hit a button.
+
+##### [MAJOR] Config transfer import: the conflict list is clipped, shows Rust Debug text, has no key hints, and the import happens silently with a stale sidebar
+- **Where:** config.transfer / Import config
+- **Steps:** palette > Import/Export Config, `i`, Tab, type the path of an exported file that has 15 conflicting connection names (+ 3 new ones), Enter.
+- **Expected:** a list of what will happen per connection (skip / overwrite / rename) with the keys named, all rows reachable (6), a clear "Import" button (1), a result such as `Imported 3, renamed 1, skipped 14`, and the sidebar showing the new connections (7).
+- **Actual:**
+  - the dialog is a fixed ~14 content lines (even at 120x60): `path: ...` (truncated at the border), `conflicts: bad-creds, duck-new, duck-sales, lite-new, pg-dev, pg-prod,` (also cut) and then `  bad-creds: Skip` ... down to `  x1: Skip`; `x2`, `x3` and anything below are not visible, and there is no hint line, no scroll indicator, no selected row, no Import/Cancel buttons;
+  - pressing `r` turns the first row into `bad-creds: Rename("bad-creds-2")`: that is Rust `Debug` output (7); nothing says which key does what (`r` = rename; Up/Down/Tab/Space/s/o/y did nothing visible) and only the first conflict can be changed;
+  - Enter applies the import (the CLI `connections list` then shows `bad-creds-2`, `my-new`, `mysql-dev` added) but the dialog does not change, no toast or Messages line says it happened, and the sidebar and Browse Connections still do not show the three new connections (stale until restart). Pressing `i` inside the conflict list silently opens a second file picker over it.
+
+##### [MINOR] Export result is just "ok"; the path is cut off at the border
+- **Where:** config.transfer / Export
+- **Steps:** palette > Import/Export Config, `e`, Tab, type a full path, Enter.
+- **Expected:** `Exported 15 connections and 1 project to <file>` with the path wrapped.
+- **Actual:** two lines, `path: /tmp/claude-1000/-home-winx-Documents-github-Dexo/c604136e-4aad-` (cut) and `ok`. The file is correct and has no password (the real password does not appear anywhere in it; `secret_ref = ""`; only `password_command` text is exported). The dialog also keeps `e export  i import  esc close` as the only key hint but `e`/`i` cannot be clicked.
+
+##### [MINOR] The export/import file picker opens in the process's working directory and has no "up to home / jump to path" key besides Backspace/Left
+- **Where:** config.transfer / file picker ("Export config to", "Import config from")
+- **Steps:** `e` (or `i`).
+- **Actual:** starts at the directory Dexo was launched from (here the repo checkout) with a `name:` field that is only reached with Tab (the first focus is the list). Typing a full path into `name:` works.
+
+##### [MAJOR] Config transfer dialog keeps the previous import's conflict list when reopened, and an export over an existing file overwrites it without asking
+- **Where:** config.transfer
+- **Steps:** import a file with conflicts (see above), Esc Esc, palette > Import/Export Config, `e`, Tab, type the path of an existing file (`export-test.toml`), Enter.
+- **Expected:** the dialog opens fresh (`e export  i import  esc close`); an existing file asks "Overwrite?"; the result is shown (7).
+- **Actual:** the dialog shows the old `conflicts: ... Skip` list from the import, so the export result ("path / ok") is never displayed; the existing file was rewritten (mtime 12:42:11, 6421 -> 7892 bytes) with no confirmation.
+
+##### [MAJOR] Switch Project with an unsaved document: no confirmation prompt, raw enum text, a hidden key
+- **Where:** project.switch / Projects dialog
+- **Steps:** in project `qa-proj` create `doc1.sql` (Ctrl+N, name `doc1`, Enter), type `select 1 as unsaved_marker;`. Palette > Switch Project, Up to `Default`, Enter.
+- **Expected:** the same dialog as closing a tab: `Unsaved changes: Save / Don't save / Cancel` (5), or the drafts are kept and the user is told.
+- **Actual:** the dialog text changes to `> Default switching` and `switch to Default (ConfirmDirty)` (a Rust enum name shown to the user, 7). There are no buttons and no hint. Enter again does nothing. The only way forward is the letter `y` (found by trial; `s`, `d`, Tab, Right do nothing). Esc abandons it. After `y` the project is switched.
+
+##### [MAJOR] A document left unsaved across a project switch comes back with an internal id as its name
+- **Where:** project.switch, tab bar
+- **Steps:** as above; after `y` switch back to `qa-proj` (palette > Switch Project, Down, Enter).
+- **Expected:** the draft comes back as `doc1.sql*` (or asks first) (5, 7).
+- **Actual:** the draft text is there, but the tab and the pane title show `e7c03b76-95a8-41ba-…` / `SQL · e7c03b76-95a8-41ba-885c-93d070739f33`, no `*`, and the tab has no connection prefix until a connection is used (then `pg-dev·e7c03b76-95a…`). The status bar says `offline:pg-dev`. Running it (Ctrl+J) connected pg-dev by itself and ran the query (good).
+
+##### [MAJOR] Switching project disconnects every connection without saying so, and marks every row "[offline]"
+- **Where:** project.switch / sidebar
+- **Steps:** with pg-dev, x2, duck-new, qa-mysql connected, switch to another project.
+- **Actual:** all four sessions are closed, the toast says `offline catalog from 2026-10-02 15:30:1...`, and every sidebar row (even those never connected) gets a `[offline]` suffix that is cut off at the sidebar edge (`pg-readonly▸  [offl`). The suffix stays on a row after it is connected again (`● pg-dev▾  [offline]`).
+
+##### [MAJOR] Deleting the active project leaves the app in a project-less state; its document stays on screen
+- **Where:** project.delete
+- **Steps:** with `qa-renamed` active and a draft document open (`documents=1`), palette > Delete Project, Enter on it, type the name, Enter.
+- **Expected:** the app moves to another project (Default), closes the project's documents, header shows the new project (5).
+- **Actual:** the header project name becomes empty (`  pg-dev  —`), the deleted project's document (`e7c03b76-95a8-...`) is still open in the editor and can be run (Ctrl+S offers `Save file` with that UUID as the name), and the dialog's `recent:` line still lists the deleted name (`recent: qa-proj, Default`).
+
+##### [MAJOR] Delete Project confirmation: `foo=bar` dump, clipped text, an input with no field or buttons, jargon
+- **Where:** project.delete / Projects dialog
+- **Steps:** palette > Delete Project, Enter on a project.
+- **Expected:** a plain sentence (`Delete project "qa-renamed"? It has 1 document... Type its name to confirm.`), a visible input, Delete/Cancel buttons (1, 7).
+- **Actual:** two lines: `delete qa-renamed? connections=0 documents=1 snippets=0 saved queries=` (cut at the border; the last count is not visible, even at 170 columns the dialog keeps its width) and `type name to confirm () connections:detach Alt+C`. The typed text is echoed inside the parentheses (`(qa-ren)`), there is no input field or cursor, no [Delete]/[Cancel], no hint for Enter/Esc. Alt+C flips `connections:detach` to `connections:delete` with no explanation of what detaching means. Enter with a partial name shows only a short-lived warn toast `type the project name to confir...` (cut at the screen edge).
+
+##### [MAJOR] Projects dialog: the `create:` field is after the buttons in the Tab order and has no focus marker; the rename/create dialogs keep stale hint lines
+- **Where:** project.create, project.rename
+- **Steps:** palette > Create Project; press Tab repeatedly. Palette > Rename Project, Enter on a project.
+- **Expected:** fields before buttons; the focused input is marked (1, 3).
+- **Actual:** Tab order is list -> [Submit] -> [Cancel] -> `create:` (the input), and while the input has focus no `>` marker moves to it (the list row `> Default` keeps its marker, so the user types "blind"). In Rename the old line `choose project to rename` stays under the `rename: <name>` input and buttons. After creating a project the `create:` input and the buttons disappear from the dialog and it becomes the plain list. The dialog is titled `Projects` for all five commands.
+
+##### [MAJOR] Renaming the active project does not update the header or the recent list
+- **Where:** project.rename
+- **Steps:** active project `qa-proj`; Rename Project, `qa-proj` -> `qa-renamed`, Submit.
+- **Actual:** the list shows `qa-renamed` but the header still reads `qa-proj` and `recent: qa-proj, Default` keeps the old name; after switching to `qa-renamed` the recent line is `qa-renamed, qa-proj, Default` (a project that no longer exists).
+
+##### [MINOR] Projects list: which project is active is not shown; single click only selects, Enter/double-click switches; no hint line
+- **Where:** project.browse / project.switch
+- **Actual:** `>` marks the selected row, not the active one; the only trace of the active project is the header and the `recent:` line. There is no footer saying `Enter switch  n new  Esc close` (1, 2). Double-click (two clicks within a few ms) switches; two clicks 0.4 s apart do not. After a switch the dialog stays open.
+
+##### [MAJOR] After deleting the active project no project can be switched to until Dexo is restarted
+- **Where:** project.switch after project.delete
+- **Steps:** delete the active project (see above), close the orphan document (Ctrl+W), palette > Switch Project > Default > Enter. Also: Create Project `p2`, select it, Enter.
+- **Expected:** switching works and lands in the chosen project (9).
+- **Actual:** every switch shows the error toast `FOREIGN KEY constraint failed` (a raw SQLite error) and nothing changes; the header stays empty. (Not rechecked after restart: see "Checked and fine" for the restart result.)
+
+##### [MAJOR] After a restart an unsaved document is restored as if it were saved: no `*`, and closing it throws the text away without asking
+- **Where:** documents / restart; Ctrl+Q; Ctrl+W
+- **Steps:** doc `query-1.sql` on pg-dev with `select 111 as from_pg` (tab `pg-dev·query-1.sql*`), a second doc `second.sql` on sqlite-shop. Ctrl+Q (quits at once, no question). Start again: tabs `pg-dev·query-1.sql ×  sqlite-…·second.sql ×` (no `*`). Ctrl+W on the first.
+- **Expected:** the draft keeps its unsaved mark and Ctrl+W asks Save / Don't save / Cancel (5); or Ctrl+Q says that drafts are kept.
+- **Actual:** the text and the connection binding come back (good) but Ctrl+W closes `query-1.sql` immediately; its content is gone. The same document closed before the restart asks `Unsaved changes ... [Save] [Don't save] [Cancel]`.
+
+##### [MINOR] After a restart the header and status bar show another connection than the visible document's
+- **Where:** header line / status bar
+- **Steps:** as above; the active tab is `sqlite-…·second.sql`.
+- **Actual:** header `Default  pg-dev  —` and status bar `offline:pg-dev` while the document belongs to sqlite-shop; after Ctrl+J they change to sqlite-shop. Documents are bound to their connection but not reconnected until an action needs it (the run connects by itself, which is fine).
+
+##### [MAJOR] SSH tunnel: `missing secret for ssh_password` and the form has no way to supply it
+- **Where:** connection.new / connection.edit, Advanced options (`ssh_host`, `ssh_port`, `ssh_user`, `ssh_key`); Test Connection / connect
+- **Steps:** Edit a Postgres connection, set `ssh_host: 127.0.0.1`, `ssh_user: nobody` (leave `ssh_key` empty), Submit, then Test Connection.
+- **Expected:** a connect-time prompt for the SSH password (like the Secret dialog for the database password) or a clear hint "set ssh_key or run `dexo connections set-secret`" (7).
+- **Actual:** toast `x2: missing secret for ssh_password` (internal key name). No Secret prompt appears and the form has no ssh password field. The saved config is `"ssh":{"host":"127.0.0.1","port":22,"username":"nobody"}`.
+
+##### [MINOR] Proxy failures name neither the proxy nor the cause
+- **Where:** Advanced `proxy_kind` / `proxy_host` / `proxy_port`
+- **Steps:** `proxy_kind: socks5`, `proxy_host: 127.0.0.1`, `proxy_port: 1`, Submit, Test Connection (or `dexo connections test --name x2`).
+- **Actual:** `Error: error communicating with the server`. It does not say the SOCKS5 proxy at 127.0.0.1:1 refused the connection. `ssh_port` silently drops non-digits (typing `/nonexistent/key` into it leaves `22`) while `port` keeps the letters and fails on Submit with `port must be a number` (inconsistent).
+
+##### [MINOR] Connection groups are never shown in the sidebar
+- **Where:** connection.move_group, sidebar
+- **Steps:** palette > Move to Group on `duck-new`, open Advanced options, `group: grp-a`, Submit. Restart Dexo.
+- **Expected:** a `grp-a` header (collapsible) in the sidebar with the connection under it.
+- **Actual:** the sidebar stays a flat list; `duck-new` just moves to the end (grouped rows sort after ungrouped ones) with no group name. Only Browse Connections shows `grp-a/duck-new`. Before a restart a newly added connection is appended at the bottom instead of its sorted place. "Move to Group" itself opens the whole Edit connection form (focus on `name`, Advanced options collapsed, `group` two Tabs below) instead of a small "Group:" prompt.
+
+##### [MAJOR] Import hides its own safety warning: "need secret" and "runs on this machine when it connects -- read before applying" are clipped out of the dialog
+- **Where:** config.transfer / Import, a file without conflicts on every row (re-import of an export after deleting connections)
+- **Steps:** export, delete connections, palette > Import/Export Config, `i`, Tab, type the path, Enter.
+- **Expected:** the whole report is readable, and the commands that will run (pre_connect, password_command) are listed in full before the user confirms (8).
+- **Actual:** the fixed-height dialog shows `conflicts: ...` (cut at the border), eight `<name>: Skip` rows, `need secret: bad-creds, bad-creds-2, duck-sales, lite-new, my-new, mys...` (cut; it also lists file-based connections that have no secret), `runs on this machine when it connects -- read before applying:` and only the first two `my-new runs `touch /tmp/...`` / `... runs `cat /tmp/...`` lines (cut at the border). The remaining lines are below the dialog's bottom edge and cannot be reached (no scrolling). Enter then applies it (the three-line report is not seen), the sidebar still lacks the re-imported connections (`pg-dev`, `pg-prod`, `x1` ... are in the database, not in the list) until a restart.
+
+##### [MINOR] Find Databases in Docker hides containers that already have a saved connection, without saying so
+- **Where:** connection.find_docker (palette) / Browse Connections `r docker`, section "Running in Docker"
+- **Steps:** with `pg-dev` etc. saved on 127.0.0.1:55601 and `mysql-dev` on 55602, open it: only `pg-commerce-lab [postgres] 127.0.0.1:5432` is listed. Delete every connection that uses 55602 (or 55601), press `r`: `qa-mysql [mysql] 127.0.0.1:55602` (`qa-pg`) appears.
+- **Expected:** the container stays listed as "already saved as mysql-dev" or the section says "2 more already saved" (7).
+- **Actual:** silent filtering; a user looking for their container thinks Dexo cannot see it. The list is not refreshed after deleting (needs `r`). The prefilled Add form is good: name `qa-mysql`/`qa-pg`, driver, 127.0.0.1, published port, database `dexo`, username `dexo`, password (masked, 23 stars: the container's own password is read). The menu entry says "Find Databases in Docker" while the hint line says only `r docker`. After deleting the last row of Browse Connections the selection jumps into the Docker section (onto `pg-commerce-lab`), so a following Enter would act on a container the user never chose; and after a delete the selection marker is missing until Up/Down.
+##### [MAJOR] Sidebar actions menu runs on the active session, not on the connection it is opened for, and does not connect the selected one
+- **Where:** sidebar `a` (Actions menu titled with the selected connection): Inspect Sessions, Manage Grants (also Search History, Native Backup/Restore were not run)
+- **Steps:** `qa-pg` connected and active, select the offline `mysql-dev` in the sidebar, `a` (menu title `mysql-dev`), Down x7 to `Inspect Sessions`, Enter. Repeat with `Manage Grants`.
+- **Expected:** the action connects `mysql-dev` by itself and shows its sessions/grants (5: actions on an offline connection connect by themselves), or says why it cannot.
+- **Actual:** `Sessions on qa-pg` opens (a Postgres list with `t terminate`!) and `Manage Grants` shows the Postgres roles `PUBLIC / dexo / pg_read_all_stats`. mysql-dev is never connected, and nothing tells the user that the menu title and the target differ. A terminate or revoke from here would hit the wrong server.
+
+##### [MINOR] Deleting a connection leaves its documents open and unbound; running one silently rebinds it to whatever connection is active
+- **Where:** connection.delete
+- **Steps:** document `second.sql` on `sqlite-shop` (SQLite SQL), delete `sqlite-shop` from Browse Connections (x, Delete). Click the editor, Ctrl+J.
+- **Expected:** the dialog says how many open documents lose their connection, or the documents close/ask (5).
+- **Actual:** the delete dialog only talks about the password, saved queries and notes. The tab loses its `sqlite-…·` prefix, and after Ctrl+J it becomes `qa-mysql·second.sql` (the active MySQL connection) and the SQLite statement is sent there.
+
+##### [MINOR] Startup: focus is in the editor, so the first `n` typed (as the Welcome text says) creates a document instead of opening New Connection
+- **Where:** first screen after the welcome, `n`
+- **Steps:** start Dexo, dismiss the welcome (Enter), press `n`.
+- **Expected:** the Welcome says "n in the explorer": the explorer has focus or the hint says to press Alt+1 first (3).
+- **Actual:** focus is on the SQL pane (`▸ SQL` marker, no `▸` on Sidebar); `n` is typed into a new unbound document `query-1.sql*` (the text `n` plus the completion popup `now / nullif / NOT ...`), and closing it asks Save/Don't save (fine, but the user did not mean to type). Alt+1 focuses the sidebar. Sidebar Home/End/PageUp/PageDown do nothing (only Up/Down), so reaching row 25 of a long connection list is Down x24.
+
+##### [MINOR] URL / CLI temporary connections
+- **Where:** `dexo <URL>`
+- **Steps:** `dexo postgres://dexo@127.0.0.1:99999/db`; `dexo /path/shop.sqlite3`; `dexo postgres://dexo@127.0.0.1:55601/qa5 --password-prompt`.
+- **Actual:** port 99999 says `the port is not a number` (it is a number, out of range); a plain file path says `not a connection URL: expected scheme://, such as postgres://user@host/db` and does not suggest `sqlite:///path`; the `--password-prompt` line (`Password for dexo@127.0.0.1/qa5:`) echoes nothing at all while typing (no `*`). The temporary row is labelled `[temporary]` but the tag is cut off at the sidebar edge for long names (`● shop.sqlite3▾  [tempor`). Saving a temporary connection (palette > Save Connection...) works (name, driver, host, port, db, user and password prefilled; the saved copy connects and the password is kept), but the old `dexo@127.0.0.1/qa5` row stays in the sidebar next to the new one.
+
+##### [COSMETIC] Layout details
+- **Where:** toasts, stacked dialogs, narrow terminals, status bar
+- **Actual:** (a) wide toasts start on top of the sidebar frame: `┌┌error────`, `││ pre-connect ...`, `│└────` at 120 columns. (b) When one dialog is opened over another (Add connection over Browse Connections, any dialog at 60x20) the lower dialog's bottom border stays visible as a second `└────┘` line under the top one. (c) At 60x20 the status bar says `ctrl+p  F1` in lower case, at 120 columns `Ctrl+P  F1`. (d) `[offline]` / `[temporary]` / `[production]`-style tags are cut at the sidebar edge (`[offl`, `[off`) on long names. (e) Browse Connections says `connected Idle` for one connection and `active Idle` for another, and shows `active Idle` for a connection the sidebar draws as offline (`○`). (f) After a restart the sidebar sorts alphabetically; within one session a new connection is appended at the end. (g) After saving an edit that renames a connection the selection jumps to the first row. (h) Esc on the Add/Edit form with typed input discards it without asking (acceptable per 1, noted because the form has up to 25 fields).
+
+#### Checked and fine
+- `connection.new` (`n` in the sidebar, palette "New Connection"): opens the Add form with name focused; Tab/Shift+Tab order name, driver, host, port, database, username, password, Advanced, [Submit], [Cancel] wraps; Esc closes; clicking every field except the driver, and both buttons, works.
+- Driver cycling with Left/Right (PostgreSQL, MySQL, MariaDB, SQLite, DuckDB, wraps); SQLite/DuckDB show only `path`; adding a DuckDB (CSV) and a SQLite connection with a good path works and connects, a wrong SQLite path gives `cannot open <path>: unable to open database file`.
+- Single-line inputs in the form: Ctrl+A selects all (reverse video), typing replaces it, Ctrl+Left, Ctrl+W, Ctrl+Backspace, Home, End work; Alt+B is not typed as text; the password field masks with `*`.
+- Add form from the Docker list (`qa-mysql`, `qa-pg`): prefilled name/driver/host/port/database/user/password; connects after Submit.
+- `connection.edit` (`e` in the sidebar and palette): opens with Advanced pre-expanded when it has values, saves, keeps group/env; `e` on a database child row edits its connection.
+- `connection.duplicate`: creates `<name> (copy)` at once (password caveat in findings).
+- `connection.delete`: the confirmation names the connection and says what else goes (password, queries, notes); Cancel is the default; Esc, [Cancel] and [Delete] by mouse work; Browse Connections `x` works.
+- `connection.test`: palette, Browse `t`, actions menu; follows the selected row; `x2 ok`, wrong password (`password authentication failed for user "dexo"`), missing secret, MySQL TLS error, bad SQLite path all report.
+- `connection.close_session` (Shift+D in the sidebar, palette "Disconnect Connection", Browse `c`): disconnects; on an offline connection a warn toast says it is already disconnected.
+- `connection.browse` (palette): list with environment, state and `ro`; Up/Down scroll with the selection visible at 60x20; Enter connects, `n`/`e`/`d`/`t`/`x`/`c`/`r` work; Esc steps back one dialog.
+- `connection.find_docker`: opens Browse with a "Running in Docker" section (see the hidden-container finding); `r` refreshes.
+- `connection.save_temporary`: temporary `dexo@127.0.0.1/qa5` (URL + `--password-prompt` + typed password), `sqlite://<path>` and `--demo` open, are marked `[temporary]`, and Save Connection... saves them; on `--demo` it refuses with a clear sentence; bad URL schemes, missing user and missing file give one-line errors.
+- Auto-connect: running Ctrl+J in a document whose connection is offline connects it by itself (also for a document restored after a restart, and after a project switch); tab switching changes the active connection, results and header; drafts and their connection bindings survive Ctrl+Q and restart.
+- `project.create`, `project.switch` (Enter or double click), `project.rename`, `project.delete` of a non-active project with a typed name and Alt+C toggle (`connections:detach` / `connections:delete`); the project name survives restart.
+- `config.transfer`: export writes a TOML with all connections and no password (the real password string occurs 0 times; `secret_ref = ""`), import with conflicts offers per-row Skip/Rename (`r`), Backspace/Left go up a folder in the file picker, typing a path in `name:` works.
+- 80x24 and 60x20: the Add/Edit form fits (width adapts at 60), scrolls with focus and keeps [Submit]/[Cancel] visible; Browse Connections and the Projects dialog fit.
+- Ctrl+Q quit cleanly (exit 0); no crash or freeze at any point (`alive` was `running` throughout).
+
+#### Not testable
+- The 25-field Advanced section against real TLS/SSH/proxy servers: the QA servers have no TLS (`ssl = off`), no SSH daemon and no proxy, so only the saving, the error messages and (for MySQL) `verify_full` against the self-signed certificate could be seen.
+- `ca_file`, `client_cert`, `client_key`, `ssh_key`, `read_only`, `confirm_destructive`, `require_verified_tls`, `max_rows`, `timeout_secs`: fields reached by Tab and typed into; effect not verified (no hint tells which values are valid).
+- Keychain behaviour beyond "password typed in Add is stored, typed in Edit is not" (checked through `dexo connections test`); the OS keyring is shared with the user's session, so I deleted my test connections (their secrets) at the end.
+- Connect-time Secret prompt focus order for the CLI `--password-prompt` flow beyond the first prompt; Windows/macOS keychains.
+- The very first state seen (Add form opened with `host: customers` and an error already shown right after a sidebar click) happened once and could not be reproduced.
