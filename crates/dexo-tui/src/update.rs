@@ -5431,7 +5431,9 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
                 },
                 format!("result {}", index + 1),
             );
-            tab.source_sql = Some(sql.clone());
+            // Only a plain read can run again with a WHERE, an ORDER BY or a count; a
+            // result of anything else keeps no statement to run, and shows no bars.
+            tab.source_sql = dexo_sql::is_read(sql, dialect).then(|| sql.clone());
             tab.source_offset = offsets[index];
             tab
         })
@@ -6242,6 +6244,20 @@ fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     Some(Vec::new())
 }
 
+/// Whether the grid cannot run again now: a statement of this session is still running
+/// (a re-run would take its place, out of Ctrl+F2's reach), or row edits are pending
+/// (a reload would pin each to whatever row lands at its index). Says why.
+fn rerun_refused(model: &mut Model) -> bool {
+    if model.active_operation.is_some() {
+        model.messages.warn(
+            "A statement is still running; wait for it, or cancel it, before sorting or filtering."
+                .into(),
+        );
+        return true;
+    }
+    reload_would_orphan_edits(model)
+}
+
 /// `t`: counts the rows the grid pages through, exactly; `t` while it runs cancels it.
 /// The count runs on a connection of its own, so the live query keeps its slot.
 fn count_rows(model: &mut Model) -> Vec<Effect> {
@@ -6292,17 +6308,13 @@ pub(crate) fn count_sql(model: &Model) -> Option<String> {
     let source = if model.active_document().kind.is_table() {
         dexo_sql::table_select(&model.data.target, dialect)
     } else {
-        let sql = model
+        // Only a plain read keeps its statement (see `launch_script`).
+        model
             .results
             .tabs
             .get(model.results.active)?
             .source_sql
-            .clone()?;
-        // Run again on its own, a statement must be a plain read, as a re-sort's is.
-        if !dexo_sql::is_read(&sql, dialect) {
-            return None;
-        }
-        sql
+            .clone()?
     };
     dexo_sql::derive_count_in(
         &source,
@@ -6331,6 +6343,9 @@ fn sort_by_column(model: &mut Model, column: usize, add: bool) -> Vec<Effect> {
     else {
         return Vec::new();
     };
+    if rerun_refused(model) {
+        return Vec::new();
+    }
     let dialect = crate::screens::editor::editor_dialect(model);
     let applied = model.data.bars.applied.order_by.clone().unwrap_or_default();
     let keys = dexo_sql::order_keys(&applied, dialect).unwrap_or_default();
@@ -6346,6 +6361,9 @@ fn sort_by_column(model: &mut Model, column: usize, add: bool) -> Vec<Effect> {
 /// Runs the grid again with the bars' text, once it is known to only read. Refused text
 /// stays in the bar to be fixed, and nothing is sent.
 fn apply_clauses(model: &mut Model) -> Vec<Effect> {
+    if rerun_refused(model) {
+        return Vec::new();
+    }
     let clauses = model.data.bars.typed();
     let dialect = crate::screens::editor::editor_dialect(model);
     if let Err(reason) = dexo_sql::clauses_read(&clauses, dialect) {
@@ -9513,6 +9531,26 @@ mod tests {
                 .fields
                 .iter()
                 .any(|field| field.label == "password" && field.value == "s3cret")
+        );
+    }
+
+    /// A statement that is not a plain read keeps no statement to run again: no bars,
+    /// no sort, no count.
+    #[test]
+    fn a_result_that_is_not_a_read_keeps_no_statement() {
+        let mut model = Model {
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            ..Model::default()
+        };
+        super::launch_script(
+            &mut model,
+            vec!["update t set a = 1".into(), "select 1".into()],
+        );
+        assert!(model.results.tabs[0].source_sql.is_none());
+        assert!(!super::clause_bars_shown(&model));
+        assert_eq!(
+            model.results.tabs[1].source_sql.as_deref(),
+            Some("select 1")
         );
     }
 

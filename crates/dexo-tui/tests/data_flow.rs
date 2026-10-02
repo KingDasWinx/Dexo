@@ -1049,3 +1049,43 @@ fn the_keyboard_sorts_the_column_it_is_on() {
         model.data.bars.order_input.as_str()
     );
 }
+
+/// A sort is refused while a statement of the session runs, or while row edits wait to
+/// be applied; the bar's text is left as it was, and nothing runs.
+#[test]
+fn a_sort_waits_for_the_running_statement_and_the_pending_edits() {
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        ..Model::default()
+    };
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id from orders".into());
+    model.results.tabs = vec![tab];
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int".into(),
+        nullable: false,
+    }]);
+    model.results.append_rows(vec![vec![DbValue::I64(1)]]);
+    let sort = |model: &mut Model| {
+        update(
+            model,
+            Action::SortByColumn {
+                column: Some(0),
+                add: false,
+            },
+        )
+    };
+    model.active_operation = Some(dexo_tui::runtime::OperationId::new());
+    assert!(sort(&mut model).is_empty());
+    assert_eq!(model.data.bars.order_input.as_str(), "");
+    model.active_operation = None;
+    model
+        .data
+        .row_changes
+        .insert(0, dexo_app::data::RowEditState::Deleted);
+    assert!(sort(&mut model).is_empty());
+    assert!(model.data.bars.applied.order_by.is_none());
+    model.data.row_changes.clear();
+    assert!(!sort(&mut model).is_empty());
+}
