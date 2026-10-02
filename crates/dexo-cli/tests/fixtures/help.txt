@@ -1,4 +1,4 @@
-Local-first terminal database workbench
+A terminal database workbench with guardrails for AI agents
 
 Usage: dexo [OPTIONS] [URL]
        dexo <COMMAND>

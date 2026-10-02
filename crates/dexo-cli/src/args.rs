@@ -6,7 +6,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 #[command(
     name = "dexo",
     version,
-    about = "Local-first terminal database workbench",
+    about = "A terminal database workbench with guardrails for AI agents",
     args_conflicts_with_subcommands = true
 )]
 pub struct Args {
