@@ -29,6 +29,11 @@ fn fields() -> Vec<Field> {
             },
             text: |m| m.help.query.as_str().to_string(),
         },
+        Field {
+            name: "savepoint prompt",
+            open: |m| m.transaction_prompt.open = true,
+            text: |m| m.transaction_prompt.name.as_str().to_string(),
+        },
     ]
 }
 

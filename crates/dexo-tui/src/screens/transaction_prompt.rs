@@ -1,4 +1,5 @@
 use crate::widgets::form::{FooterFocus, footer_line};
+use crate::widgets::text_input::TextInput;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SavepointIntent {
@@ -11,7 +12,7 @@ pub enum SavepointIntent {
 pub struct TransactionPrompt {
     pub open: bool,
     pub intent: Option<SavepointIntent>,
-    pub name: String,
+    pub name: TextInput,
     pub error: Option<String>,
     pub footer: FooterFocus,
 }
@@ -28,7 +29,7 @@ impl TransactionPrompt {
         if action != "savepoint" {
             lines.push(action.into());
         }
-        lines.push(format!("name: {}", self.name));
+        lines.push(format!("name: {}", self.name.as_str()));
         if let Some(error) = &self.error {
             lines.push(error.clone());
         }

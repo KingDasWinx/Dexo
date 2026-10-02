@@ -4999,22 +4999,10 @@ fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect
         FooterKey::Moved => return Vec::new(),
         FooterKey::Pass => {}
     }
-    match key.code {
-        KeyCode::Backspace
-            if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Input =>
-        {
-            model.transaction_prompt.name.pop();
-            Vec::new()
-        }
-        KeyCode::Char(ch)
-            if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Input
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            model.transaction_prompt.name.push(ch);
-            Vec::new()
-        }
-        _ => Vec::new(),
+    if model.transaction_prompt.footer == crate::widgets::form::FooterFocus::Input {
+        model.transaction_prompt.name.handle_key(key);
     }
+    Vec::new()
 }
 
 fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {

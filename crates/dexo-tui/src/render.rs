@@ -1912,8 +1912,12 @@ fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    let prompt = &model.transaction_prompt;
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.starts_with("name:") {
+            if prompt.footer == crate::widgets::form::FooterFocus::Input {
+                show_input(frame, rect, "name: ", &prompt.name, false);
+            }
             hits.register(HitTarget::FormField(0), rect);
         }
         if line.contains("[Cancel]") {
