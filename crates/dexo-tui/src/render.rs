@@ -370,6 +370,7 @@ fn render_explain_prompt(
         "then rolls back what it changed; a sequence or".to_string(),
         "an auto-increment counter keeps its advance.".to_string(),
     ];
+    let warning_line = production.then_some(lines.len());
     if production {
         lines.push("This is a production connection.".to_string());
     }
@@ -385,7 +386,7 @@ fn render_explain_prompt(
         .iter()
         .enumerate()
         .map(|(index, text)| {
-            if production && index == 2 {
+            if warning_line == Some(index) {
                 Line::styled(text.clone(), warning)
             } else {
                 Line::raw(text.clone())
@@ -2764,6 +2765,37 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    /// On production the analyze dialog says so in the warning colour, on that line
+    /// and no other.
+    #[test]
+    fn the_analyze_dialog_warns_on_its_production_line() {
+        use crate::theme::Role;
+        let mut model = Model::default();
+        model.connection.environment = "production".into();
+        model.explain_prompt = Some(crate::widgets::form::FooterFocus::Submit);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 40)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| super::render(frame, &model, &mut hits))
+            .unwrap();
+        let buffer = terminal.backend().buffer();
+        let warning = model.theme.style(Role::Warning, model.capabilities).fg;
+        let fg_of = |text: &str| {
+            let area = buffer.area();
+            (area.y..area.bottom()).find_map(|y| {
+                let row: String = (area.x..area.right())
+                    .map(|x| buffer[(x, y)].symbol())
+                    .collect();
+                let x = row.find(text)?;
+                let column = row[..x].chars().count() as u16;
+                Some(buffer[(area.x + column, y)].fg)
+            })
+        };
+        assert_eq!(fg_of("This is a production connection."), warning);
+        assert_ne!(fg_of("an auto-increment counter"), warning);
     }
 
     /// The welcome logo used to come out in the text colour: its cells were joined into
