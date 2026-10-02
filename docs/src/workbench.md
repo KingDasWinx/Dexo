@@ -56,4 +56,18 @@ Lines starting with a backslash are psql's commands, answered by Dexo from the c
 
 ### Vim mode
 
-With the Vim keymap (Settings), the editor is modal: Normal, Insert, Visual (`v`) and Visual-line (`V`), with the mode on the status line and a block cursor outside Insert. Normal mode takes counts and the motions `h j k l w b e 0 ^ $ gg G`; the operators `d c y` with a motion, or doubled for lines (`dd yy cc`); `x p P u` and Ctrl+R; `i a I A o O` into Insert; `.` to repeat the last change; `/` to search, `n` and `N` for the next and previous match; `:s/old/new/[g]` on the line, `:%s` on the document; `:w`, `:q`, `:wq` and `:<line>`. Every change, an Insert session included, is one undo step. Ctrl chords -- the palette, running a statement, quitting -- work in every mode.
+With the Vim keymap (Settings), the editor is modal: Normal, Insert, Visual (`v`) and Visual-line (`V`), with the mode on the status line and a block cursor outside Insert. Normal mode takes counts and the motions `h j k l w b e 0 ^ $ gg G`; the operators `d c y` with a motion, or doubled for lines (`dd yy cc`); `x p P u` and Ctrl+R; `i a I A o O` into Insert; `.` to repeat the last change; `/` to search, `n` and `N` for the next and previous match; `:s/old/new/[g]` on the line, `:%s` on the document; `:w`, `:q`, `:wq`, `:x` (which writes only what changed) and `:<line>`. The text objects `iw` and `aw` work after an operator (`diw`, `ciw`) and in Visual mode, where `X`, `D`, `C` and `Y` take whole lines. Every change, an Insert session included, is one undo step, and a count on `.` replaces the change's own. Ctrl chords -- the palette, running a statement, quitting -- work in every mode; Esc then a key typed fast is two keys, as in Vim, not an Alt chord.
+
+## Results
+
+Above a table's rows, or the result of a statement that only reads, two bars take SQL of your own: `w` focuses WHERE, `o` focuses ORDER BY, Enter runs the grid again with them, Esc puts back what last ran, Tab moves between them; a click focuses one. What they hold must be a condition and a list of sort keys -- one more statement, a locking read, a function with side effects or an executable comment is refused before anything is sent -- and the run happens where it cannot write: in a read-only transaction of its own, or inside your open transaction behind a savepoint undone after it. A run that fails puts the rows that were there back.
+
+`s` sorts by the current column (Left and Right move it, the header marks it), `S` adds it to the sort; clicking a header sorts by it, ascending, then descending, then off, and Shift+click, Alt+click or a right click adds it. The sort is the ORDER BY bar's text, and the headers show its order. A result run again with the bars is a page: `n` and `p` turn it.
+
+The title says how many rows there are: exactly when they all came, `~4.3M` from the server's statistics for a table's first page, `100+` when more may follow. `t` counts them exactly -- a table's on a connection of its own, a result's on its session -- and `t` again stops the count; the count stays while the grid shows the rows it counted.
+
+`f` on a row opens Related rows: each foreign key from or to the table, followed in a document of its own filtered to the rows on the other end; `b` closes that document and goes back to the row. Enter on a row lists what can be done with it, with each action's key.
+
+## Saved queries
+
+Save Query As (Alt+S) keeps the selection, or the whole document, under a name, for the project and the connection; the same name replaces that query, and says so. Open Saved Query (Alt+O) searches names and SQL, shows the query, opens it in a new document on its connection, renames it (F2) and deletes it (Delete, then confirm). A saved query belongs to a saved connection and goes with it; a temporary connection asks to be saved first.
