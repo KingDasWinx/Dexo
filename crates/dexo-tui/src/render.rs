@@ -1889,7 +1889,13 @@ fn render_secret(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
+    let prompt = &model.secret_prompt;
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        // The second line is the secret's, its marks after the label's `: `.
+        if i == 1 && prompt.footer == crate::widgets::form::FooterFocus::Input {
+            let before = line.find(": ").map_or(line, |at| &line[..at + 2]);
+            show_input(frame, rect, before, prompt.buffer.input(), true);
+        }
         register_label(
             hits,
             rect,

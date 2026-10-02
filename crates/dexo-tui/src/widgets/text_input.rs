@@ -25,6 +25,13 @@ impl TextInput {
         self.selected = false;
     }
 
+    /// Overwrites the text before letting it go, for an input that holds a secret.
+    pub fn wipe(&mut self) {
+        use secrecy::zeroize::Zeroize;
+        self.text.zeroize();
+        self.clear();
+    }
+
     pub fn set_text(&mut self, text: impl Into<String>) {
         let text = text.into();
         self.cursor = text.chars().count();

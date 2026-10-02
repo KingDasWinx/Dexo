@@ -4465,17 +4465,7 @@ fn handle_secret_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         FooterKey::Moved => return Vec::new(),
         FooterKey::Pass => {
             if prompt.footer == FooterFocus::Input {
-                match key.code {
-                    KeyCode::Backspace => prompt.buffer.pop(),
-                    KeyCode::Char(ch)
-                        if !key
-                            .modifiers
-                            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
-                    {
-                        prompt.buffer.push(ch)
-                    }
-                    _ => {}
-                }
+                prompt.buffer.handle_key(key);
             }
             return Vec::new();
         }

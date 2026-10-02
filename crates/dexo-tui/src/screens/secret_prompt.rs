@@ -1,5 +1,7 @@
 use dexo_app::ConnectionProfile;
-use secrecy::{ExposeSecret, SecretString};
+use secrecy::SecretString;
+
+use crate::widgets::text_input::TextInput;
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum SecretPurpose {
@@ -23,41 +25,46 @@ pub enum SecretChoice {
     Cancel,
 }
 
-pub struct SecretBuffer(SecretString);
+/// A secret as it is typed: it edits like any input -- Ctrl+A, the cursor, the word
+/// keys -- and is wiped when dropped.
+pub struct SecretBuffer(TextInput);
 
 impl SecretBuffer {
     pub fn new(value: impl Into<String>) -> Self {
-        Self(SecretString::from(value.into()))
+        Self(TextInput::new(value))
     }
 
     pub fn expose(&self) -> &str {
-        self.0.expose_secret()
+        self.0.as_str()
     }
 
     pub fn into_secret(self) -> SecretString {
-        self.0
+        SecretString::from(self.expose())
     }
 
-    pub fn push(&mut self, ch: char) {
-        let mut text = self.0.expose_secret().to_string();
-        text.push(ch);
-        self.0 = SecretString::from(text);
+    /// The input, for drawing its cursor and selection over the marks.
+    pub fn input(&self) -> &TextInput {
+        &self.0
     }
 
-    pub fn pop(&mut self) {
-        let mut text = self.0.expose_secret().to_string();
-        text.pop();
-        self.0 = SecretString::from(text);
+    pub fn handle_key(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        self.0.handle_key(key)
     }
 
     pub fn chars(&self) -> usize {
-        self.0.expose_secret().chars().count()
+        self.0.len()
+    }
+}
+
+impl Drop for SecretBuffer {
+    fn drop(&mut self) {
+        self.0.wipe();
     }
 }
 
 impl Clone for SecretBuffer {
     fn clone(&self) -> Self {
-        Self(SecretString::from(self.0.expose_secret().to_string()))
+        Self(self.0.clone())
     }
 }
 
@@ -69,7 +76,7 @@ impl std::fmt::Debug for SecretBuffer {
 
 impl PartialEq for SecretBuffer {
     fn eq(&self, other: &Self) -> bool {
-        self.0.expose_secret() == other.0.expose_secret()
+        self.expose() == other.expose()
     }
 }
 

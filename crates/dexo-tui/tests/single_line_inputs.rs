@@ -11,6 +11,8 @@ struct Field {
     name: &'static str,
     open: fn(&mut Model),
     text: fn(&Model) -> String,
+    /// Drawn as one mark per character.
+    masked: bool,
 }
 
 fn fields() -> Vec<Field> {
@@ -21,6 +23,7 @@ fn fields() -> Vec<Field> {
                 update(m, Action::OpenPalette);
             },
             text: |m| m.palette.query.as_str().to_string(),
+            masked: false,
         },
         Field {
             name: "keybindings search",
@@ -28,11 +31,19 @@ fn fields() -> Vec<Field> {
                 update(m, Action::ToggleHelp);
             },
             text: |m| m.help.query.as_str().to_string(),
+            masked: false,
         },
         Field {
             name: "savepoint prompt",
             open: |m| m.transaction_prompt.open = true,
             text: |m| m.transaction_prompt.name.as_str().to_string(),
+            masked: false,
+        },
+        Field {
+            name: "secret prompt",
+            open: |m| m.secret_prompt.open = true,
+            text: |m| m.secret_prompt.buffer.expose().to_string(),
+            masked: true,
         },
     ]
 }
@@ -89,7 +100,7 @@ fn ctrl_a_selects_shows_and_is_replaced_by_typing() {
             field.name
         );
         assert!(
-            reversed(&model).contains("abc"),
+            reversed(&model).contains(if field.masked { "***" } else { "abc" }),
             "the {} does not show its selection",
             field.name
         );
