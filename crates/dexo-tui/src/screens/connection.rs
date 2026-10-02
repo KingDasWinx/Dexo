@@ -197,22 +197,17 @@ impl ConnectionForm {
         self.footer_focus() == FooterFocus::Cancel
     }
 
-    pub fn type_char(&mut self, ch: char) {
-        if self.focused_label() == Some("driver") {
-            return;
-        }
-        if let Some(field) = self.fields.get_mut(self.focus) {
-            field.value.push(ch);
-        }
+    pub fn on_driver(&self) -> bool {
+        self.focused_label() == Some("driver")
     }
 
-    pub fn backspace(&mut self) {
-        if self.focused_label() == Some("driver") {
-            return;
-        }
-        if let Some(field) = self.fields.get_mut(self.focus) {
-            field.value.pop();
-        }
+    /// Hands `key` to the focused text field; the driver is picked, never typed.
+    pub fn edit(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        !self.on_driver()
+            && self
+                .fields
+                .get_mut(self.focus)
+                .is_some_and(|field| field.value.handle_key(key))
     }
 
     pub fn cycle_driver(&mut self, delta: i32) {
@@ -254,7 +249,7 @@ impl ConnectionForm {
         let preserved: Vec<(String, String)> = self
             .fields
             .iter()
-            .map(|field| (field.label.clone(), field.value.clone()))
+            .map(|field| (field.label.clone(), field.value.as_str().to_string()))
             .collect();
         let focus_label = self
             .fields
@@ -345,7 +340,7 @@ impl ConnectionForm {
         let field = &self.fields[index];
         let marker = if index == self.focus { ">" } else { " " };
         if field.label == "driver" {
-            let name = DriverDescriptor::for_id(&field.value)
+            let name = DriverDescriptor::for_id(field.value.as_str())
                 .map(|item| item.display_name)
                 .unwrap_or(field.value.as_str());
             return format!("{marker} driver: < {name} >  left/right");
@@ -353,9 +348,9 @@ impl ConnectionForm {
         // One mark per character typed, so a slip of the finger shows; the characters
         // themselves never reach the screen.
         let value = if field.secret {
-            "*".repeat(field.value.chars().count())
+            "*".repeat(field.value.len())
         } else {
-            field.value.clone()
+            field.value.as_str().to_string()
         };
         format!("{marker} {}: {value}", field.label)
     }
@@ -546,7 +541,8 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
             value: descriptor
                 .as_ref()
                 .map(|item| item.default_port.to_string())
-                .unwrap_or_default(),
+                .unwrap_or_default()
+                .into(),
             secret: false,
         },
         field_of("database", false),
@@ -593,7 +589,7 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
 fn field_of(label: &str, secret: bool) -> FormField {
     FormField {
         label: label.into(),
-        value: String::new(),
+        value: Default::default(),
         secret,
     }
 }
@@ -602,13 +598,13 @@ fn field(fields: &[FormField], label: &str) -> String {
     fields
         .iter()
         .find(|field| field.label == label)
-        .map(|field| field.value.clone())
+        .map(|field| field.value.as_str().to_string())
         .unwrap_or_default()
 }
 
 fn set_field(fields: &mut [FormField], label: &str, value: &str) {
     if let Some(field) = fields.iter_mut().find(|field| field.label == label) {
-        field.value = value.to_string();
+        field.value.set_text(value);
     }
 }
 
@@ -764,7 +760,7 @@ mod tests {
         assert!(
             form.fields
                 .iter()
-                .all(|field| !field.value.contains("SUPER_SECRET_SENTINEL"))
+                .all(|field| !field.value.as_str().contains("SUPER_SECRET_SENTINEL"))
         );
     }
 
@@ -779,14 +775,17 @@ mod tests {
             .iter()
             .position(|field| field.label == "driver")
             .unwrap();
-        form.type_char('x');
-        form.backspace();
+        let key =
+            |code| crossterm::event::KeyEvent::new(code, crossterm::event::KeyModifiers::NONE);
+        form.edit(key(crossterm::event::KeyCode::Char('x')));
+        form.edit(key(crossterm::event::KeyCode::Backspace));
         assert_eq!(
             form.fields
                 .iter()
                 .find(|field| field.label == "driver")
                 .unwrap()
-                .value,
+                .value
+                .as_str(),
             "postgres"
         );
         form.cycle_driver(1);
@@ -795,7 +794,8 @@ mod tests {
                 .iter()
                 .find(|field| field.label == "driver")
                 .unwrap()
-                .value,
+                .value
+                .as_str(),
             "mysql"
         );
         let dump = form.lines().join("\n");
@@ -807,7 +807,8 @@ mod tests {
                 .iter()
                 .find(|field| field.label == "driver")
                 .unwrap()
-                .value,
+                .value
+                .as_str(),
             "mariadb"
         );
         assert!(form.lines().join("\n").contains("< MariaDB >"));
@@ -828,7 +829,8 @@ mod tests {
                 .iter()
                 .find(|field| field.label == "driver")
                 .unwrap()
-                .value,
+                .value
+                .as_str(),
             "postgres"
         );
     }

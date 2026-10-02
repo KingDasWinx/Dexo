@@ -40,6 +40,52 @@ fn fields() -> Vec<Field> {
             masked: false,
         },
         Field {
+            name: "connection form",
+            open: |m| {
+                update(m, Action::OpenConnectionForm);
+            },
+            text: |m| {
+                let form = &m.connection_form;
+                form.fields[form.focus].value.as_str().to_string()
+            },
+            masked: false,
+        },
+        Field {
+            name: "schema form",
+            open: |m| {
+                m.schema_editor = dexo_tui::screens::schema_editor::SchemaEditor::table_form("");
+                m.schema_editor.open = true;
+            },
+            text: |m| m.schema_editor.field("target").to_string(),
+            masked: false,
+        },
+        Field {
+            name: "new row form",
+            open: |m| {
+                m.data.insert_form.open = true;
+                m.data.insert_form.fields = vec![dexo_tui::screens::schema_editor::FormField {
+                    label: "name".into(),
+                    value: Default::default(),
+                    secret: false,
+                }];
+            },
+            text: |m| m.data.insert_form.fields[0].value.as_str().to_string(),
+            masked: false,
+        },
+        Field {
+            name: "new MCP grant form",
+            open: |m| {
+                m.mcp_profiles.open = true;
+                m.mcp_profiles.grant_form =
+                    Some(dexo_tui::screens::mcp_profiles::GrantForm::new("local"));
+            },
+            text: |m| {
+                let form = m.mcp_profiles.grant_form.as_ref().unwrap();
+                form.fields[form.focus].value.as_str().to_string()
+            },
+            masked: false,
+        },
+        Field {
             name: "secret prompt",
             open: |m| m.secret_prompt.open = true,
             text: |m| m.secret_prompt.buffer.expose().to_string(),
@@ -74,6 +120,30 @@ fn reversed(model: &Model) -> String {
         .collect()
 }
 
+/// Where the terminal's cursor is drawn, and the column of the last character of the
+/// first `shown` on screen, with its row.
+fn cursor_and_last_of(model: &Model, shown: &str) -> ((u16, u16), (u16, u16)) {
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 40)).unwrap();
+    let mut hits = dexo_tui::mouse::HitMap::default();
+    let frame = terminal
+        .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+        .unwrap();
+    let rows: Vec<String> = frame
+        .buffer
+        .content()
+        .chunks(120)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect();
+    let (y, row) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.contains(shown))
+        .unwrap_or_else(|| panic!("{shown} is not on screen:\n{}", rows.join("\n")));
+    let x = row[..row.find(shown).unwrap()].chars().count() + shown.chars().count() - 1;
+    let cursor = terminal.get_cursor_position().unwrap();
+    ((cursor.x, cursor.y), (x as u16, y as u16))
+}
+
 fn workbench() -> Model {
     let mut model = Model::default();
     model.apply_size(120, 40);
@@ -92,6 +162,10 @@ fn ctrl_a_selects_shows_and_is_replaced_by_typing() {
             "typing into the {}",
             field.name
         );
+        // The cursor is drawn where the input has it.
+        press(&mut model, KeyCode::Left, KeyModifiers::NONE);
+        let (cursor, last) = cursor_and_last_of(&model, if field.masked { "***" } else { "abc" });
+        assert_eq!(cursor, last, "the cursor in the {}", field.name);
         press(&mut model, KeyCode::Char('a'), KeyModifiers::CONTROL);
         assert_eq!(
             (field.text)(&model),

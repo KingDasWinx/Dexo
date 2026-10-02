@@ -97,29 +97,24 @@ impl GrantForm {
         }
     }
 
-    /// A typed character: text for a field, or on the ask row Space flips it and `y`/`n`
-    /// set it.
-    pub fn type_char(&mut self, ch: char) {
-        match self.focus {
-            GRANT_ASK => match ch {
-                ' ' => self.ask = !self.ask,
-                'y' | 'Y' => self.ask = true,
-                'n' | 'N' => self.ask = false,
-                _ => {}
-            },
-            index => {
-                if let Some(field) = self.fields.get_mut(index) {
-                    field.value.push(ch);
-                }
+    /// A key for the focused row: an edit for a field, or on the ask row Space flips
+    /// it and `y`/`n` set it.
+    pub fn edit(&mut self, key: crossterm::event::KeyEvent) {
+        use crossterm::event::{KeyCode, KeyModifiers};
+        if self.focus != GRANT_ASK {
+            if let Some(field) = self.fields.get_mut(self.focus) {
+                field.value.handle_key(key);
             }
+            return;
         }
-    }
-
-    pub fn backspace(&mut self) {
-        if let Some(field) = self.fields.get_mut(self.focus)
-            && self.focus != GRANT_ASK
-        {
-            field.value.pop();
+        if !(key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) {
+            return;
+        }
+        match key.code {
+            KeyCode::Char(' ') => self.ask = !self.ask,
+            KeyCode::Char('y' | 'Y') => self.ask = true,
+            KeyCode::Char('n' | 'N') => self.ask = false,
+            _ => {}
         }
     }
 

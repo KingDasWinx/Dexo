@@ -921,6 +921,16 @@ fn show_input(
     }
 }
 
+/// The focused field of a form, drawn `> label: value` on `line`.
+fn show_form_field(
+    frame: &mut Frame,
+    line: Rect,
+    field: &crate::screens::schema_editor::FormField,
+) {
+    let before = format!("> {}: ", field.label);
+    show_input(frame, line, &before, &field.value, field.secret);
+}
+
 /// Reverses `columns` cells of `line` from its column `from`, as far as the line goes.
 fn paint_reversed(frame: &mut Frame, line: Rect, from: usize, columns: usize) {
     let cells = |count: usize| u16::try_from(count).unwrap_or(u16::MAX);
@@ -1375,6 +1385,9 @@ fn render_insert_row_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |index, line, rect| {
         if index < form.fields.len() {
+            if index == form.focus {
+                show_form_field(frame, rect, &form.fields[index]);
+            }
             hits.register(HitTarget::FormField(index), rect);
         } else if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Insert");
@@ -1683,6 +1696,9 @@ fn render_grant_form(
     for_popup_lines(popup, &lines, |index, line, rect| {
         // The fields start on the second line.
         if (1..=form.fields.len()).contains(&index) {
+            if index - 1 == form.focus && form.focus != crate::screens::mcp_profiles::GRANT_ASK {
+                show_form_field(frame, rect, &form.fields[index - 1]);
+            }
             hits.register(HitTarget::FormField(index - 1), rect);
         } else if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Create");
@@ -2106,6 +2122,7 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .focus
         .min(model.connection_form.fields.len().saturating_sub(1));
     let offset = scroll_to_selection(focus_line, 0, model.connection_form.fields.len(), body_rows);
+    let visible = model.connection_form.visible_rows(rows);
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, line, rect| {
         if line.contains("[Cancel]") {
@@ -2116,12 +2133,14 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             hits.register(HitTarget::Button(HitButton::ToggleAdvanced), rect);
             return;
         }
-        if let Some(index) = model
-            .connection_form
-            .visible_rows(rows)
-            .get(i)
-            .and_then(|(field, _)| *field)
-        {
+        if let Some(index) = visible.get(i).and_then(|(field, _)| *field) {
+            let form = &model.connection_form;
+            if index == form.focus
+                && !form.on_driver()
+                && let Some(field) = form.fields.get(index)
+            {
+                show_form_field(frame, rect, field);
+            }
             hits.register(HitTarget::FormField(index), rect);
         } else if i < body_rows {
             hits.register(HitTarget::FormField(offset.saturating_add(i)), rect);
@@ -2317,6 +2336,14 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     register_overlay(hits, popup);
     // the form's fields were clickable as a tab; keep them clickable as an overlay
     register_form_fields(hits, popup, &fields);
+    // The fields start on the second line.
+    if editor.footer == crate::widgets::form::FooterFocus::Input
+        && editor.focus + 1 < footer_index
+        && let Some(field) = editor.fields.get(editor.focus)
+    {
+        let line = crate::mouse::line_rect(popup_inner(popup), editor.focus + 1);
+        show_form_field(frame, line, field);
+    }
     let footer_row = crate::mouse::line_rect(popup_inner(popup), footer_index);
     crate::widgets::form::register_footer(hits, footer_row, &footer, submit);
 }

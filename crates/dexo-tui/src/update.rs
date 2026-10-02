@@ -3070,13 +3070,7 @@ fn grant_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Down | KeyCode::Tab => form.focus_next(),
         KeyCode::Up | KeyCode::BackTab => form.focus_prev(),
         KeyCode::Left | KeyCode::Right if footer != FooterFocus::Input => form.toggle_button(),
-        KeyCode::Backspace => form.backspace(),
-        KeyCode::Char(ch)
-            if footer == FooterFocus::Input
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            form.type_char(ch);
-        }
+        _ if footer == FooterFocus::Input => form.edit(key),
         _ => {}
     }
     Vec::new()
@@ -4044,19 +4038,11 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Down | KeyCode::Tab => form.focus_next(),
             KeyCode::Up | KeyCode::BackTab => form.focus_prev(),
             KeyCode::Left | KeyCode::Right if footer != FooterFocus::Input => form.toggle_button(),
-            KeyCode::Backspace => {
+            _ => {
                 if let Some(field) = form.focused_field_mut() {
-                    field.value.pop();
+                    field.value.handle_key(key);
                 }
             }
-            KeyCode::Char(ch)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                if let Some(field) = form.focused_field_mut() {
-                    field.value.push(ch);
-                }
-            }
-            _ => {}
         }
         return Vec::new();
     }
@@ -4428,23 +4414,20 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.connection_form.focus_next();
             Vec::new()
         }
-        KeyCode::Left => {
+        KeyCode::Left if model.connection_form.on_driver() => {
             model.connection_form.cycle_driver(-1);
             Vec::new()
         }
-        KeyCode::Right => {
+        KeyCode::Right if model.connection_form.on_driver() => {
             model.connection_form.cycle_driver(1);
             Vec::new()
         }
-        KeyCode::Backspace => {
-            model.connection_form.backspace();
+        // A text field edits like any input: it used to append and delete from its end
+        // only, and the arrows did nothing in it.
+        _ => {
+            model.connection_form.edit(key);
             Vec::new()
         }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-            model.connection_form.type_char(ch);
-            Vec::new()
-        }
-        _ => Vec::new(),
     }
 }
 
@@ -7851,9 +7834,6 @@ fn schema_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let editor = &mut model.schema_editor;
     let last = editor.fields.len().saturating_sub(1);
     if editor.footer == FooterFocus::Input {
-        let typing = !key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
         match key.code {
             KeyCode::Tab | KeyCode::Down if editor.focus < last => {
                 editor.focus_next();
@@ -7863,14 +7843,7 @@ fn schema_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 editor.focus_prev();
                 return Vec::new();
             }
-            KeyCode::Char(ch) if typing => {
-                editor.edit_focused(Some(ch));
-                return Vec::new();
-            }
-            KeyCode::Backspace => {
-                editor.edit_focused(None);
-                return Vec::new();
-            }
+            _ if editor.edit_focused(key) => return Vec::new(),
             _ => {}
         }
     }
@@ -10629,7 +10602,7 @@ mod tests {
             form.fields
                 .iter()
                 .find(|field| field.label == label)
-                .map(|field| field.value.clone())
+                .map(|field| field.value.as_str().to_string())
                 .unwrap_or_default()
         };
         assert_eq!(
@@ -10664,7 +10637,7 @@ mod tests {
                 .connection_form
                 .fields
                 .iter()
-                .any(|field| field.label == "password" && field.value == "s3cret")
+                .any(|field| field.label == "password" && field.value.as_str() == "s3cret")
         );
     }
 

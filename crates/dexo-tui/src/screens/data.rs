@@ -22,7 +22,7 @@ impl InsertRowForm {
             .iter()
             .map(|column| crate::screens::schema_editor::FormField {
                 label: column.name.clone(),
-                value: String::new(),
+                value: crate::widgets::text_input::TextInput::default(),
                 secret: false,
             })
             .collect();
@@ -76,7 +76,7 @@ impl InsertRowForm {
             .enumerate()
             .map(|(index, field)| {
                 let marker = if index == self.focus { ">" } else { " " };
-                format!("{marker} {}: {}", field.label, field.value)
+                format!("{marker} {}: {}", field.label, field.value.as_str())
             })
             .collect();
         lines.push(String::new());
@@ -91,7 +91,12 @@ impl InsertRowForm {
         self.fields
             .iter()
             .filter(|field| !field.value.is_empty())
-            .map(|field| (field.label.clone(), DbValue::Text(field.value.clone())))
+            .map(|field| {
+                (
+                    field.label.clone(),
+                    DbValue::Text(field.value.as_str().to_string()),
+                )
+            })
             .collect()
     }
 }

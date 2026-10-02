@@ -263,6 +263,18 @@ impl TextInput {
     }
 }
 
+impl From<&str> for TextInput {
+    fn from(text: &str) -> Self {
+        Self::new(text)
+    }
+}
+
+impl From<String> for TextInput {
+    fn from(text: String) -> Self {
+        Self::new(text)
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum Edit {
     SelectAll,

@@ -1,3 +1,4 @@
+use crate::widgets::text_input::TextInput;
 use dexo_app::schema::{Confirmation, DdlPreview};
 use dexo_driver_api::{
     ColumnSpec, IdentitySpec, IndexDef, QualifiedName, RoutineDef, RoutineKind, SchemaChange,
@@ -16,7 +17,8 @@ pub enum FormKind {
 #[derive(Clone, PartialEq)]
 pub struct FormField {
     pub label: String,
-    pub value: String,
+    /// Edited like any single-line input: a cursor, Ctrl+A, the word keys.
+    pub value: TextInput,
     pub secret: bool,
 }
 
@@ -24,14 +26,14 @@ pub struct FormField {
 /// a debug print.
 impl std::fmt::Debug for FormField {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        let value: &dyn std::fmt::Debug = if self.secret {
-            &"[redacted]"
+        let value = if self.secret {
+            "[redacted]"
         } else {
-            &self.value
+            self.value.as_str()
         };
         f.debug_struct("FormField")
             .field("label", &self.label)
-            .field("value", value)
+            .field("value", &value)
             .field("secret", &self.secret)
             .finish()
     }
@@ -112,7 +114,7 @@ impl SchemaEditor {
             fields: vec![
                 FormField {
                     label: "target".into(),
-                    value: target.into(),
+                    value: TextInput::new(target),
                     secret: false,
                 },
                 FormField {
@@ -122,22 +124,22 @@ impl SchemaEditor {
                 },
                 FormField {
                     label: "defaults".into(),
-                    value: String::new(),
+                    value: TextInput::default(),
                     secret: false,
                 },
                 FormField {
                     label: "indexes".into(),
-                    value: String::new(),
+                    value: TextInput::default(),
                     secret: false,
                 },
                 FormField {
                     label: "constraints".into(),
-                    value: String::new(),
+                    value: TextInput::default(),
                     secret: false,
                 },
                 FormField {
                     label: "foreign_keys".into(),
-                    value: String::new(),
+                    value: TextInput::default(),
                     secret: false,
                 },
             ],
@@ -156,7 +158,7 @@ impl SchemaEditor {
         editor.fields = vec![
             FormField {
                 label: "target".into(),
-                value: editor.field("target").to_string(),
+                value: editor.field("target").into(),
                 secret: false,
             },
             FormField {
@@ -183,34 +185,27 @@ impl SchemaEditor {
         editor.fields = vec![
             FormField {
                 label: "target".into(),
-                value: editor.field("target").to_string(),
+                value: editor.field("target").into(),
                 secret: false,
             },
             FormField {
                 label: "arguments".into(),
-                value: if trigger {
-                    String::new()
-                } else {
-                    "n integer".into()
-                },
+                value: if trigger { "" } else { "n integer" }.into(),
                 secret: false,
             },
             FormField {
                 label: "body".into(),
                 value: if trigger {
-                    "EXECUTE FUNCTION public.tg_fn()".into()
+                    "EXECUTE FUNCTION public.tg_fn()"
                 } else {
-                    "SELECT n + 1".into()
-                },
+                    "SELECT n + 1"
+                }
+                .into(),
                 secret: false,
             },
             FormField {
                 label: "table".into(),
-                value: if trigger {
-                    "public.orders".into()
-                } else {
-                    String::new()
-                },
+                value: if trigger { "public.orders" } else { "" }.into(),
                 secret: false,
             },
         ];
@@ -227,7 +222,7 @@ impl SchemaEditor {
 
     pub fn set_field(&mut self, label: &str, value: impl Into<String>) {
         if let Some(field) = self.fields.iter_mut().find(|field| field.label == label) {
-            field.value = value.into();
+            field.value.set_text(value);
         }
     }
 
@@ -241,17 +236,11 @@ impl SchemaEditor {
         }
     }
 
-    /// Types into the focused field, or deletes from its end.
-    pub fn edit_focused(&mut self, typed: Option<char>) {
-        let Some(field) = self.fields.get_mut(self.focus) else {
-            return;
-        };
-        match typed {
-            Some(ch) => field.value.push(ch),
-            None => {
-                field.value.pop();
-            }
-        }
+    /// Hands `key` to the focused field; false when it is not an input's key.
+    pub fn edit_focused(&mut self, key: crossterm::event::KeyEvent) -> bool {
+        self.fields
+            .get_mut(self.focus)
+            .is_some_and(|field| field.value.handle_key(key))
     }
 
     pub fn focus_next(&mut self) {
@@ -371,7 +360,7 @@ impl SchemaEditor {
         let previous = self
             .fields
             .iter()
-            .map(|field| format!("{}={}", field.label, field.value))
+            .map(|field| format!("{}={}", field.label, field.value.as_str()))
             .collect::<Vec<_>>()
             .join("\n");
         self.form_diff = Some(format!(
@@ -393,9 +382,9 @@ impl SchemaEditor {
             // One mark per character typed, so a slip of the finger shows; the characters
             // themselves never reach the screen.
             let value = if field.secret {
-                "*".repeat(field.value.chars().count())
+                "*".repeat(field.value.len())
             } else {
-                field.value.clone()
+                field.value.as_str().to_string()
             };
             lines.push(format!("{marker} {}: {value}", field.label));
         }
