@@ -445,6 +445,10 @@ fn render_drop(plan: &mut DdlPlan, target: &QualifiedName, kind: &ObjectKind) {
         }
         ObjectKind::Sequence => format!("DROP SEQUENCE {name}"),
         ObjectKind::Schema => format!("DROP SCHEMA {name}"),
+        // `DROP TABLE` refuses a foreign table.
+        ObjectKind::DriverSpecific(kind) if kind == "foreign_table" => {
+            format!("DROP FOREIGN TABLE {name}")
+        }
         _ => format!("DROP TABLE {name}"),
     };
     plan.push(sql, false);

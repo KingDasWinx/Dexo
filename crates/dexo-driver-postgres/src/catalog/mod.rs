@@ -797,16 +797,25 @@ impl CatalogReader for PostgresSession {
         let sql = match kind {
             "table" | "partition" => {
                 let oid: i64 = key.parse().unwrap_or(0);
+                // A foreign table is created as one, on its server and with its options.
                 self.client
                     .query_one(
-                        "SELECT 'CREATE TABLE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || E' (\\n' ||
+                        "SELECT 'CREATE ' || CASE WHEN c.relkind = 'f' THEN 'FOREIGN ' ELSE '' END ||
+                                'TABLE ' || quote_ident(n.nspname) || '.' || quote_ident(c.relname) || E' (\\n' ||
                                 coalesce(string_agg('  ' || quote_ident(a.attname) || ' ' || format_type(a.atttypid, a.atttypmod), E',\\n' ORDER BY a.attnum), '') ||
-                                E'\\n);'
+                                E'\\n)' ||
+                                coalesce((SELECT E'\\nSERVER ' || quote_ident(s.srvname) ||
+                                                 coalesce(E'\\nOPTIONS (' ||
+                                                     (SELECT string_agg(quote_ident(o.option_name) || ' ' || quote_literal(o.option_value), ', ')
+                                                      FROM pg_options_to_table(ft.ftoptions) o) || ')', '')
+                                          FROM pg_foreign_table ft
+                                          JOIN pg_foreign_server s ON s.oid = ft.ftserver
+                                          WHERE ft.ftrelid = c.oid), '') || ';'
                          FROM pg_class c
                          JOIN pg_namespace n ON n.oid = c.relnamespace
                          JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
                          WHERE c.oid = $1::bigint::oid
-                         GROUP BY n.nspname, c.relname",
+                         GROUP BY c.oid, c.relkind, n.nspname, c.relname",
                         &[&oid],
                     )
                     .await

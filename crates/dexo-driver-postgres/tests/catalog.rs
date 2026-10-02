@@ -456,6 +456,79 @@ async fn comments_come_with_tables_and_columns() {
     assert_eq!(comment("noted.id"), None);
 }
 
+/// A foreign table is said to be one: its DDL names its server and options, `\dt`
+/// calls it a foreign table, and the drop a schema diff writes for it is one Postgres
+/// takes.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn foreign_tables_are_told_apart() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE FOREIGN DATA WRAPPER inert",
+        "CREATE SERVER elsewhere FOREIGN DATA WRAPPER inert",
+        "CREATE FOREIGN TABLE remote_orders (id int, total numeric)
+             SERVER elsewhere OPTIONS (table_name 'orders')",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let catalog = session.catalog().unwrap();
+    let object = catalog
+        .relations_named(None, "remote_orders")
+        .await
+        .unwrap()
+        .unwrap()
+        .remove(0);
+    let ddl = catalog.ddl(&object.id).await.unwrap().sql;
+    assert!(
+        ddl.starts_with("CREATE FOREIGN TABLE public.remote_orders")
+            && ddl.contains("SERVER elsewhere")
+            && ddl.contains("OPTIONS (table_name 'orders')"),
+        "{ddl}"
+    );
+    let command = dexo_app::meta_command::parse("\\dt remote*").unwrap();
+    let listed = dexo_app::meta_command::answer(catalog, &command)
+        .await
+        .unwrap();
+    assert_eq!(listed.rows[0][2], "foreign table", "{:?}", listed.rows);
+    let drop = dexo_app::schema_diff::script::to_change(
+        &dexo_app::schema_diff::SchemaDifference::Removed(object),
+    );
+    let plan = dexo_driver_postgres::render_ddl(&drop).unwrap();
+    for sql in plan.sqls() {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    assert!(
+        catalog
+            .relations_named(None, "remote_orders")
+            .await
+            .unwrap()
+            .unwrap()
+            .is_empty()
+    );
+}
+
 /// `\d name` describes the table the search_path finds -- a system one too -- not the
 /// alphabetically first of that name.
 #[tokio::test]

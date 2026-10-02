@@ -157,7 +157,9 @@ pub async fn answer(
                     vec![
                         schema_of(object).unwrap_or("").to_string(),
                         leaf_name(object).to_string(),
-                        object.kind.as_str().replace('_', " "),
+                        crate::catalog_service::exact_kind(object)
+                            .as_str()
+                            .replace('_', " "),
                     ]
                 })
                 .collect();

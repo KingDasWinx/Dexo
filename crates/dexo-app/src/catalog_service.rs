@@ -289,6 +289,20 @@ fn foreign_key(object: &CatalogObject) -> Option<ForeignKey> {
     })
 }
 
+/// What `object` is, where the catalog lists it as what it reads like: a Postgres
+/// foreign table is listed as a table, but `DROP TABLE` refuses it and `\dt` should
+/// say what it is.
+pub(crate) fn exact_kind(object: &CatalogObject) -> dexo_driver_api::ObjectKind {
+    match object
+        .attributes
+        .get("driver.postgres.relkind")
+        .and_then(|relkind| relkind.as_str())
+    {
+        Some("f") => dexo_driver_api::ObjectKind::DriverSpecific("foreign_table".into()),
+        _ => object.kind.clone(),
+    }
+}
+
 pub fn parse_qualified(input: &str) -> QualifiedName {
     let parts: Vec<&str> = input.split('.').collect();
     match parts.as_slice() {
