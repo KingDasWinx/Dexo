@@ -59,6 +59,38 @@ pub async fn apply_ddl(session: &MysqlSession, plan: &DdlPlan) -> Result<DdlOutc
     })
 }
 
+/// The privileges a grant can give on one table, in the order they are shown.
+const TABLE_PRIVILEGES: &[&str] = &[
+    "SELECT",
+    "INSERT",
+    "UPDATE",
+    "DELETE",
+    "CREATE",
+    "DROP",
+    "ALTER",
+    "INDEX",
+    "REFERENCES",
+    "TRIGGER",
+    "CREATE VIEW",
+    "SHOW VIEW",
+];
+
+/// `principal` as the LIKE pattern of the `'user'@'host'` information_schema writes,
+/// `|` escaping: `user@host` is that account alone, a bare `user` that user at any host.
+/// A substring match of the name used to take `dex` for `dexo` too.
+fn grantee_like(principal: &str) -> String {
+    let part = |text: &str| {
+        text.trim_matches(|ch| ch == '\'' || ch == '`')
+            .replace('|', "||")
+            .replace('%', "|%")
+            .replace('_', "|_")
+    };
+    match principal.rsplit_once('@') {
+        Some((user, host)) => format!("'{}'@'{}'", part(user), part(host)),
+        None => format!("'{}'@%", part(principal)),
+    }
+}
+
 #[async_trait::async_trait]
 impl SecurityAdmin for MysqlSession {
     async fn list_grants(
@@ -67,12 +99,14 @@ impl SecurityAdmin for MysqlSession {
     ) -> Result<Vec<GrantRecord>, DriverError> {
         let sql = "SELECT GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE
                    FROM information_schema.TABLE_PRIVILEGES
-                   WHERE (? IS NULL OR GRANTEE LIKE CONCAT('%', ?, '%'))
+                   WHERE (? IS NULL OR GRANTEE LIKE ? ESCAPE '|')
                    ORDER BY GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE";
-        let name = principal.map(QualifiedName::object);
+        let grantee = principal.map(|principal| grantee_like(principal.object()));
         let mut conn = self.conn.lock().await;
-        let rows: Vec<(String, String, String, String)> =
-            conn.exec(sql, (name, name)).await.map_err(map_error)?;
+        let rows: Vec<(String, String, String, String)> = conn
+            .exec(sql, (&grantee, &grantee))
+            .await
+            .map_err(map_error)?;
         Ok(rows
             .into_iter()
             .map(|(grantee, schema, table, privilege)| GrantRecord {
@@ -94,25 +128,50 @@ impl SecurityAdmin for MysqlSession {
         principal: Option<&QualifiedName>,
         object: &QualifiedName,
     ) -> Result<Vec<String>, DriverError> {
-        let current;
-        let principal = match principal {
-            Some(principal) => principal,
+        // A privilege on a table comes from a grant on it, on its schema -- whose name
+        // in a grant may hold wildcards, matched the way MySQL matches them -- or on
+        // everything: only the first used to count, so root showed nothing.
+        // ponytail: privileges that come through an active role are not counted;
+        // information_schema lists them under the role, which a plain user cannot see.
+        let sql = "SELECT PRIVILEGE_TYPE FROM information_schema.USER_PRIVILEGES
+                   WHERE GRANTEE LIKE ? ESCAPE '|'
+                   UNION ALL
+                   SELECT PRIVILEGE_TYPE FROM information_schema.SCHEMA_PRIVILEGES
+                   WHERE GRANTEE LIKE ? ESCAPE '|' AND COALESCE(?, DATABASE()) LIKE TABLE_SCHEMA
+                   UNION ALL
+                   SELECT PRIVILEGE_TYPE FROM information_schema.TABLE_PRIVILEGES
+                   WHERE GRANTEE LIKE ? ESCAPE '|' AND TABLE_SCHEMA = COALESCE(?, DATABASE())
+                     AND TABLE_NAME = ?";
+        let mut conn = self.conn.lock().await;
+        let grantee = match principal {
+            Some(principal) => grantee_like(principal.object()),
             None => {
-                let mut conn = self.conn.lock().await;
-                let user: Option<String> = conn
-                    .query_first("SELECT SUBSTRING_INDEX(CURRENT_USER(), '@', 1)")
+                let current: Option<String> = conn
+                    .query_first("SELECT CURRENT_USER()")
                     .await
                     .map_err(map_error)?;
-                current =
-                    QualifiedName::new(None::<String>, None::<String>, user.unwrap_or_default());
-                &current
+                grantee_like(&current.unwrap_or_default())
             }
         };
-        let grants = self.list_grants(Some(principal)).await?;
-        Ok(grants
-            .into_iter()
-            .filter(|grant| grant.target.object() == object.object())
-            .flat_map(|grant| grant.privileges)
+        let schema = object.schema().or(object.catalog());
+        let found: Vec<String> = conn
+            .exec(
+                sql,
+                (
+                    &grantee,
+                    &grantee,
+                    schema,
+                    &grantee,
+                    schema,
+                    object.object(),
+                ),
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(TABLE_PRIVILEGES
+            .iter()
+            .filter(|privilege| found.iter().any(|found| found == *privilege))
+            .map(|privilege| privilege.to_string())
             .collect())
     }
 
@@ -130,5 +189,19 @@ impl SecurityAdmin for MysqlSession {
         );
         let mut conn = self.conn.lock().await;
         conn.query_drop(sql).await.map_err(map_error)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::grantee_like;
+
+    #[test]
+    fn a_grantee_is_matched_whole() {
+        assert_eq!(grantee_like("dexo@%"), "'dexo'@'|%'");
+        assert_eq!(grantee_like("'app'@'10.0.0.1'"), "'app'@'10.0.0.1'");
+        // A bare name is that user at any host, and its wildcards are its own letters.
+        assert_eq!(grantee_like("dex"), "'dex'@%");
+        assert_eq!(grantee_like("a_b"), "'a|_b'@%");
     }
 }
