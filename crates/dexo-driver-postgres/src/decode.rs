@@ -75,9 +75,7 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         Type::INT2 => DbValue::I64(wire::int2_from_sql(raw).ok()?.into()),
         Type::INT4 => DbValue::I64(wire::int4_from_sql(raw).ok()?.into()),
         Type::INT8 => DbValue::I64(wire::int8_from_sql(raw).ok()?),
-        Type::OID | Type::REGCLASS | Type::REGPROC | Type::REGTYPE => {
-            DbValue::U64(wire::oid_from_sql(raw).ok()?.into())
-        }
+        Type::OID => DbValue::U64(wire::oid_from_sql(raw).ok()?.into()),
         Type::FLOAT4 => native(ty, raw, wire::float4_from_sql(raw).ok()?.to_string()),
         Type::FLOAT8 => native(ty, raw, wire::float8_from_sql(raw).ok()?.to_string()),
         Type::NUMERIC => DbValue::Decimal(numeric_text(raw)?),
@@ -155,8 +153,14 @@ fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
     };
     let text = match *ty {
         Type::JSONPATH => versioned()?,
+        // Numbers, but kept as the type they are: read as a plain integer, a value went
+        // back as a bigint, and the grid's delete, which compares every column, failed
+        // with "operator does not exist: xid = bigint".
         Type::XID
         | Type::CID
+        | Type::REGCLASS
+        | Type::REGTYPE
+        | Type::REGPROC
         | Type::REGNAMESPACE
         | Type::REGROLE
         | Type::REGOPER
@@ -164,10 +168,8 @@ fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         | Type::REGPROCEDURE
         | Type::REGCONFIG
         | Type::REGDICTIONARY
-        | Type::REGCOLLATION => {
-            return Some(DbValue::U64(u32_at(0)?.into()));
-        }
-        Type::XID8 => return Some(DbValue::U64(u64::from_be_bytes(raw.try_into().ok()?))),
+        | Type::REGCOLLATION => u32_at(0)?.to_string(),
+        Type::XID8 => u64::from_be_bytes(raw.try_into().ok()?).to_string(),
         Type::TID => format!(
             "({},{})",
             u32_at(0)?,

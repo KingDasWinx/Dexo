@@ -61,6 +61,75 @@ async fn connect() -> Fixture {
     }
 }
 
+async fn run(session: &dyn Session, sql: &str) {
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(sql))
+            .await
+            .unwrap(),
+    )
+    .await;
+}
+
+/// Deletes every row of `table` the way the grid does: each found by its key, `id`, and
+/// checked against every value it was read with. Then nothing is left.
+async fn delete_as_the_grid_does(session: &dyn Session, table: &str) {
+    let data = session.data().unwrap();
+    let object = QualifiedName::new(None::<String>, Some("public"), table);
+    let fetch = || DataRequest {
+        clauses: Default::default(),
+        object: object.clone(),
+        columns: vec![],
+        filter: None,
+        sort: vec![],
+        page: Page::new(0, 100).unwrap(),
+    };
+    let page = data.fetch(fetch()).await.unwrap();
+    assert!(!page.rows.is_empty(), "{table} has rows to delete");
+    let names: Vec<ColumnId> = page
+        .columns
+        .iter()
+        .map(|column| ColumnId(column.name.clone()))
+        .collect();
+    for row in page.rows {
+        let identity = vec![(ColumnId("id".into()), row[0].clone())];
+        let original = names.iter().cloned().zip(row).collect();
+        data.apply(&[Mutation::Delete {
+            table: object.clone(),
+            identity,
+            original,
+        }])
+        .await
+        .unwrap_or_else(|error| panic!("{table}: {error}"));
+    }
+    assert!(
+        data.fetch(fetch()).await.unwrap().rows.is_empty(),
+        "{table}"
+    );
+}
+
+/// Transaction ids and command ids read as plain integers went back as bigints, and
+/// the delete, which compares every column, failed: "operator does not exist: xid =
+/// bigint". The reg* types the same.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_row_with_transaction_ids_is_deleted_from_the_grid() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    run(
+        session,
+        "create table ids (id int primary key, x xid, x8 xid8, c cid, r regclass, t regtype,
+                           n regnamespace, p regproc)",
+    )
+    .await;
+    run(
+        session,
+        "insert into ids values (1, '42', '4200000000', '7', 'pg_class', 'int4', 'public', 'now')",
+    )
+    .await;
+    delete_as_the_grid_does(session, "ids").await;
+}
+
 /// A name without a schema is the table the search_path finds, for the estimate and
 /// the key columns alike; a partitioned table's estimate is its partitions'.
 #[tokio::test]
