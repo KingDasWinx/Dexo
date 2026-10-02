@@ -114,10 +114,12 @@ fn a_long_palette_query_scrolls_to_its_end() {
 #[test]
 fn home_and_end_walk_the_document_strip() {
     use dexo_tui::model::{EditorDocument, Focus};
-    let mut model = Model::default();
-    model.documents = (1..=4)
-        .map(|n| EditorDocument::new_unique(format!("q{n}.sql"), None, None))
-        .collect();
+    let mut model = Model {
+        documents: (1..=4)
+            .map(|n| EditorDocument::new_unique(format!("q{n}.sql"), None, None))
+            .collect(),
+        ..Model::default()
+    };
     model.active_document = 1;
     model.focus = Focus::DocumentTabs;
     let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
