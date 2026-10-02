@@ -444,6 +444,7 @@ async fn a_timed_out_query_stops_on_the_server() {
         );
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
+}
 
 /// MariaDB runs what `/*M! … */` holds, so the read check takes it for code: the ORDER
 /// BY that wrote a file past it is refused, and so is a statement holding one.
