@@ -224,12 +224,15 @@ impl CatalogReader for MysqlSession {
                 (schema.clone(), name.clone(), schema, name),
             )
             .await?;
-        // One row per column: a key's rows are consecutive, its columns in order.
+        // One row per column: a key's rows are consecutive, its columns in order. Each
+        // end is named `database.table` as the app names a table opened from the
+        // sidebar -- the database as the schema -- so the tab already open for it is
+        // found instead of a second one opened.
         let mut keys: Vec<dexo_driver_api::ForeignKeyRef> = Vec::new();
         for (constraint, from_schema, from_table, from_column, to_schema, to_table, to_column) in
             rows
         {
-            let from = QualifiedName::new(Some(from_schema), None::<String>, from_table);
+            let from = QualifiedName::new(None::<String>, Some(from_schema), from_table);
             match keys.last_mut() {
                 Some(key) if key.name == constraint && key.from == from => {
                     key.from_columns.push(from_column);
@@ -239,7 +242,7 @@ impl CatalogReader for MysqlSession {
                     name: constraint,
                     from,
                     from_columns: vec![from_column],
-                    to: QualifiedName::new(Some(to_schema), None::<String>, to_table),
+                    to: QualifiedName::new(None::<String>, Some(to_schema), to_table),
                     to_columns: vec![to_column],
                 }),
             }

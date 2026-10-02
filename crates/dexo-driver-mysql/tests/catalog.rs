@@ -341,6 +341,13 @@ async fn foreign_keys_are_listed_from_and_to_a_table() {
         "fk_orders".into(),
         "id,region".into()
     )));
+    // Both ends named as a table opened from the sidebar is, so its open tab is found.
+    let key = keys
+        .iter()
+        .find(|key| key.from.object() == "fk_orders")
+        .unwrap();
+    assert_eq!(key.from, dexo_app::parse_qualified("dexo.fk_orders"));
+    assert_eq!(key.to, dexo_app::parse_qualified("dexo.fk_customers"));
 }
 
 /// Table and column comments come with the catalog, as each object's `comment`.
