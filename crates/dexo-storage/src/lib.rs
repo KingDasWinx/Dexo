@@ -8,6 +8,7 @@ mod layout;
 mod mcp;
 mod mcp_profile;
 mod migrations;
+mod object_note;
 mod object_usage;
 mod project;
 mod recent;
@@ -35,6 +36,7 @@ pub use migrations::{
     MIGRATION_6, MIGRATION_7, MIGRATION_8, MIGRATION_9, MIGRATION_10, MIGRATION_11, apply_pending,
     read_schema_version,
 };
+pub use object_note::ObjectNoteRepository;
 pub use object_usage::{ObjectUsage, ObjectUsageRepository};
 pub use project::{ProjectDeletePreview, ProjectRepository};
 pub use recent::RecentItemsRepository;

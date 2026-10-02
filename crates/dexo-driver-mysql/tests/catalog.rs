@@ -342,3 +342,61 @@ async fn foreign_keys_are_listed_from_and_to_a_table() {
         "id,region".into()
     )));
 }
+
+/// Table and column comments come with the catalog, as each object's `comment`.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn comments_come_with_tables_and_columns() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "CREATE TABLE noted (id INT, total DECIMAL(10,2) COMMENT 'Gross, in cents') COMMENT 'One row per paid checkout'",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let catalog = session.catalog().unwrap();
+    let options = CatalogListOptions::default();
+    let top = catalog.list_children(None, &options).await.unwrap().objects;
+    let tables = catalog
+        .list_children(Some(&top[0].id), &options)
+        .await
+        .unwrap()
+        .objects;
+    let table = tables
+        .iter()
+        .find(|object| object.qualified_name.object() == "noted")
+        .unwrap();
+    assert_eq!(
+        table.attributes.get("comment"),
+        Some(&serde_json::json!("One row per paid checkout"))
+    );
+    let columns = catalog
+        .list_children(Some(&table.id), &options)
+        .await
+        .unwrap()
+        .objects;
+    let comment = |name: &str| {
+        columns
+            .iter()
+            .find(|object| object.qualified_name.object() == name)
+            .and_then(|object| object.attributes.get("comment").cloned())
+    };
+    assert_eq!(
+        comment("noted.total"),
+        Some(serde_json::json!("Gross, in cents"))
+    );
+    assert_eq!(comment("noted.id"), None);
+}

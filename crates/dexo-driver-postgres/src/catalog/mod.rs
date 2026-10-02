@@ -231,7 +231,8 @@ impl PostgresSession {
         let classes = self
             .client
             .query(
-                "SELECT c.oid::bigint, c.relname::text, c.relkind::text, pg_get_partkeydef(c.oid)
+                "SELECT c.oid::bigint, c.relname::text, c.relkind::text, pg_get_partkeydef(c.oid),
+                        obj_description(c.oid, 'pg_class')
                  FROM pg_class c
                  WHERE c.relnamespace = $1::bigint::oid
                    AND c.relkind IN ('r','p','f','v','m','S')
@@ -246,6 +247,7 @@ impl PostgresSession {
             let name: String = row.get(1);
             let relkind: String = row.get(2);
             let partkey: Option<String> = row.get(3);
+            let comment: Option<String> = row.get(4);
             let mut object = CatalogObject::new(
                 pg_id(relkind_key(&relkind), oid),
                 relkind_to_kind(&relkind),
@@ -257,6 +259,9 @@ impl PostgresSession {
             if let Some(partkey) = partkey.filter(|value| !value.is_empty()) {
                 object = object
                     .with_attribute("driver.postgres.partition_key", serde_json::json!(partkey));
+            }
+            if let Some(comment) = comment.filter(|value| !value.trim().is_empty()) {
+                object = object.with_attribute("comment", serde_json::json!(comment));
             }
             objects.push(object);
         }
@@ -336,7 +341,8 @@ impl PostgresSession {
         let columns = self
             .client
             .query(
-                "SELECT a.attnum::bigint, a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull
+                "SELECT a.attnum::bigint, a.attname::text, format_type(a.atttypid, a.atttypmod), a.attnotnull,
+                        col_description(a.attrelid, a.attnum)
                  FROM pg_attribute a
                  WHERE a.attrelid = $1::bigint::oid AND a.attnum > 0 AND NOT a.attisdropped
                  ORDER BY a.attnum",
@@ -349,17 +355,20 @@ impl PostgresSession {
             let name: String = row.get(1);
             let type_name: String = row.get(2);
             let not_null: bool = row.get(3);
-            objects.push(
-                CatalogObject::new(
-                    pg_id("column", format!("{relid}.{attnum}")),
-                    ObjectKind::Column,
-                    QualifiedName::new(Some(catalog), Some(schema), format!("{relation}.{name}")),
-                    Some(parent.clone()),
-                )
-                .with_attribute("driver.postgres.attnum", serde_json::json!(attnum))
-                .with_attribute("type", serde_json::json!(type_name))
-                .with_attribute("driver.postgres.not_null", serde_json::json!(not_null)),
-            );
+            let comment: Option<String> = row.get(4);
+            let mut column = CatalogObject::new(
+                pg_id("column", format!("{relid}.{attnum}")),
+                ObjectKind::Column,
+                QualifiedName::new(Some(catalog), Some(schema), format!("{relation}.{name}")),
+                Some(parent.clone()),
+            )
+            .with_attribute("driver.postgres.attnum", serde_json::json!(attnum))
+            .with_attribute("type", serde_json::json!(type_name))
+            .with_attribute("driver.postgres.not_null", serde_json::json!(not_null));
+            if let Some(comment) = comment.filter(|value| !value.trim().is_empty()) {
+                column = column.with_attribute("comment", serde_json::json!(comment));
+            }
+            objects.push(column);
         }
 
         let indexes = self

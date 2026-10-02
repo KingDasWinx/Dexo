@@ -353,3 +353,72 @@ async fn foreign_keys_are_listed_from_and_to_a_table() {
         "id,region".into()
     )));
 }
+
+/// Table and column comments come with the catalog, as each object's `comment`.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn comments_come_with_tables_and_columns() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE noted (id int, total numeric)",
+        "COMMENT ON TABLE noted IS 'One row per paid checkout'",
+        "COMMENT ON COLUMN noted.total IS 'Gross, in cents'",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let catalog = session.catalog().unwrap();
+    let options = CatalogListOptions::default();
+    let mut level = vec![None];
+    let mut found = Vec::new();
+    for _ in 0..4 {
+        let mut next = Vec::new();
+        for parent in &level {
+            let listed = catalog
+                .list_children(parent.as_ref(), &options)
+                .await
+                .unwrap();
+            for object in listed.objects {
+                if object.qualified_name.object().starts_with("noted") {
+                    found.push(object.clone());
+                }
+                if matches!(object.kind, ObjectKind::Catalog | ObjectKind::Schema)
+                    || object.qualified_name.object() == "noted"
+                {
+                    next.push(Some(object.id));
+                }
+            }
+        }
+        level = next;
+    }
+    let comment = |name: &str| {
+        found
+            .iter()
+            .find(|object| object.qualified_name.object() == name)
+            .and_then(|object| object.attributes.get("comment").cloned())
+    };
+    assert_eq!(
+        comment("noted"),
+        Some(serde_json::json!("One row per paid checkout"))
+    );
+    assert_eq!(
+        comment("noted.total"),
+        Some(serde_json::json!("Gross, in cents"))
+    );
+    assert_eq!(comment("noted.id"), None);
+}

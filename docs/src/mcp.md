@@ -38,8 +38,8 @@ Every database tool takes an optional `connection`; it is required only when the
 | --- | --- | --- |
 | `list_connections` | The profile's connections, their environment, and whether writes are possible | Always |
 | `catalog_list` | Children of a catalog node, live from the server | Always |
-| `catalog_search` | Table, view and column names in the connection's indexed catalog | Always |
-| `object_describe` | Columns of a table or view, with type and key role | Always |
+| `catalog_search` | Tables, views and columns by name, or by what their notes say, in the connection's indexed catalog | Always |
+| `object_describe` | Columns of a table or view, with type, key role and note, and the table's own note | Always |
 | `object_get_ddl` | The object's CREATE statement | Always |
 | `object_relationships` | What the object depends on and what depends on it | Always |
 | `data_read` | One page of a table or view, without SQL | Always |
@@ -60,6 +60,10 @@ A `--deny-tool` rule hides any of them. Each tool carries a description, a typed
 A statement is parsed before anything reaches the server. It must be exactly one `SELECT`, `WITH … SELECT`, `VALUES`, `TABLE` or plain `EXPLAIN`; `SELECT … INTO`, locking clauses, `EXPLAIN ANALYZE`, data-modifying CTEs and known side-effecting functions are refused. Every relation it names must be allowed after completing the name; one denied or unknown relation hides the whole statement.
 
 The read then runs inside `BEGIN READ ONLY … ROLLBACK`, which is what stops a function that writes. It returns at most the profile's `max_rows` rows and `max_bytes` bytes, as a Markdown table plus the same rows in `structuredContent`; a cut result says so. `data_read` pages through a table the same way and returns `next_offset` when there is more. A client that cancels a call stops only that call: the query is cancelled and the transaction rolled back.
+
+## Notes
+
+A note says what a table or a column means: one row per paid checkout, amounts in cents, a column nothing reads any more. It is written in the TUI's object inspector (`n`) and kept per connection; without one, the database's own comment (`COMMENT ON`, MySQL's `COMMENT`) is shown and marked as such. `object_describe` returns the notes, and `catalog_search` finds an object by its note -- among the objects the profile lets the agent see, so a note never reveals a hidden one.
 
 ## Writes
 

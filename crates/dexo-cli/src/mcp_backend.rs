@@ -66,6 +66,17 @@ impl McpBackend for CliMcpBackend {
         Ok(objects)
     }
 
+    fn notes(
+        &self,
+        connection: &str,
+    ) -> Result<std::collections::HashMap<String, String>, AppError> {
+        let saved = self.saved(connection)?;
+        let db = Database::open(&self.database).map_err(storage)?;
+        dexo_storage::ObjectNoteRepository::new(db.connection())
+            .for_connection(&saved.id.0.to_string())
+            .map_err(storage)
+    }
+
     fn schema_snapshot(&self, name: &str) -> Result<Option<SchemaSnapshot>, AppError> {
         let db = Database::open(&self.database).map_err(storage)?;
         SchemaSnapshotStore::new(db.connection())

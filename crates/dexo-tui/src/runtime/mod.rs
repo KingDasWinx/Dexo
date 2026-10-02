@@ -365,6 +365,48 @@ impl WorkbenchRuntime {
                 sql,
                 parameters,
             } => self.count_rows(session, operation, sql, parameters).await,
+            crate::Effect::LoadNote {
+                connection_id,
+                object,
+            } => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let note = AppPaths::discover()
+                        .ok()
+                        .and_then(|paths| Database::open(&paths.database).ok())
+                        .and_then(|db| {
+                            dexo_storage::ObjectNoteRepository::new(db.connection())
+                                .get(&connection_id, &object)
+                                .ok()
+                                .flatten()
+                        });
+                    let _ = action_tx.blocking_send(Action::NoteLoaded { object, note });
+                });
+            }
+            crate::Effect::SaveNote {
+                connection_id,
+                object,
+                note,
+            } => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let saved = AppPaths::discover()
+                        .map_err(|error| error.to_string())
+                        .and_then(|paths| {
+                            Database::open(&paths.database).map_err(|error| error.to_string())
+                        })
+                        .and_then(|db| {
+                            dexo_storage::ObjectNoteRepository::new(db.connection())
+                                .set(&connection_id, &object, &note)
+                                .map_err(|error| error.to_string())
+                        });
+                    let message = match saved {
+                        Ok(()) => format!("Saved the note on {object}."),
+                        Err(error) => format!("The note was not saved: {error}"),
+                    };
+                    let _ = action_tx.blocking_send(Action::Notice(message));
+                });
+            }
             crate::Effect::DiscoverDocker => {
                 let action_tx = self.action_tx.clone();
                 tokio::task::spawn_blocking(move || {

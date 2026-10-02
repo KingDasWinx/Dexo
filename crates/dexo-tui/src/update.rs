@@ -1087,6 +1087,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.inspector.effective_privileges = effective_privileges;
                 model.inspector.restrictions = restrictions;
                 model.inspector.error = None;
+                model.inspector.note = None;
+                model.inspector.editing_note = None;
+                if let (Some(object), Some(connection_id)) =
+                    (model.inspector.note_key(), active_connection_uuid(model))
+                {
+                    return vec![Effect::LoadNote {
+                        connection_id,
+                        object,
+                    }];
+                }
             }
             Vec::new()
         }
@@ -1201,6 +1211,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
         Action::OpenRelatedPicker => open_related_picker(model),
+        Action::NoteLoaded { object, note } => {
+            if model.inspector.note_key().as_deref() == Some(object.as_str()) {
+                model.inspector.note = note;
+            }
+            Vec::new()
+        }
         Action::OpenSaveQuery => open_save_query(model),
         Action::OpenSavedQueries => {
             if model.project_id.is_empty() {
@@ -3462,7 +3478,52 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.inspector.open {
+        use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+        if let Some((input, focus)) = model.inspector.editing_note.as_mut() {
+            return match footer_key(focus, &key) {
+                FooterKey::Submit => {
+                    let note = input.as_str().trim().to_string();
+                    model.inspector.editing_note = None;
+                    match (model.inspector.note_key(), active_connection_uuid(model)) {
+                        (Some(object), Some(connection_id)) => {
+                            model.inspector.note =
+                                Some(note.clone()).filter(|note| !note.is_empty());
+                            vec![Effect::SaveNote {
+                                connection_id,
+                                object,
+                                note,
+                            }]
+                        }
+                        _ => {
+                            model
+                                .messages
+                                .warn("A note belongs to a saved connection's object.".into());
+                            Vec::new()
+                        }
+                    }
+                }
+                FooterKey::Cancel => {
+                    model.inspector.editing_note = None;
+                    Vec::new()
+                }
+                FooterKey::Moved => Vec::new(),
+                FooterKey::Pass => {
+                    if *focus == FooterFocus::Input {
+                        input.handle_key(key);
+                    }
+                    Vec::new()
+                }
+            };
+        }
         return match key.code {
+            KeyCode::Char('n') if model.inspector.object.is_some() => {
+                let current = model.inspector.note.clone().unwrap_or_default();
+                model.inspector.editing_note = Some((
+                    crate::widgets::text_input::TextInput::new(current),
+                    FooterFocus::Input,
+                ));
+                Vec::new()
+            }
             KeyCode::Esc => {
                 model.inspector.open = false;
                 Vec::new()
@@ -9272,6 +9333,72 @@ mod tests {
         assert_eq!(connected(&mut model, "prod", 1), "Connected to prod");
         assert_eq!(connected(&mut model, "demo", 2), "the URL's password shows");
         assert!(model.startup_warning.is_none());
+    }
+
+    /// The inspector shows the note on an object -- the person's, else the database's
+    /// comment -- and `n` writes one for the connection it belongs to.
+    #[test]
+    fn the_inspector_shows_and_writes_notes() {
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut model = Model::default();
+        model.connections.load_profiles(vec![ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(4)),
+            None,
+            "shop",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h"}),
+            SecretRef::new("r".into()),
+        )]);
+        model.connection.name = "shop".into();
+        model.inspector.open = true;
+        model.inspector.qualified_name = "shop.public.orders".into();
+        model.inspector.object = Some(
+            dexo_driver_api::CatalogObject::new(
+                dexo_driver_api::ObjectId::new("orders"),
+                dexo_driver_api::ObjectKind::Table,
+                dexo_driver_api::QualifiedName::new(Some("shop"), Some("public"), "orders"),
+                None,
+            )
+            .with_attribute("comment", serde_json::json!("orders placed online")),
+        );
+        let screen = crate::render::render_to_string(&model, 120, 30);
+        assert!(
+            screen.contains("orders placed online (database comment)"),
+            "{screen}"
+        );
+        update(
+            &mut model,
+            Action::NoteLoaded {
+                object: "shop.public.orders".into(),
+                note: Some("One row per checkout.".into()),
+            },
+        );
+        assert!(
+            crate::render::render_to_string(&model, 120, 30)
+                .contains("note: One row per checkout.")
+        );
+        update(&mut model, key(KeyCode::Char('n')));
+        for ch in " Paid only.".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        let effects = update(&mut model, key(KeyCode::Enter));
+        let connection = uuid::Uuid::from_u128(4).to_string();
+        assert!(
+            matches!(
+                effects.as_slice(),
+                [Effect::SaveNote { connection_id, object, note }]
+                    if *connection_id == connection
+                        && object == "shop.public.orders"
+                        && note == "One row per checkout. Paid only."
+            ),
+            "{effects:?}"
+        );
+        assert_eq!(
+            model.inspector.note.as_deref(),
+            Some("One row per checkout. Paid only.")
+        );
     }
 
     /// Agent Activity lists a waiting write with its SQL; approving takes a deliberate

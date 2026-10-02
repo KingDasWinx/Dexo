@@ -368,6 +368,11 @@ pub enum Action {
     SavedQueriesLoaded(Result<Vec<dexo_storage::SavedQuery>, String>),
     /// A save, rename or delete finished: what to say about it.
     SavedQueryDone(Result<String, String>),
+    /// The note on an object, read from the database.
+    NoteLoaded {
+        object: String,
+        note: Option<String>,
+    },
     /// `f` on a row: list the foreign keys from and to its table.
     OpenRelatedPicker,
     ForeignKeysLoaded {
@@ -747,6 +752,16 @@ pub enum Effect {
     },
     /// Look for databases running in Docker.
     DiscoverDocker,
+    LoadNote {
+        connection_id: String,
+        object: String,
+    },
+    /// Writes the note; a blank one removes it.
+    SaveNote {
+        connection_id: String,
+        object: String,
+        note: String,
+    },
     /// A person's answer to a write waiting under an asking grant.
     SettleApproval {
         id: uuid::Uuid,

@@ -10,4 +10,11 @@ pub trait McpBackend: Send + Sync {
     /// The connection's indexed catalog; the first call on a connection may build it.
     async fn catalog_snapshot(&self, connection: &str) -> Result<Vec<CatalogObject>, AppError>;
     fn schema_snapshot(&self, name: &str) -> Result<Option<SchemaSnapshot>, AppError>;
+    /// The notes people wrote on the connection's objects, by qualified name.
+    fn notes(
+        &self,
+        _connection: &str,
+    ) -> Result<std::collections::HashMap<String, String>, AppError> {
+        Ok(std::collections::HashMap::new())
+    }
 }

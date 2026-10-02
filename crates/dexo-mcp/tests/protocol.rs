@@ -704,3 +704,54 @@ async fn an_asking_grant_waits_for_a_person() {
     let now = dexo_mcp::tools_write::now_secs();
     assert!(ledger.pending_approvals(now).is_empty());
 }
+
+/// E2: notes say what a table and its columns mean -- the person's note, else the
+/// database's comment -- in object_describe and catalog_search, which also finds a
+/// table by its note; a hidden table's note is never found.
+#[tokio::test]
+async fn notes_tell_agents_what_the_schema_means() {
+    let mut objects = catalog();
+    for object in &mut objects {
+        if object.id.as_str() == "users.id" {
+            *object = object
+                .clone()
+                .with_attribute("comment", json!("Surrogate key, never shown to people"));
+        }
+    }
+    let mut backend = FakeBackend::with_session("local", users().with_catalog(objects.clone()));
+    backend.catalog = objects;
+    backend.notes = [
+        (
+            "db.public.users",
+            "One row per customer account; closed accounts stay.",
+        ),
+        (
+            "db.public.secrets",
+            "Customer passwords and payment tokens.",
+        ),
+    ]
+    .into_iter()
+    .map(|(object, note)| (object.to_string(), note.to_string()))
+    .collect();
+    let (mut client, _, _) = client_with(backend).await;
+    let described = client
+        .call("object_describe", json!({"name": "users"}))
+        .await;
+    let described = text(&described);
+    assert!(
+        described.contains("One row per customer account"),
+        "{described}"
+    );
+    assert!(
+        described.contains("Surrogate key, never shown to people (database comment)"),
+        "{described}"
+    );
+    let found = client
+        .call("catalog_search", json!({"query": "customer account"}))
+        .await;
+    assert!(text(&found).contains("db.public.users"), "{}", text(&found));
+    let hidden = client
+        .call("catalog_search", json!({"query": "payment tokens"}))
+        .await;
+    assert!(!text(&hidden).contains("secrets"), "{}", text(&hidden));
+}

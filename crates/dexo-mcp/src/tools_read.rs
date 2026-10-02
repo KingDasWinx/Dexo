@@ -121,10 +121,28 @@ async fn find_visible(
     .ok_or_else(hidden)
 }
 
+/// What people say an object is: their note, or else the database's own comment.
+pub(crate) fn note_of(
+    object: &CatalogObject,
+    notes: &std::collections::HashMap<String, String>,
+) -> Option<String> {
+    notes
+        .get(&object.qualified_name.display_unquoted())
+        .cloned()
+        .or_else(|| {
+            object
+                .attributes
+                .get("comment")
+                .and_then(Value::as_str)
+                .map(|comment| format!("{comment} (database comment)"))
+        })
+}
+
 async fn describe(
     service: &McpService,
     session: &dyn Session,
     target: &ObjectRef,
+    notes: &std::collections::HashMap<String, String>,
 ) -> Result<CallToolResult, AppError> {
     let reader = catalog_of(session)?;
     let object = find_visible(service, reader, target).await?;
@@ -159,15 +177,23 @@ async fn describe(
                 .and_then(Value::as_str)
                 .unwrap_or_default()
                 .to_string();
-            vec![name, kind, role.to_string()]
+            let note = note_of(column, notes).unwrap_or_default();
+            vec![name, kind, role.to_string(), note]
         })
         .collect();
-    let mut page = RowsPage::new(["column", "type", "key"].map(String::from).to_vec(), rows);
-    page.title = Some(format!(
+    let mut page = RowsPage::new(
+        ["column", "type", "key", "note"].map(String::from).to_vec(),
+        rows,
+    );
+    let heading = format!(
         "### {} ({:?})",
         object.qualified_name.display_unquoted(),
         object.kind
-    ));
+    );
+    page.title = Some(match note_of(&object, notes) {
+        Some(note) => format!("{heading}\n\n{note}"),
+        None => heading,
+    });
     Ok(rows_result(&page))
 }
 
@@ -401,14 +427,49 @@ impl DexoMcpServer {
             .into_iter()
             .filter(|object| self.inner.service.visible(object))
             .collect();
+        let notes = self
+            .inner
+            .router
+            .backend()
+            .notes(&slot.meta.name)
+            .unwrap_or_default();
         let limit = input.limit.unwrap_or(50).clamp(1, 200) as usize;
-        let hits: Vec<CatalogObject> = SearchService::from_objects(visible)
+        let mut hits: Vec<CatalogObject> = SearchService::from_objects(visible.clone())
             .search(&input.query)
             .into_iter()
             .map(|hit| hit.object)
             .take(limit)
             .collect();
-        objects_result(&hits)
+        // An object whose note says what was asked for is found by its meaning too --
+        // among the visible ones only, so a note never shows what the profile hides.
+        let wanted = input.query.trim().to_lowercase();
+        if !wanted.is_empty() {
+            for object in visible {
+                if hits.len() >= limit {
+                    break;
+                }
+                let says = note_of(&object, &notes)
+                    .is_some_and(|note| note.to_lowercase().contains(&wanted));
+                if says && hits.iter().all(|hit| hit.id != object.id) {
+                    hits.push(object);
+                }
+            }
+        }
+        let rows = hits
+            .iter()
+            .map(|object| {
+                vec![
+                    object.id.as_str().to_string(),
+                    format!("{:?}", object.kind),
+                    object.qualified_name.display_unquoted(),
+                    note_of(object, &notes).unwrap_or_default(),
+                ]
+            })
+            .collect();
+        rows_result(&RowsPage::new(
+            ["id", "kind", "name", "note"].map(String::from).to_vec(),
+            rows,
+        ))
     }
 
     /// Columns (with type and key role) of one table or view.
@@ -419,7 +480,13 @@ impl DexoMcpServer {
             Err(result) => return result,
         };
         let target = lease.meta.qualify(&ObjectRef::parse(&input.name).path);
-        let outcome = describe(&self.inner.service, lease.session(), &target).await;
+        let notes = self
+            .inner
+            .router
+            .backend()
+            .notes(&lease.meta.name)
+            .unwrap_or_default();
+        let outcome = describe(&self.inner.service, lease.session(), &target, &notes).await;
         finish(&mut lease, outcome)
     }
 

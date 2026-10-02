@@ -575,6 +575,10 @@ fn properties_tab_body(model: &Model) -> String {
     }
     if let Some(object) = &model.inspector.object {
         lines.push(format!("kind: {}", object.kind.as_str()));
+        match model.inspector.shown_note() {
+            Some(note) => lines.push(format!("note: {note}")),
+            None => lines.push("note: none yet; n writes one".into()),
+        }
     }
     if !model.inspector.dependencies.is_empty() {
         lines.push(format!(
@@ -2001,7 +2005,18 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     };
     let mut lines: Vec<String> = body.lines().map(str::to_string).collect();
     lines.push(String::new());
-    lines.push("  up/down scroll  esc close".into());
+    match &model.inspector.editing_note {
+        Some((input, focus)) => {
+            lines.push(
+                input.inline_line("note: ", *focus == crate::widgets::form::FooterFocus::Input),
+            );
+            lines.push(crate::widgets::form::footer_line("Save", *focus));
+        }
+        None if model.inspector.object.is_some() => {
+            lines.push("  up/down scroll  n note  esc close".into())
+        }
+        None => lines.push("  up/down scroll  esc close".into()),
+    }
     let max_scroll = lines
         .len()
         .saturating_sub((popup.height.saturating_sub(2) as usize).max(1));

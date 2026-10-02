@@ -270,7 +270,7 @@ impl MysqlSession {
         let mut restrictions = Vec::new();
         let tables: Vec<mysql_async::Row> = self
             .exec_rows(
-                "SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION
+                "SELECT TABLE_NAME, TABLE_TYPE, ENGINE, TABLE_COLLATION, TABLE_COMMENT
                  FROM information_schema.TABLES WHERE TABLE_SCHEMA = ?",
                 (schema.to_string(),),
             )
@@ -280,6 +280,7 @@ impl MysqlSession {
             let table_type = cell_string(&row, 1);
             let engine = cell_opt(&row, 2);
             let collation = cell_opt(&row, 3);
+            let comment = cell_string(&row, 4);
             let is_view = table_type.eq_ignore_ascii_case("VIEW")
                 || table_type.eq_ignore_ascii_case("SYSTEM VIEW");
             let kind = if is_view {
@@ -300,6 +301,10 @@ impl MysqlSession {
             if let Some(collation) = collation {
                 object =
                     object.with_attribute("driver.mysql.collation", serde_json::json!(collation));
+            }
+            // A view's comment is the word VIEW; only a table's says anything.
+            if !is_view && !comment.trim().is_empty() {
+                object = object.with_attribute("comment", serde_json::json!(comment));
             }
             objects.push(object);
         }
@@ -430,7 +435,8 @@ impl MysqlSession {
         let mut restrictions = Vec::new();
         let columns: Vec<mysql_async::Row> = self
             .exec_rows(
-                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, GENERATION_EXPRESSION, EXTRA, COLLATION_NAME
+                "SELECT COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, GENERATION_EXPRESSION, EXTRA, COLLATION_NAME,
+                        COLUMN_COMMENT
                  FROM information_schema.COLUMNS
                  WHERE TABLE_SCHEMA = ? AND TABLE_NAME = ?
                  ORDER BY ORDINAL_POSITION",
@@ -444,6 +450,7 @@ impl MysqlSession {
             let generated = cell_opt(&row, 3);
             let extra = cell_string(&row, 4);
             let collation = cell_opt(&row, 5);
+            let comment = cell_string(&row, 6);
             let mut object = CatalogObject::new(
                 my_id("column", format!("{schema}/{table}/{name}")),
                 ObjectKind::Column,
@@ -462,6 +469,9 @@ impl MysqlSession {
                     "driver.mysql.generation_expression",
                     serde_json::json!(generated),
                 );
+            }
+            if !comment.trim().is_empty() {
+                object = object.with_attribute("comment", serde_json::json!(comment));
             }
             objects.push(object);
         }
