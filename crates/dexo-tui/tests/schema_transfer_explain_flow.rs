@@ -201,8 +201,29 @@ fn editor_with_cursor_in_second_statement() -> (String, usize) {
 async fn explain_uses_statement_at_editor_cursor() {
     let (sql, cursor) = editor_with_cursor_in_second_statement();
     assert_eq!(
-        statement_sql(&sql, cursor).as_deref(),
+        statement_sql(&sql, cursor, dexo_sql::Dialect::Postgres).as_deref(),
         Some("SELECT * FROM orders")
+    );
+    // Split as the connection's dialect reads it: a SQLite `[a;b]` is one name, and a
+    // MySQL `#` comment's apostrophe opens no string.
+    assert_eq!(
+        statement_sql(
+            "select [a;b] from t; select 2",
+            3,
+            dexo_sql::Dialect::Sqlite
+        )
+        .as_deref(),
+        Some("select [a;b] from t")
+    );
+    let mysql = "select 1; # it's\nselect 2;\nselect 3";
+    assert_eq!(
+        statement_sql(
+            mysql,
+            mysql.find("select 2").unwrap(),
+            dexo_sql::Dialect::Mysql
+        )
+        .as_deref(),
+        Some("select 2")
     );
 }
 

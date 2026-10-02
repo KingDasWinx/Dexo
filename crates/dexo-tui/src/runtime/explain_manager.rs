@@ -1,9 +1,9 @@
 use dexo_driver_api::{ExplainRequest, Session};
-use dexo_sql::statement_at;
+use dexo_sql::{Dialect, statement_at_in};
 
 /// The statement under the cursor -- the one Run would take -- without its `;`.
-pub fn statement_sql(document: &str, cursor: usize) -> Option<String> {
-    let span = statement_at(document, cursor)?;
+pub fn statement_sql(document: &str, cursor: usize, dialect: Dialect) -> Option<String> {
+    let span = statement_at_in(document, cursor, dialect)?;
     let sql = document[span.byte_range].trim().trim_end_matches(';');
     (!sql.is_empty()).then(|| sql.to_string())
 }
@@ -11,6 +11,7 @@ pub fn statement_sql(document: &str, cursor: usize) -> Option<String> {
 /// What one explain was asked for, and where its plan goes.
 pub struct ExplainRun {
     pub cursor: usize,
+    pub dialect: Dialect,
     pub analyze: bool,
     pub document: String,
     pub operation: crate::runtime::OperationId,
@@ -24,11 +25,12 @@ pub async fn run_live(
 ) {
     let ExplainRun {
         cursor,
+        dialect,
         analyze,
         document,
         operation,
     } = run;
-    let statement = statement_sql(text, cursor);
+    let statement = statement_sql(text, cursor, dialect);
     let outcome = match (&statement, session.explain()) {
         (None, _) => Err("there is no statement under the cursor to explain".to_string()),
         (Some(_), None) => Err("explain is unavailable for this connection".into()),

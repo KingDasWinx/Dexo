@@ -6,7 +6,7 @@ use dexo_driver_api::{
     DriverError, DriverErrorCategory, QueryEvent, QueryId, QueryRequest, Session,
 };
 use dexo_runtime::RuntimeTaskId;
-use dexo_sql::{StatementEffect, split_statements};
+use dexo_sql::{StatementEffect, split_statements_in};
 
 use crate::action::{Action, ScriptRequest};
 use crate::runtime::{OperationId, OperationKey};
@@ -40,7 +40,7 @@ pub async fn run_script(
             }
             continue;
         }
-        let effect = split_statements(sql)
+        let effect = split_statements_in(sql, request.dialect)
             .first()
             .map(|span| span.effect)
             .unwrap_or(StatementEffect::Unknown);

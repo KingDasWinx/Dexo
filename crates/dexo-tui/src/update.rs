@@ -5096,6 +5096,7 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
     effects.push(Effect::StartScript(crate::action::ScriptRequest {
         key,
         statements,
+        dialect,
         policy: model.script_policy,
         parameters: model
             .editor
@@ -6011,6 +6012,7 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
     vec![Effect::StartScript(crate::action::ScriptRequest {
         key,
         statements: vec![sql],
+        dialect: crate::screens::editor::editor_dialect(model),
         policy: model.script_policy,
         parameters,
         timeout: std::time::Duration::from_secs(30),
@@ -6614,10 +6616,11 @@ fn analyze_refused(model: &mut Model) -> bool {
         .take(document.cursor())
         .map(char::len_utf8)
         .sum();
-    let Some(sql) = crate::runtime::explain_manager::statement_sql(&text, cursor) else {
+    let dialect = crate::screens::editor::editor_dialect(model);
+    let Some(sql) = crate::runtime::explain_manager::statement_sql(&text, cursor, dialect) else {
         return false;
     };
-    if dexo_sql::is_read(&sql, crate::screens::editor::editor_dialect(model)) {
+    if dexo_sql::is_read(&sql, dialect) {
         return false;
     }
     let first = sql.lines().next().unwrap_or_default().to_string();
@@ -6671,6 +6674,7 @@ fn explain_effect(model: &mut Model, analyze: bool) -> Vec<Effect> {
     vec![Effect::RunExplain {
         sql,
         cursor,
+        dialect: crate::screens::editor::editor_dialect(model),
         analyze,
         session,
         document: document.id.clone(),

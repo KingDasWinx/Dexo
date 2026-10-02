@@ -298,9 +298,10 @@ fn render_explain_prompt(
         .take(document.cursor())
         .map(char::len_utf8)
         .sum();
-    let statement = dexo_sql::statement_at(&text, cursor)
-        .map(|span| text[span.byte_range].trim().to_string())
-        .unwrap_or_default();
+    let statement =
+        dexo_sql::statement_at_in(&text, cursor, crate::screens::editor::editor_dialect(model))
+            .map(|span| text[span.byte_range].trim().to_string())
+            .unwrap_or_default();
     let width = 64.min(area.width);
     let preview_width = width.saturating_sub(6) as usize;
     let first_line = statement.lines().next().unwrap_or_default();

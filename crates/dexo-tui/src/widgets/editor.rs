@@ -59,7 +59,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     // Vim's Visual-line mode selects whole lines, wherever the cursor is in them.
     let sel = crate::screens::vim::display_selection(model).or_else(|| doc.selection());
     let cursor = doc.cursor();
-    let stmt = current_statement_lines(&text, cursor);
+    let stmt =
+        current_statement_lines(&text, cursor, crate::screens::editor::editor_dialect(model));
     let sel_style = model
         .theme
         .style(Role::Selection, model.capabilities)
@@ -464,9 +465,9 @@ fn highlight_style(kind: dexo_sql::Highlight) -> Style {
     }
 }
 
-fn current_statement_lines(text: &str, cursor: usize) -> Vec<usize> {
+fn current_statement_lines(text: &str, cursor: usize, dialect: dexo_sql::Dialect) -> Vec<usize> {
     let byte = text.chars().take(cursor).map(char::len_utf8).sum();
-    let Some(span) = dexo_sql::statement_at(text, byte) else {
+    let Some(span) = dexo_sql::statement_at_in(text, byte, dialect) else {
         return Vec::new();
     };
     let start = text[..span.byte_range.start].matches('\n').count();

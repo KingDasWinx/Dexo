@@ -302,6 +302,7 @@ fn script_request(sql: &str) -> ScriptRequest {
     ScriptRequest {
         key: OperationKey::new(OperationId::new(), "session-a", "doc-a", 1),
         statements: statements_for(sql, dexo_app::ExecutionTarget::Document, 0, None),
+        dialect: dexo_sql::Dialect::Postgres,
         policy: ScriptPolicy::StopOnError,
         parameters: Vec::new(),
         timeout: std::time::Duration::from_secs(5),

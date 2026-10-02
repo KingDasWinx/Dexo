@@ -993,7 +993,6 @@ fn run_explain(
     format: OutputFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
-    let sql = dexo_app::explain_service::single_statement(&sql)?.to_string();
     if analyze && !confirm {
         anyhow::bail!("EXPLAIN ANALYZE runs the statement, then rolls it back; pass --confirm");
     }
@@ -1028,6 +1027,12 @@ async fn explain_live(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    // Split as the connection's dialect writes it.
+    let sql = dexo_app::explain_service::single_statement(
+        &sql,
+        dexo_app::dialect_for_driver(&profile.driver),
+    )?
+    .to_string();
     let session = connect_session(&registry, &profile).await?;
     let provider = session
         .explain()

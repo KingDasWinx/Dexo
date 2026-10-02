@@ -578,8 +578,8 @@ pub fn compare_plans(before: &ExplainPlan, after: &ExplainPlan) -> Vec<NodeDelta
 /// The one statement an EXPLAIN covers. A file holding several used to reach the server
 /// whole and come back as Postgres' "cannot insert multiple commands into a prepared
 /// statement".
-pub fn single_statement(sql: &str) -> Result<&str, AppError> {
-    match dexo_sql::split_statements(sql).as_slice() {
+pub fn single_statement(sql: &str, dialect: dexo_sql::Dialect) -> Result<&str, AppError> {
+    match dexo_sql::split_statements_in(sql, dialect).as_slice() {
         [span] => Ok(sql[span.byte_range.clone()].trim().trim_end_matches(';')),
         [] => Err(AppError::new(
             ErrorCategory::Syntax,

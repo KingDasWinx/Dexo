@@ -399,6 +399,7 @@ impl WorkbenchRuntime {
             crate::Effect::RunExplain {
                 sql,
                 cursor,
+                dialect,
                 analyze,
                 session,
                 document,
@@ -430,6 +431,7 @@ impl WorkbenchRuntime {
                 tokio::spawn(async move {
                     let request = explain_manager::ExplainRun {
                         cursor,
+                        dialect,
                         analyze,
                         document,
                         operation,

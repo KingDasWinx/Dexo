@@ -591,6 +591,8 @@ pub enum FocusTarget {
 pub struct ScriptRequest {
     pub key: OperationKey,
     pub statements: Vec<String>,
+    /// How each statement is read, to tell a read from a write.
+    pub dialect: dexo_sql::Dialect,
     pub policy: ScriptPolicy,
     pub parameters: Vec<DbValue>,
     pub timeout: std::time::Duration,
@@ -813,6 +815,8 @@ pub enum Effect {
     RunExplain {
         sql: String,
         cursor: usize,
+        /// How the document is split into statements.
+        dialect: dexo_sql::Dialect,
         analyze: bool,
         session: SessionId,
         /// The document that asked; the plan is its own even if another tab is active
