@@ -138,7 +138,7 @@ dexo query --connection local --sql "select version()"
 | Key | Action |
 | --- | --- |
 | <kbd>Ctrl</kbd>+<kbd>P</kbd> | Command palette |
-| <kbd>Ctrl</kbd>+<kbd>Enter</kbd> | Run the statement under the cursor |
+| <kbd>Ctrl</kbd>+<kbd>Enter</kbd> or <kbd>Ctrl</kbd>+<kbd>J</kbd> | Run the statement under the cursor (<kbd>Ctrl</kbd>+<kbd>J</kbd> wherever the terminal sends <kbd>Ctrl</kbd>+<kbd>Enter</kbd> as <kbd>Enter</kbd>, as tmux does) |
 | <kbd>F1</kbd> | Every key, for the keymap in use (Default, Vim or Emacs) |
 | <kbd>Ctrl</kbd>+<kbd>Q</kbd> | Quit |
 

@@ -56,7 +56,10 @@ fn project_create_opens_the_existing_name_form() {
 
 #[test]
 fn palette_renders_registered_shortcut() {
-    let mut model = Model::default();
+    let mut model = Model {
+        keys_disambiguated: true,
+        ..Model::default()
+    };
     update(&mut model, Action::OpenPalette);
     update(&mut model, Action::PaletteQuery("execute statement".into()));
     let view = dexo_tui::render::render_to_string(&model, 100, 30);

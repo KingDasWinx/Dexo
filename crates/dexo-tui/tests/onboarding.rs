@@ -20,7 +20,11 @@ fn onboarding_explains_the_first_steps() {
     assert!(screen.contains("██████████"));
     assert!(screen.contains("░░░░░░░░░░    ░░░░░░"));
     assert!(screen.contains("Ctrl+P"));
-    assert!(screen.contains("Ctrl+Enter"));
+    // A terminal Dexo knows nothing of may send Ctrl+Enter as Enter: Ctrl+J is named.
+    assert!(screen.contains("Ctrl+J runs the SQL"));
+    model.keys_disambiguated = true;
+    let screen = dexo_tui::render::render_to_string(&model, 80, 24);
+    assert!(screen.contains("Ctrl+Enter runs the SQL"));
     assert!(screen.contains("F1"));
     assert!(screen.contains("adds a connection"));
 }

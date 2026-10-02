@@ -21,4 +21,4 @@ demo  local  public
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-local  Ctrl+Enter run  Ctrl+N new sql             Ctrl+P  F1
+local  Ctrl+J run  Ctrl+N new sql  Ctrl+W close   Ctrl+P  F1

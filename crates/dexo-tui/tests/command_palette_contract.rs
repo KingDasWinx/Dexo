@@ -321,7 +321,7 @@ fn query_commands_expose_one_action_per_execution_scope() {
     assert_eq!(
         actual,
         vec![
-            ("query.execute_statement", Some("Ctrl+Enter")),
+            ("query.execute_statement", Some("Ctrl+J")),
             ("query.execute_selection", None),
             ("query.execute_document", Some("Ctrl+Shift+F10")),
         ]

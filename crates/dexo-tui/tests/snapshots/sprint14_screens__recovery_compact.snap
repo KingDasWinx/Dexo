@@ -21,4 +21,4 @@ default  no connection  —
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-disconnected  Ctrl+Enter run  Ctrl+N new sql      Ctrl+P  F1
+disconnected  Ctrl+J run  Ctrl+N new sql          Ctrl+P  F1

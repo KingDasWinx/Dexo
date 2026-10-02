@@ -613,6 +613,7 @@ profile = "default"
 [editor]
 "alt+s" = "editor.save_query"
 "ctrl+enter" = "query.execute_statement"
+"ctrl+j" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
 "ctrl+f" = "editor.find"
@@ -712,6 +713,7 @@ profile = "vim"
 [editor]
 "alt+s" = "editor.save_query"
 "ctrl+enter" = "query.execute_statement"
+"ctrl+j" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
 "ctrl+f" = "editor.find"
@@ -814,6 +816,7 @@ profile = "emacs"
 [editor]
 "alt+s" = "editor.save_query"
 "ctrl+enter" = "query.execute_statement"
+"ctrl+j" = "query.execute_statement"
 "ctrl+shift+f10" = "query.execute_document"
 "ctrl+space" = "editor.complete"
 "ctrl+f" = "editor.find"
@@ -945,6 +948,10 @@ mod tests {
         ] {
             for (chord, command) in [
                 ("ctrl+enter", "query.execute_statement"),
+                // Ctrl+Enter reaches Dexo only where the terminal tells it from Enter
+                // (tmux by default, GNOME Terminal and Terminal.app do not); Ctrl+J
+                // arrives the same everywhere.
+                ("ctrl+j", "query.execute_statement"),
                 ("ctrl+shift+f10", "query.execute_document"),
                 ("ctrl+f2", "query.cancel"),
             ] {

@@ -470,6 +470,8 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .cloned()
         .unwrap_or_else(crate::entrance::static_logo_frame);
 
+    let run = crate::palette::shortcut_for(model, "query.execute_statement", Some("Ctrl+Enter"))
+        .unwrap_or_default();
     let mut lines: Vec<String> = Vec::new();
     if compact {
         // Eight rows fit inside the popup at 40x12. With the connection hint, the blank
@@ -477,7 +479,7 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.push("DEXO".into());
         lines.push("Welcome".into());
         lines.push("Ctrl+P  palette".into());
-        lines.push("Ctrl+Enter  run".into());
+        lines.push(format!("{run}  run"));
         lines.push("F1  help".into());
         lines.push("n  new connection".into());
         lines.push(String::new());
@@ -494,7 +496,7 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         }
         lines.push(String::new());
         lines.push("Ctrl+P opens the command palette.".into());
-        lines.push("Ctrl+Enter runs the SQL under the cursor.".into());
+        lines.push(format!("{run} runs the SQL under the cursor."));
         lines.push("F1 opens help.".into());
         lines.push("n in the explorer adds a connection (New Connection in Ctrl+P).".into());
         lines.push(String::new());

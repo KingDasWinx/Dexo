@@ -387,9 +387,16 @@ mod tests {
         );
 
         model.set_active_document(0);
+        model.keys_disambiguated = true;
         assert_eq!(
             footer_hint(&model).as_deref(),
             Some("Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close")
+        );
+        // Where the terminal sends Ctrl+Enter as Enter, the key that runs is named.
+        model.keys_disambiguated = false;
+        assert_eq!(
+            footer_hint(&model).as_deref(),
+            Some("Ctrl+J run  Ctrl+N new sql  Ctrl+W close")
         );
     }
 

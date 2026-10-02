@@ -1465,6 +1465,17 @@ pub(crate) fn shortcut_for(
         .iter()
         .filter(|binding| binding.command == id)
         .collect();
+    // A key this terminal cannot send is not the one to show: without the kitty
+    // keyboard protocol Ctrl+Enter arrives as Enter, so Ctrl+J is what runs.
+    let usable: Vec<&crate::keymap::Binding> = bindings
+        .iter()
+        .copied()
+        .filter(|binding| {
+            model.keys_disambiguated
+                || !crate::keymap::chord_label(&binding.chord).contains("+enter")
+        })
+        .collect();
+    let bindings = if usable.is_empty() { bindings } else { usable };
     let here = crate::update::active_key_context(model);
     let bound_here = bindings
         .iter()
