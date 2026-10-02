@@ -202,7 +202,20 @@ fn check(
     start: usize,
     found: &mut Vec<Diagnostic>,
 ) {
-    let mut aliases: HashMap<String, (Option<String>, String)> = HashMap::new();
+    // One map for the whole statement, scopes and all: a name that stands for two
+    // different tables somewhere in it -- `o` in a query and in its subquery -- stands
+    // for neither, and its columns go unchecked.
+    let mut aliases: HashMap<String, Option<(Option<String>, String)>> = HashMap::new();
+    let mut name = |key: String, target: (Option<String>, String)| {
+        aliases
+            .entry(key)
+            .and_modify(|known| {
+                if known.as_ref() != Some(&target) {
+                    *known = None;
+                }
+            })
+            .or_insert(Some(target));
+    };
     for (parts, alias) in &refs.tables {
         let names: Vec<String> = parts
             .iter()
@@ -213,9 +226,9 @@ fn check(
             [schema, table] | [_, schema, table] => (Some(schema.clone()), table.clone()),
             _ => continue,
         };
-        aliases.insert(table.clone(), (schema.clone(), table.clone()));
+        name(table.clone(), (schema.clone(), table.clone()));
         if let Some(alias) = alias {
-            aliases.insert(alias.clone(), (schema.clone(), table.clone()));
+            name(alias.clone(), (schema.clone(), table.clone()));
         }
         let unknown = match &schema {
             None => {
@@ -243,7 +256,12 @@ fn check(
         }
     }
     for (qualifier, column) in &refs.columns {
-        let Some((schema, table)) = aliases.get(&qualifier.value.to_lowercase()) else {
+        let qualifier = qualifier.value.to_lowercase();
+        // A CTE named like a table has the CTE's columns.
+        if refs.ctes.contains(&qualifier) {
+            continue;
+        }
+        let Some(Some((schema, table))) = aliases.get(&qualifier) else {
             continue;
         };
         let Some(columns) = known.columns_of(schema.as_deref(), table) else {
@@ -401,6 +419,8 @@ mod tests {
             "create table fresh (id int); select * from fresh",
             "select c.whatever from customers c",
             "select o.rowid, o.oid, o._rowid_, o.ctid, o.xmin, o.tableoid from orders o",
+            "select o.total from orders o where exists (select 1 from customers o where o.id = 1)",
+            "with orders as (select id, 1 as extra from orders) select orders.extra from orders",
         ] {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
