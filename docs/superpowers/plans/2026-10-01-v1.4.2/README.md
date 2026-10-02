@@ -14,7 +14,7 @@ The spec ships as one release in nine sections. Each section gets its own plan h
 | 6 | [06-agents.md](06-agents.md) | E3, E1, E2, E4, E5 | done |
 | 7 | [07-duckdb.md](07-duckdb.md) | D3 | done |
 | 8 | [08-fixes.md](08-fixes.md) | F1, F2 | in progress |
-| 9 | 09-launch-assets.md | README, GIF, `--help` | last |
+| 9 | [09-launch-assets.md](09-launch-assets.md) | README, GIF, `--help` | in progress |
 
 ## Release-wide constraints
 
