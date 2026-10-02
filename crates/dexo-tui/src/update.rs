@@ -10132,6 +10132,7 @@ fn submit_terminate(model: &mut Model) -> Vec<Effect> {
     }
 }
 
+/// File rows the picker shows: the same count its layout draws.
 fn file_picker_rows(model: &Model) -> usize {
     model
         .height
@@ -10171,6 +10172,20 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Up => {
             model.file_picker.move_up(rows);
+            Vec::new()
+        }
+        KeyCode::PageDown => {
+            model.file_picker.page(1, rows);
+            Vec::new()
+        }
+        KeyCode::PageUp => {
+            model.file_picker.page(-1, rows);
+            Vec::new()
+        }
+        KeyCode::Home | KeyCode::End if model.file_picker.focus == FilePickerFocus::List => {
+            model
+                .file_picker
+                .jump_to_end(key.code == KeyCode::End, rows);
             Vec::new()
         }
         // Every key the name edits with, Ctrl+A and Ctrl+W among them: only the arrows,
@@ -10734,6 +10749,9 @@ fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePi
         &[]
     };
     model.file_picker.open_browser_with_recents(recents);
+    model
+        .file_picker
+        .fit_recents(crate::screens::file_picker::inner_rows(model.height));
     if mode == crate::screens::file_picker::FilePickerMode::Save {
         // The picker only opens for a document that has never been saved, so the file
         // name alone left the field empty every time; the tab's name is the one to offer.

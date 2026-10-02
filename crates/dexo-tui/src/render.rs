@@ -3017,9 +3017,17 @@ fn render_snippets(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
-    let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
-    let list_rows = popup.height.saturating_sub(5).max(4) as usize;
-    let layout = model.file_picker.layout(model.file_picker_mode, list_rows);
+    let popup = centered(
+        area,
+        72,
+        crate::screens::file_picker::popup_height(area.height),
+    );
+    let inner = popup_inner(popup);
+    let layout = model.file_picker.layout(
+        model.file_picker_mode,
+        usize::from(inner.height),
+        usize::from(inner.width),
+    );
     paint_popup(
         frame,
         model,

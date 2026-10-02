@@ -50,9 +50,11 @@ pub enum FilePickerLineKind {
     RecentItem(usize),
     BrowseHeader,
     BrowserEntry(usize),
+    Padding,
     Name,
     Error,
     Footer,
+    Hint,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -61,6 +63,45 @@ pub struct FilePickerLayout {
     pub kinds: Vec<FilePickerLineKind>,
     pub browser_offset: usize,
     pub browser_rows: usize,
+}
+
+/// Recent files the Open picker lists; more pushed the name field and the buttons out
+/// of the dialog.
+const MAX_RECENT: usize = 5;
+/// Rows the picker spends on itself: the folder line, the name, the buttons and a hint.
+const CHROME_ROWS: usize = 4;
+/// Fewest file rows worth showing: below it the recent files give way.
+const MIN_LIST_ROWS: usize = 4;
+
+/// Height of the picker's popup on a terminal `terminal_height` rows tall.
+pub fn popup_height(terminal_height: u16) -> u16 {
+    terminal_height.min(terminal_height.saturating_sub(2).clamp(6, 22))
+}
+
+/// Rows inside the popup's border.
+pub fn inner_rows(terminal_height: u16) -> usize {
+    usize::from(popup_height(terminal_height).saturating_sub(2))
+}
+
+/// `text` cut from the left to fit `width` columns, so the end of a path -- the folder
+/// the user is in -- is what stays.
+fn keep_end(text: &str, width: usize) -> String {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if text.width() <= width {
+        return text.to_string();
+    }
+    let mut kept: Vec<char> = Vec::new();
+    let mut used = 1;
+    for ch in text.chars().rev() {
+        let wide = ch.width().unwrap_or(0);
+        if used + wide > width {
+            break;
+        }
+        used += wide;
+        kept.push(ch);
+    }
+    kept.push('…');
+    kept.iter().rev().collect()
 }
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
@@ -151,7 +192,7 @@ impl FilePicker {
         self.name.clear();
         self.focus = FilePickerFocus::List;
         self.error = None;
-        self.recent_paths = recent.to_vec();
+        self.recent_paths = recent.iter().take(MAX_RECENT).cloned().collect();
         if self.recent_paths.is_empty() {
             self.section = FilePickerSection::Browser;
             self.recent_selected = 0;
@@ -160,6 +201,17 @@ impl FilePicker {
             self.recent_selected = 0;
         }
         self.refresh();
+    }
+
+    /// Drops the recent files that would leave the list fewer than a few rows in a popup
+    /// `inner_rows` tall; on a short terminal the picker is the folder alone.
+    pub fn fit_recents(&mut self, inner_rows: usize) {
+        let room = inner_rows.saturating_sub(CHROME_ROWS + MIN_LIST_ROWS + 2);
+        self.recent_paths.truncate(room);
+        if self.recent_paths.is_empty() {
+            self.section = FilePickerSection::Browser;
+            self.recent_selected = 0;
+        }
     }
 
     pub fn refresh(&mut self) {
@@ -397,8 +449,28 @@ impl FilePicker {
         }
     }
 
-    pub fn layout(&self, mode: FilePickerMode, rows: usize) -> FilePickerLayout {
-        let rows = rows.max(1);
+    /// File rows the popup has room for, `inner_rows` being what is inside its border.
+    /// The key handling scrolls by this too, so the two cannot disagree.
+    pub fn browser_rows(&self, mode: FilePickerMode, inner_rows: usize) -> usize {
+        let recent = if mode == FilePickerMode::Open && !self.recent_paths.is_empty() {
+            self.recent_paths.len() + 2
+        } else {
+            0
+        };
+        let error = usize::from(self.error.is_some());
+        inner_rows
+            .saturating_sub(CHROME_ROWS + recent + error)
+            .max(1)
+    }
+
+    /// The popup's lines for `inner_rows` x `inner_width` cells. Everything but the
+    /// file list has a fixed size, so the name and the buttons are always on screen.
+    pub fn layout(
+        &self,
+        mode: FilePickerMode,
+        inner_rows: usize,
+        inner_width: usize,
+    ) -> FilePickerLayout {
         let show_recent = mode == FilePickerMode::Open && !self.recent_paths.is_empty();
         let mut lines = Vec::new();
         let mut kinds = Vec::new();
@@ -423,21 +495,23 @@ impl FilePicker {
             kinds.push(FilePickerLineKind::BrowseHeader);
         }
 
+        // The end of the path is the folder the user is in: a long one is cut from the
+        // left, not the right.
         let cwd = if self.cwd.as_os_str().is_empty() {
             "Drives".into()
         } else {
-            self.cwd.display().to_string()
+            keep_end(&self.cwd.display().to_string(), inner_width)
         };
-        lines.push(cwd.clone());
+        lines.push(cwd);
         kinds.push(FilePickerLineKind::Cwd);
 
+        let browser_rows = self.browser_rows(mode, inner_rows);
         let browser_offset = crate::palette::scroll_to_selection(
             self.selected,
             self.offset,
             self.entries.len(),
-            rows.max(1),
+            browser_rows,
         );
-        let browser_rows = rows.max(1);
         for (index, entry) in self
             .entries
             .iter()
@@ -457,11 +531,23 @@ impl FilePicker {
             lines.push(format!("{marker}{kind} {}", entry.name));
             kinds.push(FilePickerLineKind::BrowserEntry(index));
         }
+        // A short folder leaves the rows it does not use empty, so the name and the
+        // buttons stay where they are whatever the folder holds.
+        let shown = self
+            .entries
+            .len()
+            .saturating_sub(browser_offset)
+            .min(browser_rows);
+        for _ in shown..browser_rows {
+            lines.push(String::new());
+            kinds.push(FilePickerLineKind::Padding);
+        }
 
-        lines.push(
-            self.name
-                .labeled_line("name: ", self.focus == FilePickerFocus::Name),
-        );
+        lines.push(self.name.labeled_line_within(
+            "name: ",
+            self.focus == FilePickerFocus::Name,
+            inner_width,
+        ));
         kinds.push(FilePickerLineKind::Name);
         if let Some(error) = &self.error {
             lines.push(error.clone());
@@ -469,6 +555,15 @@ impl FilePicker {
         }
         lines.push(footer_line(mode.submit_label(), self.footer_focus()));
         kinds.push(FilePickerLineKind::Footer);
+        let position = if self.entries.is_empty() {
+            String::new()
+        } else {
+            format!("  {}/{}", self.selected + 1, self.entries.len())
+        };
+        lines.push(format!(
+            "Enter choose  Esc cancel  PgUp/PgDn scroll  h hidden{position}"
+        ));
+        kinds.push(FilePickerLineKind::Hint);
 
         FilePickerLayout {
             lines,
@@ -478,8 +573,31 @@ impl FilePicker {
         }
     }
 
-    pub fn lines(&self, mode: FilePickerMode, rows: usize) -> Vec<String> {
-        self.layout(mode, rows).lines
+    pub fn lines(&self, mode: FilePickerMode, inner_rows: usize) -> Vec<String> {
+        self.layout(mode, inner_rows, 70).lines
+    }
+
+    /// Moves the file list by a page, whichever part of the dialog has the focus.
+    pub fn page(&mut self, pages: i32, rows: usize) {
+        self.move_selection(pages * rows.max(1) as i32, rows);
+    }
+
+    /// First or last entry of the list.
+    pub fn jump_to_end(&mut self, last: bool, rows: usize) {
+        if self.section == FilePickerSection::Recent {
+            if last {
+                self.section = FilePickerSection::Browser;
+            } else {
+                self.recent_selected = 0;
+                return;
+            }
+        }
+        let target = if last {
+            self.entries.len().saturating_sub(1)
+        } else {
+            0
+        };
+        self.select_browser(target, rows);
     }
 
     pub fn select_recent(&mut self, index: usize) {

@@ -24,8 +24,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-05** `MAJOR` Most commands of the registry are missing from the palette (not searchable, not listed)
 - [ ] **PC-11** `MAJOR` Alt+Left / Alt+Right switch the document but not the session: header and status bar keep the old connection, no reconnect
 - [ ] **PC-12** `MAJOR` Ctrl+Shift+Tab (Previous Document) does nothing
-- [ ] **PC-20** `MAJOR` Save/Open pickers show the start of the path, so the current folder is never visible
-- [ ] **PC-21** `MAJOR` Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
+- [x] **PC-20** `MAJOR` Save/Open pickers show the start of the path, so the current folder is never visible
+- [x] **PC-21** `MAJOR` Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
 - [ ] **PC-25** `MAJOR` After a crash (kill) the recovered documents lose their connection and the "unsaved" marker
 - [ ] **PC-26** `MAJOR` Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
 - [ ] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
@@ -41,7 +41,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-14** `MINOR` Cancelling a query is reported as an error, and a timeout hits after 30 s with no hint
 - [ ] **PC-15** `MINOR` Error toast never goes away by itself
 - [ ] **PC-16** `MINOR` Confirmation for an unparsable statement is titled "Run destructive statements"
-- [ ] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
+- [x] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
 - [ ] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
 - [ ] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
 - [ ] **PC-27** `MINOR` Tab strip / tab focus details

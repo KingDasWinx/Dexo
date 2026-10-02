@@ -179,6 +179,13 @@ impl TextInput {
         format!("{marker} {label}{}", self.rendered_value(focused))
     }
 
+    /// [`Self::labeled_line`] in `width` display columns, the marker and label included:
+    /// the value scrolls with the cursor instead of running off the dialog.
+    pub fn labeled_line_within(&self, label: &str, focused: bool, width: usize) -> String {
+        let marker = if focused { ">" } else { " " };
+        self.inline_line_within(&format!("{marker} {label}"), focused, width)
+    }
+
     pub fn inline_line(&self, label: &str, focused: bool) -> String {
         format!("{label}{}", self.rendered_value(focused))
     }
