@@ -36,7 +36,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 **Why not rainfrog or another TUI?** See the comparison below. In short: query plans drawn as a tree, schema diff with migrations, import, and agents that write only through grants you make, each write approved if you like, are what we did not find in the others.
 
-**Where do the passwords go?** Into the operating system's keychain, or nowhere when a connection reads it from a command such as `pass` or `op read`. Never into Dexo's database, its config files, its logs or a process's arguments.
+**Where do the passwords go?** Into the operating system's keychain, or nowhere when a connection reads it from a command such as `pass` or `op read`. Never into Dexo's database, its config files or its logs, and never onto the command line of the tools it runs. A password you write into a URL on Dexo's own command line (`dexo postgres://user:secret@…`) can be seen by other users of the machine while Dexo runs, and Dexo says so; `--password-prompt` asks for it instead.
 
 **Does it need Python?** No. Dexo is one binary: Homebrew, Scoop, the installer scripts, `.deb` and `.rpm`, or `cargo install`.
 
@@ -157,7 +157,7 @@ dexo sqlite:///path/to/file.db
 dexo duckdb:///path/to/sales.parquet   # in a build with DuckDB
 ```
 
-`dexo --password-prompt <url>` asks for the password instead of reading it from the URL, where your shell history would keep it.
+`dexo --password-prompt <url>` asks for the password instead of reading it from the URL, where your shell history would keep it and other users could see it while Dexo runs.
 
 Add a connection from the sidebar with <kbd>n</kbd>, or from the command line. Passwords are stored in the operating system's keychain, never in the local database.
 
