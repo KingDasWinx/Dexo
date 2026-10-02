@@ -1656,6 +1656,8 @@ impl EditorDocument {
 pub struct SchemaRun {
     pub operation: crate::runtime::OperationId,
     pub created: Vec<Option<String>>,
+    /// The tables each statement drops.
+    pub dropped: Vec<Vec<String>>,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -1769,8 +1771,13 @@ pub struct Model {
     /// The running script changes the schema: once it ends, the catalog is read again.
     pub schema_run: Option<SchemaRun>,
     /// Tables this session's runs created, temporary ones included, which no catalog
-    /// lists; with the session generation they belong to.
-    pub session_tables: (u64, std::collections::HashSet<String>),
+    /// lists; with the session and its generation they belong to -- every session's
+    /// generation starts at 1, so the generation alone let them leak to another.
+    pub session_tables: (
+        Option<crate::runtime::SessionId>,
+        u64,
+        std::collections::HashSet<String>,
+    ),
     /// Vim mode's state, when the keymap profile is `vim`.
     pub vim: crate::screens::vim::VimState,
     /// Said once the startup connection is ready, where "Connected" would cover it.

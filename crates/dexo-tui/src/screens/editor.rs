@@ -29,9 +29,9 @@ pub struct EditorState {
     pub diagnostics: Vec<dexo_sql::Diagnostic>,
     /// Where the server said the last run failed, in the document and revision it ran.
     pub server_diagnostic: Option<(String, u64, dexo_sql::Diagnostic)>,
-    /// The catalog as the diagnostics read it, and the catalog revision and number of
-    /// session tables it was built with.
-    known: Option<((u64, usize), dexo_sql::KnownObjects)>,
+    /// The catalog as the diagnostics read it, and the catalog revision and the session
+    /// tables (see `session_tables_key`) it was built with.
+    known: Option<((u64, u64), dexo_sql::KnownObjects)>,
     /// Keeps each statement's diagnostics until it changes.
     diagnoser: dexo_sql::Diagnoser,
     pub parameters: Vec<ParameterValue>,
@@ -288,13 +288,24 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
-fn session_tables(model: &Model) -> Vec<&String> {
-    let (generation, tables) = &model.session_tables;
-    if *generation == model.session_generation {
-        tables.iter().collect()
+pub(crate) fn session_tables(model: &Model) -> Vec<&String> {
+    let (session, generation, tables) = &model.session_tables;
+    if *session == model.active_session && *generation == model.session_generation {
+        let mut tables: Vec<&String> = tables.iter().collect();
+        tables.sort();
+        tables
     } else {
         Vec::new()
     }
+}
+
+/// What the known objects were built from on the session's side: its tables, by name --
+/// a count alone missed a table dropped and another created.
+fn session_tables_key(model: &Model) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    session_tables(model).hash(&mut hasher);
+    hasher.finish()
 }
 
 /// Underlines what the document has wrong: what does not parse always, and tables and
@@ -310,7 +321,7 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
     if !complete {
         model.editor.known = None;
     } else if model.editor.known.as_ref().map(|(built, _)| *built)
-        != Some((model.catalog_revision, session_tables(model).len()))
+        != Some((model.catalog_revision, session_tables_key(model)))
     {
         let mut known = dexo_sql::KnownObjects::default();
         for table in session_tables(model) {
@@ -339,7 +350,7 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
                 _ => {}
             }
         }
-        model.editor.known = Some(((model.catalog_revision, session_tables(model).len()), known));
+        model.editor.known = Some(((model.catalog_revision, session_tables_key(model)), known));
     }
     let dialect = editor_dialect(model);
     let editor = &mut model.editor;

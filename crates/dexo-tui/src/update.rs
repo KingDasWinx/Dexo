@@ -5487,14 +5487,18 @@ fn finish_schema_run(
     let Some(run) = model.schema_run.take_if(|run| run.operation == operation) else {
         return Vec::new();
     };
-    if model.session_tables.0 != model.session_generation {
-        model.session_tables = (model.session_generation, Default::default());
+    let owner = (model.active_session, model.session_generation);
+    if (model.session_tables.0, model.session_tables.1) != owner {
+        model.session_tables = (owner.0, owner.1, Default::default());
     }
     let ran = failed_at.unwrap_or(run.created.len());
-    model
-        .session_tables
-        .1
-        .extend(run.created.into_iter().take(ran).flatten());
+    // In order: a table created and dropped in one run is gone at its end.
+    for (created, dropped) in run.created.into_iter().zip(run.dropped).take(ran) {
+        model.session_tables.2.extend(created);
+        for table in dropped {
+            model.session_tables.2.remove(&table);
+        }
+    }
     let sql = model.active_document().text();
     let cursor = model.active_document().byte_cursor();
     crate::screens::editor::refresh_diagnostics(model, &sql, cursor);
@@ -5511,13 +5515,22 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         .iter()
         .map(|sql| dexo_sql::created_table(sql, dialect))
         .collect();
+    let dropped: Vec<Vec<String>> = statements
+        .iter()
+        .map(|sql| dexo_sql::dropped_tables(sql, dialect))
+        .collect();
     let changes_schema = statements.iter().any(|sql| {
         dexo_sql::split_statements_in(sql, dialect)
             .iter()
             .any(|span| span.effect == dexo_sql::StatementEffect::SchemaWrite)
     });
-    model.schema_run = (changes_schema || created.iter().any(Option::is_some))
-        .then_some(crate::model::SchemaRun { operation, created });
+    model.schema_run = (changes_schema || created.iter().any(Option::is_some)).then_some(
+        crate::model::SchemaRun {
+            operation,
+            created,
+            dropped,
+        },
+    );
     let session = model
         .active_session
         .map(|id| id.0.to_string())
@@ -10097,6 +10110,42 @@ mod tests {
             },
         );
         assert!(model.pending_document_close.is_none());
+    }
+
+    /// A table a run created is known to its own session only -- every session's
+    /// generation starts at 1 -- and a DROP takes it away again.
+    #[test]
+    fn session_tables_stay_with_their_session_and_go_when_dropped() {
+        let (a, b) = (
+            crate::runtime::SessionId(uuid::Uuid::from_u128(1)),
+            crate::runtime::SessionId(uuid::Uuid::from_u128(2)),
+        );
+        let mut model = Model {
+            active_session: Some(a),
+            session_generation: 1,
+            ..Model::default()
+        };
+        let run = |model: &mut Model, sql: &str| {
+            let effects = super::launch_script(model, vec![sql.into()]);
+            let key = effects
+                .iter()
+                .find_map(|effect| match effect {
+                    Effect::StartScript(request) => Some(request.key.clone()),
+                    _ => None,
+                })
+                .unwrap();
+            update(model, Action::ScriptFinished { key });
+        };
+        run(&mut model, "create temp table scratch (id int)");
+        assert_eq!(
+            crate::screens::editor::session_tables(&model),
+            [&"scratch".to_string()]
+        );
+        model.active_session = Some(b);
+        assert!(crate::screens::editor::session_tables(&model).is_empty());
+        model.active_session = Some(a);
+        run(&mut model, "drop table scratch");
+        assert!(crate::screens::editor::session_tables(&model).is_empty());
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,
