@@ -300,7 +300,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-58** `MINOR` After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves
 - [ ] **AT-05** `COSMETIC` Savepoint dialog: one title for three actions, lowercase action line, a lot of empty space
 - [ ] **AT-13** `COSMETIC` Long refusal toasts are cut off mid-word without an ellipsis
-- [ ] **AT-26** `COSMETIC` `pg_sleep()` (void) shows as `\x` in the grid
+- [x] **AT-26** `COSMETIC` `pg_sleep()` (void) shows as `\x` in the grid
 - [ ] **AT-47** `COSMETIC` SQLite import errors are driver text: `UNIQUE constraint failed: tbl.id`, `datatype mismatch`
 
 ## MA: MCP and agents

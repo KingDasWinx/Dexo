@@ -192,6 +192,8 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
             DbValue::Text(wire::text_from_sql(raw).ok()?.to_string())
         }
         Type::BYTEA => DbValue::Bytes(wire::bytea_from_sql(raw).to_vec()),
+        // `pg_sleep()` answers with nothing: not bytes to be written as `\x`.
+        Type::VOID => DbValue::Text(String::new()),
         Type::JSON => DbValue::Json(wire::text_from_sql(raw).ok()?.to_string()),
         // jsonb prefixes the document with a format version byte.
         Type::JSONB => match raw.split_first() {
@@ -941,6 +943,12 @@ mod tests {
     use super::{decode_value, numeric_text};
     use dexo_driver_api::DbValue;
     use tokio_postgres::types::Type;
+
+    /// `select pg_sleep(1)` came back as the empty byte string, shown as `\x`.
+    #[test]
+    fn void_is_empty_text() {
+        assert_eq!(decode_value(&Type::VOID, &[]), DbValue::Text(String::new()));
+    }
 
     fn text_of(value: &DbValue) -> String {
         match value {
