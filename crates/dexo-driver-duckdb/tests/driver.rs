@@ -995,3 +995,48 @@ async fn a_refused_commit_leaves_no_transaction() {
     two.begin(TransactionMode::ReadWrite).await.unwrap();
     two.rollback().await.unwrap();
 }
+
+/// A key keeps the case it was written in, `REFERENCES PARENT`, and DuckDB's names ignore
+/// case: the table it points at is found by its own name, both ways, from any case.
+#[tokio::test(flavor = "multi_thread")]
+async fn keys_point_at_tables_whatever_case_they_were_written_in() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keys.duckdb");
+    let session = open(&path, false).await;
+    run(
+        &*session,
+        QueryRequest::write(
+            "create table parent (id int primary key); create table child (p int references PARENT (id))",
+        ),
+    )
+    .await
+    .unwrap();
+    let catalog = session.catalog().unwrap();
+    let id = |kind: &str, name: &str| {
+        dexo_driver_api::ObjectId::new(format!("dk:{kind}:keys/main/{name}"))
+    };
+    assert_eq!(
+        catalog.dependencies(&id("table", "child")).await.unwrap(),
+        [id("table", "parent")]
+    );
+    assert_eq!(
+        catalog.dependents(&id("table", "parent")).await.unwrap(),
+        [id("table", "child")]
+    );
+    let keys = catalog
+        .foreign_keys(&QualifiedName::new(Some("KEYS"), Some("MAIN"), "Parent"))
+        .await
+        .unwrap();
+    assert_eq!(keys.len(), 1);
+    assert_eq!(keys[0].to.object(), "parent");
+    let children = catalog
+        .list_children(Some(&id("table", "child")), &CatalogListOptions::default())
+        .await
+        .unwrap()
+        .objects;
+    let key = children
+        .iter()
+        .find(|object| object.attributes.contains_key("fk_table"))
+        .unwrap();
+    assert_eq!(key.attributes["fk_table"], "parent");
+}

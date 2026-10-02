@@ -57,6 +57,14 @@ pub(crate) fn rows<T>(
         .map_err(map_error)
 }
 
+/// Foreign keys with the table each points at by its own name: a key's text keeps the
+/// case it was written in, `REFERENCES Customers`, and DuckDB's names ignore case.
+const FOREIGN_KEYS: &str = "(SELECT c.*, coalesce(t.table_name, c.referenced_table) AS target
+    FROM duckdb_constraints() c
+    LEFT JOIN duckdb_tables() t ON t.database_name = c.database_name
+        AND t.schema_name = c.schema_name AND lower(t.table_name) = lower(c.referenced_table)
+    WHERE c.constraint_type = 'FOREIGN KEY')";
+
 /// A list column as JSON text, which reads back as strings whatever the list held.
 fn strings(json: &str) -> Vec<String> {
     serde_json::from_str(json).unwrap_or_default()
@@ -206,12 +214,14 @@ impl CatalogReader for DuckdbSession {
             let (database, schema) = place_of(conn, &table)?;
             let found = rows(
                 conn,
-                "SELECT table_name, constraint_name, to_json(constraint_column_names)::VARCHAR,
-                        referenced_table, to_json(referenced_column_names)::VARCHAR
-                 FROM duckdb_constraints()
-                 WHERE constraint_type = 'FOREIGN KEY' AND database_name = $1 AND schema_name = $2
-                   AND (lower(table_name) = lower($3) OR lower(referenced_table) = lower($3))
-                 ORDER BY table_name, constraint_index",
+                &format!(
+                    "SELECT table_name, constraint_name, to_json(constraint_column_names)::VARCHAR,
+                            target, to_json(referenced_column_names)::VARCHAR
+                     FROM {FOREIGN_KEYS}
+                     WHERE lower(database_name) = lower($1) AND lower(schema_name) = lower($2)
+                       AND (lower(table_name) = lower($3) OR lower(target) = lower($3))
+                     ORDER BY table_name, constraint_index"
+                ),
                 params![database, schema, table.object()],
                 |row| {
                     Ok((
@@ -258,16 +268,19 @@ impl DuckdbSession {
             let Some((database, schema, table)) = relation_parts(&parts) else {
                 return Ok(Vec::new());
             };
+            // The id's names are DuckDB's own, exact; a key's target is resolved to one.
             let sql = if outgoing {
-                "SELECT DISTINCT referenced_table FROM duckdb_constraints()
-                 WHERE constraint_type = 'FOREIGN KEY' AND database_name = $1 AND schema_name = $2
-                   AND table_name = $3 ORDER BY 1"
+                format!(
+                    "SELECT DISTINCT target FROM {FOREIGN_KEYS}
+                     WHERE database_name = $1 AND schema_name = $2 AND table_name = $3 ORDER BY 1"
+                )
             } else {
-                "SELECT DISTINCT table_name FROM duckdb_constraints()
-                 WHERE constraint_type = 'FOREIGN KEY' AND database_name = $1 AND schema_name = $2
-                   AND lower(referenced_table) = lower($3) ORDER BY 1"
+                format!(
+                    "SELECT DISTINCT table_name FROM {FOREIGN_KEYS}
+                     WHERE database_name = $1 AND schema_name = $2 AND target = $3 ORDER BY 1"
+                )
             };
-            let names = rows(conn, sql, params![database, schema, table], |row| {
+            let names = rows(conn, &sql, params![database, schema, table], |row| {
                 row.get::<_, String>(0)
             })?;
             Ok(names
@@ -426,12 +439,15 @@ fn relation_children(
     let place = params![database, schema, table];
     let constraints = rows(
         conn,
-        "SELECT constraint_type, constraint_name, to_json(constraint_column_names)::VARCHAR,
-                referenced_table, to_json(referenced_column_names)::VARCHAR, constraint_text
-         FROM duckdb_constraints()
-         WHERE database_name = $1 AND schema_name = $2 AND table_name = $3
-           AND constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY', 'CHECK')
-         ORDER BY constraint_index",
+        "SELECT c.constraint_type, c.constraint_name, to_json(c.constraint_column_names)::VARCHAR,
+                coalesce(t.table_name, c.referenced_table), to_json(c.referenced_column_names)::VARCHAR,
+                c.constraint_text
+         FROM duckdb_constraints() c
+         LEFT JOIN duckdb_tables() t ON t.database_name = c.database_name
+             AND t.schema_name = c.schema_name AND lower(t.table_name) = lower(c.referenced_table)
+         WHERE c.database_name = $1 AND c.schema_name = $2 AND c.table_name = $3
+           AND c.constraint_type IN ('PRIMARY KEY', 'UNIQUE', 'FOREIGN KEY', 'CHECK')
+         ORDER BY c.constraint_index",
         place,
         |row| {
             Ok((
