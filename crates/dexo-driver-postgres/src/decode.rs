@@ -660,9 +660,23 @@ fn quote_element(text: &str) -> String {
 fn range_text(inner: &Type, raw: &[u8]) -> Option<String> {
     use wire::{Range, RangeBound};
 
+    // A bound is quoted as the server quotes it, a quote or a backslash in it doubled: a
+    // timestamp's space, unquoted, read as two words.
     let bound_text = |bound: &RangeBound<Option<&[u8]>>| match bound {
         RangeBound::Inclusive(value) | RangeBound::Exclusive(value) => value
-            .map(|bytes| element_text(inner, bytes, &RegNames::default()))
+            .map(|bytes| {
+                let text = element_text(inner, bytes, &RegNames::default());
+                let quoted = text.is_empty()
+                    || text.chars().any(|ch| {
+                        matches!(ch, '"' | '\\' | '(' | ')' | '[' | ']' | ',')
+                            || ch.is_ascii_whitespace()
+                    });
+                if quoted {
+                    format!("\"{}\"", text.replace('"', "\"\"").replace('\\', "\\\\"))
+                } else {
+                    text
+                }
+            })
             .unwrap_or_default(),
         RangeBound::Unbounded => String::new(),
     };

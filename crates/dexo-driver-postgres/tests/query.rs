@@ -701,6 +701,22 @@ async fn reads_as_the_server_writes(session: &dyn Session, columns: &[String]) {
     }
 }
 
+/// A range's bounds are quoted where the server quotes them: a timestamp's space read
+/// unquoted.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn range_bounds_are_quoted_as_the_server_quotes_them() {
+    let fixture = connect_postgres_fixture().await;
+    let columns = [
+        "tsrange('2020-01-01', '2020-01-02 10:30')",
+        "'{[2020-01-01,2020-01-02)}'::tsmultirange",
+        "'[1.5,2.5)'::numrange",
+        "array['[1,3)', '[5,7)']::int4range[]",
+    ]
+    .map(String::from);
+    reads_as_the_server_writes(&*fixture.session, &columns).await;
+}
+
 /// Types that still read as hex: a cursor's name, a text search query, multiranges,
 /// snapshots, hstore.
 #[tokio::test]
