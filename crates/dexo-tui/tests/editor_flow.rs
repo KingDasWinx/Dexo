@@ -433,3 +433,38 @@ fn saved_queries_save_search_open_rename_and_delete() {
     assert_eq!(opened.connection_id.as_deref(), Some(conn_a.as_str()));
     assert_eq!(opened.title, "User 7.sql");
 }
+
+/// A long query of wide characters keeps the find bar's cursor on the bar, after the
+/// text it was typed after.
+#[test]
+fn the_find_bar_cursor_counts_display_columns() {
+    let mut model = Model {
+        focus: dexo_tui::Focus::Editor,
+        ..Model::default()
+    };
+    model.set_sql("select 1");
+    model.find.open = true;
+    model.find.query.set_text("日本語".repeat(20));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    let mut hits = dexo_tui::mouse::HitMap::default();
+    let cells: Vec<Vec<String>> = terminal
+        .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+        .unwrap()
+        .buffer
+        .content()
+        .chunks(100)
+        .map(|row| row.iter().map(|cell| cell.symbol().to_string()).collect())
+        .collect();
+    let rows: Vec<String> = cells.iter().map(|row| row.concat()).collect();
+    let bar = rows
+        .iter()
+        .position(|row| row.contains("Find    "))
+        .expect("the find bar is drawn");
+    let cursor = terminal.get_cursor_position().unwrap();
+    assert_eq!(cursor.y as usize, bar);
+    let row = &rows[bar];
+    let label = row[..row.find("Find    ").unwrap()].chars().count() + "Find    ".len();
+    // The cursor is at the end of the text shown: on the cell after the last 語.
+    assert!(cursor.x as usize > label);
+    assert_eq!(cells[bar][cursor.x as usize - 2], "語");
+}

@@ -231,14 +231,13 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
     let room = (area.width as usize)
         .saturating_sub(FIND_LABEL.len() + 1)
         .max(1);
+    // Laid out in display columns, so a wide character keeps the cursor on its text.
     let window = |input: &crate::widgets::text_input::TextInput| {
-        let chars: Vec<char> = input.as_str().chars().collect();
-        let start = input.cursor().saturating_sub(room);
-        let end = (start + room).min(chars.len());
-        (start, chars[start..end].iter().collect::<String>())
+        let (shown, cursor) = input.window(room);
+        (cursor, shown.trim_end().to_string())
     };
-    let (query_start, query_shown) = window(&find.query);
-    let (replacement_start, replacement_shown) = window(&find.replacement);
+    let (query_cursor, query_shown) = window(&find.query);
+    let (replacement_cursor, replacement_shown) = window(&find.replacement);
     let mut rows = vec![Line::from(vec![
         Span::styled(FIND_LABEL, muted),
         Span::raw(query_shown),
@@ -262,19 +261,11 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
     }
     frame.render_widget(Paragraph::new(rows), area);
     if model.effective_focus() == Focus::Editor {
-        let (row, input, start) = match find.field {
-            FindField::Query => (0, &find.query, query_start),
-            FindField::Replace => (1, &find.replacement, replacement_start),
+        let (row, cursor) = match find.field {
+            FindField::Query => (0, query_cursor),
+            FindField::Replace => (1, replacement_cursor),
         };
-        let typed: String = input
-            .as_str()
-            .chars()
-            .skip(start)
-            .take(input.cursor() - start)
-            .collect();
-        let x = area.x
-            + FIND_LABEL.len() as u16
-            + unicode_width::UnicodeWidthStr::width(typed.as_str()) as u16;
+        let x = area.x + FIND_LABEL.len() as u16 + cursor as u16;
         if row < area.height && x < area.x + area.width {
             frame.set_cursor_position(Position::new(x, area.y + row));
         }
