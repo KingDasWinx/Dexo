@@ -3415,6 +3415,25 @@ fn mouse_settings(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             model.settings.confirm_reset = false;
             step_focused_setting(model, 1)
         }
+        Some(HitTarget::SettingsChoice { row, index })
+            if row < crate::screens::settings::FIELD_COUNT =>
+        {
+            model.settings.focus = row;
+            model.settings.confirm_reset = false;
+            // Steps forward to the clicked value, as many times as it takes; the same
+            // path the arrows take, so every setting applies and saves as it does there.
+            let options = model.settings.options();
+            let Some(field) = options.get(row) else {
+                return Vec::new();
+            };
+            let count = field.values.len();
+            let steps = (index + count - field.active) % count.max(1);
+            let mut effects = Vec::new();
+            for _ in 0..steps {
+                effects.extend(step_focused_setting(model, 1));
+            }
+            effects
+        }
         Some(HitTarget::Button(HitButton::Reset)) => {
             model.settings.focus = crate::screens::settings::RESET_FOCUS;
             update(model, Action::ConfirmResetSettings)

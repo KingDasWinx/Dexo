@@ -168,9 +168,9 @@ impl SettingsScreen {
     /// Spelled out while there is room; the short form still names every key.
     pub fn hint(wide: bool) -> &'static str {
         if wide {
-            "  up/down field  left/right change  r reset  esc close"
+            "  up/down row  left/right change  e theme  r reset  esc close"
         } else {
-            "  arrows change  r reset  esc close"
+            "  arrows change  e theme  r reset  esc close"
         }
     }
 

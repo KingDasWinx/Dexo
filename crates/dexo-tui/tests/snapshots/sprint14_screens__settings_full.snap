@@ -25,7 +25,7 @@ default  no connection  —
 │                          ││                   │  Updates    [On]  Off                                        │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │  [Reset to defaults]                                         │                                               │
-│                          ││                   │  up/down field  left/right change  r reset  esc close        │                                               │
+│                          ││                   │  up/down row  left/right change  e theme  r reset  esc close │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

@@ -355,7 +355,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **SL-07** `MAJOR` Alt+[ (Shrink Explorer Pane) does nothing and swallows the next key
 - [x] **SL-16** `MAJOR` Running Dexo in a small terminal permanently hides the explorer and results (compact mode overwrites the saved layout)
 - [ ] **SL-17** `MAJOR` "Inspect value" shows raw Rust Debug text for numbers and booleans
-- [ ] **SL-01** `MINOR` Clicking an option in Settings cycles to the next value instead of choosing the clicked one
+- [x] **SL-01** `MINOR` Clicking an option in Settings cycles to the next value instead of choosing the clicked one
 - [ ] **SL-02** `MINOR` Empty-editor hint `Ctrl+N  new query / Ctrl+O  open a file` is hard-coded and wrong under the Emacs keymap
 - [ ] **SL-03** `MINOR` Unicode = Off still draws non-ASCII glyphs
 - [x] **SL-08** `MINOR` Alt+= / Alt+- mean different things depending on focus, but the hotkey is shown only as "Grow/Shrink Results Pane"
@@ -371,7 +371,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **SL-04** `COSMETIC` Modals sit at different heights and have different sizes
 - [ ] **SL-11** `COSMETIC` Layout and settings commands give no feedback about what they did
 - [x] **SL-12** `COSMETIC` Command name case differs: "Reset layout" vs "Cycle Layout" / "Reset Settings"
-- [ ] **SL-13** `COSMETIC` Settings footer does not list `e` (cycle theme) which the docs describe
+- [x] **SL-13** `COSMETIC` Settings footer does not list `e` (cycle theme) which the docs describe
 - [ ] **SL-14** `COSMETIC` Explain placeholder is cut off at the pane edge instead of wrapped
 - [ ] **SL-15** `COSMETIC` Right click: grid and tree respond, editor, tabs and status bar do not
 - [ ] **SL-25** `COSMETIC` Button rows differ between dialogs

@@ -2421,9 +2421,31 @@ fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         popup,
     );
     register_overlay(hits, popup);
+    let fields = model.settings.options();
     for_popup_lines(popup, &lines, |index, line, rect| {
         if index < crate::screens::settings::FIELD_COUNT {
             hits.register(HitTarget::ListRow(index), rect);
+            // Side by side, each value is a click of its own: the row used to step to the
+            // next value wherever it was clicked, so Rose could not be picked.
+            if wide
+                && let Some(field) = fields.get(index)
+                && field.values.len() > 1
+            {
+                // The marker and the label come first, as `settings_option_lines` lays out.
+                let mut x = rect.x + 2 + 11;
+                for (choice, value) in field.values.iter().enumerate() {
+                    let width = value.chars().count() as u16 + 3;
+                    let cell = Rect::new(x, rect.y, width, 1).intersection(rect);
+                    hits.register(
+                        HitTarget::SettingsChoice {
+                            row: index,
+                            index: choice,
+                        },
+                        cell,
+                    );
+                    x += width;
+                }
+            }
         } else if line.contains('[') {
             hits.register(HitTarget::Button(HitButton::Reset), rect);
         }

@@ -15,7 +15,7 @@ default  no connection  —    1 Sidebar  [2 SQL]  3 Results
 │  Updates    [On]  Off                                    │
 │                                                          │
 │  [Reset to defaults]                                     │
-│  up/down field  left/right change  r reset  esc close    │
+│  up/down row  left/right change  e theme  r reset  esc cl│
 └──────────────────────────────────────────────────────────┘
 │                                                          │
 │                                                          │

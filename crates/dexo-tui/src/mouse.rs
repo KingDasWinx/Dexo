@@ -27,12 +27,20 @@ pub enum HitTarget {
     Grid,
     Console,
     GridRow(usize),
-    GridCell { row: usize, col: usize },
+    GridCell {
+        row: usize,
+        col: usize,
+    },
     GridHeader(usize),
     ClauseBar(crate::screens::data::ClauseBar),
     RecentSqlFile(usize),
     Overlay,
     ListRow(usize),
+    /// One of the values a settings row lists side by side: `index` into that row's.
+    SettingsChoice {
+        row: usize,
+        index: usize,
+    },
     FormField(usize),
     FooterSubmit,
     FooterCancel,
