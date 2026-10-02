@@ -352,6 +352,39 @@ async fn foreign_keys_are_listed_from_and_to_a_table() {
         "orders".into(),
         "id,region".into()
     )));
+    // A key on a partitioned table, or to one, is listed once: not again for each
+    // partition's clone of it.
+    for sql in [
+        "CREATE TABLE events (at date, customer_id int REFERENCES customers)
+             PARTITION BY RANGE (at)",
+        "CREATE TABLE events_2025 PARTITION OF events
+             FOR VALUES FROM ('2025-01-01') TO ('2026-01-01')",
+        "CREATE TABLE events_2026 PARTITION OF events
+             FOR VALUES FROM ('2026-01-01') TO ('2027-01-01')",
+        "CREATE TABLE ledger (id int, region text, PRIMARY KEY (id, region))
+             PARTITION BY LIST (region)",
+        "CREATE TABLE ledger_eu PARTITION OF ledger FOR VALUES IN ('eu')",
+        "CREATE TABLE ledger_us PARTITION OF ledger FOR VALUES IN ('us')",
+        "CREATE TABLE ledger_notes (ledger_id int, ledger_region text,
+             FOREIGN KEY (ledger_id, ledger_region) REFERENCES ledger)",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let named =
+        |table: &str| dexo_driver_api::QualifiedName::new(Some("dexo"), Some("public"), table);
+    let catalog = session.catalog().unwrap();
+    let keys = catalog.foreign_keys(&named("customers")).await.unwrap();
+    let from: Vec<_> = keys.iter().map(|key| key.from.object()).collect();
+    assert_eq!(from, ["events", "orders"], "{keys:?}");
+    let keys = catalog.foreign_keys(&named("ledger")).await.unwrap();
+    assert_eq!(keys.len(), 1, "{keys:?}");
+    assert_eq!(keys[0].to.object(), "ledger");
 }
 
 /// Table and column comments come with the catalog, as each object's `comment`.

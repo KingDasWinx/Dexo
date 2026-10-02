@@ -926,9 +926,11 @@ impl CatalogReader for PostgresSession {
                  JOIN pg_class tt ON tt.oid = c.confrelid
                  JOIN pg_namespace tn ON tn.oid = tt.relnamespace
                  WHERE c.contype = 'f'
+                   -- A partition's clone of its parent's key is the parent's key.
+                   AND c.conparentid = 0
                    AND ((fn.nspname = $1 AND ft.relname = $2)
                         OR (tn.nspname = $1 AND tt.relname = $2))
-                 ORDER BY c.conname",
+                 ORDER BY c.conname, fn.nspname, ft.relname",
                 &[&schema, &name],
             )
             .await
