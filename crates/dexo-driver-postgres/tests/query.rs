@@ -510,23 +510,7 @@ async fn extension_and_numeric_types_read_as_postgres_prints_them() {
                 'the fat cats'::tsvector, 'pg_catalog'::regnamespace",
         0,
     );
-    let events = collect(fixture.session.execute(read).await.unwrap()).await;
-    let row = events
-        .iter()
-        .find_map(|event| match event {
-            QueryEvent::Rows(batch) => batch.rows.first().cloned(),
-            _ => None,
-        })
-        .unwrap();
-    let texts: Vec<String> = row
-        .iter()
-        .map(|cell| match cell {
-            dexo_driver_api::DbValue::Text(text)
-            | dexo_driver_api::DbValue::Native { text, .. } => text.clone(),
-            dexo_driver_api::DbValue::U64(value) => value.to_string(),
-            other => format!("{other:?}"),
-        })
-        .collect();
+    let texts = first_row_texts(&*fixture.session, read).await;
     assert_eq!(
         texts[..13],
         [
@@ -547,4 +531,37 @@ async fn extension_and_numeric_types_read_as_postgres_prints_them() {
     );
     assert_eq!(texts[13], "'cats' 'fat' 'the'");
     assert_eq!(texts[14], "11");
+
+    // A composite type of the user's is not pgvector's for its name: it read as `[]`.
+    let setup = QueryRequest::write("create type vector as (a int, b int)");
+    collect(fixture.session.execute(setup).await.unwrap()).await;
+    let texts = first_row_texts(
+        &*fixture.session,
+        QueryRequest::read("select row(1, 2)::vector", 0),
+    )
+    .await;
+    assert_ne!(texts[0], "[]");
+}
+
+/// The first row's cells as text: what the grid shows for each.
+async fn first_row_texts(session: &dyn Session, request: QueryRequest) -> Vec<String> {
+    let events = collect(session.execute(request).await.unwrap()).await;
+    let row = events
+        .iter()
+        .find_map(|event| match event {
+            QueryEvent::Rows(batch) => batch.rows.first().cloned(),
+            _ => None,
+        })
+        .unwrap();
+    row.iter()
+        .map(|cell| match cell {
+            dexo_driver_api::DbValue::Text(text)
+            | dexo_driver_api::DbValue::Decimal(text)
+            | dexo_driver_api::DbValue::Json(text)
+            | dexo_driver_api::DbValue::Native { text, .. } => text.clone(),
+            dexo_driver_api::DbValue::U64(value) => value.to_string(),
+            dexo_driver_api::DbValue::I64(value) => value.to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect()
 }

@@ -133,9 +133,11 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
     Some(value)
 }
 
-/// Types outside the common ones, read by name: extensions' -- `citext` is sent as its
-/// text, `ltree` and its queries as a version byte and their text, pgvector's `vector`
-/// as its floats -- and the built-ins made of plain numbers. They used to show as hex.
+/// Types outside the common ones, which used to show as hex: the built-ins made of
+/// plain numbers, known by their OID, and extensions' -- `citext` is sent as its text,
+/// `ltree` and its queries as a version byte and their text, pgvector's `vector` as its
+/// floats -- known by name, and only as the plain types they are: a composite type of
+/// the user's called `vector` read as an empty one.
 fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
     let utf8 = |bytes: &[u8]| std::str::from_utf8(bytes).ok().map(str::to_string);
     let versioned = || match raw.split_first() {
@@ -151,29 +153,36 @@ fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
             .collect::<Option<Vec<_>>>()
             .map(|points| points.join(","))
     };
-    let text = match ty.name() {
-        "citext" => return Some(DbValue::Text(utf8(raw)?)),
-        "ltree" | "lquery" | "ltxtquery" | "jsonpath" => versioned()?,
-        "xid" | "cid" | "regnamespace" | "regrole" | "regoper" | "regoperator" | "regprocedure"
-        | "regconfig" | "regdictionary" | "regcollation" => {
+    let text = match *ty {
+        Type::JSONPATH => versioned()?,
+        Type::XID
+        | Type::CID
+        | Type::REGNAMESPACE
+        | Type::REGROLE
+        | Type::REGOPER
+        | Type::REGOPERATOR
+        | Type::REGPROCEDURE
+        | Type::REGCONFIG
+        | Type::REGDICTIONARY
+        | Type::REGCOLLATION => {
             return Some(DbValue::U64(u32_at(0)?.into()));
         }
-        "xid8" => return Some(DbValue::U64(u64::from_be_bytes(raw.try_into().ok()?))),
-        "tid" => format!(
+        Type::XID8 => return Some(DbValue::U64(u64::from_be_bytes(raw.try_into().ok()?))),
+        Type::TID => format!(
             "({},{})",
             u32_at(0)?,
             u16::from_be_bytes(raw.get(4..6)?.try_into().ok()?)
         ),
-        "macaddr8" if raw.len() == 8 => raw
+        Type::MACADDR8 if raw.len() == 8 => raw
             .iter()
             .map(|byte| format!("{byte:02x}"))
             .collect::<Vec<_>>()
             .join(":"),
-        "lseg" => format!("[{},{}]", point_at(0)?, point_at(16)?),
-        "box" => format!("{},{}", point_at(0)?, point_at(16)?),
-        "line" => format!("{{{},{},{}}}", f8_at(0)?, f8_at(8)?, f8_at(16)?),
-        "circle" => format!("<{},{}>", point_at(0)?, f8_at(16)?),
-        "path" => {
+        Type::LSEG => format!("[{},{}]", point_at(0)?, point_at(16)?),
+        Type::BOX => format!("{},{}", point_at(0)?, point_at(16)?),
+        Type::LINE => format!("{{{},{},{}}}", f8_at(0)?, f8_at(8)?, f8_at(16)?),
+        Type::CIRCLE => format!("<{},{}>", point_at(0)?, f8_at(16)?),
+        Type::PATH => {
             let closed = *raw.first()? == 1;
             let count = usize::try_from(u32_at(1)?).ok()?;
             let points = points(5, count)?;
@@ -183,18 +192,23 @@ fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
                 format!("[{points}]")
             }
         }
-        "polygon" => format!("({})", points(4, usize::try_from(u32_at(0)?).ok()?)?),
-        "vector" => {
-            let dimensions = usize::from(u16::from_be_bytes(raw.get(0..2)?.try_into().ok()?));
-            let values = (0..dimensions)
-                .map(|index| {
-                    let at = 4 + index * 4;
-                    Some(f32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?).to_string())
-                })
-                .collect::<Option<Vec<_>>>()?;
-            format!("[{}]", values.join(","))
-        }
-        "tsvector" => tsvector_text(raw)?,
+        Type::POLYGON => format!("({})", points(4, usize::try_from(u32_at(0)?).ok()?)?),
+        Type::TS_VECTOR => tsvector_text(raw)?,
+        _ if matches!(ty.kind(), Kind::Simple) => match ty.name() {
+            "citext" => return Some(DbValue::Text(utf8(raw)?)),
+            "ltree" | "lquery" | "ltxtquery" => versioned()?,
+            "vector" => {
+                let dimensions = usize::from(u16::from_be_bytes(raw.get(0..2)?.try_into().ok()?));
+                let values = (0..dimensions)
+                    .map(|index| {
+                        let at = 4 + index * 4;
+                        Some(f32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?).to_string())
+                    })
+                    .collect::<Option<Vec<_>>>()?;
+                format!("[{}]", values.join(","))
+            }
+            _ => return None,
+        },
         _ => return None,
     };
     Some(native(ty, raw, text))
@@ -619,6 +633,27 @@ mod tests {
             raw.extend(value.to_be_bytes());
         }
         assert_eq!(text_of(&decode_value(&ty, &raw)), "[1,0.5,-2]");
+    }
+
+    /// An extension's type is known by name only as the plain type it is: a composite
+    /// of the user's called `vector (a int, b int)` read as an empty vector, `[]`.
+    #[test]
+    fn a_composite_named_like_an_extension_type_is_not_read_as_one() {
+        use tokio_postgres::types::{Field, Kind};
+        let ty = Type::new(
+            "vector".into(),
+            99_998,
+            Kind::Composite(vec![
+                Field::new("a".into(), Type::INT4),
+                Field::new("b".into(), Type::INT4),
+            ]),
+            "public".into(),
+        );
+        // Two fields: a = 1, b = 2.
+        let raw = [
+            0, 0, 0, 2, 0, 0, 0, 23, 0, 0, 0, 4, 0, 0, 0, 1, 0, 0, 0, 23, 0, 0, 0, 4, 0, 0, 0, 2,
+        ];
+        assert_ne!(text_of(&decode_value(&ty, &raw)), "[]");
     }
 
     #[test]
