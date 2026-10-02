@@ -128,7 +128,7 @@ impl DexoMcpServer {
         if !grant.asks() {
             return Ok(None);
         }
-        let approval = Approval::pending(
+        let mut approval = Approval::pending(
             &service.profile.name,
             &connection.name,
             name,
@@ -137,7 +137,19 @@ impl DexoMcpServer {
             now,
             grant.ask_secs,
         );
+        approval.grant = grant.id;
+        // A request cannot outlive the grant that would run it.
+        approval.deadline = approval.deadline.min(grant.expires_at);
+        let waits = approval.deadline - approval.created_at;
         ledger.request_approval(&approval)?;
+        // However the wait ends -- a decision, the deadline, a cancel, or the call
+        // dropped as the server goes away -- a request still pending is settled as
+        // cancelled: its SQL goes, and no one approves a write nobody waits for.
+        let _waiting = Waiting {
+            ledger,
+            id: approval.id,
+        };
+        let mut beat = now;
         let target = arguments
             .get("target")
             .and_then(Value::as_str)
@@ -161,7 +173,6 @@ impl DexoMcpServer {
                 () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
                 () = cancel.cancelled() => {
                     let now = now_secs();
-                    ledger.settle_approval(approval.id, ApprovalDecision::Cancelled, now)?;
                     audit(
                         ledger,
                         service,
@@ -178,6 +189,12 @@ impl DexoMcpServer {
                 }
             }
             let now = now_secs();
+            // Once a second the request says its call still waits; Agent Activity
+            // approves only a request that does.
+            if now != beat {
+                ledger.touch_approval(approval.id, now);
+                beat = now;
+            }
             let decision = ledger
                 .approval(approval.id)
                 .map_or(ApprovalDecision::Expired, |approval| approval.decision);
@@ -204,11 +221,11 @@ impl DexoMcpServer {
                     if !ledger.settle_approval(approval.id, ApprovalDecision::Expired, now)? {
                         continue;
                     }
-                    format!("no one approved this write within {}s", grant.ask_secs)
+                    format!("no one approved this write within {waits}s")
                 }
                 ApprovalDecision::Denied => "a person denied this write".to_string(),
                 ApprovalDecision::Expired => {
-                    format!("no one approved this write within {}s", grant.ask_secs)
+                    format!("no one approved this write within {waits}s")
                 }
                 ApprovalDecision::Cancelled => "this write's request was cancelled".to_string(),
             };
@@ -849,6 +866,21 @@ pub fn now_secs() -> i64 {
         .unwrap_or(0)
 }
 
+/// A request a call waits on; dropped, it settles the request as cancelled if no one
+/// decided it, which is a no-op once someone did.
+struct Waiting<'a> {
+    ledger: &'a dyn GrantLedger,
+    id: uuid::Uuid,
+}
+
+impl Drop for Waiting<'_> {
+    fn drop(&mut self) {
+        let _ = self
+            .ledger
+            .settle_approval(self.id, ApprovalDecision::Cancelled, now_secs());
+    }
+}
+
 fn cancelled_by_agent() -> AppError {
     AppError::new(ErrorCategory::Cancelled, "the agent cancelled this write")
 }
@@ -865,6 +897,33 @@ mod tests {
     use dexo_app::mcp::selector::{Effect, SelectorRule};
     use dexo_test_support::FakeSession;
     use serde_json::json;
+
+    /// A call that stops waiting -- dropped with its server, or cancelled -- takes its
+    /// request with it: settled, without its SQL, and no longer approvable.
+    #[test]
+    fn a_dropped_wait_settles_its_request() {
+        use dexo_app::mcp::approval::{Approval, ApprovalDecision};
+        let ledger = MemoryGrantLedger::default();
+        let arguments = json!({"sql": "DELETE FROM orders"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let now = super::now_secs();
+        let request = Approval::pending("p", "c", "data_execute_sql", &arguments, vec![], now, 60);
+        ledger.request_approval(&request).unwrap();
+        drop(super::Waiting {
+            ledger: &ledger,
+            id: request.id,
+        });
+        let settled = ledger.approval(request.id).unwrap();
+        assert_eq!(settled.decision, ApprovalDecision::Cancelled);
+        assert!(settled.statement.is_empty());
+        assert!(
+            !ledger
+                .settle_approval(request.id, ApprovalDecision::Approved, now)
+                .unwrap()
+        );
+    }
 
     fn profile() -> McpProfile {
         let mut profile = McpProfile::new("assistant");

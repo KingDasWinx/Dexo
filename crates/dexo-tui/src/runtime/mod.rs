@@ -2128,35 +2128,26 @@ impl WorkbenchRuntime {
     }
 
     async fn settle_approval(&self, id: uuid::Uuid, approve: bool) {
-        use dexo_app::mcp::{ApprovalDecision, GrantLedger};
+        use dexo_app::mcp::approval::{Answered, answer};
         let Ok(paths) = AppPaths::discover() else {
             return;
         };
         let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
             return;
         };
-        let decision = if approve {
-            ApprovalDecision::Approved
-        } else {
-            ApprovalDecision::Denied
+        let message = match answer(&ledger, id, approve, unix_now()) {
+            Ok(Answered::Taken) if approve => "Approved: the agent's write runs now.".into(),
+            Ok(Answered::Taken) => "Denied: the agent is told no.".into(),
+            Ok(Answered::AlreadyDecided) => {
+                "That request was already decided, or its grant was revoked.".into()
+            }
+            Ok(Answered::TimedOut) => "That request's time ran out; nothing runs.".into(),
+            Ok(Answered::NobodyWaiting) => {
+                "The agent is no longer waiting for this write; nothing runs.".into()
+            }
+            Err(error) => error.to_string(),
         };
-        match ledger.settle_approval(id, decision, unix_now()) {
-            Ok(true) => {
-                self.emit(Action::Notice(if approve {
-                    "Approved: the agent's write runs now.".into()
-                } else {
-                    "Denied: the agent is told no.".into()
-                }))
-                .await
-            }
-            Ok(false) => {
-                self.emit(Action::Notice(
-                    "That request was already decided, or its time ran out.".into(),
-                ))
-                .await
-            }
-            Err(error) => self.emit(Action::Notice(error.to_string())).await,
-        }
+        self.emit(Action::Notice(message)).await;
         self.load_mcp_audit().await;
     }
 

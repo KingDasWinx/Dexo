@@ -35,8 +35,21 @@ impl SqliteGrantLedger {
     }
 
     pub fn revoke_all(&self) -> anyhow::Result<usize> {
+        self.revoking(grant_repo::revoke_all)
+    }
+
+    /// Revokes, and denies the revoked grants' waiting writes in the same transaction,
+    /// so no one approves a write its grant no longer allows.
+    fn revoking<T>(
+        &self,
+        revoke: impl FnOnce(&Connection) -> anyhow::Result<T>,
+    ) -> anyhow::Result<T> {
         let conn = self.conn.lock().expect("sqlite");
-        grant_repo::revoke_all(&conn)
+        let tx = conn.unchecked_transaction()?;
+        let revoked = revoke(&tx)?;
+        approval_repo::deny_revoked(&tx)?;
+        tx.commit()?;
+        Ok(revoked)
     }
 }
 
@@ -65,13 +78,13 @@ impl GrantLedger for SqliteGrantLedger {
     }
 
     fn revoke(&self, id: Uuid) -> Result<(), AppError> {
-        let conn = self.conn.lock().expect("sqlite");
-        grant_repo::revoke(&conn, id).map_err(sql_err)
+        self.revoking(|conn| grant_repo::revoke(conn, id))
+            .map_err(sql_err)
     }
 
     fn revoke_profile(&self, profile: &str) -> Result<usize, AppError> {
-        let conn = self.conn.lock().expect("sqlite");
-        grant_repo::revoke_profile(&conn, profile).map_err(sql_err)
+        self.revoking(|conn| grant_repo::revoke_profile(conn, profile))
+            .map_err(sql_err)
     }
 
     fn reserve_operation(&self, record: OperationRecord) -> Result<OperationRecord, AppError> {
@@ -158,9 +171,19 @@ impl GrantLedger for SqliteGrantLedger {
         approval_repo::settle(&conn, id, decision, now).map_err(sql_err)
     }
 
+    fn touch_approval(&self, id: Uuid, now: i64) {
+        let conn = self.conn.lock().expect("sqlite");
+        let _ = approval_repo::touch(&conn, id, now);
+    }
+
+    fn sweep_approvals(&self, now: i64) {
+        let conn = self.conn.lock().expect("sqlite");
+        let _ = approval_repo::sweep(&conn, now);
+    }
+
     fn pending_approvals(&self, now: i64) -> Vec<Approval> {
         let conn = self.conn.lock().expect("sqlite");
-        let _ = approval_repo::expire_stale(&conn, now);
+        let _ = approval_repo::sweep(&conn, now);
         approval_repo::pending(&conn, now).unwrap_or_default()
     }
 }

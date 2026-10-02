@@ -4,7 +4,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::{AppError, ErrorCategory};
-use crate::mcp::approval::{Approval, ApprovalDecision};
+use crate::mcp::approval::{Approval, ApprovalDecision, KEEP_SETTLED_SECS};
 use crate::mcp::audit::AuditEvent;
 use crate::mcp::grant::Grant;
 use crate::mcp::operation::{
@@ -49,14 +49,21 @@ pub trait GrantLedger: Send + Sync {
     fn request_approval(&self, approval: &Approval) -> Result<(), AppError>;
     fn approval(&self, id: Uuid) -> Option<Approval>;
     /// Decides a request that is still pending, its statement blanked; false when it was
-    /// decided already. Approval is refused once the deadline has passed.
+    /// decided already. Approval is refused once the deadline has passed, or once the
+    /// call that asked stopped saying it waits (see [`Approval::waited_on`]).
     fn settle_approval(
         &self,
         id: Uuid,
         decision: ApprovalDecision,
         now: i64,
     ) -> Result<bool, AppError>;
-    /// The requests still waiting at `now`, oldest first.
+    /// The call that asked still waits for its answer, at `now`.
+    fn touch_approval(&self, id: Uuid, now: i64);
+    /// Settles what nobody will decide: a request past its deadline expires, one whose
+    /// call went silent is cancelled -- its statement blanked either way -- and decided
+    /// requests older than [`KEEP_SETTLED_SECS`] are deleted.
+    fn sweep_approvals(&self, now: i64);
+    /// The requests still waiting at `now`, oldest first, after a sweep.
     fn pending_approvals(&self, now: i64) -> Vec<Approval>;
 }
 
@@ -72,6 +79,24 @@ struct Inner {
     audits: Vec<AuditEvent>,
     approvals: Vec<Approval>,
     revision: u64,
+}
+
+impl Inner {
+    /// A revoked grant's waiting writes are denied, so no one approves one of them.
+    fn deny_revoked(&mut self) {
+        let revoked: Vec<Uuid> = self
+            .grants
+            .iter()
+            .filter(|grant| grant.revoked)
+            .map(|grant| grant.id)
+            .collect();
+        for approval in &mut self.approvals {
+            if approval.decision == ApprovalDecision::Pending && revoked.contains(&approval.grant) {
+                approval.decision = ApprovalDecision::Denied;
+                approval.statement.clear();
+            }
+        }
+    }
 }
 
 fn op_key(profile: &str, session: &str, operation_id: &str) -> String {
@@ -127,6 +152,7 @@ impl GrantLedger for MemoryGrantLedger {
             grant.remaining_uses = 0;
             grant.revoked = true;
             inner.revision += 1;
+            inner.deny_revoked();
             Ok(())
         } else {
             Err(AppError::new(ErrorCategory::McpPolicy, "not found"))
@@ -144,6 +170,7 @@ impl GrantLedger for MemoryGrantLedger {
             }
         }
         inner.revision += 1;
+        inner.deny_revoked();
         Ok(revoked)
     }
 
@@ -251,7 +278,8 @@ impl GrantLedger for MemoryGrantLedger {
             return Ok(false);
         };
         if approval.decision != ApprovalDecision::Pending
-            || (decision == ApprovalDecision::Approved && now >= approval.deadline)
+            || (decision == ApprovalDecision::Approved
+                && (now >= approval.deadline || !approval.waited_on(now)))
         {
             return Ok(false);
         }
@@ -260,15 +288,46 @@ impl GrantLedger for MemoryGrantLedger {
         Ok(true)
     }
 
+    fn touch_approval(&self, id: Uuid, now: i64) {
+        let mut inner = self.inner.lock().expect("ledger");
+        if let Some(approval) = inner
+            .approvals
+            .iter_mut()
+            .find(|approval| approval.id == id && approval.decision == ApprovalDecision::Pending)
+        {
+            approval.heartbeat = now;
+        }
+    }
+
+    fn sweep_approvals(&self, now: i64) {
+        let mut inner = self.inner.lock().expect("ledger");
+        for approval in &mut inner.approvals {
+            if approval.decision != ApprovalDecision::Pending {
+                continue;
+            }
+            if approval.deadline <= now {
+                approval.decision = ApprovalDecision::Expired;
+            } else if !approval.waited_on(now) {
+                approval.decision = ApprovalDecision::Cancelled;
+            } else {
+                continue;
+            }
+            approval.statement.clear();
+        }
+        inner.approvals.retain(|approval| {
+            approval.decision == ApprovalDecision::Pending
+                || approval.deadline >= now.saturating_sub(KEEP_SETTLED_SECS)
+        });
+    }
+
     fn pending_approvals(&self, now: i64) -> Vec<Approval> {
+        self.sweep_approvals(now);
         self.inner
             .lock()
             .expect("ledger")
             .approvals
             .iter()
-            .filter(|approval| {
-                approval.decision == ApprovalDecision::Pending && approval.deadline > now
-            })
+            .filter(|approval| approval.decision == ApprovalDecision::Pending)
             .cloned()
             .collect()
     }

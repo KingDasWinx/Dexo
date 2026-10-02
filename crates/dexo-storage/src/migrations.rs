@@ -1,4 +1,4 @@
-pub const LATEST_SCHEMA_VERSION: u32 = 16;
+pub const LATEST_SCHEMA_VERSION: u32 = 17;
 
 pub const MIGRATION_1: &str = r#"
 BEGIN;
@@ -323,6 +323,16 @@ INSERT INTO schema_migrations(version, applied_at) VALUES(16, datetime('now'));
 COMMIT;
 "#;
 
+/// A waiting write knows its grant, so revoking the grant denies it, and says every
+/// second that its call still waits, so a request whose server died is not approved.
+pub const MIGRATION_17: &str = r#"
+BEGIN;
+ALTER TABLE mcp_approvals ADD COLUMN grant_id TEXT NOT NULL DEFAULT '';
+ALTER TABLE mcp_approvals ADD COLUMN heartbeat INTEGER NOT NULL DEFAULT 0;
+INSERT INTO schema_migrations(version, applied_at) VALUES(17, datetime('now'));
+COMMIT;
+"#;
+
 pub fn read_schema_version(conn: &rusqlite::Connection) -> u32 {
     conn.query_row(
         "SELECT COALESCE(MAX(version), 0) FROM schema_migrations",
@@ -369,6 +379,7 @@ pub fn apply_up_to(conn: &rusqlite::Connection, target: u32) -> anyhow::Result<(
             14 => MIGRATION_14,
             15 => MIGRATION_15,
             16 => MIGRATION_16,
+            17 => MIGRATION_17,
             other => anyhow::bail!("missing migration {other}"),
         };
         conn.execute_batch(sql)?;
@@ -388,7 +399,7 @@ mod tests {
         conn.execute_batch(MIGRATION_1).unwrap();
         assert_eq!(read_schema_version(&conn), 1);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='sql_history'",
@@ -407,7 +418,7 @@ mod tests {
         conn.execute_batch(MIGRATION_2).unwrap();
         assert_eq!(read_schema_version(&conn), 2);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='catalog_snapshots'",
@@ -427,7 +438,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_3).unwrap();
         assert_eq!(read_schema_version(&conn), 3);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='schema_diff_snapshots'",
@@ -448,7 +459,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_4).unwrap();
         assert_eq!(read_schema_version(&conn), 4);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_profiles'",
@@ -470,7 +481,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_5).unwrap();
         assert_eq!(read_schema_version(&conn), 5);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='mcp_grants'",
@@ -493,7 +504,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_6).unwrap();
         assert_eq!(read_schema_version(&conn), 6);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='workbench_layouts'",
@@ -517,7 +528,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_7).unwrap();
         assert_eq!(read_schema_version(&conn), 7);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='connection_secret_refs'",
@@ -543,7 +554,7 @@ mod tests {
         conn.execute_batch(super::MIGRATION_9).unwrap();
         assert_eq!(read_schema_version(&conn), 9);
         apply_pending(&conn).unwrap();
-        assert_eq!(read_schema_version(&conn), 16);
+        assert_eq!(read_schema_version(&conn), 17);
         let name: String = conn
             .query_row(
                 "SELECT name FROM sqlite_master WHERE type='table' AND name='object_usage'",
@@ -595,7 +606,7 @@ mod tests {
             }
             assert_eq!(read_schema_version(&conn), version);
             apply_pending(&conn).unwrap();
-            assert_eq!(read_schema_version(&conn), 16);
+            assert_eq!(read_schema_version(&conn), 17);
         }
     }
 
