@@ -617,8 +617,11 @@ async fn production_connections_refuse_writes_over_the_protocol() {
             json!({"operation_id": "op-prod", "target": "users", "values": {"id": 1}}),
         )
         .await;
+    // The tool is not on the list for a connection that cannot take it, so the call finds
+    // nothing; either way no write is made.
     assert!(
-        text(&refused).starts_with("Error [POLICY_DENIED]"),
+        text(&refused).starts_with("Error [NOT_FOUND]")
+            || text(&refused).starts_with("Error [POLICY_DENIED]"),
         "{refused}"
     );
     assert_eq!(
@@ -942,4 +945,28 @@ async fn a_revoked_grant_is_not_reported_as_a_persons_no() {
     let message = text(&answer);
     assert!(message.contains("revoked"), "{message}");
     assert!(!message.contains("a person denied"), "{message}");
+}
+
+/// A grant left on a connection that is now production opens nothing: the tool list does
+/// not offer a write `list_connections` says it cannot do.
+#[tokio::test]
+async fn a_grant_on_a_production_connection_publishes_no_write_tool() {
+    use dexo_app::mcp::GrantLedger;
+    let backend = Arc::new(FakeBackend::with_session("local", users()));
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let mut production = connection("local");
+    production.environment = dexo_app::Environment::Production;
+    let mut client = Client::start(
+        profile(),
+        vec![production],
+        Arc::clone(&backend),
+        Arc::clone(&ledger),
+    )
+    .await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    let tools = client.tools().await;
+    assert!(
+        tools.iter().all(|tool| tool["name"] != "data_insert"),
+        "{tools:?}"
+    );
 }

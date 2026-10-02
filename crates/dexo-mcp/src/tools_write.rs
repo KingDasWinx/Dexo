@@ -405,9 +405,22 @@ impl DexoMcpServer {
     }
 }
 
-pub fn write_tool_names(ledger: &dyn GrantLedger, profile: &str, now: i64) -> Vec<String> {
+/// The write tools an active grant publishes, for the connections that accept writes: a
+/// grant on a connection that became production, or read-only, stays in the ledger but
+/// opens nothing, and the tool list no longer offers what `list_connections` says it
+/// cannot do.
+pub fn write_tool_names(
+    ledger: &dyn GrantLedger,
+    profile: &str,
+    now: i64,
+    accepts_writes: &dyn Fn(&str) -> bool,
+) -> Vec<String> {
     let mut tools = Vec::new();
-    for grant in ledger.active_grants(profile, now) {
+    for grant in ledger
+        .active_grants(profile, now)
+        .into_iter()
+        .filter(|grant| accepts_writes(&grant.connection))
+    {
         for tool in grant.tools {
             if WRITE_TOOLS.contains(&tool.as_str()) && !tools.contains(&tool) {
                 tools.push(tool);
@@ -1157,7 +1170,7 @@ mod tests {
         assert!(!is_grant_management("data_insert"));
         assert!(is_grant_management("grant_create"));
         let ledger = MemoryGrantLedger::default();
-        assert!(write_tool_names(&ledger, "assistant", 0).is_empty());
+        assert!(write_tool_names(&ledger, "assistant", 0, &|_| true).is_empty());
     }
 
     #[tokio::test]

@@ -342,7 +342,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-37** `MINOR` `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
 - [x] **MA-38** `MINOR` CLI messages and output of `dexo mcp grant` are raw
 - [ ] **MA-39** `MINOR` Agent side: raw Rust/serde and Debug text in errors and results
-- [ ] **MA-40** `MINOR` `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
+- [x] **MA-40** `MINOR` `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
 - [ ] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids
 - [x] **MA-06** `COSMETIC` MCP Profiles selected row has no highlight
 - [x] **MA-20** `COSMETIC` New MCP Grant: the checkbox label describes the unchecked state as a feature

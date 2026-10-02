@@ -149,9 +149,20 @@ impl DexoMcpServer {
             .map(str::to_string)
             .collect();
         tools.extend(
-            write_tool_names(self.inner.ledger.as_ref(), &profile.name, now_secs())
-                .into_iter()
-                .filter(|tool| profile.tool_allowed(tool)),
+            write_tool_names(
+                self.inner.ledger.as_ref(),
+                &profile.name,
+                now_secs(),
+                &|name| {
+                    self.inner
+                        .router
+                        .connections()
+                        .find(|connection| connection.name == name)
+                        .is_some_and(|connection| connection.accepts_writes().is_ok())
+                },
+            )
+            .into_iter()
+            .filter(|tool| profile.tool_allowed(tool)),
         );
         tools
     }
