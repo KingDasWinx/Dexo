@@ -30,7 +30,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 ## Questions every launch thread asks
 
-**Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree with estimated and actual rows, schema diffs, import and export -- for Postgres, MySQL, MariaDB and SQLite in one tool.
+**Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree (with estimated and actual rows on Postgres, MySQL and MariaDB), schema diffs, import and export -- for Postgres, MySQL, MariaDB and SQLite in one tool.
 
 **Why not DataGrip or DBeaver?** Dexo starts in a terminal in a moment, runs over SSH, and is free and open source. It does not try to be an IDE for every database.
 
@@ -50,7 +50,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 | Databases | Postgres, MySQL, MariaDB, SQLite; DuckDB as a build option | Postgres, MySQL, SQLite, Redshift, DuckDB, Oracle | DuckDB, SQLite, Postgres, MySQL and more through adapters | MySQL, Postgres, SQLite, MSSQL, ClickHouse | About 30, through drivers installed on demand |
 | Passwords | OS keychain, or a command | OS keychain | Config files, which can name environment variables | Config file, or environment variables | OS keyring, or a command |
 | Edit rows in the grid | Yes, reviewed before they are written | — | — | Yes | — |
-| Query plans | Tree with estimated and actual rows; try an index before building it | — | — | — | — |
+| Query plans | Tree, with estimated and actual rows on Postgres, MySQL and MariaDB; on Postgres with hypopg, try an index before building it | — | — | — | — |
 | Schema diff | Live databases, snapshots and files | — | — | — | — |
 | Import | CSV, TSV, JSON, JSON Lines | — | — | — | — |
 | Export | CSV, TSV, JSON, JSON Lines, SQL | CSV | Yes | CSV | Query output as CSV or JSON, from its CLI |
