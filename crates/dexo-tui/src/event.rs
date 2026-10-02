@@ -125,7 +125,8 @@ async fn run_loop(
     onboarding_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Only runs while a toast that can age out is up, the same shape as onboarding_tick.
     // A sticky error toast never starts the clock.
-    let mut toast_tick = tokio::time::interval(Duration::from_secs(1));
+    let mut toast_tick = toast_clock(Duration::from_secs(1));
+    let mut toast_ageing = false;
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Agent Activity is live: the requests and the calls are read again every second.
@@ -152,6 +153,7 @@ async fn run_loop(
             );
             continue;
         }
+        arm_toast_clock(&mut toast_tick, &mut toast_ageing, model.messages.expires());
         tokio::select! {
             terminal_event = events.next() => {
                 let Some(event) = terminal_event else { break };
@@ -298,4 +300,46 @@ async fn dispatch_effects(
         }
     }
     false
+}
+
+/// The clock toasts age by. A late tick is skipped, not made up for.
+fn toast_clock(period: Duration) -> tokio::time::Interval {
+    let mut clock = tokio::time::interval(period);
+    clock.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    clock
+}
+
+/// Starts the toast clock over when a toast that ages out goes up. It is polled only
+/// while one is up, so an idle spell left it behind, and the next toast took the missed
+/// seconds in a burst and was gone within a few frames.
+fn arm_toast_clock(clock: &mut tokio::time::Interval, ageing: &mut bool, now_ageing: bool) {
+    if now_ageing && !*ageing {
+        clock.reset();
+    }
+    *ageing = now_ageing;
+}
+
+#[cfg(test)]
+mod tests {
+    use futures_util::FutureExt;
+    use std::time::Duration;
+
+    /// A toast that goes up after the clock sat idle waits a whole period for its first
+    /// tick instead of taking the missed ones at once.
+    #[tokio::test]
+    async fn a_toast_after_an_idle_spell_gets_its_whole_time() {
+        let mut clock = super::toast_clock(Duration::from_millis(200));
+        let mut ageing = false;
+        clock.tick().await;
+        tokio::time::sleep(Duration::from_millis(700)).await;
+        super::arm_toast_clock(&mut clock, &mut ageing, true);
+        assert!(
+            clock.tick().now_or_never().is_none(),
+            "a missed tick aged it"
+        );
+        // Still up: the clock is not started over on every frame.
+        super::arm_toast_clock(&mut clock, &mut ageing, true);
+        clock.tick().await;
+        assert!(ageing);
+    }
 }
