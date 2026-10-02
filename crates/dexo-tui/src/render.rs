@@ -2185,10 +2185,24 @@ fn ddl_overlay_body(model: &Model) -> String {
 fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let popup = centered(area, 76, area.height.saturating_sub(2).min(20));
-    let fields = crate::widgets::form::render_lines(&model.schema_editor);
-    let mut lines = fields.clone();
-    lines.push(String::new());
-    lines.push("  tab next field  enter apply  esc close".into());
+    let editor = &model.schema_editor;
+    let fields = crate::widgets::form::render_lines(editor);
+    // The buttons keep the bottom of the popup: raw SQL a page long would push them out.
+    let room = usize::from(popup_inner(popup).height.saturating_sub(2));
+    let mut lines: Vec<String> = fields
+        .iter()
+        .flat_map(|line| line.split('\n').map(str::to_string))
+        .chain(std::iter::once(String::new()))
+        .take(room)
+        .collect();
+    let submit = editor.submit_label();
+    let footer = crate::widgets::form::footer_line(submit, editor.footer);
+    let footer_index = lines.len();
+    lines.push(footer.clone());
+    lines.push(format!(
+        "  tab/arrows move  enter {}  esc cancel",
+        submit.to_lowercase()
+    ));
     frame.render_widget(Clear, popup);
     frame.render_widget(
         Paragraph::new(lines.join("\n")).block(overlay_block(model, "Schema")),
@@ -2197,6 +2211,8 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     register_overlay(hits, popup);
     // the form's fields were clickable as a tab; keep them clickable as an overlay
     register_form_fields(hits, popup, &fields);
+    let footer_row = crate::mouse::line_rect(popup_inner(popup), footer_index);
+    crate::widgets::form::register_footer(hits, footer_row, &footer, submit);
 }
 
 /// Messages used to be appended to the status bar, which is the one place a user never

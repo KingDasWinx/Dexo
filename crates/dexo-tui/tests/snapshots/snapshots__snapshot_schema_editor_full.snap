@@ -22,8 +22,8 @@ demo  local  public
 │                          ││             │  foreign_keys:                                                           │                                         │
 │                          ││             │error: columns are required                                               │                                         │
 │                          ││             │                                                                          │                                         │
-│                          ││             │  tab next field  enter apply  esc close                                  │                                         │
-│                          ││             │                                                                          │                                         │
+│                          ││             │ [Preview]   [Cancel]                                                     │                                         │
+│                          ││             │  tab/arrows move  enter preview  esc cancel                              │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │                                                                          │                                         │

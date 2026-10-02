@@ -1414,6 +1414,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let sql = model.active_document().text();
             if !sql.trim().is_empty() {
                 model.schema_editor.apply_raw(sql);
+                model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
                 model.schema_editor.open = true;
             } else {
                 model.messages.warn("no SQL to apply".into());
@@ -2526,10 +2527,19 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Admin) => mouse_admin(model, hit),
         Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
         Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
-        Some(OverlayKind::SchemaForm) => {
-            model.schema_editor.open = false;
-            Vec::new()
-        }
+        Some(OverlayKind::SchemaForm) => match hit {
+            Some(HitTarget::FormField(index)) if index < model.schema_editor.fields.len() => {
+                model.schema_editor.focus = index;
+                model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
+                Vec::new()
+            }
+            Some(HitTarget::FooterSubmit) => submit_schema_form(model),
+            Some(HitTarget::FooterCancel) => {
+                model.schema_editor.open = false;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         Some(OverlayKind::ValueViewer) => {
             model.data.viewer = None;
             Vec::new()
@@ -3762,18 +3772,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return handle_document_name_prompt_key(model, key);
     }
     if model.schema_editor.open {
-        return match key.code {
-            KeyCode::Esc => {
-                model.schema_editor.open = false;
-                Vec::new()
-            }
-            KeyCode::Tab => {
-                model.schema_editor.focus_next();
-                Vec::new()
-            }
-            KeyCode::Enter => update(model, Action::OpenDdlPreview),
-            _ => Vec::new(),
-        };
+        return schema_form_key(model, key);
     }
     if model.inspector.open {
         use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
@@ -7838,6 +7837,75 @@ fn apply_changes(model: &mut Model) -> Vec<Effect> {
     }
 }
 
+/// The schema form answers like every other dialog -- Esc cancels, the arrows walk to
+/// its buttons -- once the walk has passed its last field. It used to take Tab, Enter
+/// and Esc and nothing else: nothing typed reached a field, and it had no buttons.
+fn schema_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    let editor = &mut model.schema_editor;
+    let last = editor.fields.len().saturating_sub(1);
+    if editor.footer == FooterFocus::Input {
+        let typing = !key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT);
+        match key.code {
+            KeyCode::Tab | KeyCode::Down if editor.focus < last => {
+                editor.focus_next();
+                return Vec::new();
+            }
+            KeyCode::BackTab | KeyCode::Up if editor.focus > 0 => {
+                editor.focus_prev();
+                return Vec::new();
+            }
+            KeyCode::Char(ch) if typing => {
+                editor.edit_focused(Some(ch));
+                return Vec::new();
+            }
+            KeyCode::Backspace => {
+                editor.edit_focused(None);
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
+    let before = editor.footer;
+    match footer_key(&mut editor.footer, &key) {
+        FooterKey::Submit => submit_schema_form(model),
+        FooterKey::Cancel => {
+            model.schema_editor.open = false;
+            Vec::new()
+        }
+        FooterKey::Moved => {
+            // Walking back into the fields lands on the end it came in from.
+            let editor = &mut model.schema_editor;
+            if editor.footer == FooterFocus::Input {
+                editor.focus = if before == FooterFocus::Cancel {
+                    0
+                } else {
+                    last
+                };
+            }
+            Vec::new()
+        }
+        FooterKey::Pass => Vec::new(),
+    }
+}
+
+/// Previews the DDL the fields make, closing the form for the preview to take the keys;
+/// a form opened on raw SQL runs it the way the editor runs a document, through the
+/// connection's guard.
+fn submit_schema_form(model: &mut Model) -> Vec<Effect> {
+    if !model.schema_editor.raw_sql.is_empty() {
+        model.schema_editor.open = false;
+        return update(model, Action::ExecuteDocument);
+    }
+    let effects = update(model, Action::OpenDdlPreview);
+    if model.schema_editor.errors.is_empty() {
+        model.schema_editor.open = false;
+    }
+    effects
+}
+
 fn open_ddl_preview(model: &mut Model) -> Vec<Effect> {
     if !model.schema_editor.validate() {
         return Vec::new();
@@ -9556,8 +9624,13 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
             crate::screens::transaction_prompt::SavepointIntent::Release,
         ),
         PaletteInvocation::OpenFlow(FlowIntent::DataReview) => update(model, Action::OpenReview),
+        // The fields come first: previewing straight away previewed a form nobody saw.
         PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
-            update(model, Action::OpenDdlPreview)
+            model.schema_editor.raw_sql.clear();
+            model.schema_editor.form_diff = None;
+            model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
+            model.schema_editor.open = true;
+            Vec::new()
         }
         PaletteInvocation::OpenFlow(FlowIntent::SchemaRaw) => update(model, Action::ApplyRawDdl),
         PaletteInvocation::OpenFlow(FlowIntent::SchemaDiff) => {

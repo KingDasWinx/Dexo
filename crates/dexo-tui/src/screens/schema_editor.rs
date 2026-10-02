@@ -94,6 +94,8 @@ pub struct SchemaEditor {
     pub raw_sql: String,
     pub preview: Option<DdlPreviewState>,
     pub form_diff: Option<String>,
+    /// The fields, or one of the two buttons under them.
+    pub footer: crate::widgets::form::FooterFocus,
 }
 
 impl Default for SchemaEditor {
@@ -144,6 +146,7 @@ impl SchemaEditor {
             raw_sql: String::new(),
             preview: None,
             form_diff: None,
+            footer: crate::widgets::form::FooterFocus::Input,
         }
     }
 
@@ -225,6 +228,29 @@ impl SchemaEditor {
     pub fn set_field(&mut self, label: &str, value: impl Into<String>) {
         if let Some(field) = self.fields.iter_mut().find(|field| field.label == label) {
             field.value = value.into();
+        }
+    }
+
+    /// What the form's Submit does: preview the DDL its fields make, or run the SQL it
+    /// was opened with.
+    pub fn submit_label(&self) -> &'static str {
+        if self.raw_sql.is_empty() {
+            "Preview"
+        } else {
+            "Run"
+        }
+    }
+
+    /// Types into the focused field, or deletes from its end.
+    pub fn edit_focused(&mut self, typed: Option<char>) {
+        let Some(field) = self.fields.get_mut(self.focus) else {
+            return;
+        };
+        match typed {
+            Some(ch) => field.value.push(ch),
+            None => {
+                field.value.pop();
+            }
         }
     }
 
@@ -357,8 +383,13 @@ impl SchemaEditor {
 
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![format!("schema {}", kind_label(self.kind))];
+        let on_fields = self.footer == crate::widgets::form::FooterFocus::Input;
         for (index, field) in self.fields.iter().enumerate() {
-            let marker = if index == self.focus { ">" } else { " " };
+            let marker = if on_fields && index == self.focus {
+                ">"
+            } else {
+                " "
+            };
             // One mark per character typed, so a slip of the finger shows; the characters
             // themselves never reach the screen.
             let value = if field.secret {
@@ -471,5 +502,44 @@ mod tests {
         };
         update(&mut model, Action::OpenDdlPreview);
         assert!(model.schema_editor.preview.is_some());
+    }
+
+    /// The form took Tab, Enter and Esc and nothing else: nothing typed reached a field,
+    /// and it had no buttons to walk to.
+    #[test]
+    fn the_form_takes_typing_and_has_submit_and_cancel() {
+        use crate::widgets::form::FooterFocus;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut model = Model {
+            schema_editor: SchemaEditor::table_form("public.t"),
+            ..Model::default()
+        };
+        model.schema_editor.open = true;
+        update(&mut model, key(KeyCode::Backspace));
+        update(&mut model, key(KeyCode::Char('2')));
+        assert_eq!(model.schema_editor.field("target"), "public.2");
+        let fields = model.schema_editor.fields.len();
+        for _ in 0..fields {
+            update(&mut model, key(KeyCode::Down));
+        }
+        assert_eq!(model.schema_editor.footer, FooterFocus::Submit);
+        let screen = crate::render::render_to_string(&model, 100, 30);
+        assert!(screen.contains(">[Preview]"), "{screen}");
+        update(&mut model, key(KeyCode::Right));
+        assert_eq!(model.schema_editor.footer, FooterFocus::Cancel);
+        update(&mut model, key(KeyCode::Enter));
+        assert!(!model.schema_editor.open, "Enter on Cancel cancels");
+
+        model.schema_editor.open = true;
+        model.schema_editor.footer = FooterFocus::Submit;
+        update(&mut model, key(KeyCode::Enter));
+        assert!(model.schema_editor.preview.is_some());
+        assert!(!model.schema_editor.open, "the preview takes over");
+
+        model.schema_editor.preview = None;
+        model.schema_editor.open = true;
+        update(&mut model, key(KeyCode::Esc));
+        assert!(!model.schema_editor.open);
     }
 }
