@@ -601,10 +601,7 @@ pub enum Action {
     ImportConfig {
         path: std::path::PathBuf,
     },
-    ConfigPreviewed {
-        conflicts: Vec<String>,
-        needing_secret: Vec<String>,
-    },
+    ConfigPreviewed(dexo_storage::ImportPreview),
     ConfigImported {
         needing_secret: Vec<String>,
     },

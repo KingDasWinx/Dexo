@@ -53,6 +53,13 @@ impl ConfigTransferScreen {
                     preview.connections_needing_secret.join(", ")
                 ));
             }
+            // A shared file's commands run on this machine: shown before they are kept.
+            if !preview.commands.is_empty() {
+                lines.push("runs on this machine when it connects -- read before applying:".into());
+                for command in &preview.commands {
+                    lines.push(format!("  {command}"));
+                }
+            }
         }
         if !self.needing_secret.is_empty() {
             lines.push(format!(

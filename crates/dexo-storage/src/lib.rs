@@ -21,8 +21,8 @@ pub mod sql_files;
 
 pub use catalog_cache::{CatalogCache, CatalogSnapshotMetadata};
 pub use connection::{
-    ConnectionRepository, ImportPreview, ImportReport, ImportResolution, export_portable,
-    import_portable, import_portable_resolved, preview_import,
+    ConnectionRepository, ImportPreview, ImportReport, ImportResolution, commands_of,
+    export_portable, import_portable, import_portable_resolved, preview_import,
 };
 pub use database::{AppPaths, Database};
 pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};

@@ -1859,13 +1859,7 @@ impl WorkbenchRuntime {
             return;
         };
         match storage.preview_import(path).await {
-            Ok(preview) => {
-                self.emit(Action::ConfigPreviewed {
-                    conflicts: preview.conflicts,
-                    needing_secret: preview.connections_needing_secret,
-                })
-                .await;
-            }
+            Ok(preview) => self.emit(Action::ConfigPreviewed(preview)).await,
             Err(error) => self.fail_project(error).await,
         }
     }

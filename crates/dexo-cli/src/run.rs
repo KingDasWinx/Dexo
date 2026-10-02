@@ -392,6 +392,9 @@ fn run_config(command: ConfigCommand) -> anyhow::Result<()> {
             let db = Database::open(&paths.database)?;
             let toml_text = std::fs::read_to_string(input)?;
             let report = import_portable(db.connection(), &toml_text)?;
+            for command in &report.commands {
+                eprintln!("note: {command}; read it before you connect");
+            }
             if report.connections_needing_secret.is_empty() {
                 println!("Imported 0 connection(s).");
             } else {

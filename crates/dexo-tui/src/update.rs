@@ -2221,14 +2221,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let resolutions = model.config_transfer.resolutions.clone();
             vec![Effect::ApplyConfigImport { path, resolutions }]
         }
-        Action::ConfigPreviewed {
-            conflicts,
-            needing_secret,
-        } => {
-            model.config_transfer.preview = Some(dexo_storage::ImportPreview {
-                conflicts,
-                connections_needing_secret: needing_secret,
-            });
+        Action::ConfigPreviewed(preview) => {
+            model.config_transfer.preview = Some(preview);
             Vec::new()
         }
         Action::ConfigImported { needing_secret } => {

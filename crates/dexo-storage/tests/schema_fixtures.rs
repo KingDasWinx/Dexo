@@ -72,3 +72,37 @@ fn export_import_survives_reopen() {
     let report = import_portable(fresh.connection(), &exported).unwrap();
     assert_eq!(report.connections_needing_secret, vec!["c"]);
 }
+
+/// A shared file's pre-connect and password commands are said before and after the
+/// import, so nobody runs one without having seen it.
+#[test]
+fn an_import_says_the_commands_it_brings() {
+    let source = Database::open_in_memory().unwrap();
+    ConnectionRepository::new(source.connection())
+        .save(&ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::new_v4()),
+            None,
+            "tunnelled",
+            "postgres",
+            "local",
+            serde_json::json!({
+                "host": "db", "port": 5432,
+                "pre_connect": "kubectl port-forward svc/db ${port}:5432",
+                "password_command": "op read op://vault/db/password"
+            }),
+            SecretRef::new("ref-1".into()),
+        ))
+        .unwrap();
+    let exported = export_portable(source.connection()).unwrap();
+    let fresh = Database::open_in_memory().unwrap();
+    let preview = dexo_storage::preview_import(fresh.connection(), &exported).unwrap();
+    assert_eq!(
+        preview.commands,
+        [
+            "tunnelled runs `kubectl port-forward svc/db ${port}:5432` before it connects",
+            "tunnelled runs `op read op://vault/db/password` for its password"
+        ]
+    );
+    let report = import_portable(fresh.connection(), &exported).unwrap();
+    assert_eq!(report.commands, preview.commands);
+}
