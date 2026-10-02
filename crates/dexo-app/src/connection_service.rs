@@ -163,6 +163,10 @@ fn file_config(extra: &serde_json::Value) -> Result<serde_json::Value, AppError>
         .and_then(|value| value.as_str())
         .unwrap_or_default();
     let path = require_field("path", path.to_string())?;
+    // DuckDB's in-memory database is no file to resolve.
+    if path == ":memory:" {
+        return Ok(serde_json::json!({ "path": path }));
+    }
     let path = std::path::absolute(&path)
         .ok()
         .and_then(|path| path.into_os_string().into_string().ok())
@@ -232,6 +236,7 @@ fn normalize_driver(driver: &str) -> Result<String, AppError> {
         "mysql" => Ok("mysql".into()),
         "mariadb" => Ok("mariadb".into()),
         "sqlite" | "sqlite3" => Ok("sqlite".into()),
+        "duckdb" => Ok("duckdb".into()),
         "" => Err(AppError::new(
             ErrorCategory::Configuration,
             "driver is required",
@@ -395,5 +400,12 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn an_in_memory_duckdb_keeps_its_path() {
+        let config = super::file_config(&serde_json::json!({ "path": ":memory:" })).unwrap();
+        assert_eq!(config["path"], ":memory:");
+        assert_eq!(super::normalize_driver("DuckDB").unwrap(), "duckdb");
     }
 }

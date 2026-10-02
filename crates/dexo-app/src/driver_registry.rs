@@ -19,12 +19,23 @@ impl DriverRegistry {
         self.factories.insert(factory.driver_name(), factory);
     }
 
+    /// A driver Dexo has but this build left out -- DuckDB, built in only with its cargo
+    /// feature -- says how to get it.
     pub fn get(&self, driver: &str) -> Result<Arc<dyn ConnectionFactory>, AppError> {
         self.factories.get(driver).cloned().ok_or_else(|| {
-            AppError::new(
-                ErrorCategory::Configuration,
-                format!("unknown driver '{driver}'"),
-            )
+            match dexo_driver_api::DriverDescriptor::for_id(driver) {
+                Some(descriptor) => AppError::new(
+                    ErrorCategory::Capability,
+                    format!(
+                        "this build of Dexo has no {} driver: build it with `--features {}`",
+                        descriptor.display_name, descriptor.id
+                    ),
+                ),
+                None => AppError::new(
+                    ErrorCategory::Configuration,
+                    format!("unknown driver '{driver}'"),
+                ),
+            }
         })
     }
 
@@ -36,5 +47,24 @@ impl DriverRegistry {
             .collect();
         descriptors.sort_by_key(|descriptor| descriptor.id);
         descriptors
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::DriverRegistry;
+    use crate::error::ErrorCategory;
+
+    #[test]
+    fn a_driver_left_out_of_the_build_says_how_to_get_it() {
+        let registry = DriverRegistry::new();
+        let missing = registry.get("duckdb").err().unwrap();
+        assert_eq!(missing.category(), ErrorCategory::Capability);
+        assert!(
+            missing.to_string().contains("--features duckdb"),
+            "{missing}"
+        );
+        let unknown = registry.get("oracle").err().unwrap();
+        assert_eq!(unknown.category(), ErrorCategory::Configuration);
     }
 }

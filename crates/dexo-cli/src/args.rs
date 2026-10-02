@@ -11,7 +11,7 @@ use clap::{Parser, Subcommand, ValueEnum};
 )]
 pub struct Args {
     /// Open the workbench connected to this URL, without saving it: postgres://user@host/db,
-    /// mysql://…, mariadb://…, sqlite:///path/to/file.
+    /// mysql://…, mariadb://…, sqlite:///path/to/file, duckdb:///path/to/file.parquet.
     #[arg(value_name = "URL")]
     pub url: Option<String>,
     /// Ask for the URL's password on the terminal instead of putting it in the URL, where
@@ -284,7 +284,7 @@ pub enum ConnectionsCommand {
         database: String,
         #[arg(long, default_value = "", required_unless_present = "path")]
         username: String,
-        /// The database file, for a driver that opens one (sqlite).
+        /// The database file, for a driver that opens one (sqlite, duckdb).
         #[arg(
             long,
             conflicts_with_all = ["host", "port", "database", "username", "password_command", "password_stdin", "pre_connect"]

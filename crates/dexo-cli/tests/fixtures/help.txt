@@ -22,7 +22,7 @@ Commands:
 
 Arguments:
   [URL]
-          Open the workbench connected to this URL, without saving it: postgres://user@host/db, mysql://…, mariadb://…, sqlite:///path/to/file
+          Open the workbench connected to this URL, without saving it: postgres://user@host/db, mysql://…, mariadb://…, sqlite:///path/to/file, duckdb:///path/to/file.parquet
 
 Options:
       --password-prompt

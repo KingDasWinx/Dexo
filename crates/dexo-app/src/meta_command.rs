@@ -345,13 +345,17 @@ fn text_attribute(object: &CatalogObject, key: &str) -> String {
         .to_string()
 }
 
-/// Each driver says it its own way: Postgres and SQLite flag `not_null`, MySQL answers
+/// Each driver says it its own way: Postgres, SQLite and DuckDB flag `not_null`, MySQL answers
 /// `YES` or `NO`.
 fn nullable(column: &CatalogObject) -> bool {
-    let not_null = ["driver.postgres.not_null", "driver.sqlite.not_null"]
-        .iter()
-        .find_map(|key| column.attributes.get(*key))
-        .and_then(serde_json::Value::as_bool);
+    let not_null = [
+        "driver.postgres.not_null",
+        "driver.sqlite.not_null",
+        "driver.duckdb.not_null",
+    ]
+    .iter()
+    .find_map(|key| column.attributes.get(*key))
+    .and_then(serde_json::Value::as_bool);
     match not_null {
         Some(not_null) => !not_null,
         None => column

@@ -41,12 +41,7 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
         "mysql" => "mysql",
         "mariadb" => "mariadb",
         "sqlite" => return file_connection("sqlite", rest),
-        "duckdb" => {
-            return Err(AppError::new(
-                ErrorCategory::Capability,
-                "DuckDB connections arrive with the DuckDB driver",
-            ));
-        }
+        "duckdb" => return file_connection("duckdb", rest),
         other => return Err(invalid(&format!("unknown scheme {other}"))),
     };
     let (userinfo, rest) = split_userinfo(rest);
@@ -162,8 +157,9 @@ fn in_parameter(before: &str) -> bool {
     })
 }
 
-/// `sqlite:///abs/path` and `sqlite://relative/path`: the rest is the file, and
-/// `?mode=ro` opens it read-only.
+/// `sqlite:///abs/path` and `sqlite://relative/path`, `duckdb://` the same: the rest is
+/// the file, and `?mode=ro` opens it read-only. `duckdb://:memory:` is a database that
+/// lives as long as the connection.
 fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> {
     let invalid = |reason: &str| {
         AppError::new(
@@ -207,6 +203,14 @@ fn names_a_file(text: &str) -> bool {
 
 /// A temporary connection to the file at `path`, named after it.
 pub fn file(driver: &str, path: &std::path::Path) -> Result<UrlConnection, AppError> {
+    if path.as_os_str() == ":memory:" {
+        let config = serde_json::json!({ "path": ":memory:" });
+        return Ok(UrlConnection {
+            profile: temporary("memory".into(), driver, config),
+            password: None,
+            warning: None,
+        });
+    }
     let path = std::path::absolute(path).map_err(|error| {
         AppError::new(
             ErrorCategory::Configuration,
@@ -278,7 +282,7 @@ impl Parameters {
                 decode(value).map_err(|_| format!("{key} is not valid percent-encoding"))?;
             let lower = value.to_ascii_lowercase().replace('-', "_");
             match (driver, key.to_ascii_lowercase().as_str()) {
-                ("sqlite", "mode") => match lower.as_str() {
+                ("sqlite" | "duckdb", "mode") => match lower.as_str() {
                     "ro" => read.read_only = true,
                     "rw" | "rwc" => {}
                     _ => return Err(format!("mode={value}: expected ro, rw or rwc")),
@@ -387,6 +391,14 @@ mod tests {
 
     #[test]
     fn file_urls_name_the_file() {
+        let duckdb = parse("duckdb:///data/sales.parquet?mode=ro").unwrap();
+        assert_eq!(duckdb.profile.driver, "duckdb");
+        assert_eq!(duckdb.profile.config["path"], "/data/sales.parquet");
+        assert_eq!(duckdb.profile.policy.read_only, Some(true));
+        let memory = parse("duckdb://:memory:").unwrap();
+        assert_eq!(memory.profile.config["path"], ":memory:");
+        assert_eq!(memory.profile.name, "memory");
+
         let parsed = parse("sqlite:///tmp/shop%20copy.db").unwrap();
         assert_eq!(parsed.profile.driver, "sqlite");
         assert_eq!(parsed.profile.config["path"], "/tmp/shop copy.db");
@@ -480,7 +492,8 @@ mod tests {
             "postgres://u@h:port/db",
             "postgres://u:%zz@h/db",
             "sqlite://",
-            "duckdb:///tmp/x.duckdb",
+            "duckdb://",
+            "duckdb:///x.duckdb?mode=memory",
         ] {
             assert!(parse(url).is_err(), "{url}");
         }

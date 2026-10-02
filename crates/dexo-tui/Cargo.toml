@@ -6,6 +6,9 @@ rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 
+[features]
+duckdb = []
+
 [dependencies]
 crossterm.workspace = true
 dexo-app = { path = "../dexo-app" }

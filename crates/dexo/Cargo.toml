@@ -17,11 +17,15 @@ dexo-cli = { path = "../dexo-cli" }
 dexo-driver-mysql = { path = "../dexo-driver-mysql" }
 dexo-driver-postgres = { path = "../dexo-driver-postgres" }
 dexo-driver-sqlite = { path = "../dexo-driver-sqlite" }
+dexo-driver-duckdb = { path = "../dexo-driver-duckdb", optional = true }
 dexo-tui = { path = "../dexo-tui" }
 dexo-storage = { path = "../dexo-storage" }
 tracing-subscriber.workspace = true
 tracing-appender.workspace = true
 rusqlite.workspace = true
+
+[features]
+duckdb = ["dep:dexo-driver-duckdb", "dexo-tui/duckdb"]
 
 [dev-dependencies]
 tokio-util.workspace = true

@@ -399,13 +399,19 @@ fn is_basic(label: &str) -> bool {
     BASIC_FIELDS.contains(&label)
 }
 
-fn drivers() -> [&'static str; 4] {
-    [
+/// The drivers this build has: DuckDB's engine is large, and built in only with the
+/// `duckdb` feature.
+fn drivers() -> Vec<&'static str> {
+    let mut drivers = vec![
         DriverDescriptor::postgres().id,
         DriverDescriptor::mysql().id,
         DriverDescriptor::mariadb().id,
         DriverDescriptor::sqlite().id,
-    ]
+    ];
+    if cfg!(feature = "duckdb") {
+        drivers.push(DriverDescriptor::duckdb().id);
+    }
+    drivers
 }
 
 fn normalize_driver(driver: &str) -> &'static str {
@@ -806,6 +812,12 @@ mod tests {
         assert!(dump.contains("< SQLite >"));
         assert!(dump.contains("path:"));
         assert!(!dump.contains("host:") && !dump.contains("password:"));
+        if cfg!(feature = "duckdb") {
+            form.cycle_driver(1);
+            let dump = form.lines().join("\n");
+            assert!(dump.contains("< DuckDB >"));
+            assert!(dump.contains("path:") && !dump.contains("password:"));
+        }
         form.cycle_driver(1);
         assert_eq!(
             form.fields

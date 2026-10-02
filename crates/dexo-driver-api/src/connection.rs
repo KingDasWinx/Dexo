@@ -72,6 +72,15 @@ impl DriverDescriptor {
         }
     }
 
+    /// A DuckDB file, `:memory:`, or a CSV, Parquet or JSON file read as a table.
+    pub fn duckdb() -> Self {
+        Self {
+            id: "duckdb",
+            display_name: "DuckDB",
+            ..Self::sqlite()
+        }
+    }
+
     pub fn mariadb() -> Self {
         Self {
             id: "mariadb",
@@ -95,6 +104,7 @@ impl DriverDescriptor {
             Self::mysql(),
             Self::mariadb(),
             Self::sqlite(),
+            Self::duckdb(),
         ]
         .into_iter()
         .find(|descriptor| descriptor.id == id)
