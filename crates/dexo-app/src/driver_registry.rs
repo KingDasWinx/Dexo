@@ -5,6 +5,9 @@ use dexo_driver_api::ConnectionFactory;
 
 use crate::error::{AppError, ErrorCategory};
 
+/// Drivers built in only with the cargo feature of the same name.
+const FEATURE_GATED: &[&str] = &["duckdb"];
+
 #[derive(Clone, Default)]
 pub struct DriverRegistry {
     factories: HashMap<&'static str, Arc<dyn ConnectionFactory>>,
@@ -23,7 +26,9 @@ impl DriverRegistry {
     /// feature -- says how to get it.
     pub fn get(&self, driver: &str) -> Result<Arc<dyn ConnectionFactory>, AppError> {
         self.factories.get(driver).cloned().ok_or_else(|| {
-            match dexo_driver_api::DriverDescriptor::for_id(driver) {
+            match dexo_driver_api::DriverDescriptor::for_id(driver)
+                .filter(|descriptor| FEATURE_GATED.contains(&descriptor.id))
+            {
                 Some(descriptor) => AppError::new(
                     ErrorCategory::Capability,
                     format!(
@@ -66,5 +71,9 @@ mod tests {
         );
         let unknown = registry.get("oracle").err().unwrap();
         assert_eq!(unknown.category(), ErrorCategory::Configuration);
+        // Postgres is always built in: no feature brings it.
+        let unregistered = registry.get("postgres").err().unwrap();
+        assert_eq!(unregistered.category(), ErrorCategory::Configuration);
+        assert!(!unregistered.to_string().contains("--features"));
     }
 }
