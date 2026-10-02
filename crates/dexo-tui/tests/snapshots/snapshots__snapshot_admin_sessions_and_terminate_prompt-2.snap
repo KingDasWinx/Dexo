@@ -1,0 +1,34 @@
+---
+source: crates/dexo-tui/tests/snapshots.rs
+expression: "render_to_string(&model, 100, 30)"
+---
+demo  local  public                                                                                 
+┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
+│[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
+│  ● local▾  [offline]     ││   1▸select 1                                                         │
+│>   ▸ public              ││                                                                      │
+│      mysql.users [restric││                                                                      │
+│                          ││                                                                      │
+│┌Sessions on ┌Terminate session─────────────────────────────────────────────────────┐────────────┐│
+││  ID       U│Session 11 · dexo@dexo · idle in transaction                          │            ││
+││  10       d│  lock table items                                                    │            ││
+││> 11       d│                                                                      │            ││
+││            │Type 11 to end this session and roll back its work.                   │            ││
+││  11 blocks │id: █                                                                 │            ││
+││            │ [Terminate]   [Cancel]                                               │            ││
+││up/down pick└──────────────────────────────────────────────────────────────────────┘            ││
+│└────────────────────────────────────────────────────────────────────────────────────────────────┘│
+│                          │└──────────────────────────────────────────────────────────────────────┘
+│                          │┌  Results─────────────────────────────────────────────────────────────┐
+│                          ││[Grid] Explain  Messages                                              │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+│                          ││                                                                      │
+└──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
+local  Ctrl+Enter run  Ctrl+N new sql  Ctrl+W close                                       Ctrl+P  F1

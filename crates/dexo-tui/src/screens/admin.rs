@@ -1,16 +1,79 @@
-use dexo_driver_api::{AdminPreview, BlockingEdge, SessionInfo};
+use dexo_driver_api::{BlockingEdge, SessionInfo};
 
+use crate::widgets::form::{FooterFocus, footer_line};
+use crate::widgets::text_input::TextInput;
+
+/// The server's sessions, one picked with the arrows; `t` ends the picked one once its
+/// id is typed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AdminScreen {
     pub open: bool,
     pub sessions: Vec<SessionInfo>,
     pub blocking: Vec<BlockingEdge>,
     pub captured_at: String,
-    pub paused: bool,
-    pub preview: Option<AdminPreview>,
-    pub confirm_target: String,
-    pub confirmed: bool,
+    pub selected: usize,
+    pub terminate: Option<TerminatePrompt>,
     pub last_error: Option<String>,
+}
+
+/// Asked before a session is ended: its id typed, as `dexo sessions terminate
+/// --confirm-target` asks for it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TerminatePrompt {
+    pub session: SessionInfo,
+    /// The connection the session was listed on; the prompt refuses once it changed.
+    pub connection: String,
+    pub typed: TextInput,
+    pub footer: FooterFocus,
+    pub error: Option<String>,
+}
+
+impl TerminatePrompt {
+    pub fn new(session: SessionInfo) -> Self {
+        Self {
+            session,
+            connection: String::new(),
+            typed: TextInput::default(),
+            footer: FooterFocus::Input,
+            error: None,
+        }
+    }
+
+    pub fn accepted(&self) -> bool {
+        self.typed.as_str() == self.session.id
+    }
+
+    pub fn lines(&self, width: usize) -> Vec<String> {
+        let session = &self.session;
+        let mut lines = vec![
+            format!(
+                "Session {} · {}@{} · {}",
+                session.id,
+                session.user.as_deref().unwrap_or("-"),
+                session.database.as_deref().unwrap_or("-"),
+                session.state
+            ),
+            format!(
+                "  {}",
+                cut(
+                    session.current_query.as_deref().unwrap_or("-"),
+                    width.saturating_sub(2)
+                )
+            ),
+            String::new(),
+            format!(
+                "Type {} to end this session and roll back its work.",
+                session.id
+            ),
+            self.typed
+                .inline_line("id: ", self.footer == FooterFocus::Input),
+        ];
+        if let Some(error) = &self.error {
+            lines.push(error.clone());
+        }
+        lines.push(footer_line("Terminate", self.footer));
+        lines
+    }
 }
 
 impl AdminScreen {
@@ -18,7 +81,6 @@ impl AdminScreen {
         Self {
             open: true,
             captured_at: "1710000000".into(),
-            paused: false,
             sessions: vec![
                 SessionInfo {
                     id: "10".into(),
@@ -48,66 +110,99 @@ impl AdminScreen {
                     session_id: "10".into(),
                 },
             }],
-            preview: Some(dexo_driver_api::AdminPreview {
-                command: "SELECT pg_terminate_backend(11)".into(),
-                lock_risk: dexo_driver_api::LockLevel::None,
-                confirmation: dexo_driver_api::AdminConfirmKind::TypeTarget,
-            }),
-            confirm_target: String::new(),
-            confirmed: false,
+            selected: 0,
+            terminate: None,
             last_error: None,
         }
     }
 
-    pub fn pause(&mut self) {
-        self.paused = true;
+    /// The session the arrows are on.
+    pub fn picked(&self) -> Option<&SessionInfo> {
+        self.sessions.get(self.selected)
     }
 
-    pub fn resume(&mut self) {
-        self.paused = false;
+    pub fn move_selection(&mut self, down: bool) {
+        let last = self.sessions.len().saturating_sub(1);
+        self.selected = if down {
+            (self.selected + 1).min(last)
+        } else {
+            self.selected.saturating_sub(1)
+        };
     }
 
-    pub fn lines(&self) -> Vec<String> {
+    /// The session list as a table, the picked row marked, then who blocks whom and the
+    /// keys. `width` is the popup's inner width.
+    pub fn lines(&self, width: usize) -> Vec<String> {
         let mut lines = vec![format!(
-            "admin captured_at={} paused={}",
-            self.captured_at, self.paused
+            "  {:<8} {:<12} {:<12} {:<20} {:>7}  QUERY",
+            "ID", "USER", "DATABASE", "STATE", "TIME"
         )];
-        for session in &self.sessions {
-            lines.push(format!(
-                "session {} user={} db={} state={} duration_ms={} sql={}",
-                session.id,
-                session.user.as_deref().unwrap_or("-"),
-                session.database.as_deref().unwrap_or("-"),
-                session.state,
+        if self.sessions.is_empty() {
+            lines.push("  No sessions.".into());
+        }
+        for (index, session) in self.sessions.iter().enumerate() {
+            let row = format!(
+                "{} {:<8} {:<12} {:<12} {:<20} {:>7}  {}",
+                if index == self.selected { ">" } else { " " },
+                cut(&session.id, 8),
+                cut(session.user.as_deref().unwrap_or("-"), 12),
+                cut(session.database.as_deref().unwrap_or("-"), 12),
+                cut(&session.state, 20),
                 session
                     .duration_ms
-                    .map(|ms| ms.to_string())
+                    .map(duration)
                     .unwrap_or_else(|| "-".into()),
-                session.current_query.as_deref().unwrap_or("-")
-            ));
+                session
+                    .current_query
+                    .as_deref()
+                    .unwrap_or("-")
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            );
+            lines.push(cut(&row, width));
         }
-        for edge in &self.blocking {
-            lines.push(format!(
-                "block {} -> {} lock={} rel={}",
-                edge.blocker,
-                edge.blocked,
-                edge.lock.mode,
-                edge.lock.relation.as_deref().unwrap_or("-")
-            ));
-        }
-        if let Some(preview) = &self.preview {
-            lines.push(format!(
-                "preview {} lock={:?} confirm={:?}",
-                preview.command, preview.lock_risk, preview.confirmation
-            ));
-            lines.push(format!(
-                "confirm-target={} confirmed={}",
-                self.confirm_target, self.confirmed
-            ));
+        if !self.blocking.is_empty() {
+            lines.push(String::new());
+            for edge in &self.blocking {
+                lines.push(cut(
+                    &format!(
+                        "  {} blocks {} · {} on {}",
+                        edge.blocker,
+                        edge.blocked,
+                        edge.lock.mode,
+                        edge.lock.relation.as_deref().unwrap_or("-")
+                    ),
+                    width,
+                ));
+            }
         }
         if let Some(error) = &self.last_error {
-            lines.push(format!("error={error}"));
+            lines.push(String::new());
+            lines.push(cut(error, width));
         }
+        lines.push(String::new());
+        lines.push("up/down pick  t terminate  r refresh  esc close".into());
         lines
     }
+}
+
+/// `1.2s`, `4m03s`, `2h05m`.
+fn duration(ms: u64) -> String {
+    let secs = ms / 1000;
+    match secs {
+        0..60 => format!("{}.{}s", secs, (ms % 1000) / 100),
+        60..3600 => format!("{}m{:02}s", secs / 60, secs % 60),
+        _ => format!("{}h{:02}m", secs / 3600, (secs % 3600) / 60),
+    }
+}
+
+/// `text` in at most `width` characters, an ellipsis marking what was cut.
+fn cut(text: &str, width: usize) -> String {
+    if text.chars().count() <= width {
+        return text.to_string();
+    }
+    let mut out: String = text.chars().take(width.saturating_sub(1)).collect();
+    out.push('…');
+    out
 }

@@ -243,7 +243,8 @@ fn snapshot_explain_tree_table_summary() {
 }
 
 #[test]
-fn snapshot_admin_sessions_pause_and_preview() {
+fn snapshot_admin_sessions_and_terminate_prompt() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
     use dexo_tui::action::Action;
     use dexo_tui::update;
 
@@ -251,8 +252,13 @@ fn snapshot_admin_sessions_pause_and_preview() {
     update(&mut model, Action::OpenAdmin);
     model.admin = dexo_tui::screens::admin::AdminScreen::fixture();
     insta::assert_snapshot!(render_to_string(&model, 160, 50));
-    update(&mut model, Action::AdminPause);
-    insta::assert_snapshot!(render_to_string(&model, 60, 20));
+    for code in [KeyCode::Down, KeyCode::Char('t')] {
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(code, KeyModifiers::NONE)),
+        );
+    }
+    insta::assert_snapshot!(render_to_string(&model, 100, 30));
 }
 
 #[test]

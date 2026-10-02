@@ -48,8 +48,6 @@ pub enum HitButton {
     Keymap,
     Mouse,
     Reset,
-    Pause,
-    Resume,
     Confirm,
     Recover,
     Discard,

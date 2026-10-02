@@ -1547,42 +1547,23 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenAdmin => {
             model.admin.open = true;
-            model
-                .active_session
-                .map(|session| Effect::LoadAdminSessions {
-                    session,
-                    generation: model.session_generation,
-                })
-                .into_iter()
-                .collect()
+            model.admin.selected = 0;
+            model.admin.terminate = None;
+            model.admin.last_error = None;
+            load_admin_sessions(model)
         }
-        Action::AdminPause => {
-            model.admin.pause();
-            Vec::new()
-        }
-        Action::AdminResume => {
-            model.admin.resume();
-            Vec::new()
-        }
-        Action::ConfirmAdmin => {
-            model.admin.confirmed = true;
-            if model.admin.confirm_target.is_empty() {
-                model.admin.confirm_target = model
-                    .admin
-                    .sessions
-                    .first()
-                    .map(|session| session.id.clone())
-                    .unwrap_or_default();
-            }
-            match model.active_session {
-                Some(session) if !model.admin.confirm_target.is_empty() => {
-                    vec![Effect::AdminTerminate {
-                        session,
-                        target: model.admin.confirm_target.clone(),
-                    }]
+        Action::AdminTerminated { result } => {
+            match result {
+                Ok(message) => {
+                    model.admin.last_error = None;
+                    model.messages.info(message);
                 }
-                _ => Vec::new(),
+                Err(message) => {
+                    model.admin.last_error = Some(format!("Not terminated: {message}"));
+                    model.messages.error(message);
+                }
             }
+            load_admin_sessions(model)
         }
         Action::OpenMcpProfiles => {
             model.mcp_profiles.open = true;
@@ -1988,6 +1969,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.admin.sessions = sessions;
             model.admin.captured_at = captured_at;
             model.admin.blocking = blocking;
+            model.admin.selected = model
+                .admin
+                .selected
+                .min(model.admin.sessions.len().saturating_sub(1));
             model.admin.open = true;
             Vec::new()
         }
@@ -2953,12 +2938,26 @@ fn mouse_parameters(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    match hit {
-        Some(HitTarget::Button(HitButton::Pause)) => update(model, Action::AdminPause),
-        Some(HitTarget::Button(HitButton::Resume)) => update(model, Action::AdminResume),
-        Some(HitTarget::Button(HitButton::Confirm)) => update(model, Action::ConfirmAdmin),
-        _ => Vec::new(),
+    if let Some(prompt) = model.admin.terminate.as_mut() {
+        return match hit {
+            Some(HitTarget::FooterSubmit) => submit_terminate(model),
+            Some(HitTarget::FooterCancel) => {
+                model.admin.terminate = None;
+                Vec::new()
+            }
+            Some(HitTarget::FormField(_)) => {
+                prompt.footer = crate::widgets::form::FooterFocus::Input;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
     }
+    if let Some(HitTarget::ListRow(index)) = hit
+        && index < model.admin.sessions.len()
+    {
+        model.admin.selected = index;
+    }
+    Vec::new()
 }
 
 fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -8914,15 +8913,103 @@ fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    if let Some(prompt) = model.admin.terminate.as_mut() {
+        return match footer_key(&mut prompt.footer, &key) {
+            FooterKey::Submit => submit_terminate(model),
+            FooterKey::Cancel => {
+                model.admin.terminate = None;
+                Vec::new()
+            }
+            FooterKey::Moved => Vec::new(),
+            FooterKey::Pass => {
+                if prompt.footer == crate::widgets::form::FooterFocus::Input {
+                    let _ = prompt.typed.handle_key(key);
+                    prompt.error = None;
+                }
+                Vec::new()
+            }
+        };
+    }
     match key.code {
         KeyCode::Esc => {
             model.admin.open = false;
             Vec::new()
         }
-        KeyCode::Char('p') => update(model, Action::AdminPause),
-        KeyCode::Char('r') => update(model, Action::AdminResume),
-        KeyCode::Enter => update(model, Action::ConfirmAdmin),
+        KeyCode::Up | KeyCode::Char('k') => {
+            model.admin.move_selection(false);
+            Vec::new()
+        }
+        KeyCode::Down | KeyCode::Char('j') => {
+            model.admin.move_selection(true);
+            Vec::new()
+        }
+        KeyCode::Char('r') => load_admin_sessions(model),
+        KeyCode::Char('t') => open_terminate(model),
         _ => Vec::new(),
+    }
+}
+
+fn load_admin_sessions(model: &Model) -> Vec<Effect> {
+    model
+        .active_session
+        .map(|session| Effect::LoadAdminSessions {
+            session,
+            generation: model.session_generation,
+        })
+        .into_iter()
+        .collect()
+}
+
+/// Ending a session is a write on the server: the connection's policy is asked first,
+/// then the picked session's id has to be typed.
+fn open_terminate(model: &mut Model) -> Vec<Effect> {
+    let Some(session) = model.admin.picked().cloned() else {
+        return Vec::new();
+    };
+    let action = dexo_driver_api::AdminAction::TerminateSession {
+        session_id: session.id.clone(),
+    };
+    let policy = dexo_app::admin_service::AdminPolicy {
+        production: dexo_app::Environment::parse_strict(&model.connection.environment)
+            == dexo_app::Environment::Production,
+        read_only: model.connection.read_only,
+    };
+    let decision = dexo_app::admin_service::evaluate(&action, "", &policy);
+    if !decision.allowed {
+        model.admin.last_error = Some(format!(
+            "Not terminated: {} is read-only.",
+            model.connection.name
+        ));
+        return Vec::new();
+    }
+    let mut prompt = crate::screens::admin::TerminatePrompt::new(session);
+    prompt.connection = model.connection.name.clone();
+    model.admin.terminate = Some(prompt);
+    Vec::new()
+}
+
+fn submit_terminate(model: &mut Model) -> Vec<Effect> {
+    let Some(prompt) = model.admin.terminate.as_mut() else {
+        return Vec::new();
+    };
+    if !prompt.accepted() {
+        prompt.error = Some("The id does not match; nothing was done.".into());
+        return Vec::new();
+    }
+    // What was confirmed for one connection is never sent to another.
+    let target = prompt.session.id.clone();
+    let connection = prompt.connection.clone();
+    model.admin.terminate = None;
+    match model.active_session {
+        Some(session) if connection == model.connection.name => {
+            vec![Effect::AdminTerminate { session, target }]
+        }
+        _ => {
+            model.admin.last_error =
+                Some("The connection changed under the dialog; nothing was done.".into());
+            Vec::new()
+        }
     }
 }
 

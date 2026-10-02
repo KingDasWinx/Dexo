@@ -67,19 +67,75 @@ async fn saved_mode_accent_keymap_and_mouse_survive_restart() {
     assert!(!loaded.mouse);
 }
 
-#[tokio::test]
-async fn terminate_requires_exact_backend_id_and_never_retries() {
-    let mut calls = 0u32;
-    let preview = "42";
-    assert_ne!(preview, "41");
-    let typed = "42";
-    if typed != preview {
-        panic!("wrong target");
-    }
-    calls += 1;
-    assert_eq!(calls, 1);
-    let _ = Action::ConfirmAdmin;
-    let _ = update;
+fn sessions_model(read_only: bool) -> dexo_tui::Model {
+    let mut model = dexo_tui::Model {
+        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::new_v4())),
+        ..Default::default()
+    };
+    model.connection.name = "shop".into();
+    model.connection.read_only = read_only;
+    update(&mut model, Action::OpenAdmin);
+    model.admin = dexo_tui::screens::admin::AdminScreen::fixture();
+    model
+}
+
+fn press_key(
+    model: &mut dexo_tui::Model,
+    code: crossterm::event::KeyCode,
+) -> Vec<dexo_tui::Effect> {
+    update(
+        model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
+}
+
+fn terminates(effects: &[dexo_tui::Effect]) -> Option<String> {
+    effects.iter().find_map(|effect| match effect {
+        dexo_tui::Effect::AdminTerminate { target, .. } => Some(target.clone()),
+        _ => None,
+    })
+}
+
+/// Enter used to end the first session listed, whoever owned it. Now only the session
+/// picked with the arrows is ended, after its id is typed, and an id that does not
+/// match does nothing.
+#[test]
+fn only_the_picked_session_ends_once_its_id_is_typed() {
+    use crossterm::event::KeyCode;
+    let mut model = sessions_model(false);
+    assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
+    press_key(&mut model, KeyCode::Down);
+    press_key(&mut model, KeyCode::Char('t'));
+    assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
+    assert!(model.admin.terminate.as_ref().unwrap().error.is_some());
+    press_key(&mut model, KeyCode::Char('1'));
+    assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
+    press_key(&mut model, KeyCode::Char('1'));
+    assert_eq!(
+        terminates(&press_key(&mut model, KeyCode::Enter)).as_deref(),
+        Some("11")
+    );
+    assert!(model.admin.terminate.is_none());
+}
+
+/// Ending a session is a write: a read-only connection refuses it before asking.
+#[test]
+fn a_read_only_connection_ends_no_session() {
+    use crossterm::event::KeyCode;
+    let mut model = sessions_model(true);
+    press_key(&mut model, KeyCode::Char('t'));
+    assert!(model.admin.terminate.is_none());
+    assert!(
+        model
+            .admin
+            .last_error
+            .as_deref()
+            .unwrap()
+            .contains("read-only")
+    );
 }
 
 #[tokio::test]

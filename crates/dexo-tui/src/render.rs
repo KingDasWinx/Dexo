@@ -1616,29 +1616,50 @@ fn render_admin(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let popup = centered(area, 80, 16);
-    let lines = model.admin.lines();
+    let width = 110.min(area.width.saturating_sub(2));
+    let lines = model.admin.lines(width.saturating_sub(2) as usize);
+    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
+    let popup = centered(area, width, height);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Sessions"),
+        Block::bordered().title(format!("Sessions on {}", model.connection.name)),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |_, line, rect| {
-        if line.contains("paused=") {
-            let button = if model.admin.paused {
-                HitButton::Resume
-            } else {
-                HitButton::Pause
-            };
-            hits.register(HitTarget::Button(button), rect);
+    // Row 0 is the header; each session's row below it picks that session.
+    for_popup_lines(popup, &lines, |index, _, rect| {
+        if index >= 1 && index <= model.admin.sessions.len() {
+            hits.register(HitTarget::ListRow(index - 1), rect);
         }
-        if line.contains("confirm-target=") || line.contains("confirmed=") {
-            hits.register(HitTarget::Button(HitButton::Confirm), rect);
+        if index == model.admin.selected + 1 && !model.admin.sessions.is_empty() {
+            paint_reversed(frame, rect, 0, rect.width as usize);
         }
     });
+    if let Some(prompt) = &model.admin.terminate {
+        let width = 72.min(area.width);
+        let lines = prompt.lines(width.saturating_sub(2) as usize);
+        let popup = centered(area, width, lines.len() as u16 + 2);
+        paint_popup(
+            frame,
+            model,
+            popup,
+            Block::bordered().title("Terminate session"),
+            lines.join("\n"),
+        );
+        register_overlay(hits, popup);
+        for_popup_lines(popup, &lines, |_, line, rect| {
+            if line.starts_with("id:") {
+                let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
+                paint_selection(frame, rect, "id: ", &prompt.typed, focused);
+                hits.register(HitTarget::FormField(0), rect);
+            }
+            if line.contains("[Cancel]") {
+                crate::widgets::form::register_footer(hits, rect, line, "Terminate");
+            }
+        });
+    }
 }
 
 fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

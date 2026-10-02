@@ -449,9 +449,6 @@ pub enum Action {
     ConfirmExplainAnalyze,
     RunExplainAnalyze,
     OpenAdmin,
-    AdminPause,
-    AdminResume,
-    ConfirmAdmin,
     OpenMcpProfiles,
     ToggleMcpProfile,
     RevokeAllMcpGrants,
@@ -566,6 +563,10 @@ pub enum Action {
         sessions: Vec<dexo_driver_api::SessionInfo>,
         captured_at: String,
         blocking: Vec<dexo_driver_api::BlockingEdge>,
+    },
+    /// What the server said to ending a session, or why it would not.
+    AdminTerminated {
+        result: Result<String, String>,
     },
     DiagnosticsReady {
         preview: String,
