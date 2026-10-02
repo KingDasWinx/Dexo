@@ -53,19 +53,37 @@ pub fn temporary_connection(
     url: &str,
     password_prompt: bool,
 ) -> anyhow::Result<dexo_app::connection_url::UrlConnection> {
+    let prompt = |name: &str| rpassword::prompt_password(format!("Password for {name}: "));
+    temporary_connection_with(url, password_prompt.then_some(prompt))
+}
+
+fn temporary_connection_with(
+    url: &str,
+    prompt: Option<impl FnOnce(&str) -> std::io::Result<String>>,
+) -> anyhow::Result<dexo_app::connection_url::UrlConnection> {
     let mut connection = dexo_app::connection_url::parse(url)?;
+    let in_url = connection.password.is_some();
     // A file has no password to ask for.
-    if password_prompt && !connection.profile.is_file() {
-        let password =
-            rpassword::prompt_password(format!("Password for {}: ", connection.profile.name))?;
-        if !password.is_empty() {
-            connection.password = Some(secrecy::SecretString::from(password));
+    let warning = match prompt.filter(|_| !connection.profile.is_file()) {
+        Some(prompt) => {
+            // What is typed is the password, an empty answer too: the URL's would
+            // otherwise be used without a word when the prompt is left empty.
+            let password = prompt(&connection.profile.name)?;
+            connection.password =
+                (!password.is_empty()).then(|| secrecy::SecretString::from(password));
+            in_url.then_some(
+                "The URL's password was ignored for the one typed, and other users can see \
+                 it (ps) while Dexo runs; leave it out of the URL.",
+            )
         }
-    } else if connection.password.is_some() {
+        None => in_url.then_some(
+            "Other users can see this URL's password (ps) while Dexo runs; \
+             --password-prompt asks for it instead.",
+        ),
+    };
+    if let Some(warning) = warning {
         // Printed here for whoever reads the terminal afterwards, and given to the
         // workbench, whose screen covers this line at once.
-        let warning = "Other users can see this URL's password (ps) while Dexo runs; \
-                       --password-prompt asks for it instead.";
         eprintln!("dexo: {warning}");
         connection.warning = Some(warning.to_string());
     }
@@ -1618,4 +1636,34 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
         println!("{line}");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod temporary_tests {
+    use secrecy::ExposeSecret;
+
+    use super::temporary_connection_with;
+
+    /// With --password-prompt, the typed password is the one used -- an empty one too
+    /// -- and a password left in the URL is ignored, with a warning.
+    #[test]
+    fn the_prompt_wins_over_the_url_and_says_so() {
+        let url = "postgres://ana:in-url@db/shop";
+        let typed =
+            temporary_connection_with(url, Some(|_: &str| Ok("typed".to_string()))).unwrap();
+        assert_eq!(typed.password.unwrap().expose_secret(), "typed");
+        assert!(typed.warning.unwrap().contains("ignored"));
+        let empty = temporary_connection_with(url, Some(|_: &str| Ok(String::new()))).unwrap();
+        assert!(empty.password.is_none());
+        let asked = temporary_connection_with(
+            "postgres://ana@db/shop",
+            Some(|_: &str| Ok("typed".to_string())),
+        )
+        .unwrap();
+        assert!(asked.warning.is_none());
+        let none: Option<fn(&str) -> std::io::Result<String>> = None;
+        let unasked = temporary_connection_with(url, none).unwrap();
+        assert_eq!(unasked.password.unwrap().expose_secret(), "in-url");
+        assert!(unasked.warning.unwrap().contains("--password-prompt"));
+    }
 }
