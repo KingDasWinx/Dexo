@@ -23,7 +23,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-02** `MAJOR` PageUp / PageDown do nothing in the palette list
 - [ ] **PC-05** `MAJOR` Most commands of the registry are missing from the palette (not searchable, not listed)
 - [ ] **PC-11** `MAJOR` Alt+Left / Alt+Right switch the document but not the session: header and status bar keep the old connection, no reconnect
-- [ ] **PC-12** `MAJOR` Ctrl+Shift+Tab (Previous Document) does nothing
+- [x] **PC-12** `MAJOR` Ctrl+Shift+Tab (Previous Document) does nothing
 - [x] **PC-20** `MAJOR` Save/Open pickers show the start of the path, so the current folder is never visible
 - [x] **PC-21** `MAJOR` Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
 - [ ] **PC-25** `MAJOR` After a crash (kill) the recovered documents lose their connection and the "unsaved" marker

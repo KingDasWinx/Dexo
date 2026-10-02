@@ -537,7 +537,10 @@ fn key_label(key: &KeySpec) -> String {
     }
     // A terminal without the extended keyboard protocol sends Alt+Shift+F as Alt and a
     // capital F, with no Shift of its own: the capital is the Shift.
+    // BackTab is Shift+Tab as the terminal spells it: with Ctrl it is Ctrl+Shift+Tab,
+    // the chord the keymap names, and Ctrl+Shift+Tab found no command.
     let shifted = key.modifiers.contains(KeyModifiers::SHIFT)
+        || key.code == KeyCode::BackTab
         || matches!(key.code, KeyCode::Char(c) if c.is_ascii_uppercase());
     if shifted && !matches!(key.code, KeyCode::Char(c) if !c.is_ascii_alphabetic()) {
         out.push_str("shift+");
@@ -548,7 +551,7 @@ fn key_label(key: &KeySpec) -> String {
         KeyCode::F(n) => format!("f{n}"),
         KeyCode::Esc => "esc".into(),
         KeyCode::Enter => "enter".into(),
-        KeyCode::Tab => "tab".into(),
+        KeyCode::Tab | KeyCode::BackTab => "tab".into(),
         KeyCode::Backspace => "backspace".into(),
         KeyCode::Delete => "delete".into(),
         KeyCode::Up => "up".into(),
@@ -1334,5 +1337,33 @@ profile = "overlap"
         assert!(super::load("default", dir.path()).1.is_some());
         let dir = tempfile::tempdir().unwrap();
         assert_eq!(super::load("default", dir.path()).1, None);
+    }
+
+    /// Terminals send Shift+Tab as BackTab; the keymap writes it `shift+tab`, and with
+    /// Ctrl `ctrl+shift+tab`, which is what Previous Document is bound to.
+    #[test]
+    fn back_tab_is_shift_tab() {
+        let label = |modifiers| {
+            super::chord_label(&super::chord_from_event(KeyEvent::new(
+                KeyCode::BackTab,
+                modifiers,
+            )))
+        };
+        assert_eq!(
+            label(KeyModifiers::CONTROL | KeyModifiers::SHIFT),
+            "ctrl+shift+tab"
+        );
+        assert_eq!(label(KeyModifiers::CONTROL), "ctrl+shift+tab");
+        assert_eq!(label(KeyModifiers::SHIFT), "shift+tab");
+        let chord = super::chord_from_event(KeyEvent::new(
+            KeyCode::BackTab,
+            KeyModifiers::CONTROL | KeyModifiers::SHIFT,
+        ));
+        assert_eq!(
+            Keymap::default_profile()
+                .resolve(&chord, KeyContext::Editor)
+                .unwrap(),
+            Some("document.prev")
+        );
     }
 }
