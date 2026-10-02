@@ -29,6 +29,7 @@ pub enum HitTarget {
     GridRow(usize),
     GridCell { row: usize, col: usize },
     GridHeader(usize),
+    ClauseBar(crate::screens::data::ClauseBar),
     RecentSqlFile(usize),
     Overlay,
     ListRow(usize),

@@ -686,6 +686,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 crate::screens::editor::refresh_intelligence(model, false);
                 return crate::screens::editor::take_completion_effects(model);
             }
+            if let Some(bar) = focused_bar(model) {
+                model.data.bars.input_mut(bar).insert_text(&text);
+                return Vec::new();
+            }
+            // On the grid, the tree or the tabs every letter is a command: pasted text
+            // would sort, count and filter at random.
+            if crate::mouse::top_overlay(model).is_none()
+                && model.effective_focus() != Focus::Editor
+            {
+                model.messages.info(
+                    "Nothing here takes text; paste into the editor, a bar or a form.".into(),
+                );
+                return Vec::new();
+            }
             // Anywhere else -- a form field, a prompt -- the text is short and the
             // widget only knows keys, so it is fed as the keys it stands for.
             let mut effects = Vec::new();
@@ -979,9 +993,18 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ChangeDataPage { offset } => change_data_page(model, offset),
         Action::FocusClauseBar { bar } => {
-            if clause_bars_shown(model) {
+            // From the log or the plan, the bars are on the grid: it comes back.
+            if clause_bars_shown(model) && model.results.view != crate::model::ResultsView::Grid {
+                model.results.view = crate::model::ResultsView::Grid;
+            }
+            if bars_drawn(model) {
                 model.focus = Focus::Results;
                 model.data.bars.focus = Some(bar);
+            } else if clause_bars_shown(model) {
+                model.messages.warn(
+                    "WHERE and ORDER BY are on the grid; \\x goes back to it from the records."
+                        .into(),
+                );
             } else {
                 model.messages.warn(
                     "WHERE and ORDER BY apply to a table's rows or a query's result; run one first."
@@ -3017,6 +3040,7 @@ fn mouse_workbench(
             }
             Vec::new()
         }
+        Some(HitTarget::ClauseBar(bar)) => update(model, Action::FocusClauseBar { bar }),
         Some(HitTarget::GridHeader(col)) => {
             crate::screens::editor::end_typing(model);
             close_palette(model);
@@ -3914,9 +3938,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             _ => Vec::new(),
         };
     }
-    if model.effective_focus() == Focus::Results
-        && let Some(effects) = clause_bar_key(model, key)
-    {
+    if let Some(effects) = clause_bar_key(model, key) {
         return effects;
     }
     if model.find.open
@@ -6228,6 +6250,23 @@ fn reload_would_orphan_edits(model: &mut Model) -> bool {
     pending
 }
 
+/// Whether the bars are on screen: the grid view of rows that can run again, not the
+/// one-record-per-block view.
+fn bars_drawn(model: &Model) -> bool {
+    model.results.view == crate::model::ResultsView::Grid
+        && !(model.expanded_records && model.results.row_count() > 0)
+        && clause_bars_shown(model)
+}
+
+/// The bar that has the keys: one that is focused, drawn, and in the focused pane.
+pub(crate) fn focused_bar(model: &Model) -> Option<crate::screens::data::ClauseBar> {
+    model
+        .data
+        .bars
+        .focus
+        .filter(|_| model.effective_focus() == Focus::Results && bars_drawn(model))
+}
+
 /// Whether the grid can run again with a WHERE and an ORDER BY: a table's rows, or the
 /// result of a statement Dexo knows.
 pub(crate) fn clause_bars_shown(model: &Model) -> bool {
@@ -6244,7 +6283,12 @@ pub(crate) fn clause_bars_shown(model: &Model) -> bool {
 /// keymap.
 fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     use crate::screens::data::ClauseBar;
-    let bar = model.data.bars.focus?;
+    // A bar keeps the keys only while it is drawn and its pane has the focus; once
+    // either goes, so does the bar's focus, and the keys go where they are meant to.
+    let Some(bar) = focused_bar(model) else {
+        model.data.bars.focus = None;
+        return None;
+    };
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)

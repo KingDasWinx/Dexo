@@ -44,6 +44,47 @@ impl TextInput {
         self.cursor
     }
 
+    /// Inserts `text` at the cursor, as one line: a pasted line break becomes a space.
+    pub fn insert_text(&mut self, text: &str) {
+        for ch in text.chars() {
+            if ch == '\n' {
+                self.insert(' ');
+            } else if !ch.is_control() {
+                self.insert(ch);
+            }
+        }
+    }
+
+    /// What a field `width` columns wide shows of the text, padded to that width, and
+    /// the column the cursor is at in it. Counted in display columns, so a wide
+    /// character neither pushes the cursor off nor overflows; the view starts only as
+    /// far in as the cursor needs, so a cursor at the start shows the start.
+    pub fn window(&self, width: usize) -> (String, usize) {
+        use unicode_width::UnicodeWidthChar;
+        let width = width.max(1);
+        let chars: Vec<char> = self.text.chars().collect();
+        let cursor = self.cursor.min(chars.len());
+        let columns = |ch: &char| ch.width().unwrap_or(0);
+        let mut start = 0;
+        let mut at: usize = chars[..cursor].iter().map(columns).sum();
+        while at >= width && start < cursor {
+            at -= columns(&chars[start]);
+            start += 1;
+        }
+        let mut shown = String::new();
+        let mut used = 0;
+        for ch in &chars[start..] {
+            let wide = columns(ch);
+            if used + wide > width {
+                break;
+            }
+            shown.push(*ch);
+            used += wide;
+        }
+        shown.push_str(&" ".repeat(width - used));
+        (shown, at)
+    }
+
     pub fn handle_key(&mut self, key: KeyEvent) -> bool {
         match key.code {
             KeyCode::Left if key.modifiers.contains(KeyModifiers::CONTROL) => {
@@ -240,5 +281,39 @@ mod tests {
         input.handle_key(key(KeyCode::End));
         input.handle_key(ctrl(KeyCode::Left));
         assert_eq!(input.cursor(), "query-1.".chars().count());
+    }
+}
+
+#[cfg(test)]
+mod window_tests {
+    use super::TextInput;
+
+    /// The view counts display columns: wide characters keep the cursor on them, and
+    /// the view moves only as far as the cursor needs.
+    #[test]
+    fn the_window_follows_the_cursor_in_display_columns() {
+        let mut input = TextInput::new("日本語 name = 1");
+        assert_eq!(input.window(8), ("ame = 1 ".to_string(), 7));
+        for _ in 0..20 {
+            input.handle_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Left,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        assert_eq!(input.window(8), ("日本語 n".to_string(), 0));
+        input.set_text("ab");
+        assert_eq!(input.window(5), ("ab   ".to_string(), 2));
+        let mut long = TextInput::new("abcdefghij");
+        assert_eq!(long.window(4).1, 3);
+        for _ in 0..10 {
+            long.handle_key(crossterm::event::KeyEvent::new(
+                crossterm::event::KeyCode::Left,
+                crossterm::event::KeyModifiers::NONE,
+            ));
+        }
+        assert_eq!(long.window(4), ("abcd".to_string(), 0));
+        let mut pasted = TextInput::default();
+        pasted.insert_text("a = 1 and\nb = 2");
+        assert_eq!(pasted.as_str(), "a = 1 and b = 2");
     }
 }

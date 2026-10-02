@@ -87,7 +87,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         }
         ResultsView::Grid => {
             let body = if bars_row(model) {
-                render_clause_bars(frame, Rect { height: 1, ..body }, model);
+                render_clause_bars(frame, Rect { height: 1, ..body }, model, hits);
                 Rect {
                     y: body.y + 1,
                     height: body.height.saturating_sub(1),
@@ -102,13 +102,14 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
 }
 
 /// `WHERE [...]  ORDER BY [...]`: the text typed, or what the key is when there is none,
-/// and the terminal cursor in the bar that has the keys.
-fn render_clause_bars(frame: &mut Frame, area: Rect, model: &Model) {
+/// and the terminal cursor in the bar that has the keys. Each bar is a click target.
+fn render_clause_bars(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     use crate::screens::data::ClauseBar;
     let bars = &model.data.bars;
     let muted = model.theme.style(Role::Muted, model.capabilities);
+    let focus = crate::update::focused_bar(model);
     let label = |bar: ClauseBar| {
-        if bars.focus == Some(bar) {
+        if focus == Some(bar) {
             model
                 .theme
                 .style(Role::Focus, model.capabilities)
@@ -117,38 +118,59 @@ fn render_clause_bars(frame: &mut Frame, area: Rect, model: &Model) {
             muted
         }
     };
-    let where_width = (area.width as usize * 3 / 5).max(16);
+    const WHERE: &str = "WHERE ";
+    const ORDER: &str = " ORDER BY ";
+    let where_field = (area.width as usize * 3 / 5)
+        .max(16)
+        .saturating_sub(WHERE.len());
+    let order_start = WHERE.len() + where_field + ORDER.len();
+    let order_field = (area.width as usize).saturating_sub(order_start);
     let field = |input: &crate::widgets::text_input::TextInput, hint: &str, width: usize| {
         if input.is_empty() {
-            return ratatui::text::Span::styled(format!("{hint:<width$}"), muted);
+            return (
+                ratatui::text::Span::styled(
+                    format!("{:width$}", truncate_cell(hint, width)),
+                    muted,
+                ),
+                0,
+            );
         }
-        // The end of a long clause is where the typing is.
-        let chars: Vec<char> = input.as_str().chars().collect();
-        let shown: String = chars[chars.len().saturating_sub(width)..].iter().collect();
-        ratatui::text::Span::raw(format!("{shown:<width$}"))
+        let (shown, cursor) = input.window(width);
+        (ratatui::text::Span::raw(shown), cursor)
     };
-    let where_field = where_width.saturating_sub(7);
-    let order_field = (area.width as usize).saturating_sub(where_width + 11);
+    let (where_span, where_cursor) = field(&bars.where_input, "w to filter", where_field);
+    let (order_span, order_cursor) = field(&bars.order_input, "o to sort", order_field);
     let line = ratatui::text::Line::from(vec![
-        ratatui::text::Span::styled("WHERE ", label(ClauseBar::Where)),
-        field(&bars.where_input, "w to filter", where_field),
-        ratatui::text::Span::raw(" "),
-        ratatui::text::Span::styled("ORDER BY ", label(ClauseBar::Order)),
-        field(&bars.order_input, "o to sort", order_field),
+        ratatui::text::Span::styled(WHERE, label(ClauseBar::Where)),
+        where_span,
+        ratatui::text::Span::styled(ORDER, label(ClauseBar::Order)),
+        order_span,
     ]);
     frame.render_widget(Paragraph::new(line), area);
-    if let Some(bar) = bars.focus {
-        let (start, input, width) = match bar {
-            ClauseBar::Where => (6, &bars.where_input, where_field),
-            ClauseBar::Order => (where_width + 10, &bars.order_input, order_field),
+    let span = |start: usize, width: usize| {
+        let start = (start as u16).min(area.width);
+        Rect::new(
+            area.x + start,
+            area.y,
+            (width as u16).min(area.width - start),
+            1,
+        )
+    };
+    hits.register(
+        HitTarget::ClauseBar(ClauseBar::Where),
+        span(0, WHERE.len() + where_field),
+    );
+    hits.register(
+        HitTarget::ClauseBar(ClauseBar::Order),
+        span(WHERE.len() + where_field, ORDER.len() + order_field),
+    );
+    if let Some(bar) = focus {
+        let x = match bar {
+            ClauseBar::Where => WHERE.len() + where_cursor,
+            ClauseBar::Order => order_start + order_cursor,
         };
-        // The field shows the text's last `width` characters; the cursor counts from
-        // the first of them.
-        let hidden = input.len().saturating_sub(width);
-        let typed = input.cursor().saturating_sub(hidden).min(width);
-        let x = area.x + start as u16 + typed as u16;
-        if x < area.x + area.width {
-            frame.set_cursor_position(ratatui::layout::Position::new(x, area.y));
+        if x < area.width as usize {
+            frame.set_cursor_position(ratatui::layout::Position::new(area.x + x as u16, area.y));
         }
     }
 }

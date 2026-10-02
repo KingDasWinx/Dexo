@@ -1089,3 +1089,83 @@ fn a_sort_waits_for_the_running_statement_and_the_pending_edits() {
     model.data.row_changes.clear();
     assert!(!sort(&mut model).is_empty());
 }
+
+fn result_with_bars() -> Model {
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        ..Model::default()
+    };
+    model.apply_size(100, 30);
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id from orders".into());
+    model.results.tabs = vec![tab];
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int".into(),
+        nullable: false,
+    }]);
+    model.results.append_rows(vec![vec![DbValue::I64(1)]]);
+    model
+}
+
+/// The terminal cursor sits right after the ORDER BY text; leaving the pane takes the
+/// bar's focus with it; `w` from the log comes back to the grid's bar; a paste on the
+/// grid runs nothing, and one into a bar keeps to one line.
+#[test]
+fn the_bars_keep_their_cursor_focus_and_paste_in_place() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use dexo_tui::screens::data::ClauseBar;
+    let mut model = result_with_bars();
+    update(
+        &mut model,
+        Action::FocusClauseBar {
+            bar: ClauseBar::Order,
+        },
+    );
+    model.data.bars.order_input.set_text("id");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    let mut hits = dexo_tui::mouse::HitMap::default();
+    let frame = terminal
+        .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+        .unwrap();
+    let rows: Vec<String> = frame
+        .buffer
+        .content()
+        .chunks(100)
+        .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+        .collect();
+    let (y, row) = rows
+        .iter()
+        .enumerate()
+        .find(|(_, row)| row.contains("ORDER BY id"))
+        .expect("the bars are drawn");
+    let byte = row.find("ORDER BY id").unwrap();
+    let x = row[..byte].chars().count() + "ORDER BY id".len();
+    let cursor = terminal.get_cursor_position().unwrap();
+    assert_eq!((cursor.x as usize, cursor.y as usize), (x, y));
+
+    model.focus = dexo_tui::Focus::Explorer;
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+    );
+    assert_eq!(model.data.bars.order_input.as_str(), "id");
+    assert_eq!(model.data.bars.focus, None);
+
+    model.focus = dexo_tui::Focus::Results;
+    model.results.view = dexo_tui::model::ResultsView::Messages;
+    update(
+        &mut model,
+        Action::FocusClauseBar {
+            bar: ClauseBar::Where,
+        },
+    );
+    assert_eq!(model.results.view, dexo_tui::model::ResultsView::Grid);
+    update(&mut model, Action::Paste("a = 1 and\nb = 2".into()));
+    assert_eq!(model.data.bars.where_input.as_str(), "a = 1 and b = 2");
+
+    model.data.bars.focus = None;
+    let effects = update(&mut model, Action::Paste("st".into()));
+    assert!(effects.is_empty());
+    assert!(model.data.bars.applied.order_by.is_none());
+}
