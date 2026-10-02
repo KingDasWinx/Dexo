@@ -1991,6 +1991,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "clap",
+ "clap_complete",
  "dexo-app",
  "dexo-driver-api",
  "dexo-mcp",

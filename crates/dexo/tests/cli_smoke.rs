@@ -271,3 +271,29 @@ fn config_path_names_the_settings_file() {
             dexo_app::settings::settings_path(dir.path()).display()
         ));
 }
+
+/// `completion` prints a script the shell loads, covering every subcommand.
+#[test]
+fn completion_prints_a_script_with_every_subcommand() {
+    for (shell, marker) in [
+        ("bash", "complete -F"),
+        ("zsh", "#compdef dexo"),
+        ("fish", "complete -c dexo"),
+        ("powershell", "Register-ArgumentCompleter"),
+    ] {
+        let output = Command::cargo_bin("dexo")
+            .unwrap()
+            .args(["completion", shell])
+            .output()
+            .unwrap();
+        let script = String::from_utf8(output.stdout).unwrap();
+        assert!(
+            output.status.success() && script.contains(marker),
+            "{shell}"
+        );
+        assert!(
+            script.contains("lsp") && script.contains("grant"),
+            "{shell}"
+        );
+    }
+}

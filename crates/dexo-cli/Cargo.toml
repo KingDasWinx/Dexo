@@ -11,6 +11,7 @@ secrecy.workspace = true
 anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true
+clap_complete = "4.6.9"
 dexo-app = { path = "../dexo-app" }
 dexo-sql = { path = "../dexo-sql" }
 dexo-driver-api = { path = "../dexo-driver-api" }

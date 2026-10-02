@@ -6,7 +6,7 @@ Usage: dexo [OPTIONS] [URL]
 Commands:
   doctor       Say whether Dexo runs, for a script that checks; `dexo mcp doctor` checks agents' setup
   connections  Add, list and test saved connections, and set their passwords
-  completion   Print completions of the subcommands for bash, zsh, fish or PowerShell
+  completion   Print a completion script for bash, zsh, fish, PowerShell or Elvish
   config       Print, export and import the projects and connections, without passwords
   query        Run SQL on a connection and print the rows
   run          Run a SQL file on a connection, statement by statement

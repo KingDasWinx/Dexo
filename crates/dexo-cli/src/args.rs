@@ -74,8 +74,11 @@ pub enum Command {
         #[command(subcommand)]
         command: ConnectionsCommand,
     },
-    /// Print completions of the subcommands for bash, zsh, fish or PowerShell
-    Completion { shell: String },
+    /// Print a completion script for bash, zsh, fish, PowerShell or Elvish
+    Completion {
+        #[arg(value_enum)]
+        shell: clap_complete::Shell,
+    },
     /// Print, export and import the projects and connections, without passwords
     Config {
         #[command(subcommand)]

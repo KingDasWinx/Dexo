@@ -128,7 +128,12 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
         Command::Doctor { json: true } => println!(r#"{{"status":"ok"}}"#),
         Command::Doctor { json: false } => println!("Dexo: ok"),
         Command::Connections { command } => run_connections(registry, command)?,
-        Command::Completion { shell } => print_completion(&shell)?,
+        Command::Completion { shell } => clap_complete::generate(
+            shell,
+            &mut <Args as clap::CommandFactory>::command(),
+            "dexo",
+            &mut std::io::stdout(),
+        ),
         Command::Config { command } => run_config(command)?,
         // Nothing here prompts, so --non-interactive changes nothing: what is not
         // confirmed by a flag is refused.
@@ -603,40 +608,6 @@ fn print_secret_persist(name: &str, persist: SecretPersist) {
             "saved {name}; keychain unavailable, secret not persisted (use connections set-secret)"
         ),
     }
-}
-
-fn print_completion(shell: &str) -> anyhow::Result<()> {
-    let names = [
-        "doctor",
-        "connections",
-        "completion",
-        "config",
-        "query",
-        "run",
-        "inspect",
-        "schema",
-        "export",
-        "import",
-        "explain",
-        "sessions",
-        "mcp",
-    ];
-    match shell {
-        "bash" => {
-            println!("complete -W '{}' dexo", names.join(" "));
-        }
-        "powershell" | "pwsh" => {
-            println!(
-                "Register-ArgumentCompleter -CommandName dexo -ScriptBlock {{ '{}' -split ' ' }}",
-                names.join(" ")
-            );
-        }
-        "zsh" | "fish" => {
-            println!("{}", names.join("\n"));
-        }
-        other => anyhow::bail!("unsupported shell '{other}'"),
-    }
-    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
