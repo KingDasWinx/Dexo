@@ -1153,7 +1153,9 @@ fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let action_offset =
         scroll_to_selection(model.results_menu.selected, 0, items.len(), action_rows);
     let mut action_lines = Vec::new();
-    for (index, (_, title)) in items
+    // Each action with its key, as the palette shows it.
+    let width = layout.actions.width.saturating_sub(2) as usize;
+    for (index, (id, title)) in items
         .iter()
         .enumerate()
         .skip(action_offset)
@@ -1164,7 +1166,14 @@ fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         } else {
             " "
         };
-        action_lines.push(format!("{marker} {title}"));
+        let label = format!("{marker} {title}");
+        let key = crate::palette::shortcut_for(model, id, None).unwrap_or_default();
+        let room = width.saturating_sub(unicode_width::UnicodeWidthStr::width(key.as_str()) + 1);
+        action_lines.push(
+            format!("{} {key}", crate::model::fit_cell(&label, room))
+                .trim_end()
+                .to_string(),
+        );
     }
     if action_lines.is_empty() {
         action_lines.push("(empty)".into());

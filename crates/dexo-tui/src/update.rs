@@ -10278,6 +10278,37 @@ mod tests {
         );
     }
 
+    /// The row's Actions menu says each action's key, and has the sort, the count and
+    /// the way back.
+    #[test]
+    fn the_row_menu_says_its_keys() {
+        let mut model = Model {
+            focus: Focus::Results,
+            ..Model::default()
+        };
+        model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+            name: "id".into(),
+            type_name: "int".into(),
+            nullable: false,
+        }]);
+        model.results.append_rows(vec![vec![DbValue::I64(1)]]);
+        model.results.select_row(0);
+        update(&mut model, Action::OpenResultsMenu);
+        let screen = crate::render::render_to_string(&model, 120, 40);
+        let line = |title: &str| {
+            screen
+                .lines()
+                .find(|line| line.contains(title))
+                .unwrap_or_else(|| panic!("{title} missing:\n{screen}"))
+                .to_string()
+        };
+        assert!(line("Filter rows (WHERE)").contains(" w "), "{screen}");
+        assert!(line("Related rows…").contains(" f "), "{screen}");
+        assert!(line("Count rows").contains(" t "), "{screen}");
+        line("Sort by this column");
+        line("Back from related rows");
+    }
+
     /// A statement that is not a plain read keeps no statement to run again: no bars,
     /// no sort, no count.
     #[test]

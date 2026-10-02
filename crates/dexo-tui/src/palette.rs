@@ -173,7 +173,12 @@ pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
         ("data.copy.sql", "Copy as SQL"),
         ("data.inspect", "Inspect value"),
         ("data.filter", "Filter rows (WHERE)"),
+        ("data.sort", "Sort rows (ORDER BY)"),
+        ("results.sort_column", "Sort by this column"),
+        ("results.sort_add_column", "Add this column to the sort"),
+        ("results.count", "Count rows"),
         ("data.related", "Related rows…"),
+        ("data.nav_back", "Back from related rows"),
         ("data.refresh", "Refresh table data"),
     ]
 }
