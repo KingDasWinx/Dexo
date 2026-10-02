@@ -151,8 +151,10 @@ impl PaneLayout {
     pub fn clamp(mut self, width: u16, height: u16) -> Self {
         let max_side = width.saturating_div(2).max(8);
         let max_results = height.saturating_sub(6).max(3);
-        self.explorer_width = self.explorer_width.min(max_side).max(8);
-        self.results_height = self.results_height.min(max_results).max(3);
+        // Floors that keep a pane readable: a name or two in the explorer, a header and
+        // a few rows in the results. The hide commands are for removing one.
+        self.explorer_width = self.explorer_width.min(max_side).max(16.min(max_side));
+        self.results_height = self.results_height.min(max_results).max(5.min(max_results));
         self.console_height = self.console_height.min(max_results).max(3);
         self
     }

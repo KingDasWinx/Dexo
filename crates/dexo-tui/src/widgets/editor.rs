@@ -292,11 +292,16 @@ fn render_nothing_open(frame: &mut Frame, area: Rect, model: &Model) {
         return;
     }
     let muted = model.theme.style(Role::Muted, model.capabilities);
+    // The keys of the keymap in use, as the status bar names them.
+    let key =
+        |id: &str| crate::palette::shortcut_for(model, id, None).unwrap_or_else(|| "Ctrl+P".into());
+    let new_key = format!("{}  new sql", key("document.new"));
+    let open_key = format!("{}  open a file", key("document.open"));
     let lines = [
         "No document open",
         "",
-        "Ctrl+N  new query",
-        "Ctrl+O  open a file",
+        new_key.as_str(),
+        open_key.as_str(),
         "or just start typing",
     ];
     let top = inner.height.saturating_sub(lines.len() as u16) / 2;
