@@ -4015,7 +4015,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Char('f') if key.modifiers.contains(KeyModifiers::CONTROL) => {
-                model.transfer.format = next_transfer_format(&model.transfer.format);
+                model.transfer.format = next_transfer_format(
+                    &model.transfer.format,
+                    model.transfer.mode == crate::screens::transfer::TransferMode::Import,
+                );
                 Vec::new()
             }
             KeyCode::Char(ch)
@@ -8851,12 +8854,13 @@ fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
     }]
 }
 
-fn next_transfer_format(current: &str) -> String {
+/// An import reads data, not SQL: an SQL file is a script, run in the editor.
+fn next_transfer_format(current: &str, import: bool) -> String {
     match current {
         "csv" => "tsv",
         "tsv" => "json",
         "json" => "jsonl",
-        "jsonl" => "sql",
+        "jsonl" if !import => "sql",
         _ => "csv",
     }
     .into()

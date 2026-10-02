@@ -52,7 +52,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 | Edit rows in the grid | Yes, reviewed before they are written | — | — | Yes | — |
 | Query plans | Tree with estimated and actual rows; try an index before building it | — | — | — | — |
 | Schema diff | Live databases, snapshots and files | — | — | — | — |
-| Import | CSV, TSV, JSON, JSON Lines, SQL | — | — | — | — |
+| Import | CSV, TSV, JSON, JSON Lines | — | — | — | — |
 | Export | CSV, TSV, JSON, JSON Lines, SQL | CSV | Yes | CSV | CSV, JSON |
 | SSH tunnels | Yes | — | — | A command run before connecting | Yes |
 | Production guard | A destructive statement waits for the connection's name | — | — | — | — |

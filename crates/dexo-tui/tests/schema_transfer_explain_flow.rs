@@ -463,3 +463,27 @@ async fn an_sql_export_speaks_the_connections_dialect() {
     let written = std::fs::read_to_string(&path).unwrap();
     assert!(written.contains("X'cafe'"), "{written}");
 }
+
+/// Ctrl+F cycles the formats; an import never lands on SQL, which is a script to run,
+/// not data it can read, while an export does.
+#[test]
+fn an_import_never_offers_sql() {
+    let formats = |id: &str| {
+        let mut model = transfer_ready_model();
+        choose(&mut model, id);
+        (0..6)
+            .map(|_| {
+                dexo_tui::update(
+                    &mut model,
+                    dexo_tui::Action::Key(crossterm::event::KeyEvent::new(
+                        crossterm::event::KeyCode::Char('f'),
+                        crossterm::event::KeyModifiers::CONTROL,
+                    )),
+                );
+                model.transfer.format.clone()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert!(!formats("transfer.import").contains(&"sql".to_string()));
+    assert!(formats("transfer.export").contains(&"sql".to_string()));
+}

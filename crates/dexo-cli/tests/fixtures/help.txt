@@ -13,7 +13,7 @@ Commands:
   inspect      Show a connection's catalog: an object, a search, the grants, or a cached snapshot
   schema       Snapshot a schema, or diff two of them into a migration
   export       Write a query's rows to a CSV, TSV, JSON, JSON Lines or SQL file
-  import       Load a CSV, TSV, JSON, JSON Lines or SQL file into a table
+  import       Load a CSV, TSV, JSON or JSON Lines file into a table
   explain      Show a statement's plan, estimated or analyzed
   sessions     List the server's sessions, and cancel or end one
   mcp          Serve connections to AI agents over MCP, and manage what they may do

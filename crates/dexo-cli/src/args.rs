@@ -162,7 +162,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = TransferCliFormat::Csv)]
         format: TransferCliFormat,
     },
-    /// Load a CSV, TSV, JSON, JSON Lines or SQL file into a table
+    /// Load a CSV, TSV, JSON or JSON Lines file into a table
     Import {
         #[arg(long)]
         connection: String,

@@ -64,7 +64,10 @@ pub fn decode_document(
         TransferFormat::Csv | TransferFormat::Tsv => decode_delimited(&text, options),
         TransferFormat::Json => decode_json(&text, true),
         TransferFormat::Jsonl => decode_jsonl(&text),
-        TransferFormat::Sql => Err("SQL import is lossy; use CSV/JSON".into()),
+        TransferFormat::Sql => Err(
+            "an SQL file is a script, not data to import: run it with `dexo run --file`, or import CSV or JSON"
+                .into(),
+        ),
     }
 }
 
