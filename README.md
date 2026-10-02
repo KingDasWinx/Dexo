@@ -1,7 +1,7 @@
 <div align="center">
   <img src="assets/dexo_icon.png" width="128" alt="Dexo">
   <h1>Dexo</h1>
-  <p>A local-first database workbench for the terminal.</p>
+  <p>A terminal database workbench with guardrails for AI agents.</p>
 
   <p>
     <a href="https://github.com/kingdaswinx/Dexo/releases/latest"><img src="https://img.shields.io/github/v/release/kingdaswinx/Dexo" alt="Release"></a>
@@ -11,11 +11,54 @@
   </p>
 </div>
 
-Dexo is a keyboard-driven workbench for PostgreSQL, MySQL and SQLite. It ships as a terminal UI, a command-line interface, and a local MCP server, all built on the same application layer. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
+Try it on a sample shop, with nothing to connect to:
+
+```sh
+brew install kingdaswinx/tap/dexo   # or any install below
+dexo --demo
+```
+
+Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, with DuckDB as a build option. It ships as a terminal UI, a command-line interface, and a local MCP server, all on the same application layer, so the guardrails hold everywhere: a `DELETE` without a `WHERE` on production waits for you to type the connection's name, a read-only connection is read-only on the server too, and an AI agent writes only through a grant you made, each write waiting for your approval if you ask for that. Everything it stores stays on your machine: workspace state lives in a local SQLite database, passwords live in the operating system's keychain, and the only request Dexo makes on its own is a once-a-day check for a newer release.
+
+<div align="center">
+  <img src="assets/guardrails.gif" alt="Dexo stopping a DELETE without WHERE on a production connection until its name is typed, then an AI agent's UPDATE waiting in Agent Activity until it is approved">
+</div>
 
 <div align="center">
   <img src="assets/demo.gif" alt="Dexo demo: connecting, browsing a table, writing SQL with autocomplete, opening a record, and switching to the light theme">
 </div>
+
+## Questions every launch thread asks
+
+**Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree with estimated and actual rows, schema diffs, import and export -- for Postgres, MySQL, MariaDB and SQLite in one tool.
+
+**Why not DataGrip or DBeaver?** Dexo starts in a terminal in a moment, runs over SSH, and is free and open source. It does not try to be an IDE for every database.
+
+**Why not rainfrog or another TUI?** See the comparison below: Dexo's grid edits, plans, schema diff, import, production guard and agent guardrails are what it adds.
+
+**Where do the passwords go?** Into the operating system's keychain, or nowhere when a connection reads it from a command such as `pass` or `op read`. Never into Dexo's database, its config files, its logs or a process's arguments.
+
+**Does it need Python?** No. Dexo is one binary: Homebrew, Scoop, the installer scripts, `.deb` and `.rpm`, or `cargo install`.
+
+**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid and the agents' tools, and the server refuses them too -- Postgres and MySQL sessions start read-only, SQLite and DuckDB files open read-only.
+
+## How it compares
+
+| | Dexo | rainfrog | harlequin | lazysql | sqlit |
+| --- | --- | --- | --- | --- | --- |
+| Built with | Rust, one binary | Rust, one binary | Python | Go, one binary | Python |
+| Databases | Postgres, MySQL, MariaDB, SQLite; DuckDB as a build option | Postgres, MySQL, SQLite, Redshift, DuckDB, Oracle | DuckDB, SQLite, Postgres, MySQL and more through adapters | MySQL, Postgres, SQLite, MSSQL, ClickHouse, MongoDB | About 30, through drivers installed on demand |
+| Passwords | OS keychain, or a command | OS keychain | Config files, which can name environment variables | Config file, or environment variables | OS keyring |
+| Edit rows in the grid | Yes, reviewed before they are written | — | — | Yes | — |
+| Query plans | Tree with estimated and actual rows; try an index before building it | — | — | — | — |
+| Schema diff | Live databases, snapshots and files | — | — | — | — |
+| Import | CSV, TSV, JSON, JSON Lines, SQL | — | — | — | — |
+| Export | CSV, TSV, JSON, JSON Lines, SQL | CSV | Yes | CSV | CSV, JSON |
+| SSH tunnels | Yes | — | — | A command run before connecting | Yes |
+| Production guard | A destructive statement waits for the connection's name | — | — | — | — |
+| AI agents | MCP server: read-only profiles, allowlists, timed write grants, approval per write | — | `hsql`, a CLI for agents | — | — |
+
+— means the project's README does not list it, as of October 2026.
 
 ## Features
 
