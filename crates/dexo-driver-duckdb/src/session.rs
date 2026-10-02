@@ -220,15 +220,15 @@ pub(crate) fn reads(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
     Ok(crate::parse::only_queries(conn, sql)? && statements(sql).iter().all(|text| is_read(text)))
 }
 
-/// Whether the connection has a transaction open, asked of DuckDB by trying to open one:
-/// its own flag for it reads true inside one.
+/// Whether the connection has a transaction open. duckdb-rs answers that it never has;
+/// trying a BEGIN to find out failed inside the user's transaction, and a failure aborts
+/// a DuckDB transaction. Two statements in a row share a transaction id only inside
+/// one: outside, each is a transaction of its own.
 pub(crate) fn in_transaction(conn: &Connection) -> bool {
-    match conn.execute_batch("BEGIN TRANSACTION") {
-        Ok(()) => {
-            let _ = conn.execute_batch("ROLLBACK");
-            false
-        }
-        Err(_) => true,
+    let id = || conn.query_row("SELECT txid_current()", [], |row| row.get::<_, i64>(0));
+    match (id(), id()) {
+        (Ok(first), Ok(second)) => first == second,
+        _ => true,
     }
 }
 
@@ -245,11 +245,11 @@ pub(crate) fn close_own(conn: &Connection) -> Result<(), DriverError> {
 /// Opens a transaction for Dexo's own use, or says the user already has one open:
 /// DuckDB has no savepoint to nest one inside theirs.
 pub(crate) fn begin_own(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
-    match conn.execute_batch(sql) {
-        Ok(()) => Ok(true),
-        Err(error) if error.to_string().contains("within a transaction") => Ok(false),
-        Err(error) => Err(map_error(error)),
+    if in_transaction(conn) {
+        return Ok(false);
     }
+    conn.execute_batch(sql).map_err(map_error)?;
+    Ok(true)
 }
 
 #[async_trait::async_trait]
