@@ -47,7 +47,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 | | Dexo | rainfrog | harlequin | lazysql | sqlit |
 | --- | --- | --- | --- | --- | --- |
 | Built with | Rust, one binary | Rust, one binary | Python | Go, one binary | Python |
-| Databases | Postgres, MySQL, MariaDB, SQLite; DuckDB as a build option | Postgres, MySQL, SQLite, Redshift, DuckDB, Oracle | DuckDB, SQLite, Postgres, MySQL and more through adapters | MySQL, Postgres, SQLite, MSSQL, ClickHouse, MongoDB | About 30, through drivers installed on demand |
+| Databases | Postgres, MySQL, MariaDB, SQLite; DuckDB as a build option | Postgres, MySQL, SQLite, Redshift, DuckDB, Oracle | DuckDB, SQLite, Postgres, MySQL and more through adapters | MySQL, Postgres, SQLite, MSSQL, ClickHouse | About 30, through drivers installed on demand |
 | Passwords | OS keychain, or a command | OS keychain | Config files, which can name environment variables | Config file, or environment variables | OS keyring |
 | Edit rows in the grid | Yes, reviewed before they are written | — | — | Yes | — |
 | Query plans | Tree with estimated and actual rows; try an index before building it | — | — | — | — |
