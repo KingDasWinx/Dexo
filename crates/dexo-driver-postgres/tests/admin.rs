@@ -211,6 +211,37 @@ async fn variables_show_the_values_in_force_with_their_units() {
     assert_eq!(value("listen_addresses", Server).as_deref(), Some("*"));
 }
 
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn the_server_sees_dexo_as_the_application_behind_its_sessions() {
+    use futures_util::StreamExt;
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::read(
+            "select application_name from pg_stat_activity where pid = pg_backend_pid()",
+            1,
+        ))
+        .await
+        .unwrap();
+    let mut name = None;
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            name = batch.rows[0].first().cloned();
+        }
+    }
+    assert_eq!(name, Some(dexo_driver_api::DbValue::Text("dexo".into())));
+}
+
 async fn drain(mut stream: dexo_driver_api::QueryStream) {
     use futures_util::StreamExt;
     while stream.next().await.is_some() {}

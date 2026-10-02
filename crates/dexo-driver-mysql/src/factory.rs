@@ -34,7 +34,10 @@ impl ConnectionFactory for MysqlFactory {
             .tcp_port(port)
             .user(Some(request.username))
             .pass(Some(request.secret.expose_secret().to_string()))
-            .db_name(request.database);
+            .db_name(request.database)
+            // The name performance_schema.session_connect_attrs, and the tools reading
+            // it, show for Dexo's sessions; the mysql client sends its own the same way.
+            .connect_attribute("program_name", "dexo");
         if request.read_only {
             // `init` runs on every connection these options open, the cancel connection
             // and reconnects included, so the server refuses the write, not only Dexo.

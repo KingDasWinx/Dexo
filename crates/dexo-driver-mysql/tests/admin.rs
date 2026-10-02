@@ -139,25 +139,52 @@ fn connect_as(
     ))
 }
 
-async fn connection_id(session: &dyn dexo_driver_api::Session) -> String {
+async fn first_value(
+    session: &dyn dexo_driver_api::Session,
+    sql: &str,
+) -> Option<dexo_driver_api::DbValue> {
     use futures_util::StreamExt;
     let mut stream = session
-        .execute(dexo_driver_api::QueryRequest::read(
-            "select connection_id()",
-            1,
-        ))
+        .execute(dexo_driver_api::QueryRequest::read(sql, 1))
         .await
         .unwrap();
     while let Some(event) = stream.next().await {
-        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
-            return match &batch.rows[0][0] {
-                dexo_driver_api::DbValue::U64(id) => id.to_string(),
-                dexo_driver_api::DbValue::I64(id) => id.to_string(),
-                other => panic!("connection id read as {other:?}"),
-            };
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap()
+            && let Some(row) = batch.rows.into_iter().next()
+        {
+            return row.into_iter().next();
         }
     }
-    panic!("no connection id");
+    None
+}
+
+async fn connection_id(session: &dyn dexo_driver_api::Session) -> String {
+    match first_value(session, "select connection_id()").await {
+        Some(dexo_driver_api::DbValue::U64(id)) => id.to_string(),
+        Some(dexo_driver_api::DbValue::I64(id)) => id.to_string(),
+        other => panic!("connection id read as {other:?}"),
+    }
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn the_server_sees_dexo_as_the_program_behind_its_sessions() {
+    use dexo_driver_api::DbValue;
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let root = connect_as(&pair, "root").await.unwrap();
+    let program = first_value(
+        root.as_ref(),
+        "select attr_value from performance_schema.session_connect_attrs
+         where processlist_id = connection_id() and attr_name = 'program_name'",
+    )
+    .await;
+    let instrumented = first_value(root.as_ref(), "select @@performance_schema").await;
+    if matches!(instrumented, Some(DbValue::I64(0) | DbValue::U64(0))) {
+        // MariaDB ships with performance_schema off, and records no attributes then.
+        assert_eq!(program, None);
+    } else {
+        assert_eq!(program, Some(DbValue::Text("dexo".into())));
+    }
 }
 
 #[tokio::test]

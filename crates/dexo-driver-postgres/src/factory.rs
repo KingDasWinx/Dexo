@@ -32,6 +32,8 @@ impl ConnectionFactory for PostgresFactory {
         if let Some(database) = &request.database {
             config.dbname(database);
         }
+        // pg_stat_activity, and every tool reading it, tells Dexo's sessions apart by this.
+        config.application_name("dexo");
         if request.read_only {
             config.options("-c default_transaction_read_only=on");
         }
