@@ -225,9 +225,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             key,
             index,
             rows_affected,
+            truncated,
         } => {
             if let Some(tab) = result_tab_mut(model, &key, index) {
                 tab.rows_affected = rows_affected;
+                tab.truncated = truncated;
                 tab.status = crate::model::OperationStatus::Finished;
             }
             Vec::new()
@@ -851,6 +853,26 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SelectGridColumn => {
             if let Some((_, col)) = model.results.selection() {
                 model.results.select_column(col);
+            }
+            Vec::new()
+        }
+        Action::CountRows => count_rows(model),
+        Action::RowsCounted { operation, result } => {
+            use crate::screens::data::CountState;
+            // An answer for a count since cancelled, or for another table, is dropped.
+            if let Some(count) = model
+                .data
+                .count
+                .as_mut()
+                .filter(|count| count.state == CountState::Running(operation))
+            {
+                match result {
+                    Ok(rows) => count.state = CountState::Exact(rows),
+                    Err(message) => {
+                        model.data.count = None;
+                        model.messages.error(format!("The count failed: {message}"));
+                    }
+                }
             }
             Vec::new()
         }
@@ -5892,6 +5914,81 @@ fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
     }
     Some(Vec::new())
+}
+
+/// `t`: counts the rows the grid pages through, exactly; `t` while it runs cancels it.
+/// The count runs on a connection of its own, so the live query keeps its slot.
+fn count_rows(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::data::{CountState, RowCount};
+    if let Some(RowCount {
+        state: CountState::Running(operation),
+        ..
+    }) = model.data.count
+    {
+        model.data.count = None;
+        model.messages.info("Count cancelled.".into());
+        return vec![Effect::CancelCount { operation }];
+    }
+    let Some(session) = model.active_session else {
+        model
+            .messages
+            .warn("Connect a session to count the rows.".into());
+        return Vec::new();
+    };
+    let Some(sql) = count_sql(model) else {
+        model.messages.warn(
+            "Counting needs a table's rows, or the result of a statement that only reads.".into(),
+        );
+        return Vec::new();
+    };
+    let operation = crate::runtime::OperationId::new();
+    model.data.count = Some(RowCount {
+        sql: sql.clone(),
+        state: CountState::Running(operation),
+    });
+    vec![Effect::CountRows {
+        session,
+        operation,
+        sql,
+        parameters: model
+            .data
+            .filter
+            .as_ref()
+            .map(dexo_sql::filter_values)
+            .unwrap_or_default(),
+    }]
+}
+
+/// The `SELECT COUNT(*)` for what the grid pages through: a table document's rows, or
+/// the statement a result came from, under the WHERE that ran.
+pub(crate) fn count_sql(model: &Model) -> Option<String> {
+    let dialect = crate::screens::editor::editor_dialect(model);
+    let source = if model.active_document().kind.is_table() {
+        dexo_sql::table_select(&model.data.target, dialect)
+    } else {
+        let sql = model
+            .results
+            .tabs
+            .get(model.results.active)?
+            .source_sql
+            .clone()?;
+        // Run again on its own, a statement must be a plain read, as a re-sort's is.
+        if !dexo_sql::is_read(&sql, dialect) {
+            return None;
+        }
+        sql
+    };
+    let sql = dexo_sql::derive_count_in(
+        &source,
+        &model.data.filter,
+        &model.data.bars.applied,
+        dialect,
+    )
+    .ok()?;
+    Some(match dialect {
+        dexo_sql::Dialect::Postgres => postgres_placeholders(&sql),
+        dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite => sql,
+    })
 }
 
 /// A header click, or `s`: the ORDER BY bar's text is the sort, so the click rewrites

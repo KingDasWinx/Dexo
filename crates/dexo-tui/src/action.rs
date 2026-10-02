@@ -130,6 +130,8 @@ pub enum Action {
         key: crate::runtime::OperationKey,
         index: usize,
         rows_affected: Option<u64>,
+        /// The rows stopped at the row limit with more left.
+        truncated: bool,
     },
     ScriptFinished {
         key: crate::runtime::OperationKey,
@@ -240,6 +242,13 @@ pub enum Action {
     SortByColumn {
         column: Option<usize>,
         add: bool,
+    },
+    /// `t`: count the grid's rows exactly, on a connection of its own; `t` again while
+    /// it runs cancels it.
+    CountRows,
+    RowsCounted {
+        operation: OperationId,
+        result: Result<u64, String>,
     },
     NextResultTab,
     PrevResultTab,
@@ -704,6 +713,17 @@ pub struct FlushedDocument {
 pub enum Effect {
     StartScript(ScriptRequest),
     CancelOperation(OperationId),
+    /// `sql` counts rows on a connection opened for it, so the count never waits on,
+    /// nor cancels, the session's own queries.
+    CountRows {
+        session: SessionId,
+        operation: OperationId,
+        sql: String,
+        parameters: Vec<DbValue>,
+    },
+    CancelCount {
+        operation: OperationId,
+    },
     PersistLayout {
         project_id: String,
         layout: dexo_storage::WorkbenchLayout,

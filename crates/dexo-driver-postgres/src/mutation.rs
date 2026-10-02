@@ -258,6 +258,26 @@ fn predicate(
 
 #[async_trait::async_trait]
 impl DataMutator for PostgresSession {
+    async fn estimate_rows(&self, target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        // `reltuples` is -1 until the table is first vacuumed or analyzed.
+        let schema = target.schema().unwrap_or("public").to_string();
+        let object = target.object().to_string();
+        let refs: Vec<&(dyn ToSql + Sync)> = vec![&object, &schema];
+        let row = self
+            .client
+            .query_opt(
+                "SELECT c.reltuples::bigint FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relname = $1 AND n.nspname = $2",
+                &refs,
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(row
+            .map(|row| row.get::<_, i64>(0))
+            .and_then(|rows| u64::try_from(rows).ok()))
+    }
+
     async fn table_columns(
         &self,
         target: &QualifiedName,

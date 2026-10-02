@@ -4,7 +4,7 @@ expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
 ┌  Sidebar─────────────────┐ scratch.sql ×  orders ×  +                                                                                                         
-│[n]ew [e]dit [a]ctions    │┌▸ Results (0)─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│[n]ew [e]dit [a]ctions    │┌▸ Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  ● local▾  [offline]     ││[Grid] Explain  Messages                                                                                                          │
 │>   ▸ public              ││WHERE w to filter                                                             ORDER BY o to sort                                  │
 │      mysql.users [restric││                                                                                                                                  │

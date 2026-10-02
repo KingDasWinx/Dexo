@@ -196,6 +196,12 @@ pub trait DataMutator: Send + Sync {
         &self,
         target: &QualifiedName,
     ) -> Result<Vec<ColumnKeyInfo>, DriverError>;
+
+    /// The table's row count as the server's statistics have it, without counting:
+    /// `None` when it keeps none.
+    async fn estimate_rows(&self, _target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        Ok(None)
+    }
 }
 
 #[cfg(test)]

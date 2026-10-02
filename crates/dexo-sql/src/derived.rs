@@ -30,33 +30,8 @@ pub fn derive_page_in(
     page: Page,
     dialect: Dialect,
 ) -> Result<String, String> {
-    let trimmed = sql.trim();
-    if trimmed.is_empty() {
-        return Err("empty query".into());
-    }
     let quote = |ident: &str| quote(ident, dialect);
-    let statements = split_statements_in(trimmed, dialect);
-    if statements.len() != 1 {
-        return Err("only one statement can be re-run remotely".into());
-    }
-    let span = &statements[0];
-    if !span.understood || span.effect != StatementEffect::ReadOnly {
-        return Err("only a read-only SELECT can be re-run remotely".into());
-    }
-    let body = trimmed.trim_end_matches(';').trim();
-    let lower = body.to_ascii_lowercase();
-    if lower.contains(" for update") || lower.contains(" for share") {
-        return Err("locking queries are local-only".into());
-    }
-    let mut wrapped = format!("SELECT * FROM ({body}) AS _dexo_derived");
-    let typed = filter
-        .as_ref()
-        .map(|filter| render_filter(filter, &quote))
-        .transpose()?;
-    if let Some(condition) = clauses.condition(typed) {
-        wrapped.push_str(" WHERE ");
-        wrapped.push_str(&condition);
-    }
+    let mut wrapped = filtered("*", sql, filter, clauses, dialect)?;
     if let Some(order) = clauses.order() {
         wrapped.push_str(" ORDER BY ");
         wrapped.push_str(order);
@@ -78,6 +53,70 @@ pub fn derive_page_in(
     }
     wrapped.push_str(&format!(" LIMIT {} OFFSET {}", page.limit, page.offset));
     Ok(wrapped)
+}
+
+/// How many rows [`derive_page_in`] pages through: the same statement and filters
+/// under `SELECT COUNT(*)`.
+pub fn derive_count_in(
+    sql: &str,
+    filter: &Option<Filter>,
+    clauses: &RawClauses,
+    dialect: Dialect,
+) -> Result<String, String> {
+    filtered("COUNT(*)", sql, filter, clauses, dialect)
+}
+
+/// `SELECT {select} FROM (sql) WHERE ...`, once `sql` is known to be one plain read.
+fn filtered(
+    select: &str,
+    sql: &str,
+    filter: &Option<Filter>,
+    clauses: &RawClauses,
+    dialect: Dialect,
+) -> Result<String, String> {
+    let trimmed = sql.trim();
+    if trimmed.is_empty() {
+        return Err("empty query".into());
+    }
+    let quote = |ident: &str| quote(ident, dialect);
+    let statements = split_statements_in(trimmed, dialect);
+    if statements.len() != 1 {
+        return Err("only one statement can be re-run remotely".into());
+    }
+    let span = &statements[0];
+    if !span.understood || span.effect != StatementEffect::ReadOnly {
+        return Err("only a read-only SELECT can be re-run remotely".into());
+    }
+    let body = trimmed.trim_end_matches(';').trim();
+    let lower = body.to_ascii_lowercase();
+    if lower.contains(" for update") || lower.contains(" for share") {
+        return Err("locking queries are local-only".into());
+    }
+    let mut wrapped = format!("SELECT {select} FROM ({body}) AS _dexo_derived");
+    let typed = filter
+        .as_ref()
+        .map(|filter| render_filter(filter, &quote))
+        .transpose()?;
+    if let Some(condition) = clauses.condition(typed) {
+        wrapped.push_str(" WHERE ");
+        wrapped.push_str(&condition);
+    }
+    Ok(wrapped)
+}
+
+/// `SELECT * FROM schema.table` for `name`, each part quoted: what a table document's
+/// rows are, as a statement the derivations can wrap. Postgres leaves the database
+/// out, which it does not take in a name.
+pub fn table_select(name: &dexo_driver_api::QualifiedName, dialect: Dialect) -> String {
+    let container = match dialect {
+        Dialect::Postgres => name.schema(),
+        Dialect::Mysql | Dialect::Sqlite => name.schema().or(name.catalog()),
+    };
+    let object = quote(name.object(), dialect);
+    match container {
+        Some(container) => format!("SELECT * FROM {}.{object}", quote(container, dialect)),
+        None => format!("SELECT * FROM {object}"),
+    }
 }
 
 fn quote(ident: &str, dialect: Dialect) -> String {
@@ -157,5 +196,32 @@ mod tests {
         assert!(derive_page("select id,name from users", &sort(), &filter(), page()).is_ok());
         assert!(derive_page("update users set name='x'", &sort(), &filter(), page()).is_err());
         assert!(derive_page("select * from users for update", &sort(), &filter(), page()).is_err());
+    }
+
+    /// The count wraps what the page wraps, filters and all, and nothing that writes.
+    #[test]
+    fn a_count_covers_what_the_pages_do() {
+        use crate::Dialect;
+        let clauses = dexo_driver_api::RawClauses {
+            where_sql: Some("total > 5".into()),
+            order_by: Some("id".into()),
+        };
+        let table = dexo_driver_api::QualifiedName::new(Some("shop"), Some("public"), "orders");
+        let sql = super::table_select(&table, Dialect::Postgres);
+        assert_eq!(sql, "SELECT * FROM \"public\".\"orders\"");
+        assert_eq!(
+            super::derive_count_in(&sql, &filter(), &clauses, Dialect::Postgres).unwrap(),
+            "SELECT COUNT(*) FROM (SELECT * FROM \"public\".\"orders\") AS _dexo_derived \
+             WHERE (total > 5) AND (\"id\" = ?)"
+        );
+        let mysql = dexo_driver_api::QualifiedName::new(Some("shop"), None::<String>, "orders");
+        assert_eq!(
+            super::table_select(&mysql, Dialect::Mysql),
+            "SELECT * FROM `shop`.`orders`"
+        );
+        assert!(
+            super::derive_count_in("delete from t", &None, &Default::default(), Dialect::Mysql)
+                .is_err()
+        );
     }
 }

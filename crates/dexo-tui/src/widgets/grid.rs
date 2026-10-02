@@ -35,10 +35,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         return;
     }
     let extra = result_banner(model);
-    let title = if model.results.truncated() {
-        format!("Results ({}) …{extra}", model.results.row_count())
+    // Nothing has run into the pane: no count to give.
+    let title = if model.results.columns().is_empty() {
+        format!("Results{extra}")
+    } else if model.results.truncated() {
+        format!("Results ({}) …{extra}", rows_label(model))
     } else {
-        format!("Results ({}){extra}", model.results.row_count())
+        format!("Results ({}){extra}", rows_label(model))
     };
     let focused = model.effective_focus() == Focus::Results;
     let block = crate::render::pane_block(model, &title, focused);
@@ -236,6 +239,68 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
         }
     }
     out
+}
+
+/// How many rows there are, and how sure that is: `843 rows` when every row is in, `~4.3M
+/// rows` from the server's statistics, `300+ rows` when only a floor is known, and
+/// `10,000+ rows, limit reached` when a statement's rows stopped at the limit. A count
+/// asked for with `t` replaces all of them while the grid still shows what it counted.
+fn rows_label(model: &Model) -> String {
+    use crate::screens::data::CountState;
+    let counted = model
+        .data
+        .count
+        .as_ref()
+        .filter(|count| crate::update::count_sql(model).as_deref() == Some(count.sql.as_str()));
+    if let Some(CountState::Exact(rows)) = counted.map(|count| count.state) {
+        return format!("{} rows", grouped(rows));
+    }
+    let shown = model.results.row_count() as u64;
+    let label = if model.active_document().kind.is_table() {
+        let seen = model.data.page_offset + shown;
+        match (model.data.has_more, model.data.estimated_total) {
+            (false, _) => format!("{} rows", grouped(seen)),
+            (true, Some(total)) if total > seen => format!("~{} rows", compact(total)),
+            (true, _) => format!("{}+ rows", grouped(seen)),
+        }
+    } else if model
+        .results
+        .tabs
+        .get(model.results.active)
+        .is_some_and(|tab| tab.truncated)
+    {
+        format!("{}+ rows, limit reached", grouped(shown))
+    } else {
+        format!("{} rows", grouped(shown))
+    };
+    if counted.is_some() {
+        format!("{label}, counting…")
+    } else {
+        label
+    }
+}
+
+/// `10000` as `10,000`.
+fn grouped(number: u64) -> String {
+    let digits = number.to_string();
+    let mut out = String::new();
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(digit);
+    }
+    out
+}
+
+/// An estimate as it reads best: `843`, `12.4K`, `4.3M`, `1.2B`.
+fn compact(number: u64) -> String {
+    match number {
+        0..1_000 => number.to_string(),
+        1_000..1_000_000 => format!("{:.1}K", number as f64 / 1_000.0),
+        1_000_000..1_000_000_000 => format!("{:.1}M", number as f64 / 1_000_000.0),
+        _ => format!("{:.1}B", number as f64 / 1_000_000_000.0),
+    }
 }
 
 fn result_banner(model: &Model) -> String {

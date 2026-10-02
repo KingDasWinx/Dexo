@@ -8,6 +8,7 @@ impl DataScreen {
     pub fn apply_page(&mut self, page: DataPage) {
         self.page_offset = page.offset;
         self.has_more = page.has_more;
+        self.estimated_total = page.estimated_total;
         self.loading = false;
         self.last_error = None;
     }

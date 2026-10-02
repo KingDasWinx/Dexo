@@ -377,6 +377,8 @@ pub struct ResultTab {
     /// Where the statement began in its document, in bytes, and the document's revision
     /// then: what turns the server's position for a failure into a place in the text.
     pub source_offset: Option<(usize, u64)>,
+    /// The rows stopped at the row limit with more left.
+    pub truncated: bool,
 }
 
 impl ResultTab {
@@ -391,6 +393,7 @@ impl ResultTab {
             source_sql: None,
             local_only: None,
             source_offset: None,
+            truncated: false,
         }
     }
 }

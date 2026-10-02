@@ -239,6 +239,26 @@ fn cap_value(value: DbValue) -> DbValue {
 
 #[async_trait::async_trait]
 impl DataMutator for MysqlSession {
+    async fn estimate_rows(&self, target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        // InnoDB's TABLE_ROWS is a sampled estimate; that is what is asked for.
+        let schema = target
+            .schema()
+            .or(target.catalog())
+            .unwrap_or_default()
+            .to_string();
+        let object = target.object().to_string();
+        let mut conn = self.conn.lock().await;
+        let rows: Option<Option<u64>> = conn
+            .exec_first(
+                "SELECT TABLE_ROWS FROM information_schema.TABLES
+                 WHERE TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND TABLE_NAME = ?",
+                (schema, object),
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(rows.flatten())
+    }
+
     async fn table_columns(
         &self,
         target: &QualifiedName,

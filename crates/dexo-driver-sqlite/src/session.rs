@@ -266,6 +266,8 @@ fn run_statements(
                 return Ok(());
             }
         }
+        let truncated =
+            row_limit > 0 && emitted == row_limit && rows.next().map_err(map_error)?.is_some();
         drop(rows);
         if !batch_rows.is_empty() && !send(QueryEvent::Rows(RowBatch { rows: batch_rows })) {
             return Ok(());
@@ -283,6 +285,7 @@ fn run_statements(
         if !send(QueryEvent::ResultSetFinished {
             index,
             rows_affected,
+            truncated,
         }) {
             return Ok(());
         }

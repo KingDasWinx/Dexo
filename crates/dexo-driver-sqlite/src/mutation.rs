@@ -291,6 +291,29 @@ fn apply_all(conn: &mut Connection, mutations: &[Mutation]) -> Result<(), Driver
 
 #[async_trait::async_trait]
 impl DataMutator for SqliteSession {
+    /// From `sqlite_stat1`, which only `ANALYZE` writes: its `stat` starts with the
+    /// table's row count.
+    async fn estimate_rows(&self, target: &QualifiedName) -> Result<Option<u64>, DriverError> {
+        let target = target.clone();
+        self.with_conn(move |conn| {
+            let sql = format!(
+                "SELECT stat FROM {}.sqlite_stat1 WHERE tbl = ?1 ORDER BY idx IS NOT NULL LIMIT 1",
+                quote(schema_of(&target))
+            );
+            // No statistics table at all until the first ANALYZE.
+            let Ok(stat) = conn.query_row(&sql, params![target.object()], |row| {
+                row.get::<_, String>(0)
+            }) else {
+                return Ok(None);
+            };
+            Ok(stat
+                .split_whitespace()
+                .next()
+                .and_then(|rows| rows.parse().ok()))
+        })
+        .await
+    }
+
     async fn fetch(&self, request: DataRequest) -> Result<DataPage, DriverError> {
         Page::new(request.page.offset, request.page.limit)?;
         request.validate()?;

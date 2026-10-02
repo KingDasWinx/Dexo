@@ -176,6 +176,18 @@ impl Password {
     }
 }
 
+/// `COUNT(*)`'s answer, however the driver types it.
+fn count_of(value: &dexo_driver_api::DbValue) -> Option<u64> {
+    match value {
+        dexo_driver_api::DbValue::I64(rows) => u64::try_from(*rows).ok(),
+        dexo_driver_api::DbValue::U64(rows) => Some(*rows),
+        dexo_driver_api::DbValue::Decimal(rows) | dexo_driver_api::DbValue::Text(rows) => {
+            rows.parse().ok()
+        }
+        _ => None,
+    }
+}
+
 /// Dials `profile` with the password `password` resolves to, within `CONNECT_TIMEOUT`.
 /// On a connect (`forget`), a password the server turns down is forgotten if this
 /// session was holding it in memory -- a URL's, or one typed for the session -- so the
@@ -226,6 +238,16 @@ pub struct WorkbenchRuntime {
     /// record of one, and the side connections export and import open need it.
     session_profiles: std::collections::HashMap<SessionId, ConnectionProfile>,
     transfer: transfer_manager::TransferManager,
+    /// The row counts running, each on a connection of its own.
+    counts: Arc<std::sync::Mutex<std::collections::HashMap<OperationId, CountTask>>>,
+}
+
+/// A count's task, and once it has dialled, its connection and query: what a cancel
+/// stops on the server.
+#[derive(Default)]
+struct CountTask {
+    task: Option<tokio::task::AbortHandle>,
+    running: Option<(Arc<dyn dexo_driver_api::Session>, dexo_driver_api::QueryId)>,
 }
 
 impl WorkbenchRuntime {
@@ -245,6 +267,7 @@ impl WorkbenchRuntime {
             opening: Arc::new(tokio::sync::Mutex::new(None)),
             session_profiles: std::collections::HashMap::new(),
             transfer: transfer_manager::TransferManager::default(),
+            counts: Arc::default(),
         }
     }
 
@@ -312,6 +335,29 @@ impl WorkbenchRuntime {
                 let _ = self.start_script(request).await;
             }
             crate::Effect::CancelOperation(id) => self.cancel_operation(id).await,
+            crate::Effect::CountRows {
+                session,
+                operation,
+                sql,
+                parameters,
+            } => self.count_rows(session, operation, sql, parameters).await,
+            crate::Effect::CancelCount { operation } => {
+                let task = self
+                    .counts
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .remove(&operation);
+                if let Some(task) = task {
+                    // The server stops counting first; dropping the task closes the
+                    // connection it was counting on.
+                    if let Some((session, query)) = task.running {
+                        let _ = session.cancel(query).await;
+                    }
+                    if let Some(task) = task.task {
+                        task.abort();
+                    }
+                }
+            }
             crate::Effect::BeginTransaction { session, mode } => self.begin(session, mode).await,
             crate::Effect::CommitTransaction { session } => self.commit(session).await,
             crate::Effect::RollbackTransaction { session } => self.rollback(session).await,
@@ -802,6 +848,100 @@ impl WorkbenchRuntime {
             },
         };
         let _ = self.transfer.run_with(request, Some(&access)).await;
+    }
+
+    /// Counts on a connection dialled for it with the session's profile: a count on the
+    /// session itself would wait behind its queries, and a cancel would stop theirs.
+    async fn count_rows(
+        &self,
+        session: SessionId,
+        operation: OperationId,
+        sql: String,
+        parameters: Vec<dexo_driver_api::DbValue>,
+    ) {
+        let fail = |message: String| Action::RowsCounted {
+            operation,
+            result: Err(message),
+        };
+        let Some(profile) = self.session_profiles.get(&session).cloned() else {
+            return self.emit(fail("the session is closed".into())).await;
+        };
+        // What the session connected with, kept in memory -- a password command's
+        // answer too -- before asking the keychain or the command again.
+        let password = match self.secrets.memory.get(profile.secret_ref.as_str()) {
+            Ok(Some(secret)) => Password::Ready(secret),
+            _ => match Password::for_profile(&profile, &self.secrets) {
+                Ok(password) => password,
+                Err(_) => {
+                    return self
+                        .emit(fail("the password is not at hand; connect again".into()))
+                        .await;
+                }
+            },
+        };
+        let factory = match self.drivers.get(&profile.driver) {
+            Ok(factory) => factory,
+            Err(error) => return self.emit(fail(error.to_string())).await,
+        };
+        let counts = Arc::clone(&self.counts);
+        let memory = Arc::clone(&self.secrets.memory);
+        let action_tx = self.action_tx.clone();
+        counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .insert(operation, CountTask::default());
+        let slots = Arc::clone(&counts);
+        let task = tokio::spawn(async move {
+            let result = async {
+                let (session, _) = dial(factory, &profile, password, &memory, false).await?;
+                let session: Arc<dyn dexo_driver_api::Session> = Arc::from(session);
+                let mut request = dexo_driver_api::QueryRequest::read(sql, 1);
+                request.parameters = parameters;
+                {
+                    let mut slots = slots
+                        .lock()
+                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                    let Some(slot) = slots.get_mut(&operation) else {
+                        return Err("cancelled".to_string());
+                    };
+                    slot.running = Some((Arc::clone(&session), request.id));
+                }
+                let mut stream = session
+                    .execute(request)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let mut counted = None;
+                while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+                    if let dexo_driver_api::QueryEvent::Rows(batch) =
+                        event.map_err(|error| error.to_string())?
+                    {
+                        counted = counted.or_else(|| {
+                            batch
+                                .rows
+                                .first()
+                                .and_then(|row| row.first())
+                                .and_then(count_of)
+                        });
+                    }
+                }
+                counted.ok_or_else(|| "the count came back without a number".to_string())
+            }
+            .await;
+            slots
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner)
+                .remove(&operation);
+            let _ = action_tx
+                .send(Action::RowsCounted { operation, result })
+                .await;
+        });
+        if let Some(slot) = counts
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .get_mut(&operation)
+        {
+            slot.task = Some(task.abort_handle());
+        }
     }
 
     fn transfer_access(

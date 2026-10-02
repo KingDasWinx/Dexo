@@ -248,6 +248,31 @@ async fn timeout_or_cancel_mysql_sleep() {
     }));
 }
 
+/// A result cut at the row limit says so, and the next statement still runs on the
+/// connection; one that holds exactly the limit does not say so.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_result_cut_at_the_row_limit_says_so() {
+    let fixture = connect_mysql_fixture().await;
+    let five = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 5) \
+                select i from n";
+    for (limit, cut) in [(3, true), (5, false), (0, false)] {
+        let stream = fixture
+            .session
+            .execute(QueryRequest::read(five, limit))
+            .await
+            .unwrap();
+        let truncated = collect(stream)
+            .await
+            .into_iter()
+            .find_map(|event| match event {
+                QueryEvent::ResultSetFinished { truncated, .. } => Some(truncated),
+                _ => None,
+            });
+        assert_eq!(truncated, Some(cut), "limit {limit}");
+    }
+}
+
 async fn collect(mut stream: dexo_driver_api::QueryStream) -> Vec<QueryEvent> {
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {

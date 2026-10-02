@@ -1,6 +1,5 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 238
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
@@ -20,7 +19,7 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          │└──────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results (0)─────────────────────────────────────────────────────────┐
+│                          │┌  Results─────────────────────────────────────────────────────────────┐
 │                          ││ Grid [Explain] Messages  │ Table                                     │
 │                          ││Analyzed · 0.21 ms execution · 0.04 ms planning                       │
 │                          ││                              self     time  rows est  rows act  loops│

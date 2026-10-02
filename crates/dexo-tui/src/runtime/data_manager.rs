@@ -21,8 +21,15 @@ pub async fn fetch_page(
             .await;
         return;
     };
+    // Asked only of a page that leaves rows out and has nothing filtering it: what the
+    // statistics say is the table's size, not the filter's.
+    let unfiltered = request.filter.is_none() && request.clauses.where_sql.is_none();
+    let object = request.object.clone();
     match data.fetch(request).await {
-        Ok(page) => {
+        Ok(mut page) => {
+            if page.has_more && unfiltered {
+                page.estimated_total = data.estimate_rows(&object).await.ok().flatten();
+            }
             let _ = action_tx
                 .send(Action::DataPageLoaded {
                     generation,

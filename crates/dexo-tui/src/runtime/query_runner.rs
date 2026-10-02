@@ -193,6 +193,7 @@ async fn answer_meta(
         QueryEvent::ResultSetFinished {
             index,
             rows_affected: None,
+            truncated: false,
         },
     ] {
         if forward_event(action_tx, key, index, event).await {
@@ -225,13 +226,16 @@ async fn forward_event(
             index,
             message,
         }),
-        QueryEvent::ResultSetFinished { rows_affected, .. } => {
-            Some(Action::QueryResultSetFinished {
-                key: key.clone(),
-                index,
-                rows_affected,
-            })
-        }
+        QueryEvent::ResultSetFinished {
+            rows_affected,
+            truncated,
+            ..
+        } => Some(Action::QueryResultSetFinished {
+            key: key.clone(),
+            index,
+            rows_affected,
+            truncated,
+        }),
         QueryEvent::Finished { .. } => None,
     };
     if let Some(action) = action {

@@ -726,3 +726,128 @@ fn a_header_click_sorts_through_the_order_by_bar() {
         ran(&effects)
     );
 }
+
+/// The title says how many rows there are and how sure that is; `t` counts them on a
+/// runner of its own, and `t` again cancels the count.
+#[test]
+fn row_counts_say_whether_they_are_exact_estimated_or_open() {
+    use dexo_tui::screens::data::CountState;
+    let title = |model: &Model| -> String {
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+        let mut hits = dexo_tui::mouse::HitMap::default();
+        let frame = terminal
+            .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+            .unwrap();
+        let text: String = frame
+            .buffer
+            .content()
+            .iter()
+            .map(|cell| cell.symbol())
+            .collect();
+        let start = text.find("Results (").expect("a results title");
+        text[start..start + text[start..].find(')').unwrap() + 1].to_string()
+    };
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(5))),
+        ..Model::default()
+    };
+    model.apply_size(120, 30);
+    let orders = dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders");
+    model
+        .documents
+        .push(dexo_tui::model::EditorDocument::new_table(
+            orders.clone(),
+            None,
+        ));
+    model.set_active_document(model.documents.len() - 1);
+    model.data.target = orders;
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int8".into(),
+        nullable: false,
+    }]);
+    model
+        .results
+        .append_rows((1..=3).map(|id| vec![DbValue::I64(id)]).collect());
+    assert_eq!(title(&model), "Results (3 rows)");
+    model.data.has_more = true;
+    model.data.page_offset = 100;
+    assert_eq!(title(&model), "Results (103+ rows)");
+    model.data.estimated_total = Some(4_321_000);
+    assert_eq!(title(&model), "Results (~4.3M rows)");
+
+    let effects = update(&mut model, Action::CountRows);
+    let (operation, sql) = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::CountRows { operation, sql, .. } => Some((*operation, sql.clone())),
+            _ => None,
+        })
+        .expect("a count started");
+    assert!(
+        sql.starts_with("SELECT COUNT(*) FROM (SELECT * FROM \"public\".\"orders\")"),
+        "{sql}"
+    );
+    assert_eq!(title(&model), "Results (~4.3M rows, counting…)");
+    // `t` again cancels it, and its late answer is dropped.
+    let effects = update(&mut model, Action::CountRows);
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        dexo_tui::Effect::CancelCount { operation: cancelled } if *cancelled == operation
+    )));
+    update(
+        &mut model,
+        Action::RowsCounted {
+            operation,
+            result: Ok(1),
+        },
+    );
+    assert!(model.data.count.is_none());
+    let effects = update(&mut model, Action::CountRows);
+    let operation = effects
+        .iter()
+        .find_map(|effect| match effect {
+            dexo_tui::Effect::CountRows { operation, .. } => Some(*operation),
+            _ => None,
+        })
+        .unwrap();
+    update(
+        &mut model,
+        Action::RowsCounted {
+            operation,
+            result: Ok(4_321_987),
+        },
+    );
+    assert_eq!(
+        model.data.count.as_ref().map(|count| count.state),
+        Some(CountState::Exact(4_321_987))
+    );
+    assert_eq!(title(&model), "Results (4,321,987 rows)");
+    // A WHERE that ran since makes it another count: the exact number goes.
+    model.data.bars.applied.where_sql = Some("id > 2".into());
+    model.data.estimated_total = None;
+    assert_eq!(title(&model), "Results (103+ rows)");
+
+    // A statement's rows that stopped at the limit say so.
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.truncated = true;
+    let query = model.documents.len();
+    model
+        .documents
+        .push(dexo_tui::model::EditorDocument::new_unique(
+            "q.sql", None, None,
+        ));
+    model.set_active_document(query);
+    model.results.tabs = vec![tab];
+    model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
+        name: "id".into(),
+        type_name: "int8".into(),
+        nullable: false,
+    }]);
+    model
+        .results
+        .append_rows((1..=3).map(|id| vec![DbValue::I64(id)]).collect());
+    assert_eq!(title(&model), "Results (3+ rows, limit reached)");
+}

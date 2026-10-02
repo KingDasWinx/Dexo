@@ -63,6 +63,9 @@ pub enum QueryEvent {
     ResultSetFinished {
         index: usize,
         rows_affected: Option<u64>,
+        /// The rows stopped at the request's row limit with more left: the driver read
+        /// one row past it to know.
+        truncated: bool,
     },
     Finished {
         rows_affected: Option<u64>,

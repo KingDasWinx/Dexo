@@ -184,8 +184,10 @@ async fn run_postgres_query(
     let mut rows = pin!(rows);
     let mut batch = Vec::new();
     let mut emitted = 0_u64;
+    let mut truncated = false;
     loop {
         if row_limit > 0 && emitted >= row_limit {
+            truncated = matches!(rows.next().await, Some(Ok(_)));
             break;
         }
         match rows.next().await {
@@ -223,6 +225,7 @@ async fn run_postgres_query(
         .send(Ok(QueryEvent::ResultSetFinished {
             index: 0,
             rows_affected,
+            truncated,
         }))
         .await;
     let _ = tx.send(Ok(QueryEvent::Finished { rows_affected })).await;

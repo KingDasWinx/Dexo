@@ -710,3 +710,25 @@ async fn a_cancel_reaches_only_the_query_it_names() {
         "the queued query ran"
     );
 }
+
+/// A result cut at the row limit says so, found by reading one row past it; one that
+/// holds exactly the limit, or fewer, does not.
+#[tokio::test]
+async fn a_result_cut_at_the_row_limit_says_so() {
+    let (_dir, path) = seeded().await;
+    let session = open(&path, false).await;
+    let five = "with recursive n(i) as (select 1 union all select i + 1 from n where i < 5) \
+                select i from n";
+    for (limit, cut) in [(3, true), (5, false), (6, false), (0, false)] {
+        let events = run(&*session, QueryRequest::read(five, limit))
+            .await
+            .unwrap();
+        let truncated = events.iter().find_map(|event| match event {
+            QueryEvent::ResultSetFinished { truncated, .. } => Some(*truncated),
+            _ => None,
+        });
+        assert_eq!(truncated, Some(cut), "limit {limit}");
+        let expected = if limit == 0 { 5 } else { limit.min(5) as usize };
+        assert_eq!(rows(&events).len(), expected, "limit {limit}");
+    }
+}

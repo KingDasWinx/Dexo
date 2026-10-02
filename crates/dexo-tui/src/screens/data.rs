@@ -102,6 +102,20 @@ pub enum ClauseBar {
     Order,
 }
 
+/// The exact row count `t` asked for, and the statement it counts: shown only while the
+/// grid still pages through that statement.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowCount {
+    pub sql: String,
+    pub state: CountState,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum CountState {
+    Running(crate::runtime::OperationId),
+    Exact(u64),
+}
+
 /// The WHERE and ORDER BY bars over the grid: what is typed, what was last sent, and
 /// what last came back with rows -- which a failed clause falls back to.
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -180,6 +194,9 @@ pub struct DataScreen {
     pub page_offset: u64,
     pub page_limit: u32,
     pub has_more: bool,
+    /// The table's row count as the server's statistics have it, when the page asked.
+    pub estimated_total: Option<u64>,
+    pub count: Option<RowCount>,
     pub loading: bool,
     pub filter: Option<dexo_driver_api::Filter>,
     pub sort: Vec<dexo_driver_api::Sort>,
@@ -213,6 +230,8 @@ impl Default for DataScreen {
             page_offset: 0,
             page_limit: 100,
             has_more: false,
+            estimated_total: None,
+            count: None,
             loading: false,
             filter: None,
             sort: Vec::new(),
@@ -241,6 +260,8 @@ impl DataScreen {
         swap(&mut self.crumbs, &mut parked.crumbs);
         swap(&mut self.page_offset, &mut parked.page_offset);
         swap(&mut self.has_more, &mut parked.has_more);
+        swap(&mut self.estimated_total, &mut parked.estimated_total);
+        swap(&mut self.count, &mut parked.count);
         swap(&mut self.loading, &mut parked.loading);
         swap(&mut self.filter, &mut parked.filter);
         swap(&mut self.sort, &mut parked.sort);

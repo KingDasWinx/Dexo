@@ -94,6 +94,7 @@ impl Session for FakeSession {
         events.push(QueryEvent::ResultSetFinished {
             index: 0,
             rows_affected: Some(count as u64),
+            truncated: false,
         });
         events.push(QueryEvent::Finished {
             rows_affected: Some(count as u64),

@@ -165,6 +165,28 @@ async fn timeout_or_cancel_pg_sleep() {
     }));
 }
 
+/// A result cut at the row limit says so; one that holds exactly the limit does not.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_result_cut_at_the_row_limit_says_so() {
+    let fixture = connect_postgres_fixture().await;
+    for (limit, cut) in [(3, true), (5, false), (0, false)] {
+        let stream = fixture
+            .session
+            .execute(QueryRequest::read("select generate_series(1, 5)", limit))
+            .await
+            .unwrap();
+        let truncated = collect(stream)
+            .await
+            .into_iter()
+            .find_map(|event| match event {
+                QueryEvent::ResultSetFinished { truncated, .. } => Some(truncated),
+                _ => None,
+            });
+        assert_eq!(truncated, Some(cut), "limit {limit}");
+    }
+}
+
 async fn collect(mut stream: dexo_driver_api::QueryStream) -> Vec<QueryEvent> {
     let mut events = Vec::new();
     while let Some(event) = stream.next().await {

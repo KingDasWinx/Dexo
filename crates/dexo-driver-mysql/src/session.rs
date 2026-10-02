@@ -305,6 +305,7 @@ async fn emit_mysql_sets<P>(
         }
         let mut batch = Vec::new();
         let mut emitted = 0_u64;
+        let mut truncated = false;
         loop {
             match result.next().await {
                 Ok(Some(row)) => {
@@ -321,6 +322,7 @@ async fn emit_mysql_sets<P>(
                         return;
                     }
                     if row_limit > 0 && emitted >= row_limit {
+                        truncated = matches!(result.next().await, Ok(Some(_)));
                         break;
                     }
                 }
@@ -345,6 +347,7 @@ async fn emit_mysql_sets<P>(
             .send(Ok(QueryEvent::ResultSetFinished {
                 index,
                 rows_affected,
+                truncated,
             }))
             .await
             .is_err()

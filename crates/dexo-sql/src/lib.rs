@@ -25,7 +25,7 @@ pub use context::{
     Confidence, CursorContext, Intent, RowSource, RowSourceKind, StatementKind, TriggerMode,
     TriggerOrigin, analyze, should_open,
 };
-pub use derived::{derive_page, derive_page_in, filter_values};
+pub use derived::{derive_count_in, derive_page, derive_page_in, filter_values, table_select};
 pub use diagnose::{Diagnoser, KnownObjects, created_table, diagnose};
 pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
