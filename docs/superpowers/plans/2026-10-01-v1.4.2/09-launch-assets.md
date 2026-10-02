@@ -10,7 +10,7 @@
 
 - **The pitch** is the spec's: "A terminal database workbench with guardrails for AI agents."
 - **`dexo --demo` at the top**, under the pitch, with the install line before it.
-- **The comparison** covers rainfrog, harlequin, lazysql and sqlit from what each project's README says; a feature its README does not list is a dash, and the table says so and when it was read.
+- **The comparison** covers rainfrog, harlequin, lazysql and sqlit from each project's README, documentation and changelog (and rainfrog's write checks from its code); a feature not found there is a dash, and the table says so and when it was read.
 - **The GIF** is recorded from the real binary: a `DELETE` without `WHERE` on a production connection waits for the connection's name, then an agent's `UPDATE` through MCP waits in Agent Activity until it is approved. Frames are captured from tmux and drawn as the terminal shows them.
 - **`--help`**: every subcommand, at every level, has a one-line description that says what it does, no more than it does; a test walks the command tree.
 
