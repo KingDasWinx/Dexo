@@ -1206,3 +1206,60 @@ fn follow(model: &mut Model, key: dexo_app::data::ForeignKey) -> Vec<dexo_tui::E
         )),
     )
 }
+
+/// Alt+click and a right click on a header add the column to the sort: most terminals
+/// keep Shift+click for their own selection.
+#[test]
+fn alt_click_and_right_click_add_a_column_to_the_sort() {
+    use crossterm::event::{KeyModifiers, MouseButton, MouseEvent, MouseEventKind};
+    use dexo_tui::mouse::{HitMap, HitTarget};
+    for (button, modifiers) in [
+        (MouseButton::Left, KeyModifiers::ALT),
+        (MouseButton::Right, KeyModifiers::NONE),
+    ] {
+        let mut model = Model {
+            focus: dexo_tui::Focus::Results,
+            ..Model::default()
+        };
+        model.apply_size(100, 30);
+        let mut tab = ResultTab::new(result_key(0), "r0");
+        tab.source_sql = Some("select id, name from users".into());
+        model.results.tabs = vec![tab];
+        model.results.set_columns(
+            ["id", "name"]
+                .into_iter()
+                .map(|name| dexo_driver_api::ColumnMeta {
+                    name: name.into(),
+                    type_name: "text".into(),
+                    nullable: false,
+                })
+                .collect(),
+        );
+        model
+            .results
+            .append_rows(vec![vec![DbValue::I64(7), DbValue::Text("ana".into())]]);
+        model.data.bars.applied.order_by = Some("id ASC".into());
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut hits = HitMap::default();
+        terminal
+            .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+            .unwrap();
+        model.hits = hits;
+        let (x, y) = model.hits.center(HitTarget::GridHeader(1));
+        update(
+            &mut model,
+            Action::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(button),
+                column: x,
+                row: y,
+                modifiers,
+            }),
+        );
+        assert_eq!(
+            model.data.bars.order_input.as_str(),
+            "id ASC, name ASC",
+            "{button:?} {modifiers:?}"
+        );
+    }
+}

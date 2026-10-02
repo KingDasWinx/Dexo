@@ -3027,7 +3027,11 @@ fn mouse_workbench(
     hit: Option<HitTarget>,
     doubled: bool,
 ) -> Vec<Effect> {
-    let extend = mouse.modifiers.contains(KeyModifiers::SHIFT);
+    // Most terminals keep Shift+click for their own text selection, so Alt extends too
+    // (and a right click on a header adds its column). Ctrl picks rows.
+    let extend = mouse
+        .modifiers
+        .intersects(KeyModifiers::SHIFT | KeyModifiers::ALT);
     let pick = mouse.modifiers.contains(KeyModifiers::CONTROL);
     match hit {
         Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
@@ -3227,6 +3231,17 @@ fn handle_mouse_right_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> 
             model.focus = Focus::Results;
             click_results_row(model, row, false);
             update(model, Action::OpenResultsMenu)
+        }
+        // A right click on a header adds its column to the sort, as Shift+click would
+        // where the terminal leaves Shift alone.
+        Some(HitTarget::GridHeader(col)) => {
+            model.focus = Focus::Results;
+            model.results.select_column(col);
+            if clause_bars_shown(model) {
+                sort_by_column(model, col, true)
+            } else {
+                Vec::new()
+            }
         }
         _ => Vec::new(),
     }
