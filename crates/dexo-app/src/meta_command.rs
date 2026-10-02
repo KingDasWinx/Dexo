@@ -5,6 +5,7 @@ use dexo_driver_api::{CatalogListOptions, CatalogObject, CatalogReader, ObjectKi
 
 use crate::catalog_service::CatalogService;
 use crate::error::{AppError, ErrorCategory};
+use crate::query_service::map_driver_error;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum MetaCommand {
@@ -18,8 +19,9 @@ pub enum MetaCommand {
     Describe(String),
     /// `\l`: the databases.
     Databases,
-    /// `\x`: rows shown one field per line, or back to the grid.
-    ToggleRecordView,
+    /// `\x`, `\x on`, `\x off`: rows shown one field per line, or back to the grid;
+    /// without an argument it switches.
+    RecordView(Option<bool>),
     /// `\?`: what this list says.
     Help,
 }
@@ -39,7 +41,10 @@ const HELP: &[(&str, &str)] = &[
     ("\\df [pattern]", "functions and procedures"),
     ("\\d name", "a table's or view's columns, keys and indexes"),
     ("\\l", "databases"),
-    ("\\x", "rows one field per line, or back to the grid"),
+    (
+        "\\x [on|off]",
+        "rows one field per line, or back to the grid",
+    ),
     ("\\?", "this list"),
 ];
 
@@ -49,7 +54,9 @@ pub fn is_meta(sql: &str) -> bool {
 }
 
 pub fn parse(line: &str) -> Result<MetaCommand, AppError> {
+    // psql users end a line with `;` out of habit; it belongs to no argument.
     let line = line.trim();
+    let line = line.strip_suffix(';').unwrap_or(line).trim_end();
     let (command, argument) = match line.split_once(char::is_whitespace) {
         Some((command, rest)) => (command, Some(rest.trim()).filter(|rest| !rest.is_empty())),
         None => (line, None),
@@ -80,7 +87,15 @@ pub fn parse(line: &str) -> Result<MetaCommand, AppError> {
             ]),
         },
         "\\l" | "\\list" => Ok(MetaCommand::Databases),
-        "\\x" => Ok(MetaCommand::ToggleRecordView),
+        "\\x" => match argument.map(str::to_ascii_lowercase).as_deref() {
+            None => Ok(MetaCommand::RecordView(None)),
+            Some("on") => Ok(MetaCommand::RecordView(Some(true))),
+            Some("off") => Ok(MetaCommand::RecordView(Some(false))),
+            Some(other) => Err(AppError::new(
+                ErrorCategory::Syntax,
+                format!("\\x takes on or off, not {other}"),
+            )),
+        },
         "\\?" => Ok(MetaCommand::Help),
         _ => Err(AppError::new(
             ErrorCategory::Syntax,
@@ -104,33 +119,33 @@ pub async fn answer(
                 .map(|(command, shows)| vec![command.to_string(), shows.to_string()])
                 .collect(),
         }),
-        MetaCommand::ToggleRecordView => Ok(MetaAnswer::default()),
-        MetaCommand::Databases => {
-            let top = CatalogService::list_children(reader, None, &options).await?;
-            // Postgres and SQLite list databases as catalogs; MySQL's are its schemas.
-            let wanted = if top
-                .objects
-                .iter()
-                .any(|object| object.kind == ObjectKind::Catalog)
-            {
-                ObjectKind::Catalog
-            } else {
-                ObjectKind::Schema
-            };
-            Ok(MetaAnswer {
-                columns: vec!["Name"],
-                rows: top
-                    .objects
-                    .iter()
-                    .filter(|object| object.kind == wanted)
-                    .map(|object| vec![object.qualified_name.object().to_string()])
-                    .collect(),
-            })
-        }
+        MetaCommand::RecordView(_) => Ok(MetaAnswer::default()),
+        MetaCommand::Databases => Ok(MetaAnswer {
+            columns: vec!["Name"],
+            rows: reader
+                .databases()
+                .await
+                .map_err(map_driver_error)?
+                .into_iter()
+                .map(|name| vec![name])
+                .collect(),
+        }),
         MetaCommand::List { kinds, pattern } => {
             let into_tables = kinds.contains(&ObjectKind::Index);
             let mut found = Vec::new();
             collect(reader, None, kinds, into_tables, &options, &mut found).await?;
+            // MySQL and SQLite have no schemas under their databases: `\dn` lists those.
+            if kinds == &[ObjectKind::Schema] && found.is_empty() {
+                collect(
+                    reader,
+                    None,
+                    &[ObjectKind::Catalog],
+                    false,
+                    &options,
+                    &mut found,
+                )
+                .await?;
+            }
             let rows = found
                 .iter()
                 .filter(|object| {
@@ -140,7 +155,7 @@ pub async fn answer(
                 })
                 .map(|object| {
                     vec![
-                        object.qualified_name.schema().unwrap_or("").to_string(),
+                        schema_of(object).unwrap_or("").to_string(),
                         leaf_name(object).to_string(),
                         object.kind.as_str().replace('_', " "),
                     ]
@@ -152,14 +167,14 @@ pub async fn answer(
             })
         }
         MetaCommand::Describe(name) => {
-            let object = CatalogService::find_by_qualified_name(reader, name, &options)
-                .await?
-                .ok_or_else(|| {
-                    AppError::new(
-                        ErrorCategory::Syntax,
-                        format!("Did not find any relation named \"{name}\"."),
-                    )
-                })?;
+            let mut relations = Vec::new();
+            collect(reader, None, DESCRIBED, false, &options, &mut relations).await?;
+            let object = describe_target(relations, name).ok_or_else(|| {
+                AppError::new(
+                    ErrorCategory::Syntax,
+                    format!("Did not find any relation named \"{name}\"."),
+                )
+            })?;
             let children =
                 CatalogService::list_children(reader, Some(&object.id), &options).await?;
             let mut rows = Vec::new();
@@ -225,6 +240,45 @@ async fn collect(
     Ok(())
 }
 
+/// What `\d name` describes.
+const DESCRIBED: &[ObjectKind] = &[
+    ObjectKind::Table,
+    ObjectKind::View,
+    ObjectKind::MaterializedView,
+];
+
+/// The relation `name` -- `orders` or `public.orders` -- means: one spelled exactly so
+/// first, then one that differs only in case.
+fn describe_target(relations: Vec<CatalogObject>, name: &str) -> Option<CatalogObject> {
+    let unquoted = name.replace('"', "");
+    let (schema, leaf) = match unquoted.rsplit_once('.') {
+        Some((schema, leaf)) => (Some(schema), leaf),
+        None => (None, unquoted.as_str()),
+    };
+    let named = |object: &CatalogObject, exact: bool| {
+        let same = |a: &str, b: &str| {
+            if exact {
+                a == b
+            } else {
+                a.eq_ignore_ascii_case(b)
+            }
+        };
+        same(leaf_name(object), leaf)
+            && schema.is_none_or(|schema| schema_of(object).is_some_and(|own| same(own, schema)))
+    };
+    let exact = relations.iter().position(|object| named(object, true));
+    let index = exact.or_else(|| relations.iter().position(|object| named(object, false)))?;
+    relations.into_iter().nth(index)
+}
+
+/// The schema an object sits in, or its database where there are no schemas (MySQL).
+fn schema_of(object: &CatalogObject) -> Option<&str> {
+    object
+        .qualified_name
+        .schema()
+        .or_else(|| object.qualified_name.catalog())
+}
+
 /// The object's own name: MySQL names a column `table.column`, the others just `column`.
 fn leaf_name(object: &CatalogObject) -> &str {
     let name = object.qualified_name.object();
@@ -238,7 +292,7 @@ fn leaf_name(object: &CatalogObject) -> &str {
 /// to case against the name, or against `schema.name` when the pattern has a dot.
 fn matches_pattern(object: &CatalogObject, pattern: &str) -> bool {
     let subject = if pattern.contains('.') {
-        match object.qualified_name.schema() {
+        match schema_of(object) {
             Some(schema) => format!("{schema}.{}", leaf_name(object)),
             None => leaf_name(object).to_string(),
         }
@@ -329,10 +383,54 @@ mod tests {
             parse("\\d orders").unwrap(),
             MetaCommand::Describe("orders".into())
         );
-        assert_eq!(parse("\\x").unwrap(), MetaCommand::ToggleRecordView);
+        assert_eq!(parse("\\x").unwrap(), MetaCommand::RecordView(None));
+        assert_eq!(
+            parse("\\x on").unwrap(),
+            MetaCommand::RecordView(Some(true))
+        );
+        assert_eq!(
+            parse("\\x OFF;").unwrap(),
+            MetaCommand::RecordView(Some(false))
+        );
+        assert!(parse("\\x maybe").is_err());
+        assert_eq!(parse("\\dt;").unwrap(), parse("\\dt").unwrap());
+        assert_eq!(
+            parse("\\d orders;").unwrap(),
+            MetaCommand::Describe("orders".into())
+        );
         assert!(parse("\\! rm -rf /").is_err());
         assert!(parse("\\copy t to 'x'").is_err());
         assert!(is_meta("  \\dt") && !is_meta("select '\\dt'"));
+    }
+
+    /// `\d orders` found nothing on Postgres, whose tables sit in a schema: the name is
+    /// looked for under every schema, and `schema.name` narrows it.
+    #[test]
+    fn describe_finds_a_relation_by_its_own_name() {
+        use dexo_driver_api::{CatalogObject, ObjectId, QualifiedName};
+        let table = |id: &str, catalog: Option<&str>, schema: Option<&str>, name: &str| {
+            CatalogObject::new(
+                ObjectId::new(id),
+                ObjectKind::Table,
+                QualifiedName::new(catalog, schema, name),
+                None,
+            )
+        };
+        let relations = vec![
+            table("a", Some("db"), Some("audit"), "Orders"),
+            table("b", Some("db"), Some("public"), "orders"),
+            table("c", Some("shop"), None, "items"),
+        ];
+        let found = |name: &str| {
+            super::describe_target(relations.clone(), name)
+                .map(|object| object.id.as_str().to_string())
+        };
+        assert_eq!(found("orders").as_deref(), Some("b"));
+        assert_eq!(found("ORDERS").as_deref(), Some("a"));
+        assert_eq!(found("audit.orders").as_deref(), Some("a"));
+        assert_eq!(found("\"public\".\"orders\"").as_deref(), Some("b"));
+        assert_eq!(found("shop.items").as_deref(), Some("c"));
+        assert_eq!(found("missing"), None);
     }
 
     #[test]

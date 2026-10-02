@@ -1493,8 +1493,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.messages.info(message);
             Vec::new()
         }
-        Action::ToggleRecordView => {
-            model.expanded_records = !model.expanded_records;
+        Action::ToggleRecordView | Action::SetRecordView(_) => {
+            model.expanded_records = match &action {
+                Action::SetRecordView(on) => *on,
+                _ => !model.expanded_records,
+            };
             model.messages.info(
                 if model.expanded_records {
                     "Expanded display is on: one field per line."

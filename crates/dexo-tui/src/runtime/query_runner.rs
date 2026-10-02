@@ -146,8 +146,12 @@ async fn answer_meta(
     use dexo_app::meta_command::{self, MetaCommand};
     let fail = |message: String| DriverError::new(DriverErrorCategory::Syntax, message);
     let command = meta_command::parse(sql).map_err(|error| fail(error.to_string()))?;
-    if command == MetaCommand::ToggleRecordView {
-        let _ = action_tx.send(Action::ToggleRecordView).await;
+    if let MetaCommand::RecordView(on) = command {
+        let action = match on {
+            Some(on) => Action::SetRecordView(on),
+            None => Action::ToggleRecordView,
+        };
+        let _ = action_tx.send(action).await;
         return Ok(());
     }
     let catalog = session.catalog().ok_or_else(|| {

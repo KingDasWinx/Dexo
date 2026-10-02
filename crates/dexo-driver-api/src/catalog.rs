@@ -131,6 +131,20 @@ pub trait CatalogReader: Send + Sync {
     async fn dependencies(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError>;
 
     async fn dependents(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError>;
+
+    /// Every database the server holds, not only the one connected to. By default the
+    /// names of the catalogs at the top of the tree.
+    async fn databases(&self) -> Result<Vec<String>, DriverError> {
+        let top = self
+            .list_children(None, &CatalogListOptions::default())
+            .await?;
+        Ok(top
+            .objects
+            .into_iter()
+            .filter(|object| object.kind == ObjectKind::Catalog)
+            .map(|object| object.qualified_name.object().to_string())
+            .collect())
+    }
 }
 
 #[cfg(test)]

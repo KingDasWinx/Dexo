@@ -392,6 +392,8 @@ pub enum Action {
     CycleResultsView,
     /// `\x`: rows one field per line, or back to the grid.
     ToggleRecordView,
+    /// `\x on` / `\x off`: the record view set rather than switched.
+    SetRecordView(bool),
     DismissToast,
     ToastTick,
     ConfirmExplainAnalyze,

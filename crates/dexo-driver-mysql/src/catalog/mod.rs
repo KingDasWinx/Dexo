@@ -200,6 +200,14 @@ impl CatalogReader for MysqlSession {
     async fn dependents(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
         self.relation_graph(id, false).await
     }
+
+    async fn databases(&self) -> Result<Vec<String>, DriverError> {
+        self.exec_rows(
+            "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY 1",
+            (),
+        )
+        .await
+    }
 }
 
 impl MysqlSession {

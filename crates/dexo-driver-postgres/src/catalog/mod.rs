@@ -891,4 +891,17 @@ impl CatalogReader for PostgresSession {
             .unwrap_or(0);
         self.depend_ids(oid, false).await
     }
+
+    async fn databases(&self) -> Result<Vec<String>, DriverError> {
+        let rows = self
+            .client
+            .query(
+                "SELECT datname::text FROM pg_database
+                 WHERE NOT datistemplate AND datallowconn ORDER BY 1",
+                &[],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(rows.into_iter().map(|row| row.get(0)).collect())
+    }
 }
