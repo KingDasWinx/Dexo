@@ -99,6 +99,10 @@ pub struct SecretPrompt {
     pub temporary: bool,
     /// Keep it in the keychain rather than for this session only (Alt+K).
     pub keychain: bool,
+    /// The keychain checkbox has the focus: it is a stop between the secret and the buttons.
+    pub keychain_focus: bool,
+    /// What the server said about the secret that was just tried.
+    pub error: Option<String>,
     pub footer: crate::widgets::form::FooterFocus,
 }
 
@@ -114,6 +118,8 @@ impl Default for SecretPrompt {
             delete: None,
             temporary: false,
             keychain: false,
+            keychain_focus: false,
+            error: None,
             footer: crate::widgets::form::FooterFocus::Input,
         }
     }
@@ -135,6 +141,8 @@ impl SecretPrompt {
             delete: None,
             temporary: false,
             keychain: false,
+            keychain_focus: false,
+            error: None,
             footer: crate::widgets::form::FooterFocus::Input,
         }
     }
@@ -152,7 +160,7 @@ impl SecretPrompt {
             SecretPurpose::ProxyPassword => "Proxy password",
             SecretPurpose::TlsPassphrase => "TLS key passphrase",
         };
-        let marker = if self.footer == FooterFocus::Input {
+        let marker = if self.footer == FooterFocus::Input && !self.keychain_focus {
             ">"
         } else {
             " "
@@ -168,9 +176,15 @@ impl SecretPrompt {
         // A temporary connection has no saved profile for a keychain entry to belong to.
         if !self.temporary {
             lines.push(format!(
-                "  [{}] save to the keychain  Alt+K",
+                "{} [{}] save to the keychain  Alt+K",
+                if self.keychain_focus { ">" } else { " " },
                 if self.keychain { "x" } else { " " }
             ));
+        }
+        if let Some(error) = &self.error {
+            for line in crate::model::wrap_words(error, 66) {
+                lines.push(format!("  {line}"));
+            }
         }
         lines.push(footer_line("Submit", self.footer));
         lines

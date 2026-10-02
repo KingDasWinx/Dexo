@@ -54,6 +54,15 @@ pub enum Action {
         profile: ConnectionProfile,
         buffer: crate::screens::secret_prompt::SecretBuffer,
     },
+    /// The server turned down a password typed at the prompt: the prompt comes back with
+    /// what was typed and what the server said.
+    SecretRejected {
+        purpose: crate::screens::secret_prompt::SecretPurpose,
+        profile: ConnectionProfile,
+        buffer: crate::screens::secret_prompt::SecretBuffer,
+        keychain: bool,
+        message: String,
+    },
     SubmitSecret {
         kind: crate::screens::secret_prompt::SecretChoiceKind,
     },
@@ -880,6 +889,7 @@ pub enum Effect {
     },
     SubmitSecret {
         kind: crate::screens::secret_prompt::SecretChoiceKind,
+        purpose: crate::screens::secret_prompt::SecretPurpose,
         profile: ConnectionProfile,
         secret: crate::screens::secret_prompt::SecretBuffer,
         /// The connect that asked for the secret: the dial answers it, and an answer to
@@ -900,6 +910,8 @@ pub enum Effect {
     },
     SaveProfile {
         profile: ConnectionProfile,
+        /// A password typed in the edit form; empty keeps the one already saved.
+        password: String,
     },
     DeleteProfile {
         profile: ConnectionProfile,

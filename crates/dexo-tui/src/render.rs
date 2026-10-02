@@ -2404,9 +2404,15 @@ fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitM
 
 fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
-    let popup = centered(area, 72, area.height.saturating_sub(2).min(22));
+    // As tall as its fields, up to what the screen has: a short form was a short list in
+    // a tall box.
+    let wanted = model.connection_form.content_rows() as u16 + 2;
+    let popup = centered(area, 72, area.height.saturating_sub(2).min(22).min(wanted));
     let rows = popup.height.saturating_sub(2).max(4) as usize;
-    let lines = model.connection_form.visible_lines(rows);
+    let visible = model
+        .connection_form
+        .visible_rows(rows, popup_inner(popup).width as usize);
+    let lines: Vec<String> = visible.iter().map(|(_, line)| line.clone()).collect();
     paint_popup(
         frame,
         model,
@@ -2414,37 +2420,47 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         overlay_block(model, model.connection_form.title()),
         lines.join("\n"),
     );
-    let body_rows = rows.saturating_sub(1).max(1);
-    let focus_line = model
-        .connection_form
-        .focus
-        .min(model.connection_form.fields.len().saturating_sub(1));
-    let offset = scroll_to_selection(focus_line, 0, model.connection_form.fields.len(), body_rows);
-    let visible = model.connection_form.visible_rows(rows);
     register_overlay(hits, popup);
+    let footer = lines.len().saturating_sub(1);
     for_popup_lines(popup, &lines, |i, line, rect| {
-        if line.contains("[Cancel]") {
+        if i == footer {
             crate::widgets::form::register_footer(hits, rect, line, "Submit");
+            crate::mouse::register_label(
+                hits,
+                rect,
+                line,
+                "[Test]",
+                HitTarget::Button(HitButton::Test),
+            );
             return;
         }
+        // The status rows above the buttons are text, not fields: a click there is
+        // nothing, where it used to focus whichever field sat at that row's index.
+        let Some(index) = visible.get(i).and_then(|(field, _)| *field) else {
+            return;
+        };
         if line.contains("Advanced options") {
             hits.register(HitTarget::Button(HitButton::ToggleAdvanced), rect);
             return;
         }
-        if let Some(index) = visible.get(i).and_then(|(field, _)| *field) {
-            let form = &model.connection_form;
-            if index == form.focus
-                && !form.on_driver()
-                && let Some(field) = form.fields.get(index)
-            {
-                show_form_field(frame, rect, field);
-            }
-            hits.register(HitTarget::FormField(index), rect);
-        } else if i < body_rows {
-            hits.register(HitTarget::FormField(offset.saturating_add(i)), rect);
+        let form = &model.connection_form;
+        if index == form.focus
+            && !form.is_choice_at(index)
+            && let Some(field) = form.fields.get(index)
+        {
+            show_form_field(frame, rect, field);
         }
-        if line.contains("driver:") {
-            hits.register(HitTarget::Button(HitButton::CycleDriver), rect);
+        hits.register(HitTarget::FormField(index), rect);
+        if form.is_choice_at(index) {
+            for (needle, step) in [("< ", -1), (" >", 1)] {
+                crate::mouse::register_label(
+                    hits,
+                    rect,
+                    line,
+                    needle,
+                    HitTarget::FormChoice { index, step },
+                );
+            }
         }
     });
 }

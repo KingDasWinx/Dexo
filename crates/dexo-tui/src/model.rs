@@ -1371,6 +1371,37 @@ pub fn wrap_display_text(text: &str, width: usize) -> Vec<String> {
     lines
 }
 
+/// `text` wrapped to `width` columns at the spaces, so a word is not split across two
+/// lines; a word longer than the line is split, as `wrap_display_text` does.
+pub fn wrap_words(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::UnicodeWidthStr;
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut current = String::new();
+    for word in text.split(' ') {
+        let used = current.width();
+        if !current.is_empty() && used + 1 + word.width() <= width {
+            current.push(' ');
+            current.push_str(word);
+            continue;
+        }
+        if !current.is_empty() {
+            lines.push(std::mem::take(&mut current));
+        }
+        if word.width() <= width {
+            current = word.to_string();
+        } else {
+            let mut pieces = wrap_display_text(word, width);
+            current = pieces.pop().unwrap_or_default();
+            lines.extend(pieces);
+        }
+    }
+    if !current.is_empty() || lines.is_empty() {
+        lines.push(current);
+    }
+    lines
+}
+
 pub fn append_field_detail(lines: &mut Vec<String>, name: &str, value: &str, width: usize) {
     if width == 0 {
         lines.push(format!("{name}: {value}"));

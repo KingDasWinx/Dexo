@@ -360,6 +360,20 @@ mod tests {
     }
 
     #[test]
+    fn a_tunnel_without_a_key_file_keeps_its_password_apart() {
+        let mut profile = sample("local");
+        assert_eq!(profile.ssh_password_key(), None);
+        profile.config["ssh"] =
+            serde_json::json!({"host": "bastion", "port": 22, "username": "me"});
+        assert_eq!(
+            profile.ssh_password_key().as_deref(),
+            Some("r:ssh_password")
+        );
+        profile.config["ssh"]["key_file"] = serde_json::json!("/home/me/.ssh/id");
+        assert_eq!(profile.ssh_password_key(), None);
+    }
+
+    #[test]
     fn connect_request_builds_host_port_endpoint() {
         let (request, policy) = sample("local")
             .connect_request(SecretString::from("s"))

@@ -42,6 +42,11 @@ pub enum HitTarget {
         index: usize,
     },
     FormField(usize),
+    /// A click on the `<` (step -1) or `>` (step 1) of a field picked from a list.
+    FormChoice {
+        index: usize,
+        step: i8,
+    },
     FooterSubmit,
     FooterCancel,
     Button(HitButton),
@@ -81,7 +86,6 @@ pub enum HitButton {
     Docker,
     ParentDir,
     ToggleDescending,
-    CycleDriver,
     ToggleAdvanced,
     GetStarted,
     /// The edit-cell dialog's NULL and Editor buttons.

@@ -201,18 +201,18 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 ## CP: Connections and projects
 
 - [ ] **CP-01** `MAJOR` "[offline]" tags appear on every connection after Shift+D and stay, even on connected ones
-- [ ] **CP-02** `MAJOR` Changing the driver between server drivers does not change the port (MySQL on 5432, PostgreSQL on 3306)
-- [ ] **CP-03** `MAJOR` "Add connection": empty submit says only "password is required"; the error stays after the driver changes to one with no password
-- [ ] **CP-04** `MAJOR` The form lets you save a custom environment that then cannot connect; the error is internal jargon with no way out
-- [ ] **CP-05** `MAJOR` Submit saves the connection but the dialog stays open when the automatic connect fails; the next Submit says "already exists"
-- [ ] **CP-07** `MAJOR` tls_mode is a free-text field: any value is saved, a wrong one fails only at connect time with a serde error, and Postgres ignores the setting
-- [ ] **CP-08** `MAJOR` Typing a password in "Edit connection" says "saved" but the password is not stored
-- [ ] **CP-09** `MAJOR` Duplicate Connection silently drops the password
-- [ ] **CP-11** `MAJOR` No way to test a connection before saving; Submit always saves, and a failed connect leaves a broken saved connection and an open dialog
+- [x] **CP-02** `MAJOR` Changing the driver between server drivers does not change the port (MySQL on 5432, PostgreSQL on 3306)
+- [x] **CP-03** `MAJOR` "Add connection": empty submit says only "password is required"; the error stays after the driver changes to one with no password
+- [x] **CP-04** `MAJOR` The form lets you save a custom environment that then cannot connect; the error is internal jargon with no way out
+- [x] **CP-05** `MAJOR` Submit saves the connection but the dialog stays open when the automatic connect fails; the next Submit says "already exists"
+- [x] **CP-07** `MAJOR` tls_mode is a free-text field: any value is saved, a wrong one fails only at connect time with a serde error, and Postgres ignores the setting
+- [x] **CP-08** `MAJOR` Typing a password in "Edit connection" says "saved" but the password is not stored
+- [x] **CP-09** `MAJOR` Duplicate Connection silently drops the password
+- [x] **CP-11** `MAJOR` No way to test a connection before saving; Submit always saves, and a failed connect leaves a broken saved connection and an open dialog
 - [x] **CP-12** `MAJOR` "Unreachable host" error has no cause and no address
-- [ ] **CP-13** `MAJOR` Validation errors in the connection form are invisible while the Advanced section is scrolled
-- [ ] **CP-14** `MAJOR` pre_connect: the one error that explains it is cut off; the command must stay in the foreground
-- [ ] **CP-15** `MAJOR` The driver field of the connection form cannot be focused or changed with the mouse
+- [x] **CP-13** `MAJOR` Validation errors in the connection form are invisible while the Advanced section is scrolled
+- [x] **CP-14** `MAJOR` pre_connect: the one error that explains it is cut off; the command must stay in the foreground
+- [x] **CP-15** `MAJOR` The driver field of the connection form cannot be focused or changed with the mouse
 - [ ] **CP-17** `MAJOR` Config transfer import: the conflict list is clipped, shows Rust Debug text, has no key hints, and the import happens silently with a stale sidebar
 - [ ] **CP-20** `MAJOR` Config transfer dialog keeps the previous import's conflict list when reopened, and an export over an existing file overwrites it without asking
 - [ ] **CP-21** `MAJOR` Switch Project with an unsaved document: no confirmation prompt, raw enum text, a hidden key
@@ -224,11 +224,11 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **CP-27** `MAJOR` Renaming the active project does not update the header or the recent list
 - [ ] **CP-29** `MAJOR` After deleting the active project no project can be switched to until Dexo is restarted
 - [ ] **CP-30** `MAJOR` After a restart an unsaved document is restored as if it were saved: no `*`, and closing it throws the text away without asking
-- [ ] **CP-32** `MAJOR` SSH tunnel: `missing secret for ssh_password` and the form has no way to supply it
+- [x] **CP-32** `MAJOR` SSH tunnel: `missing secret for ssh_password` and the form has no way to supply it
 - [ ] **CP-35** `MAJOR` Import hides its own safety warning: "need secret" and "runs on this machine when it connects -- read before applying" are clipped out of the dialog
 - [ ] **CP-37** `MAJOR` Sidebar actions menu runs on the active session, not on the connection it is opened for, and does not connect the selected one
-- [ ] **CP-06** `MINOR` Enter in a text field submits the whole form; nothing in the dialog says so, and the long form has no shortcut to Submit
-- [ ] **CP-10** `MINOR` The password prompt at connect time: "save to the keychain" checkbox is not in the Tab order; a rejected password is stored anyway; a wrong password closes the prompt
+- [x] **CP-06** `MINOR` Enter in a text field submits the whole form; nothing in the dialog says so, and the long form has no shortcut to Submit
+- [x] **CP-10** `MINOR` The password prompt at connect time: "save to the keychain" checkbox is not in the Tab order; a rejected password is stored anyway; a wrong password closes the prompt
 - [ ] **CP-18** `MINOR` Export result is just "ok"; the path is cut off at the border
 - [ ] **CP-19** `MINOR` The export/import file picker opens in the process's working directory and has no "up to home / jump to path" key besides Backspace/Left
 - [ ] **CP-28** `MINOR` Projects list: which project is active is not shown; single click only selects, Enter/double-click switches; no hint line
@@ -239,7 +239,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **CP-38** `MINOR` Deleting a connection leaves its documents open and unbound; running one silently rebinds it to whatever connection is active
 - [ ] **CP-39** `MINOR` Startup: focus is in the editor, so the first `n` typed (as the Welcome text says) creates a document instead of opening New Connection
 - [ ] **CP-40** `MINOR` URL / CLI temporary connections
-- [ ] **CP-16** `COSMETIC` The buttons jump one row down when the error line appears; a click made where the button was lands on the error text
+- [x] **CP-16** `COSMETIC` The buttons jump one row down when the error line appears; a click made where the button was lands on the error text
 - [ ] **CP-41** `COSMETIC` Layout details
 
 ## AT: Transactions, sessions, import, export, backup

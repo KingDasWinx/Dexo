@@ -126,6 +126,38 @@ impl SecretStore for SessionSecrets {
     }
 }
 
+/// Puts the passwords of `from` under the references of its copy. The copy has secret
+/// references of its own; without the password under them it was saved, and then could
+/// not connect. False when one could not be kept anywhere.
+fn copy_secrets(
+    secrets: &SessionSecrets,
+    from: &ConnectionProfile,
+    to: &ConnectionProfile,
+) -> bool {
+    let mut pairs: Vec<(String, String)> = from
+        .secret_refs
+        .iter()
+        .filter_map(|(purpose, old)| {
+            Some((
+                old.as_str().to_string(),
+                to.secret_refs.get(purpose)?.as_str().to_string(),
+            ))
+        })
+        .collect();
+    if let (Some(old), Some(new)) = (from.ssh_password_key(), to.ssh_password_key()) {
+        pairs.push((old, new));
+    }
+    let mut kept_all = true;
+    for (old, new) in pairs {
+        if let Ok(Some(secret)) = secrets.get(&old) {
+            let value = secret.expose_secret();
+            kept_all &= secrets.put_keychain(&new, value).is_ok()
+                || secrets.put_memory(&new, value).is_ok();
+        }
+    }
+    kept_all
+}
+
 /// How long a driver gets to answer before the connect is called a failure. An
 /// unroutable host otherwise leaves the dial hanging for the OS timeout, and the user
 /// sees a connection that never resolves either way.
@@ -205,10 +237,41 @@ fn count_of(value: &dexo_driver_api::DbValue) -> Option<u64> {
 /// session was holding it in memory -- a URL's, or one typed for the session -- so the
 /// next connect asks again instead of failing with it for ever. A password command's
 /// answer is not one, and a test only reports.
+/// Why a dial failed, and whether the server turned the password down.
+#[derive(Debug)]
+struct DialError {
+    message: String,
+    /// The server refused the login: a wrong password, or a user that does not exist.
+    rejected: bool,
+    /// The password this session held in memory was dropped because of it.
+    forgot: bool,
+}
+
+impl std::fmt::Display for DialError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.message)?;
+        if self.forgot {
+            f.write_str(" -- connect again to enter the password")?;
+        }
+        Ok(())
+    }
+}
+
+impl From<String> for DialError {
+    fn from(message: String) -> Self {
+        Self {
+            message,
+            rejected: false,
+            forgot: false,
+        }
+    }
+}
+
 async fn dial(
     factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
     profile: &ConnectionProfile,
     password: Password,
+    ssh_password: Option<SecretString>,
     memory: &MemorySecretStore,
     forget: bool,
 ) -> Result<
@@ -217,41 +280,57 @@ async fn dial(
         SecretString,
         ConnectionProfile,
     ),
-    String,
+    DialError,
 > {
     let forget = forget && matches!(password, Password::Ready(_));
     let secret = password.resolve().await?;
+    let mut secrets = dexo_driver_api::ConnectionSecrets::database_password(SecretString::from(
+        secret.expose_secret().to_string(),
+    ));
+    if let Some(ssh) = ssh_password {
+        secrets.insert("ssh_password", ssh);
+    }
     // A pre-connect command opens the way first; the session keeps it running, and the
     // profile it hands back dials that way, for the connections that follow.
-    let opened = dexo_app::connect::open(
-        factory.as_ref(),
-        profile,
-        SecretString::from(secret.expose_secret().to_string()),
-        Some(CONNECT_TIMEOUT),
-    )
-    .await;
+    let opened =
+        dexo_app::connect::open(factory.as_ref(), profile, secrets, Some(CONNECT_TIMEOUT)).await;
     match opened {
         Ok(opened) => Ok((opened.session, secret, opened.profile)),
         Err(
             dexo_app::connect::ConnectError::PreConnect(error)
             | dexo_app::connect::ConnectError::Setup(error),
-        ) => Err(error.to_string()),
+        ) => Err(error.to_string().into()),
         Err(dexo_app::connect::ConnectError::Driver(error)) => {
             let rejected = error.category() == dexo_driver_api::DriverErrorCategory::Authentication;
             let message = map_driver_error(error).to_string();
             let key = profile.secret_ref.as_str();
-            if forget && rejected && matches!(memory.get(key), Ok(Some(_))) {
+            let forgot = forget && rejected && matches!(memory.get(key), Ok(Some(_)));
+            if forgot {
                 let _ = memory.delete(key);
-                return Err(format!("{message} -- connect again to enter the password"));
             }
-            Err(message)
+            Err(DialError {
+                message,
+                rejected,
+                forgot,
+            })
         }
         Err(dexo_app::connect::ConnectError::TimedOut(limit)) => Err(format!(
-            "{} did not answer within {}s",
+            "{} did not answer within {}s ({})",
             profile.name,
-            limit.as_secs()
-        )),
+            limit.as_secs(),
+            profile.target()
+        )
+        .into()),
     }
+}
+
+/// A secret typed at a prompt, on its way to the server to be tried.
+#[derive(Clone)]
+struct Typed {
+    purpose: crate::screens::secret_prompt::SecretPurpose,
+    buffer: crate::screens::secret_prompt::SecretBuffer,
+    /// Keep it in the keychain once the server has taken it.
+    keychain: bool,
 }
 
 pub struct WorkbenchRuntime {
@@ -269,6 +348,9 @@ pub struct WorkbenchRuntime {
     transfer: transfer_manager::TransferManager,
     /// The row counts running, each on a connection of its own.
     counts: Arc<std::sync::Mutex<std::collections::HashMap<OperationId, CountTask>>>,
+    /// Secrets typed at a prompt that the keychain gets once a connect has used them: the
+    /// connect they belong to, the keychain key, and the secret.
+    to_keychain: Vec<(u64, String, SecretString)>,
 }
 
 /// A count's task, and once it has dialled, its connection and query: what a cancel
@@ -297,6 +379,7 @@ impl WorkbenchRuntime {
             session_profiles: std::collections::HashMap::new(),
             transfer: transfer_manager::TransferManager::default(),
             counts: Arc::default(),
+            to_keychain: Vec::new(),
         }
     }
 
@@ -342,10 +425,14 @@ impl WorkbenchRuntime {
             crate::Effect::AdoptSession { token } => self.adopt_session(token).await,
             crate::Effect::SubmitSecret {
                 kind,
+                purpose,
                 profile,
                 secret,
                 token,
-            } => self.submit_secret(kind, profile, secret, token).await,
+            } => {
+                self.submit_secret(kind, purpose, profile, secret, token)
+                    .await
+            }
             crate::Effect::DuplicateProfile { id, taken } => {
                 self.duplicate_profile(id, taken).await
             }
@@ -353,7 +440,9 @@ impl WorkbenchRuntime {
                 self.test_input(input, password).await
             }
             crate::Effect::TestSavedProfile { profile } => self.test_saved(profile).await,
-            crate::Effect::SaveProfile { profile } => self.save_existing(profile).await,
+            crate::Effect::SaveProfile { profile, password } => {
+                self.save_existing(profile, password).await
+            }
             crate::Effect::DeleteProfile {
                 profile,
                 delete_secrets,
@@ -1084,6 +1173,10 @@ impl WorkbenchRuntime {
                 }
             },
         };
+        // The tunnel the session went through needs the password it was opened with.
+        let ssh = profile
+            .ssh_password_key()
+            .and_then(|key| self.secrets.get(&key).ok().flatten());
         let factory = match self.drivers.get(&profile.driver) {
             Ok(factory) => factory,
             Err(error) => return self.emit(fail(error.to_string())).await,
@@ -1110,8 +1203,9 @@ impl WorkbenchRuntime {
                 let session: Arc<dyn dexo_driver_api::Session> = match live {
                     Some(session) => session,
                     None => {
-                        let (session, ..) =
-                            dial(factory, &profile, password, &memory, false).await?;
+                        let (session, ..) = dial(factory, &profile, password, ssh, &memory, false)
+                            .await
+                            .map_err(|error| error.to_string())?;
                         Arc::from(session)
                     }
                 };
@@ -1285,37 +1379,56 @@ impl WorkbenchRuntime {
     async fn submit_secret(
         &mut self,
         kind: crate::screens::secret_prompt::SecretChoiceKind,
+        purpose: crate::screens::secret_prompt::SecretPurpose,
         profile: ConnectionProfile,
         secret: crate::screens::secret_prompt::SecretBuffer,
         token: u64,
     ) {
-        use crate::screens::secret_prompt::SecretChoiceKind;
-        let key = profile.secret_ref.as_str();
-        let result = match kind {
-            SecretChoiceKind::Cancel => return,
-            SecretChoiceKind::SessionOnly => self.secrets.put_memory(key, secret.expose()),
-            SecretChoiceKind::SaveToKeychain => self.secrets.put_keychain(key, secret.expose()),
+        use crate::screens::secret_prompt::{SecretChoiceKind, SecretPurpose};
+        let key = match purpose {
+            SecretPurpose::SshPassword => profile.ssh_password_key(),
+            _ => Some(profile.secret_ref.as_str().to_string()),
         };
-        match result {
-            Ok(()) => self.connect_profile(profile, token).await,
-            Err(SecretError::Unavailable) => {
-                self.emit(Action::SecretRequired {
-                    purpose: crate::screens::secret_prompt::SecretPurpose::DatabasePassword,
-                    profile,
-                    buffer: secret,
-                })
-                .await;
-            }
-            Err(error) => {
-                self.emit(Action::ConnectionFormError {
+        let Some(key) = key else { return };
+        let keychain = match kind {
+            SecretChoiceKind::Cancel => return,
+            SecretChoiceKind::SessionOnly => false,
+            SecretChoiceKind::SaveToKeychain => true,
+        };
+        // Held in memory while the server is asked: a password it turns down is not kept,
+        // where it used to be written to the keychain first.
+        if let Err(error) = self.secrets.put_memory(&key, secret.expose()) {
+            return self
+                .emit(Action::ConnectionFormError {
                     message: error.to_string(),
                 })
                 .await;
-            }
         }
+        if keychain {
+            // A password tried before and turned down is not the one to keep.
+            self.to_keychain
+                .retain(|(waiting, kept, _)| !(*waiting == token && *kept == key));
+            self.to_keychain
+                .push((token, key, SecretString::from(secret.expose())));
+        }
+        let typed = Typed {
+            purpose,
+            buffer: secret,
+            keychain,
+        };
+        self.connect_profile_with(profile, token, Some(typed)).await;
     }
 
     async fn connect_profile(&mut self, profile: ConnectionProfile, token: u64) {
+        self.connect_profile_with(profile, token, None).await;
+    }
+
+    async fn connect_profile_with(
+        &mut self,
+        profile: ConnectionProfile,
+        token: u64,
+        typed: Option<Typed>,
+    ) {
         if let Some((id, generation)) = self
             .sessions
             .find_by_connection(&profile.name)
@@ -1346,6 +1459,23 @@ impl WorkbenchRuntime {
             Err(action) => return self.emit(*action).await,
         };
         let from_command = matches!(password, Password::Command(_));
+        // A tunnel through SSH without a key file needs the SSH password too: asked for
+        // here, like the database's, rather than refused with the name of its key.
+        let ssh_password = match profile.ssh_password_key() {
+            None => None,
+            Some(key) => match self.secrets.get(&key) {
+                Ok(Some(secret)) => Some(secret),
+                _ => {
+                    return self
+                        .emit(Action::SecretRequired {
+                            purpose: crate::screens::secret_prompt::SecretPurpose::SshPassword,
+                            profile,
+                            buffer: crate::screens::secret_prompt::SecretBuffer::new(String::new()),
+                        })
+                        .await;
+                }
+            },
+        };
         let factory = match self.drivers.get(&profile.driver) {
             Ok(factory) => factory,
             Err(error) => {
@@ -1360,13 +1490,38 @@ impl WorkbenchRuntime {
         let action_tx = self.action_tx.clone();
         let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
-            let action = match dial(factory, &profile, password, &memory, true).await {
+            let dialled = dial(factory, &profile, password, ssh_password, &memory, true).await;
+            let action = match dialled {
                 Ok((session, secret, effective)) => {
                     let printed = from_command.then_some(secret);
                     *opening.lock().await = Some((token, effective, Arc::from(session), printed));
                     Action::SessionOpened { token }
                 }
-                Err(message) => Action::ConnectionFormError { message },
+                // A password the server turned down comes back to the prompt it was typed
+                // at, with what the server said, to be typed again.
+                Err(error) if error.rejected && typed.is_some() => {
+                    let typed = typed.unwrap_or_else(|| unreachable!("checked above"));
+                    Action::SecretRejected {
+                        purpose: typed.purpose,
+                        profile,
+                        buffer: typed.buffer,
+                        keychain: typed.keychain,
+                        message: error.message,
+                    }
+                }
+                Err(error) => {
+                    // The SSH password that was just typed did not get a session either.
+                    if let Some(typed) = &typed
+                        && typed.purpose
+                            == crate::screens::secret_prompt::SecretPurpose::SshPassword
+                        && let Some(key) = profile.ssh_password_key()
+                    {
+                        let _ = memory.delete(&key);
+                    }
+                    Action::ConnectionFormError {
+                        message: format!("{}: {error}", profile.name),
+                    }
+                }
             };
             let _ = action_tx.send(action).await;
         });
@@ -1385,6 +1540,25 @@ impl WorkbenchRuntime {
             return;
         };
         drop(slot);
+        // The server took what was typed: now it may go to the keychain.
+        let kept: Vec<(u64, String, SecretString)> = self.to_keychain.drain(..).collect();
+        for (waiting, key, secret) in kept {
+            if waiting != token {
+                continue;
+            }
+            match self.secrets.put_keychain(&key, secret.expose_secret()) {
+                Ok(()) => {
+                    let _ = self.secrets.memory.delete(&key);
+                }
+                Err(_) => {
+                    self.emit(Action::Notice(format!(
+                        "The keychain is unavailable: {} will ask for its password next time.",
+                        profile.name
+                    )))
+                    .await;
+                }
+            }
+        }
         if let Some(secret) = printed {
             let _ = self
                 .secrets
@@ -1430,18 +1604,70 @@ impl WorkbenchRuntime {
 
     async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId, taken: Vec<String>) {
         match self.with_repo(|repo| {
-            repo.duplicate(id, &taken)
-                .map_err(|error| error.to_string())
+            let original = repo.get(id).map_err(|error| error.to_string())?;
+            let copy = repo
+                .duplicate(id, &taken)
+                .map_err(|error| error.to_string())?;
+            Ok((original, copy))
         }) {
-            Ok(profile) => self.emit(Action::ProfileSaved(profile)).await,
+            Ok((original, copy)) => {
+                let kept_all = match &original {
+                    Some(original) => copy_secrets(&self.secrets, original, &copy),
+                    None => true,
+                };
+                self.emit(Action::ProfileSaved(copy.clone())).await;
+                if !kept_all {
+                    self.emit(Action::Notice(format!(
+                        "{} has no password: the original's could not be copied.",
+                        copy.name
+                    )))
+                    .await;
+                }
+            }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }
     }
 
-    async fn save_existing(&mut self, profile: ConnectionProfile) {
+    async fn save_existing(&mut self, profile: ConnectionProfile, password: String) {
         match self.with_repo(|repo| repo.update(&profile).map_err(|error| error.to_string())) {
-            Ok(()) => self.emit(Action::ProfileSaved(profile)).await,
+            Ok(()) => {
+                // The edit form saved the profile and dropped the typed password with
+                // it, which is how a changed password used to say "saved" and keep the
+                // old one. Empty means leave the saved one alone.
+                if !password.is_empty()
+                    && !profile.is_file()
+                    && profile.password_command().is_none()
+                {
+                    self.store_password(&profile, &password).await;
+                }
+                self.emit(Action::ProfileSaved(profile)).await
+            }
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
+        }
+    }
+
+    /// Keeps `password` as the connection's, in the keychain; for this session only when
+    /// the keychain is unavailable, which the user is told.
+    async fn store_password(&mut self, profile: &ConnectionProfile, password: &str) {
+        let key = profile.secret_ref.as_str();
+        // A password kept for this session would otherwise be read before the new one.
+        let _ = self.secrets.memory.delete(key);
+        match self.secrets.put_keychain(key, password) {
+            Ok(()) => {}
+            Err(SecretError::Unavailable) => {
+                let _ = self.secrets.put_memory(key, password);
+                self.emit(Action::Notice(format!(
+                    "The keychain is unavailable: {} will ask for its password next time.",
+                    profile.name
+                )))
+                .await;
+            }
+            Err(error) => {
+                self.emit(Action::ConnectionFormError {
+                    message: format!("saved {}, but not its new password: {error}", profile.name),
+                })
+                .await;
+            }
         }
     }
 
@@ -1464,6 +1690,9 @@ impl WorkbenchRuntime {
                 self.secrets.delete(profile.secret_ref.as_str()),
                 Err(SecretError::Unavailable) | Err(SecretError::Internal)
             );
+        if delete_secrets && let Some(key) = profile.ssh_password_key() {
+            let _ = self.secrets.delete(&key);
+        }
         match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
             Ok(()) => {
                 let name = profile.name.clone();
@@ -1527,18 +1756,36 @@ impl WorkbenchRuntime {
                 }),
         }
         .and_then(|password| {
+            // A test cannot ask: the SSH password is the one kept, or none.
+            let ssh = match profile.ssh_password_key() {
+                None => Ok(None),
+                Some(key) => match self.secrets.get(&key) {
+                    Ok(Some(secret)) => Ok(Some(secret)),
+                    _ => Err(
+                        "the SSH tunnel needs a password: connect the connection once, \
+                         and it asks for it"
+                            .to_string(),
+                    ),
+                },
+            };
+            ssh.map(|ssh| (password, ssh))
+        })
+        .and_then(|(password, ssh)| {
             self.drivers
                 .get(&profile.driver)
-                .map(|factory| (factory, password))
+                .map(|factory| (factory, password, ssh))
                 .map_err(|error| error.to_string())
         });
         let action_tx = self.action_tx.clone();
         let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
             let answered = match ready {
-                Ok((factory, password)) => dial(factory, &profile, password, &memory, false)
-                    .await
-                    .map(drop),
+                Ok((factory, password, ssh)) => {
+                    dial(factory, &profile, password, ssh, &memory, false)
+                        .await
+                        .map(drop)
+                        .map_err(|error| error.to_string())
+                }
                 Err(message) => Err(message),
             };
             let (ok, message) = match answered {
@@ -2373,6 +2620,77 @@ mod dial_tests {
         }
     }
 
+    /// The copy of a connection has references of its own: its password has to be put
+    /// under them, or the copy saves and then cannot connect.
+    #[test]
+    fn a_copy_gets_the_password_of_the_original() {
+        use super::{SessionSecrets, copy_secrets};
+        use secrecy::ExposeSecret;
+        let original = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(1)),
+            None,
+            "pg",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h", "port": 5432, "username": "u", "database": "d"}),
+            SecretRef::new("old".into()),
+        );
+        let copy = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(2)),
+            None,
+            "pg (copy)",
+            "postgres",
+            "local",
+            original.config.clone(),
+            SecretRef::new("new".into()),
+        );
+        let secrets = SessionSecrets {
+            keyring: Box::new(MemorySecretStore::default()),
+            memory: Arc::new(MemorySecretStore::default()),
+        };
+        secrets.put_keychain("old", "hunter2").unwrap();
+        assert!(copy_secrets(&secrets, &original, &copy));
+        assert_eq!(
+            secrets.get("new").unwrap().unwrap().expose_secret(),
+            "hunter2"
+        );
+        // The original keeps its own.
+        assert_eq!(
+            secrets.get("old").unwrap().unwrap().expose_secret(),
+            "hunter2"
+        );
+    }
+
+    /// A login the server refuses says so, apart from every other failure: it is what
+    /// brings the password prompt back.
+    #[tokio::test]
+    async fn a_refused_login_is_told_apart_from_other_failures() {
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(2)),
+            None,
+            "shop",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h", "port": 5432, "username": "u", "database": "d"}),
+            SecretRef::new("held".into()),
+        );
+        let memory = MemorySecretStore::default();
+        let factory: Arc<dyn ConnectionFactory> = Arc::new(Refuses);
+        let error = dial(
+            factory,
+            &profile,
+            Password::Ready(SecretString::from("wrong")),
+            None,
+            &memory,
+            false,
+        )
+        .await
+        .err()
+        .unwrap();
+        assert!(error.rejected);
+        assert_eq!(error.message, "password authentication failed");
+    }
+
     /// Only a connect with a password held in memory forgets it and says to connect
     /// again; a password command's answer, or a test, is reported as it is.
     #[tokio::test]
@@ -2394,17 +2712,26 @@ mod dial_tests {
             (ready(), false),
             (Password::Command("printf wrong".into()), true),
         ] {
-            let message = dial(Arc::clone(&factory), &profile, password, &memory, forget)
-                .await
-                .err()
-                .unwrap();
+            let message = dial(
+                Arc::clone(&factory),
+                &profile,
+                password,
+                None,
+                &memory,
+                forget,
+            )
+            .await
+            .err()
+            .unwrap()
+            .to_string();
             assert!(!message.contains("connect again"), "{message}");
             assert!(memory.get("held").unwrap().is_some());
         }
-        let message = dial(factory, &profile, ready(), &memory, true)
+        let message = dial(factory, &profile, ready(), None, &memory, true)
             .await
             .err()
-            .unwrap();
+            .unwrap()
+            .to_string();
         assert!(message.contains("connect again"), "{message}");
         assert!(memory.get("held").unwrap().is_none());
     }

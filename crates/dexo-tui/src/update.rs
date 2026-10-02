@@ -396,6 +396,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.secret_prompt.temporary = temporary;
             Vec::new()
         }
+        Action::SecretRejected {
+            purpose,
+            profile,
+            buffer,
+            keychain,
+            message,
+        } => {
+            let temporary = model.connections.is_temporary(&profile.name);
+            model.secret_prompt =
+                crate::screens::secret_prompt::SecretPrompt::open_for(purpose, profile, buffer);
+            model.secret_prompt.temporary = temporary;
+            model.secret_prompt.keychain = keychain && !temporary;
+            model.secret_prompt.error = Some(message);
+            Vec::new()
+        }
         Action::SubmitSecret { kind } => submit_secret(model, kind),
         Action::ConfirmDeleteProfile { decision } => confirm_delete(model, decision),
         Action::OpenConnections => open_connections(model),
@@ -567,6 +582,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 // Saving a temporary connection dials nothing, so nothing else closes it.
                 model.connection_form.close();
             }
+            // A connection the form created is saved now. The dial that follows may fail,
+            // but that is a connection that failed to open, not a form that failed to save.
+            if model.connection_form.open && model.connection_form.editing.is_none() {
+                model.connection_form.close();
+            }
             if let Some(from) = previous_name.filter(|from| *from != profile.name) {
                 effects.extend(rename_sessions(model, &from, &profile.name));
             }
@@ -619,7 +639,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::ConnectionTested { name, ok, message } => {
-            if ok {
+            // A test run from the form answers in the form, where the user is looking.
+            if model.connection_form.open {
+                if ok {
+                    model
+                        .connection_form
+                        .set_notice(format!("{name}: the connection works"));
+                } else {
+                    model.connection_form.set_error(message);
+                }
+            } else if ok {
                 model.messages.info(format!("{name} ok"));
             } else {
                 model.messages.error(format!("{name}: {message}"));
@@ -2902,6 +2931,7 @@ fn mouse_secret(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::Button(HitButton::Keychain)) => {
             model.secret_prompt.keychain =
                 !model.secret_prompt.keychain && !model.secret_prompt.temporary;
+            model.secret_prompt.keychain_focus = !model.secret_prompt.temporary;
             Vec::new()
         }
         Some(HitTarget::FooterCancel | HitTarget::Overlay) => update(
@@ -3079,13 +3109,17 @@ fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
             }
             Vec::new()
         }
-        Some(HitTarget::FooterSubmit) => save_connection(model),
-        Some(HitTarget::FooterCancel) => {
-            model.connection_form.close();
+        Some(HitTarget::FormChoice { index, step }) => {
+            if index < model.connection_form.fields.len() {
+                model.connection_form.focus = index;
+                model.connection_form.cycle_choice(i32::from(step));
+            }
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::CycleDriver)) => {
-            model.connection_form.cycle_driver(1);
+        Some(HitTarget::FooterSubmit) => save_connection(model),
+        Some(HitTarget::Button(HitButton::Test)) => test_connection(model),
+        Some(HitTarget::FooterCancel) => {
+            model.connection_form.close();
             Vec::new()
         }
         _ => Vec::new(),
@@ -4745,6 +4779,7 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.connection_form.close();
             Vec::new()
         }
+        KeyCode::Enter if model.connection_form.on_test() => test_connection(model),
         KeyCode::Enter => save_connection(model),
         KeyCode::Tab | KeyCode::Down => {
             model.connection_form.focus_next();
@@ -4754,20 +4789,20 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.connection_form.focus_prev();
             Vec::new()
         }
-        KeyCode::Left if model.connection_form.on_cancel() => {
+        KeyCode::Left if model.connection_form.on_cancel() || model.connection_form.on_test() => {
             model.connection_form.focus_prev();
             Vec::new()
         }
-        KeyCode::Right if model.connection_form.on_submit() => {
+        KeyCode::Right if model.connection_form.on_submit() || model.connection_form.on_test() => {
             model.connection_form.focus_next();
             Vec::new()
         }
-        KeyCode::Left if model.connection_form.on_driver() => {
-            model.connection_form.cycle_driver(-1);
+        KeyCode::Left if model.connection_form.on_choice() => {
+            model.connection_form.cycle_choice(-1);
             Vec::new()
         }
-        KeyCode::Right if model.connection_form.on_driver() => {
-            model.connection_form.cycle_driver(1);
+        KeyCode::Right if model.connection_form.on_choice() => {
+            model.connection_form.cycle_choice(1);
             Vec::new()
         }
         // A text field edits like any input: it used to append and delete from its end
@@ -4789,14 +4824,45 @@ fn handle_secret_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         prompt.keychain = !prompt.keychain && !prompt.temporary;
         return Vec::new();
     }
+    // The keychain checkbox is a stop between the secret and the buttons, so the arrows
+    // reach it, and Space flips it there.
+    if !prompt.temporary {
+        match (prompt.keychain_focus, prompt.footer, key.code) {
+            (false, FooterFocus::Input, KeyCode::Tab | KeyCode::Down) => {
+                prompt.keychain_focus = true;
+                return Vec::new();
+            }
+            (true, _, KeyCode::Tab | KeyCode::Down) => {
+                prompt.keychain_focus = false;
+                prompt.footer = FooterFocus::Submit;
+                return Vec::new();
+            }
+            (true, _, KeyCode::BackTab | KeyCode::Up) => {
+                prompt.keychain_focus = false;
+                prompt.footer = FooterFocus::Input;
+                return Vec::new();
+            }
+            (false, FooterFocus::Submit, KeyCode::BackTab | KeyCode::Up) => {
+                prompt.keychain_focus = true;
+                prompt.footer = FooterFocus::Input;
+                return Vec::new();
+            }
+            (true, _, KeyCode::Char(' ')) => {
+                prompt.keychain = !prompt.keychain;
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
     let kind = match footer_key(&mut prompt.footer, &key) {
         FooterKey::Cancel => SecretChoiceKind::Cancel,
         FooterKey::Submit if prompt.keychain => SecretChoiceKind::SaveToKeychain,
         FooterKey::Submit => SecretChoiceKind::SessionOnly,
         FooterKey::Moved => return Vec::new(),
         FooterKey::Pass => {
-            if prompt.footer == FooterFocus::Input {
+            if prompt.footer == FooterFocus::Input && !prompt.keychain_focus {
                 prompt.buffer.handle_key(key);
+                prompt.error = None;
             }
             return Vec::new();
         }
@@ -4898,6 +4964,7 @@ fn submit_secret(
 ) -> Vec<Effect> {
     use crate::screens::secret_prompt::SecretChoiceKind;
     let profile = model.secret_prompt.profile.clone();
+    let purpose = model.secret_prompt.purpose;
     let secret = model.secret_prompt.buffer.clone();
     // A temporary connection's secret_ref names no saved profile; a keychain entry under
     // it would outlive the session with nothing to find or delete it.
@@ -4913,6 +4980,7 @@ fn submit_secret(
         (_, None) => Vec::new(),
         (kind, Some(profile)) => vec![Effect::SubmitSecret {
             kind,
+            purpose,
             profile,
             secret,
             token: model.connections.pending_connect.unwrap_or(0),
@@ -5250,10 +5318,29 @@ fn activate_existing_session(
 
 fn test_connection(model: &mut Model) -> Vec<Effect> {
     if model.connection_form.open {
-        return match model.connection_form.submit() {
-            Some((input, password)) => vec![Effect::TestConnection { input, password }],
-            None => Vec::new(),
+        let Some((input, password)) = model.connection_form.submit() else {
+            return Vec::new();
         };
+        model
+            .connection_form
+            .set_notice("Testing the connection...".into());
+        // An edit that types no new password is tested with the one already saved.
+        if let Some(original) = model.connection_form.editing.clone()
+            && password.is_empty()
+        {
+            return match dexo_app::test_connection_input(input) {
+                Ok(mut profile) => {
+                    profile.secret_ref = original.secret_ref;
+                    profile.secret_refs = original.secret_refs;
+                    vec![Effect::TestSavedProfile { profile }]
+                }
+                Err(error) => {
+                    model.connection_form.set_error(error.to_string());
+                    Vec::new()
+                }
+            };
+        }
+        return vec![Effect::TestConnection { input, password }];
     }
     model
         .connections
@@ -5289,7 +5376,7 @@ fn save_connection(model: &mut Model) -> Vec<Effect> {
                         profile.secret_refs = original.secret_refs;
                         profile.project_id = original.project_id;
                         model.connection_form.close();
-                        vec![Effect::SaveProfile { profile }]
+                        vec![Effect::SaveProfile { profile, password }]
                     }
                     Err(error) => {
                         model.connection_form.set_error(error.to_string());
@@ -13764,5 +13851,61 @@ mod tests {
             std::mem::discriminant(&before)
         );
         assert!(matches!(before, GridSelection::Range { .. }));
+    }
+
+    /// The keychain checkbox is a stop of its own between the secret and the buttons, and a
+    /// password the server turned down comes back to the prompt, as typed, with the error.
+    #[test]
+    fn the_secret_prompt_walks_to_its_checkbox_and_reopens_on_a_rejection() {
+        use crate::screens::secret_prompt::{SecretBuffer, SecretPurpose};
+        use dexo_app::{ConnectionId, ConnectionProfile, SecretRef};
+        let profile = ConnectionProfile::new(
+            ConnectionId(uuid::Uuid::from_u128(6)),
+            None,
+            "shop",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "db"}),
+            SecretRef::new("ref".into()),
+        );
+        let mut model = Model::default();
+        update(
+            &mut model,
+            Action::SecretRequired {
+                purpose: SecretPurpose::DatabasePassword,
+                profile: profile.clone(),
+                buffer: SecretBuffer::new(String::new()),
+            },
+        );
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        update(&mut model, key(KeyCode::Tab));
+        assert!(
+            model.secret_prompt.keychain_focus,
+            "Tab reaches the checkbox"
+        );
+        update(&mut model, key(KeyCode::Char(' ')));
+        assert!(model.secret_prompt.keychain, "Space flips it");
+        update(&mut model, key(KeyCode::Tab));
+        assert_eq!(
+            model.secret_prompt.footer,
+            crate::widgets::form::FooterFocus::Submit
+        );
+        assert!(!model.secret_prompt.keychain_focus);
+
+        update(
+            &mut model,
+            Action::SecretRejected {
+                purpose: SecretPurpose::DatabasePassword,
+                profile,
+                buffer: SecretBuffer::new("typo"),
+                keychain: true,
+                message: "password authentication failed for user \"dexo\"".into(),
+            },
+        );
+        assert!(model.secret_prompt.open);
+        assert_eq!(model.secret_prompt.buffer.expose(), "typo");
+        assert!(model.secret_prompt.keychain);
+        let lines = model.secret_prompt.lines().join("\n");
+        assert!(lines.contains("password authentication failed"), "{lines}");
     }
 }
