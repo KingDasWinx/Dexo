@@ -381,6 +381,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::OpenFlow(FlowIntent::DataReview),
         },
         CommandSpec {
+            id: "editor.save_query",
+            title: "Save Query As…",
+            keywords: &["saved", "name", "bookmark", "favorite"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSaveQuery),
+        },
+        CommandSpec {
+            id: "editor.open_saved_query",
+            title: "Open Saved Query…",
+            keywords: &["saved", "bookmark", "favorite", "library"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSavedQueries),
+        },
+        CommandSpec {
             id: "data.related",
             title: "Related Rows…",
             keywords: &[

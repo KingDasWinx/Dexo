@@ -17,6 +17,7 @@ pub mod object_inspector;
 pub mod projects;
 pub mod recovery;
 pub mod run_prompt;
+pub mod saved_queries;
 pub mod schema_diff;
 pub mod schema_editor;
 pub mod secret_prompt;

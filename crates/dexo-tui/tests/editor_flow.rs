@@ -284,3 +284,136 @@ fn submit_parameters_outside_prompt_never_executes_query() {
     assert!(effects.is_empty());
     assert!(model.active_operation.is_none());
 }
+
+/// Save Query As names the selection, for the project and the document's connection;
+/// Open Saved Query searches, opens the highlighted one in a new document of its
+/// connection, renames with F2, and deletes only after a second, deliberate answer.
+#[test]
+fn saved_queries_save_search_open_rename_and_delete() {
+    let mut model = model_with_sql("select 1;\nselect * from users where id = 7;");
+    model.project_id = "project-1".into();
+    let profile = |id: u128, name: &str| {
+        dexo_app::ConnectionProfile::new(
+            dexo_app::ConnectionId(uuid::Uuid::from_u128(id)),
+            None,
+            name,
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h", "port": 5432, "username": "u", "database": "d"}),
+            dexo_app::SecretRef::new(format!("ref-{id}")),
+        )
+    };
+    model
+        .connections
+        .load_profiles(vec![profile(0xa, "shop"), profile(0xb, "warehouse")]);
+    let conn_a = uuid::Uuid::from_u128(0xa).to_string();
+    let conn_b = uuid::Uuid::from_u128(0xb).to_string();
+    model.active_document_mut().connection_id = Some(conn_a.clone());
+    let start = "select 1;\n".chars().count();
+    let end = "select 1;\nselect * from users where id = 7;"
+        .chars()
+        .count();
+    model.active_document_mut().anchor = Some(start);
+    model.active_document_mut().sql.set_cursor(end).unwrap();
+    assert!(update(&mut model, Action::OpenSaveQuery).is_empty());
+    // The suggested name goes; a typed one takes its place.
+    for _ in 0..40 {
+        update(&mut model, key(KeyCode::Backspace));
+    }
+    for ch in "User 7".chars() {
+        update(&mut model, key(KeyCode::Char(ch)));
+    }
+    let effects = update(&mut model, key(KeyCode::Enter));
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [dexo_tui::Effect::SaveQuery { project_id, connection_id, name, sql }]
+                if project_id == "project-1"
+                    && *connection_id == conn_a
+                    && name == "User 7"
+                    && sql == "select * from users where id = 7;"
+        ),
+        "{effects:?}"
+    );
+    assert!(model.save_query_prompt.is_none());
+
+    let effects = update(&mut model, Action::OpenSavedQueries);
+    assert!(matches!(
+        effects.as_slice(),
+        [dexo_tui::Effect::LoadSavedQueries { project_id }] if project_id == "project-1"
+    ));
+    let saved = |id: &str, name: &str, connection: &str, sql: &str| dexo_storage::SavedQuery {
+        id: id.into(),
+        project_id: "project-1".into(),
+        connection_id: connection.into(),
+        name: name.into(),
+        sql: sql.into(),
+        updated_at: String::new(),
+    };
+    update(
+        &mut model,
+        Action::SavedQueriesLoaded(Ok(vec![
+            saved(
+                "q1",
+                "Late orders",
+                &conn_a,
+                "select * from orders where late",
+            ),
+            saved("q2", "User 7", &conn_a, "select * from users where id = 7;"),
+            saved("q3", "Users elsewhere", &conn_b, "select * from users"),
+        ])),
+    );
+    let screen = dexo_tui::render::render_to_string(&model, 110, 30);
+    assert!(screen.contains("Open saved query"), "{screen}");
+    assert!(screen.contains("> Late orders"), "{screen}");
+    assert!(
+        screen.contains("select * from orders where late"),
+        "{screen}"
+    );
+    assert!(screen.contains("Users elsewhere · warehouse"), "{screen}");
+    for ch in "users".chars() {
+        update(&mut model, key(KeyCode::Char(ch)));
+    }
+    assert_eq!(model.saved_queries.filtered().len(), 2);
+    update(&mut model, key(KeyCode::Down));
+    assert_eq!(
+        model.saved_queries.current().map(|query| query.id.as_str()),
+        Some("q3")
+    );
+
+    update(&mut model, key(KeyCode::F(2)));
+    for ch in " (b)".chars() {
+        update(&mut model, key(KeyCode::Char(ch)));
+    }
+    let effects = update(&mut model, key(KeyCode::Enter));
+    assert!(
+        matches!(
+            effects.as_slice(),
+            [dexo_tui::Effect::RenameSavedQuery { id, name, .. }]
+                if id == "q3" && name == "Users elsewhere (b)"
+        ),
+        "{effects:?}"
+    );
+
+    // Delete asks; Enter on the question keeps the query, [Delete] removes it.
+    update(&mut model, key(KeyCode::Delete));
+    assert!(update(&mut model, key(KeyCode::Enter)).is_empty());
+    assert!(model.saved_queries.deleting.is_none());
+    update(&mut model, key(KeyCode::Delete));
+    update(&mut model, key(KeyCode::Left));
+    let effects = update(&mut model, key(KeyCode::Enter));
+    assert!(
+        matches!(effects.as_slice(), [dexo_tui::Effect::DeleteSavedQuery { id, .. }] if id == "q3"),
+        "{effects:?}"
+    );
+
+    let documents = model.documents.len();
+    update(&mut model, key(KeyCode::Up));
+    update(&mut model, key(KeyCode::Enter));
+    assert!(!model.saved_queries.open);
+    assert_eq!(model.documents.len(), documents + 1);
+    let opened = model.active_document();
+    assert_eq!(opened.text(), "select * from users where id = 7;");
+    assert_eq!(opened.connection_id.as_deref(), Some(conn_a.as_str()));
+    assert_eq!(opened.title, "User 7.sql");
+}

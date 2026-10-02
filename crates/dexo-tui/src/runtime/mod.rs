@@ -341,6 +341,53 @@ impl WorkbenchRuntime {
                 sql,
                 parameters,
             } => self.count_rows(session, operation, sql, parameters).await,
+            crate::Effect::SaveQuery {
+                project_id,
+                connection_id,
+                name,
+                sql,
+            } => {
+                let Some(storage) = &self.storage else {
+                    return;
+                };
+                let done = storage
+                    .save_query(project_id, connection_id, name, sql)
+                    .await
+                    .map(|saved| format!("Saved query {}.", saved.name))
+                    .map_err(|error| format!("The query was not saved: {error}"));
+                self.emit(Action::SavedQueryDone(done)).await;
+            }
+            crate::Effect::LoadSavedQueries { project_id } => {
+                self.list_saved_queries(project_id).await;
+            }
+            crate::Effect::RenameSavedQuery {
+                project_id,
+                id,
+                name,
+            } => {
+                let Some(storage) = &self.storage else {
+                    return;
+                };
+                let done = storage
+                    .rename_saved_query(project_id.clone(), id, name.clone())
+                    .await
+                    .map(|()| format!("Renamed to {name}."))
+                    .map_err(|error| error.to_string());
+                self.emit(Action::SavedQueryDone(done)).await;
+                self.list_saved_queries(project_id).await;
+            }
+            crate::Effect::DeleteSavedQuery { project_id, id } => {
+                let Some(storage) = &self.storage else {
+                    return;
+                };
+                let done = storage
+                    .delete_saved_query(project_id.clone(), id)
+                    .await
+                    .map(|()| "Deleted the saved query.".to_string())
+                    .map_err(|error| error.to_string());
+                self.emit(Action::SavedQueryDone(done)).await;
+                self.list_saved_queries(project_id).await;
+            }
             crate::Effect::LoadForeignKeys {
                 session,
                 generation,
@@ -875,6 +922,17 @@ impl WorkbenchRuntime {
             },
         };
         let _ = self.transfer.run_with(request, Some(&access)).await;
+    }
+
+    async fn list_saved_queries(&self, project_id: String) {
+        let Some(storage) = &self.storage else {
+            return;
+        };
+        let listed = storage
+            .list_saved_queries(project_id)
+            .await
+            .map_err(|error| error.to_string());
+        self.emit(Action::SavedQueriesLoaded(listed)).await;
     }
 
     /// Counts on a connection dialled for it with the session's profile: a count on the

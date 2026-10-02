@@ -131,6 +131,29 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.document_name_prompt.open {
         render_document_name_prompt(frame, model, hits);
     }
+    if model.saved_queries.open {
+        render_saved_queries(frame, model, hits);
+    }
+    if let Some(prompt) = &model.save_query_prompt {
+        let popup = centered(frame.area(), 64, 8);
+        let lines = prompt.lines();
+        paint_popup(
+            frame,
+            model,
+            popup,
+            overlay_block(model, "Save query"),
+            lines.join("\n"),
+        );
+        register_overlay(hits, popup);
+        for_popup_lines(popup, &lines, |_, line, rect| {
+            if line.starts_with("name:") {
+                hits.register(HitTarget::FormField(0), rect);
+            }
+            if line.contains("[Cancel]") {
+                crate::widgets::form::register_footer(hits, rect, line, "Save");
+            }
+        });
+    }
     if model.connection_form.open {
         render_connection_form(frame, model, hits);
     }
@@ -1703,6 +1726,99 @@ fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap
         }
         if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Submit");
+        }
+    });
+}
+
+/// Open Saved Query: the search on top, the queries on the left with the highlighted
+/// one's SQL beside them, and what the keys do at the bottom.
+fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    use crate::widgets::form::footer_line;
+    let picker = &model.saved_queries;
+    let area = frame.area();
+    let popup = centered(area, 100, area.height.saturating_sub(2).min(22));
+    let inner = popup_inner(popup);
+    let width = inner.width as usize;
+    let list_width = (width * 2 / 5).clamp(16, 40);
+    let rows = (inner.height as usize).saturating_sub(3).max(1);
+    let filtered = picker.filtered();
+    let offset = scroll_to_selection(picker.selected, 0, filtered.len(), rows);
+    let current_connection = model.active_document().connection_id.clone();
+    let preview: Vec<&str> = picker
+        .current()
+        .map(|query| query.sql.lines().collect())
+        .unwrap_or_default();
+    let mut lines = vec![
+        picker
+            .search
+            .inline_line("search: ", picker.renaming.is_none()),
+    ];
+    for row in 0..rows {
+        let left = match filtered.get(offset + row) {
+            Some(query) => {
+                let index = offset + row;
+                let marker = if index == picker.selected { ">" } else { " " };
+                let name = match (&picker.renaming, index == picker.selected) {
+                    (Some(input), true) => input.inline_line("", true),
+                    _ => query.name.clone(),
+                };
+                // Another connection's query says whose it is.
+                let owner = (current_connection.as_deref() != Some(query.connection_id.as_str()))
+                    .then(|| {
+                        model
+                            .connections
+                            .profiles
+                            .iter()
+                            .find(|row| row.profile.id.0.to_string() == query.connection_id)
+                            .map_or("another connection".to_string(), |row| {
+                                row.profile.name.clone()
+                            })
+                    });
+                match owner {
+                    Some(owner) => format!("{marker} {name} · {owner}"),
+                    None => format!("{marker} {name}"),
+                }
+            }
+            None if row == 0 && picker.items.is_none() => "  Reading the saved queries…".into(),
+            None if row == 0 && filtered.is_empty() => "  No saved query matches.".into(),
+            None => String::new(),
+        };
+        let right = preview.get(row).copied().unwrap_or("");
+        lines.push(format!(
+            "{:list_width$} │ {}",
+            crate::model::truncate_cell(&left, list_width),
+            crate::model::truncate_cell(right, width.saturating_sub(list_width + 3)),
+        ));
+    }
+    let footer = match (&picker.deleting, &picker.error) {
+        (Some(focus), _) => {
+            let name = picker.current().map_or("", |query| query.name.as_str());
+            lines.push(format!("Delete {name}?"));
+            footer_line("Delete", *focus)
+        }
+        (None, Some(error)) => error.clone(),
+        (None, None) if picker.renaming.is_some() => "Enter renames · Esc keeps the name".into(),
+        (None, None) => "Enter open · F2 rename · Delete delete · Esc close".into(),
+    };
+    lines.push(footer);
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, "Open saved query"),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if (1..=rows).contains(&i) && offset + i - 1 < filtered.len() {
+            let list = Rect {
+                width: (list_width as u16).min(rect.width),
+                ..rect
+            };
+            hits.register(HitTarget::ListRow(offset + i - 1), list);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Delete");
         }
     });
 }

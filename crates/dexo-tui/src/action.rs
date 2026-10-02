@@ -360,6 +360,12 @@ pub enum Action {
     CancelInsertRow,
     InspectValue,
     OpenRelated,
+    /// Save Query As: name what the selection or the document holds.
+    OpenSaveQuery,
+    OpenSavedQueries,
+    SavedQueriesLoaded(Result<Vec<dexo_storage::SavedQuery>, String>),
+    /// A save, rename or delete finished: what to say about it.
+    SavedQueryDone(Result<String, String>),
     /// `f` on a row: list the foreign keys from and to its table.
     OpenRelatedPicker,
     ForeignKeysLoaded {
@@ -730,6 +736,24 @@ pub enum Effect {
     },
     CancelCount {
         operation: OperationId,
+    },
+    SaveQuery {
+        project_id: String,
+        connection_id: String,
+        name: String,
+        sql: String,
+    },
+    LoadSavedQueries {
+        project_id: String,
+    },
+    RenameSavedQuery {
+        project_id: String,
+        id: String,
+        name: String,
+    },
+    DeleteSavedQuery {
+        project_id: String,
+        id: String,
     },
     LoadForeignKeys {
         session: SessionId,

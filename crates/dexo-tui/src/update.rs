@@ -1188,6 +1188,50 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
         Action::OpenRelatedPicker => open_related_picker(model),
+        Action::OpenSaveQuery => open_save_query(model),
+        Action::OpenSavedQueries => {
+            if model.project_id.is_empty() {
+                model
+                    .messages
+                    .warn("Saved queries belong to a project; open one first.".into());
+                return Vec::new();
+            }
+            model.saved_queries = crate::screens::saved_queries::SavedQueriesPicker {
+                open: true,
+                ..Default::default()
+            };
+            vec![Effect::LoadSavedQueries {
+                project_id: model.project_id.clone(),
+            }]
+        }
+        Action::SavedQueriesLoaded(listed) => {
+            let picker = &mut model.saved_queries;
+            match listed {
+                Ok(items) => {
+                    picker.items = Some(items);
+                    picker.renaming = None;
+                    picker.deleting = None;
+                    picker.clamp();
+                }
+                Err(message) => picker.error = Some(message),
+            }
+            Vec::new()
+        }
+        Action::SavedQueryDone(done) => {
+            match done {
+                Ok(message) => {
+                    model.saved_queries.error = None;
+                    model.messages.info(message);
+                }
+                Err(message) => {
+                    if model.saved_queries.open {
+                        model.saved_queries.error = Some(message.clone());
+                    }
+                    model.messages.error(message);
+                }
+            }
+            Vec::new()
+        }
         Action::ForeignKeysLoaded {
             generation,
             table,
@@ -2278,6 +2322,29 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
         Some(OverlayKind::History) => mouse_history(model, hit),
         Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
+        Some(OverlayKind::SaveQuery) => match hit {
+            Some(HitTarget::FooterSubmit) => submit_save_query(model),
+            Some(HitTarget::FooterCancel) => {
+                model.save_query_prompt = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
+        Some(OverlayKind::SavedQueries) => match hit {
+            Some(HitTarget::ListRow(index)) if model.saved_queries.deleting.is_none() => {
+                model.saved_queries.selected = index;
+                open_saved_query(model)
+            }
+            Some(HitTarget::FooterSubmit) if model.saved_queries.deleting.is_some() => {
+                model.saved_queries.deleting = Some(crate::widgets::form::FooterFocus::Submit);
+                saved_queries_key(model, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            }
+            Some(HitTarget::FooterCancel) => {
+                model.saved_queries.deleting = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        },
         Some(OverlayKind::Related) => match hit {
             Some(HitTarget::ListRow(index)) => {
                 if let Some(picker) = &mut model.data.related_picker {
@@ -3375,6 +3442,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.editor.snippet_open {
         crate::screens::editor::handle_snippet_key(model, key);
         return Vec::new();
+    }
+    if model.save_query_prompt.is_some() {
+        return save_query_key(model, key);
+    }
+    if model.saved_queries.open {
+        return saved_queries_key(model, key);
     }
     if let Some(picker) = &mut model.data.related_picker {
         let count = picker.links.as_ref().map_or(0, Vec::len);
@@ -6450,6 +6523,202 @@ fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMet
             );
         }
     }
+}
+
+/// Save Query As: the selection when there is one, the document otherwise, under a
+/// name, for this project and the document's connection.
+fn open_save_query(model: &mut Model) -> Vec<Effect> {
+    let document = model.active_document();
+    if document.kind.is_table() || document.kind.is_placeholder() {
+        model
+            .messages
+            .warn("Save Query As saves a SQL document's text; open one first.".into());
+        return Vec::new();
+    }
+    let text = document.text();
+    let (sql, source) = match document.selection() {
+        Some(range) if range.start < range.end => (
+            text.chars()
+                .skip(range.start)
+                .take(range.end - range.start)
+                .collect(),
+            "the selection",
+        ),
+        _ => (text, "the whole document"),
+    };
+    let sql = sql.trim().to_string();
+    if sql.is_empty() {
+        model.messages.warn("There is no SQL to save.".into());
+        return Vec::new();
+    }
+    let Some(connection_id) = document
+        .connection_id
+        .clone()
+        .or_else(|| active_connection_uuid(model))
+    else {
+        model
+            .messages
+            .warn("A saved query belongs to a connection; connect this document first.".into());
+        return Vec::new();
+    };
+    if model.project_id.is_empty() {
+        model
+            .messages
+            .warn("Saved queries belong to a project; open one first.".into());
+        return Vec::new();
+    }
+    let suggested = document
+        .title
+        .strip_suffix(".sql")
+        .unwrap_or(&document.title)
+        .to_string();
+    let name = crate::widgets::text_input::TextInput::new(suggested);
+    model.save_query_prompt = Some(crate::screens::saved_queries::SaveQueryPrompt {
+        name,
+        footer: crate::widgets::form::FooterFocus::Input,
+        error: None,
+        sql,
+        connection_id,
+        source,
+    });
+    Vec::new()
+}
+
+fn save_query_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    let Some(prompt) = model.save_query_prompt.as_mut() else {
+        return Vec::new();
+    };
+    match footer_key(&mut prompt.footer, &key) {
+        FooterKey::Submit => submit_save_query(model),
+        FooterKey::Cancel => {
+            model.save_query_prompt = None;
+            Vec::new()
+        }
+        FooterKey::Moved => Vec::new(),
+        FooterKey::Pass => {
+            if prompt.footer == crate::widgets::form::FooterFocus::Input {
+                prompt.name.handle_key(key);
+                prompt.error = None;
+            }
+            Vec::new()
+        }
+    }
+}
+
+fn submit_save_query(model: &mut Model) -> Vec<Effect> {
+    let Some(prompt) = model.save_query_prompt.as_mut() else {
+        return Vec::new();
+    };
+    let name = prompt.name.as_str().trim().to_string();
+    if name.is_empty() {
+        prompt.error = Some("A saved query needs a name.".into());
+        return Vec::new();
+    }
+    let Some(prompt) = model.save_query_prompt.take() else {
+        return Vec::new();
+    };
+    vec![Effect::SaveQuery {
+        project_id: model.project_id.clone(),
+        connection_id: prompt.connection_id,
+        name,
+        sql: prompt.sql,
+    }]
+}
+
+/// The picker's keys: typing searches, Up and Down pick, Enter opens, F2 renames and
+/// Delete asks before it deletes.
+fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterKey, footer_key};
+    let project_id = model.project_id.clone();
+    let picker = &mut model.saved_queries;
+    if let Some(focus) = picker.deleting.as_mut() {
+        match footer_key(focus, &key) {
+            FooterKey::Submit => {
+                picker.deleting = None;
+                if let Some(query) = picker.current() {
+                    let id = query.id.clone();
+                    return vec![Effect::DeleteSavedQuery { project_id, id }];
+                }
+            }
+            FooterKey::Cancel => picker.deleting = None,
+            FooterKey::Moved | FooterKey::Pass => {}
+        }
+        return Vec::new();
+    }
+    if let Some(input) = picker.renaming.as_mut() {
+        match key.code {
+            KeyCode::Esc => picker.renaming = None,
+            KeyCode::Enter => {
+                let name = input.as_str().trim().to_string();
+                if name.is_empty() {
+                    picker.error = Some("A saved query needs a name.".into());
+                } else if let Some(query) = picker.current() {
+                    let id = query.id.clone();
+                    picker.renaming = None;
+                    return vec![Effect::RenameSavedQuery {
+                        project_id,
+                        id,
+                        name,
+                    }];
+                }
+            }
+            _ => {
+                input.handle_key(key);
+            }
+        }
+        return Vec::new();
+    }
+    match key.code {
+        KeyCode::Esc => picker.open = false,
+        KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+        KeyCode::Down => {
+            picker.selected += 1;
+            picker.clamp();
+        }
+        KeyCode::Enter => return open_saved_query(model),
+        KeyCode::F(2) => {
+            if let Some(name) = picker.current().map(|query| query.name.clone()) {
+                picker.renaming = Some(crate::widgets::text_input::TextInput::new(name));
+                picker.error = None;
+            }
+        }
+        KeyCode::Delete if picker.current().is_some() => {
+            // Cancel holds the focus: Enter alone keeps the query.
+            picker.deleting = Some(crate::widgets::form::FooterFocus::Cancel);
+            picker.error = None;
+        }
+        _ => {
+            if picker.search.handle_key(key) {
+                picker.selected = 0;
+                picker.error = None;
+            }
+        }
+    }
+    Vec::new()
+}
+
+/// Enter: the query opens in a new document of its connection, which connects if it is
+/// not the live one.
+fn open_saved_query(model: &mut Model) -> Vec<Effect> {
+    let Some(query) = model.saved_queries.current().cloned() else {
+        return Vec::new();
+    };
+    model.saved_queries.open = false;
+    let title = crate::screens::document_name_prompt::normalize_document_name(
+        &query.name.replace(['/', '\\'], "-"),
+        "saved-query.sql",
+    )
+    .unwrap_or_else(|_| "saved-query.sql".into());
+    let mut document =
+        crate::model::EditorDocument::new_unique(title, None, Some(query.connection_id.clone()));
+    document.sql = dexo_sql::SqlDocument::new(&query.sql);
+    model.documents.push(document);
+    let index = model.documents.len() - 1;
+    let effects = activate_document(model, index);
+    model.focus_active_document_tab();
+    model.focus = Focus::Editor;
+    effects
 }
 
 /// `f`: the rows the row under the cursor points at, or that point at it. The row is

@@ -65,6 +65,28 @@ pub enum StorageCommand {
     DeleteSnippet {
         id: String,
     },
+    SaveQuery {
+        project_id: String,
+        connection_id: String,
+        name: String,
+        sql: String,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<dexo_storage::SavedQuery>>,
+    },
+    ListSavedQueries {
+        project_id: String,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_storage::SavedQuery>>>,
+    },
+    RenameSavedQuery {
+        project_id: String,
+        id: String,
+        name: String,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
+    DeleteSavedQuery {
+        project_id: String,
+        id: String,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<()>>,
+    },
     CheckpointRecovery(RecoveryCheckpointRequest),
     DiscardRecovery {
         document: String,
@@ -191,6 +213,37 @@ impl StorageWorker {
                         StorageCommand::DeleteSnippet { id } => {
                             let repo = SnippetRepository::new(db.connection());
                             let _ = repo.delete(&id);
+                        }
+                        StorageCommand::SaveQuery {
+                            project_id,
+                            connection_id,
+                            name,
+                            sql,
+                            reply,
+                        } => {
+                            let repo = dexo_storage::SavedQueryRepository::new(db.connection());
+                            let _ = reply.send(repo.save(&project_id, &connection_id, &name, &sql));
+                        }
+                        StorageCommand::ListSavedQueries { project_id, reply } => {
+                            let repo = dexo_storage::SavedQueryRepository::new(db.connection());
+                            let _ = reply.send(repo.list_for_project(&project_id));
+                        }
+                        StorageCommand::RenameSavedQuery {
+                            project_id,
+                            id,
+                            name,
+                            reply,
+                        } => {
+                            let repo = dexo_storage::SavedQueryRepository::new(db.connection());
+                            let _ = reply.send(repo.rename(&project_id, &id, &name));
+                        }
+                        StorageCommand::DeleteSavedQuery {
+                            project_id,
+                            id,
+                            reply,
+                        } => {
+                            let repo = dexo_storage::SavedQueryRepository::new(db.connection());
+                            let _ = reply.send(repo.delete(&project_id, &id));
                         }
                         StorageCommand::SearchCatalogObjects {
                             connection_id,
@@ -388,6 +441,60 @@ impl StorageWorker {
             database_name,
             query,
             limit,
+            reply,
+        })?;
+        receive.await?
+    }
+
+    pub async fn save_query(
+        &self,
+        project_id: String,
+        connection_id: String,
+        name: String,
+        sql: String,
+    ) -> anyhow::Result<dexo_storage::SavedQuery> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx.send(StorageCommand::SaveQuery {
+            project_id,
+            connection_id,
+            name,
+            sql,
+            reply,
+        })?;
+        receive.await?
+    }
+
+    pub async fn list_saved_queries(
+        &self,
+        project_id: String,
+    ) -> anyhow::Result<Vec<dexo_storage::SavedQuery>> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(StorageCommand::ListSavedQueries { project_id, reply })?;
+        receive.await?
+    }
+
+    pub async fn rename_saved_query(
+        &self,
+        project_id: String,
+        id: String,
+        name: String,
+    ) -> anyhow::Result<()> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx.send(StorageCommand::RenameSavedQuery {
+            project_id,
+            id,
+            name,
+            reply,
+        })?;
+        receive.await?
+    }
+
+    pub async fn delete_saved_query(&self, project_id: String, id: String) -> anyhow::Result<()> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx.send(StorageCommand::DeleteSavedQuery {
+            project_id,
+            id,
             reply,
         })?;
         receive.await?
