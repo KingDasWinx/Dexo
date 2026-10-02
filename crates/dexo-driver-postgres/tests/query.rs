@@ -492,3 +492,59 @@ async fn trying_an_index_keeps_the_users_own_hypothetical_ones() {
         Some(vec![dexo_driver_api::DbValue::Text(String::new())])
     );
 }
+
+/// Extension and built-in types this driver had no decoder for came out as hex.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn extension_and_numeric_types_read_as_postgres_prints_them() {
+    let fixture = connect_postgres_fixture().await;
+    for extension in ["citext", "ltree"] {
+        let setup = QueryRequest::write(format!("create extension if not exists {extension}"));
+        collect(fixture.session.execute(setup).await.unwrap()).await;
+    }
+    let read = QueryRequest::read(
+        "select 'MiXed'::citext, 'a.b.c'::ltree, '*.b.*'::lquery, '$.a[*] ? (@ > 1)'::jsonpath,
+                '42'::xid, '(3,7)'::tid, '08:00:2b:01:02:03:04:05'::macaddr8,
+                '[(1,2),(3,4)]'::lseg, '(3,4),(1,2)'::box, '{1,-1,0}'::line, '<(1,2),3>'::circle,
+                '[(0,0),(1,1)]'::path, '((0,0),(1,1),(1,0))'::polygon,
+                'the fat cats'::tsvector, 'pg_catalog'::regnamespace",
+        0,
+    );
+    let events = collect(fixture.session.execute(read).await.unwrap()).await;
+    let row = events
+        .iter()
+        .find_map(|event| match event {
+            QueryEvent::Rows(batch) => batch.rows.first().cloned(),
+            _ => None,
+        })
+        .unwrap();
+    let texts: Vec<String> = row
+        .iter()
+        .map(|cell| match cell {
+            dexo_driver_api::DbValue::Text(text)
+            | dexo_driver_api::DbValue::Native { text, .. } => text.clone(),
+            dexo_driver_api::DbValue::U64(value) => value.to_string(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(
+        texts[..13],
+        [
+            "MiXed",
+            "a.b.c",
+            "*.b.*",
+            "$.\"a\"[*]?(@ > 1)",
+            "42",
+            "(3,7)",
+            "08:00:2b:01:02:03:04:05",
+            "[(1,2),(3,4)]",
+            "(3,4),(1,2)",
+            "{1,-1,0}",
+            "<(1,2),3>",
+            "[(0,0),(1,1)]",
+            "((0,0),(1,1),(1,0))",
+        ]
+    );
+    assert_eq!(texts[13], "'cats' 'fat' 'the'");
+    assert_eq!(texts[14], "11");
+}

@@ -64,7 +64,9 @@ pub fn decode_value(ty: &Type, raw: &[u8]) -> DbValue {
         }
         _ => {}
     }
-    scalar(ty, raw).unwrap_or_else(|| undecoded(ty, raw))
+    scalar(ty, raw)
+        .or_else(|| other(ty, raw))
+        .unwrap_or_else(|| undecoded(ty, raw))
 }
 
 fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
@@ -129,6 +131,102 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         _ => return None,
     };
     Some(value)
+}
+
+/// Types outside the common ones, read by name: extensions' -- `citext` is sent as its
+/// text, `ltree` and its queries as a version byte and their text, pgvector's `vector`
+/// as its floats -- and the built-ins made of plain numbers. They used to show as hex.
+fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
+    let utf8 = |bytes: &[u8]| std::str::from_utf8(bytes).ok().map(str::to_string);
+    let versioned = || match raw.split_first() {
+        Some((1, rest)) => utf8(rest),
+        _ => None,
+    };
+    let u32_at = |at: usize| Some(u32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?));
+    let f8_at = |at: usize| Some(f64::from_be_bytes(raw.get(at..at + 8)?.try_into().ok()?));
+    let point_at = |at: usize| Some(format!("({},{})", f8_at(at)?, f8_at(at + 8)?));
+    let points = |from: usize, count: usize| {
+        (0..count)
+            .map(|index| point_at(from + index * 16))
+            .collect::<Option<Vec<_>>>()
+            .map(|points| points.join(","))
+    };
+    let text = match ty.name() {
+        "citext" => return Some(DbValue::Text(utf8(raw)?)),
+        "ltree" | "lquery" | "ltxtquery" | "jsonpath" => versioned()?,
+        "xid" | "cid" | "regnamespace" | "regrole" | "regoper" | "regoperator" | "regprocedure"
+        | "regconfig" | "regdictionary" | "regcollation" => {
+            return Some(DbValue::U64(u32_at(0)?.into()));
+        }
+        "xid8" => return Some(DbValue::U64(u64::from_be_bytes(raw.try_into().ok()?))),
+        "tid" => format!(
+            "({},{})",
+            u32_at(0)?,
+            u16::from_be_bytes(raw.get(4..6)?.try_into().ok()?)
+        ),
+        "macaddr8" if raw.len() == 8 => raw
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<Vec<_>>()
+            .join(":"),
+        "lseg" => format!("[{},{}]", point_at(0)?, point_at(16)?),
+        "box" => format!("{},{}", point_at(0)?, point_at(16)?),
+        "line" => format!("{{{},{},{}}}", f8_at(0)?, f8_at(8)?, f8_at(16)?),
+        "circle" => format!("<{},{}>", point_at(0)?, f8_at(16)?),
+        "path" => {
+            let closed = *raw.first()? == 1;
+            let count = usize::try_from(u32_at(1)?).ok()?;
+            let points = points(5, count)?;
+            if closed {
+                format!("({points})")
+            } else {
+                format!("[{points}]")
+            }
+        }
+        "polygon" => format!("({})", points(4, usize::try_from(u32_at(0)?).ok()?)?),
+        "vector" => {
+            let dimensions = usize::from(u16::from_be_bytes(raw.get(0..2)?.try_into().ok()?));
+            let values = (0..dimensions)
+                .map(|index| {
+                    let at = 4 + index * 4;
+                    Some(f32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?).to_string())
+                })
+                .collect::<Option<Vec<_>>>()?;
+            format!("[{}]", values.join(","))
+        }
+        "tsvector" => tsvector_text(raw)?,
+        _ => return None,
+    };
+    Some(native(ty, raw, text))
+}
+
+/// `'fat':2,4A 'cat':3`: each lexeme quoted, with its positions and their weights.
+fn tsvector_text(raw: &[u8]) -> Option<String> {
+    let count = u32::from_be_bytes(raw.get(0..4)?.try_into().ok()?);
+    let mut at = 4;
+    let mut lexemes = Vec::new();
+    for _ in 0..count {
+        let end = at + raw.get(at..)?.iter().position(|byte| *byte == 0)?;
+        let word = std::str::from_utf8(&raw[at..end]).ok()?;
+        at = end + 1;
+        let positions = u16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+        at += 2;
+        let mut lexeme = format!("'{}'", word.replace('\\', "\\\\").replace('\'', "''"));
+        for index in 0..positions {
+            let entry = u16::from_be_bytes(raw.get(at..at + 2)?.try_into().ok()?);
+            at += 2;
+            lexeme.push(if index == 0 { ':' } else { ',' });
+            let _ = write!(lexeme, "{}", entry & 0x3fff);
+            match entry >> 14 {
+                3 => lexeme.push('A'),
+                2 => lexeme.push('B'),
+                1 => lexeme.push('C'),
+                _ => {}
+            }
+        }
+        lexemes.push(lexeme);
+    }
+    Some(lexemes.join(" "))
 }
 
 fn text(raw: &[u8]) -> Option<DbValue> {
@@ -504,6 +602,23 @@ mod tests {
                 "{ty} reported a value as NULL"
             );
         }
+    }
+
+    /// pgvector's `vector` is not in the image the live tests use; its wire form is a
+    /// dimension count, an unused word, and the floats.
+    #[test]
+    fn a_pgvector_reads_as_its_floats() {
+        let ty = Type::new(
+            "vector".into(),
+            99_999,
+            tokio_postgres::types::Kind::Simple,
+            "public".into(),
+        );
+        let mut raw = vec![0, 3, 0, 0];
+        for value in [1.0f32, 0.5, -2.0] {
+            raw.extend(value.to_be_bytes());
+        }
+        assert_eq!(text_of(&decode_value(&ty, &raw)), "[1,0.5,-2]");
     }
 
     #[test]
