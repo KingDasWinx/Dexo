@@ -1954,20 +1954,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             pending,
             now,
         } => {
-            let screen = &mut model.mcp_audit;
-            screen.events = events;
-            screen.now = now;
+            model.mcp_audit.events = events;
             // A request decided elsewhere, or out of time, takes its confirmation away.
-            if screen
-                .deciding
-                .as_ref()
-                .is_some_and(|deciding| pending.iter().all(|request| request.id != deciding.id))
-            {
-                screen.deciding = None;
+            if model.mcp_audit.load(pending, now) {
+                model.messages.warn(
+                    "That request was decided elsewhere or ran out of time; nothing was settled."
+                        .into(),
+                );
             }
-            screen.announced = pending.iter().map(|request| request.id).collect();
-            screen.pending = pending;
-            screen.selected = screen.selected.min(screen.pending.len().saturating_sub(1));
             Vec::new()
         }
         Action::AgentActivityTick => {
@@ -4067,11 +4061,11 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Up => {
-                screen.selected = screen.selected.saturating_sub(1);
+                screen.select(-1);
                 Vec::new()
             }
             KeyCode::Down => {
-                screen.selected = (screen.selected + 1).min(screen.pending.len().saturating_sub(1));
+                screen.select(1);
                 Vec::new()
             }
             // Approving runs a write: Cancel holds the focus, so an Enter out of habit
