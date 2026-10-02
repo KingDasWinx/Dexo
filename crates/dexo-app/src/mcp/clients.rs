@@ -272,13 +272,26 @@ fn set_toml(table: &mut dyn toml_edit::TableLike, key: &str, value: toml_edit::V
     }
 }
 
-/// Writes `contents` to `path`, the old file copied to `<file>.dexo-backup` first.
+/// Writes `contents` to `path`, the old file copied to `<file>.dexo-backup` first. A
+/// symlink is written through, so it stays a link to the file it named; the file keeps
+/// its permissions, since it may hold other servers' keys, and a new one is the user's
+/// alone.
 pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>, AppError> {
+    use std::io::Write as _;
     let storage = |error: std::io::Error| AppError::new(ErrorCategory::Storage, error.to_string());
+    let path = &match std::fs::canonicalize(path) {
+        Ok(real) => real,
+        // A link to a file not made yet is followed by hand.
+        Err(_) => match std::fs::read_link(path) {
+            Ok(target) => path.parent().unwrap_or(Path::new("")).join(target),
+            Err(_) => path.to_path_buf(),
+        },
+    };
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent).map_err(storage)?;
     }
-    let backup = if path.exists() {
+    let existing = std::fs::metadata(path).ok();
+    let backup = if existing.is_some() {
         let mut name = path.as_os_str().to_owned();
         name.push(".dexo-backup");
         let backup = PathBuf::from(name);
@@ -290,7 +303,17 @@ pub fn write_with_backup(path: &Path, contents: &str) -> Result<Option<PathBuf>,
     let mut tmp = path.as_os_str().to_owned();
     tmp.push(".dexo-tmp");
     let tmp = PathBuf::from(tmp);
-    std::fs::write(&tmp, contents).map_err(storage)?;
+    let _ = std::fs::remove_file(&tmp);
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    std::os::unix::fs::OpenOptionsExt::mode(&mut options, 0o600);
+    let mut file = options.open(&tmp).map_err(storage)?;
+    file.write_all(contents.as_bytes()).map_err(storage)?;
+    file.sync_all().map_err(storage)?;
+    if let Some(existing) = &existing {
+        std::fs::set_permissions(&tmp, existing.permissions()).map_err(storage)?;
+    }
     std::fs::rename(&tmp, path).map_err(storage)?;
     Ok(backup)
 }
@@ -523,5 +546,33 @@ mod tests {
             merged.contains("2.5") && merged.contains("null"),
             "{merged}"
         );
+    }
+
+    /// A symlinked config stays a link and its target gets the text; a private file
+    /// stays private, and a new one is made private.
+    #[cfg(unix)]
+    #[test]
+    fn a_config_is_written_through_its_link_with_its_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let real = dir.path().join("real.json");
+        std::fs::write(&real, "{}").unwrap();
+        std::fs::set_permissions(&real, std::fs::Permissions::from_mode(0o600)).unwrap();
+        let link = dir.path().join("link.json");
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+        super::write_with_backup(&link, "{\"a\": 1}").unwrap();
+        assert!(link.symlink_metadata().unwrap().file_type().is_symlink());
+        assert_eq!(std::fs::read_to_string(&real).unwrap(), "{\"a\": 1}");
+        let mode =
+            |path: &std::path::Path| std::fs::metadata(path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode(&real), 0o600);
+        let fresh = dir.path().join("new/mcp.json");
+        super::write_with_backup(&fresh, "{}").unwrap();
+        assert_eq!(mode(&fresh), 0o600);
+        let shared = dir.path().join("shared.json");
+        std::fs::write(&shared, "{}").unwrap();
+        std::fs::set_permissions(&shared, std::fs::Permissions::from_mode(0o644)).unwrap();
+        super::write_with_backup(&shared, "{}").unwrap();
+        assert_eq!(mode(&shared), 0o644);
     }
 }
