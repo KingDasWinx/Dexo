@@ -82,6 +82,61 @@ async fn container_explain_estimated_and_analyze() {
         .unwrap();
     assert!(analyzed.execution_ms.is_some());
     assert!(analyzed.root.actual.time_ms.is_some() || analyzed.root.loops.is_some());
+
+    // A parameter has no value: Postgres 16 plans for any, an older server refuses
+    // clearly, and ANALYZE, which runs the statement, refuses everywhere.
+    let generic = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::estimated(
+            "select * from pg_class where oid = $1 and relname = $2;",
+        ))
+        .await;
+    let version: i64 = {
+        let mut stream = session
+            .execute(dexo_driver_api::QueryRequest::read(
+                "select current_setting('server_version_num')::int",
+                1,
+            ))
+            .await
+            .unwrap();
+        let mut found = 0;
+        while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+            if let Ok(dexo_driver_api::QueryEvent::Rows(batch)) = event
+                && let dexo_driver_api::DbValue::I64(value) = batch.rows[0][0]
+            {
+                found = value;
+            }
+        }
+        found
+    };
+    if version >= 160_000 {
+        assert!(generic.unwrap().raw.contains("Plan"));
+    } else {
+        let refused = generic.unwrap_err();
+        assert_eq!(
+            refused.category(),
+            dexo_driver_api::DriverErrorCategory::Capability
+        );
+    }
+    let refused = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("select $1::int + 1"))
+        .await
+        .unwrap_err();
+    assert_eq!(
+        refused.category(),
+        dexo_driver_api::DriverErrorCategory::Capability
+    );
+    assert!(refused.to_string().contains("parameters"), "{refused}");
+    // The fence closed: the session still runs a plain plan.
+    session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("select 1"))
+        .await
+        .unwrap();
 }
 
 /// A trailing `--` comment on the explained statement used to comment out the fence's

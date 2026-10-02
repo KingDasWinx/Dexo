@@ -164,7 +164,42 @@ fn analyze_fence(state: TransactionState) -> (&'static str, &'static str) {
     }
 }
 
+/// `$1` with no value bound (42P02), or one whose type nothing tells (42P18).
+fn parameter_error(error: &tokio_postgres::Error) -> bool {
+    error
+        .code()
+        .is_some_and(|code| matches!(code.code(), "42P02" | "42P18"))
+}
+
+fn first_text(messages: &[SimpleQueryMessage]) -> Result<String, DriverError> {
+    messages
+        .iter()
+        .find_map(|message| match message {
+            SimpleQueryMessage::Row(row) => row.get(0).map(str::to_string),
+            _ => None,
+        })
+        .ok_or_else(|| DriverError::new(DriverErrorCategory::Internal, "explain returned no plan"))
+}
+
 impl PostgresSession {
+    /// A statement with parameters has no values to plan with. Postgres 16 plans it for
+    /// any value (`GENERIC_PLAN`); an older server knows no such option.
+    async fn explain_generic(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
+        let inner = sql.trim().trim_end_matches(';');
+        let explain = format!("EXPLAIN (GENERIC_PLAN, FORMAT JSON)\n{inner}\n");
+        match self.client.simple_query(&explain).await {
+            Ok(messages) => parse_json(&first_text(&messages)?),
+            // Before 16 the option is unknown, or the parameter is reported first.
+            Err(error)
+                if parameter_error(&error)
+                    || error.code().is_some_and(|code| code.code() == "42601") =>
+            {
+                Err(dexo_driver_api::parameters_unsupported())
+            }
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
     async fn explain_analyzed(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
         let (open, close) = analyze_fence(self.state());
         // One simple query, so nothing else sent on this shared connection lands inside
@@ -172,22 +207,15 @@ impl PostgresSession {
         // comment would otherwise comment out the ROLLBACK and leave the change pending.
         let fenced = format!("{open};\n{}\n;\n{close}", wrap_explain(sql, true));
         match self.client.simple_query(&fenced).await {
-            Ok(messages) => {
-                let text = messages
-                    .iter()
-                    .find_map(|message| match message {
-                        SimpleQueryMessage::Row(row) => row.get(0).map(str::to_string),
-                        _ => None,
-                    })
-                    .ok_or_else(|| {
-                        DriverError::new(DriverErrorCategory::Internal, "explain returned no plan")
-                    })?;
-                parse_json(&text)
-            }
+            Ok(messages) => parse_json(&first_text(&messages)?),
             Err(error) => {
                 // The server skips the rest of the string after an error, so the fence is
                 // still open; closing it keeps the session out of an aborted transaction.
                 let _ = self.client.batch_execute(close).await;
+                // ANALYZE runs the statement, which needs its parameters' values.
+                if parameter_error(&error) {
+                    return Err(dexo_driver_api::parameters_unsupported());
+                }
                 Err(map_error(error))
             }
         }
@@ -211,8 +239,18 @@ impl ExplainProvider for PostgresSession {
 
 impl PostgresSession {
     async fn explain_estimated(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
-        let sql = wrap_explain(sql, false);
-        let row = self.client.query_one(&sql, &[]).await.map_err(map_error)?;
+        let statement = match self.client.prepare(&wrap_explain(sql, false)).await {
+            Ok(statement) if statement.params().is_empty() => statement,
+            Ok(_) => return self.explain_generic(sql).await,
+            Err(error) if parameter_error(&error) => return self.explain_generic(sql).await,
+            Err(error) => return Err(map_error(error)),
+        };
+        // An EXPLAIN is not planned until it runs, so a parameter can show only then.
+        let row = match self.client.query_one(&statement, &[]).await {
+            Ok(row) => row,
+            Err(error) if parameter_error(&error) => return self.explain_generic(sql).await,
+            Err(error) => return Err(map_error(error)),
+        };
         if let Ok(value) = row.try_get::<_, serde_json::Value>(0) {
             return parse_value(&value, &value.to_string());
         }
