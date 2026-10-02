@@ -93,6 +93,34 @@ fn right_reaches_the_last_column_before_the_view_moves() {
     assert!(at_end >= 400 - shown);
 }
 
+/// Left past the first column jumped the view half a screen while Right moved it one
+/// column: the two edges scroll alike now.
+#[test]
+fn left_reaches_the_first_column_before_the_view_moves() {
+    let long = "x".repeat(400);
+    let mut model = editor_with(&long, 100, 30);
+    press(&mut model, KeyCode::End);
+    let at_end = model.active_document().viewport_column;
+    assert!(at_end > 0);
+    let mut steps = 0;
+    while model.active_document().viewport_column == at_end {
+        press(&mut model, KeyCode::Left);
+        steps += 1;
+        assert!(steps < 400);
+    }
+    assert_eq!(model.active_document().viewport_column, at_end - 1);
+    // The cursor crossed the whole text area before the view moved.
+    let frame = dexo_tui::render::render_to_string(&model, 100, 30);
+    let row = frame.lines().find(|row| row.contains("   1")).unwrap();
+    let shown = row.matches('x').count();
+    assert_eq!(
+        steps, shown,
+        "scrolled after {steps} of {shown} columns:\n{frame}"
+    );
+    press(&mut model, KeyCode::Left);
+    assert_eq!(model.active_document().viewport_column, at_end - 2);
+}
+
 /// A long line deleted back to a short one: the view went back only as far as the
 /// cursor, and the start of the line stayed out of sight.
 #[test]

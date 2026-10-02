@@ -216,8 +216,9 @@ fn text_area(model: &Model) -> Option<(usize, usize)> {
 
 /// Scrolls just far enough to keep the cursor on screen, and only once it reaches an
 /// edge: the arrows walk to the last row or column before the text moves, as in any
-/// editor. It used to assume a pane 12 rows by 80 columns, so a taller one started
-/// scrolling halfway down.
+/// editor, and the view moves a row or a column at a time either way. A line that fits
+/// in the pane shows from its first column. It used to assume a pane 12 rows by 80
+/// columns, so a taller one started scrolling halfway down.
 pub fn follow_cursor(model: &mut Model) {
     let doc = model.active_document();
     if doc.kind.is_table() || doc.kind.is_placeholder() {
@@ -240,19 +241,20 @@ pub fn follow_cursor(model: &mut Model) {
         doc.viewport_line = line + 1 - rows;
     }
     // The view scrolls in screen columns, which a wide character takes two of.
-    let x: usize = text
-        .split('\n')
-        .nth(line)
-        .unwrap_or("")
-        .chars()
-        .take(col)
-        .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
-        .sum();
-    // Back to the start of the line once the cursor fits on its first screen, and else
-    // half a screen short of the cursor: scrolled to the cursor itself, a long line
-    // deleted back to a short one kept its start out of view.
-    if x < doc.viewport_column {
-        doc.viewport_column = if x < cols { 0 } else { x - cols / 2 };
+    let columns = |text: &str, chars: usize| -> usize {
+        text.chars()
+            .take(chars)
+            .map(|ch| unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0))
+            .sum()
+    };
+    let current = text.split('\n').nth(line).unwrap_or("");
+    let x = columns(current, col);
+    // A long line deleted back to a short one kept its start out of view, scrolled
+    // back only as far as the cursor.
+    if columns(current, usize::MAX) < cols {
+        doc.viewport_column = 0;
+    } else if x < doc.viewport_column {
+        doc.viewport_column = x;
     } else if x >= doc.viewport_column + cols {
         doc.viewport_column = x + 1 - cols;
     }
