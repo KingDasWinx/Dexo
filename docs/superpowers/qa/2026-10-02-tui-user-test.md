@@ -1,0 +1,320 @@
+# TUI user test, 2026-10-02 (before 1.4.2)
+
+Every command of the palette (161) was used as a user would — from the palette and by its hotkey, keyboard and mouse — and every modal it opens was walked through: fields, buttons, Esc, clicks, small terminals. Nothing here is fixed yet; this file collects the findings to fix later.
+
+**Build:** `development` at the time of the test, with the `duckdb` feature.
+**Connections:** Postgres 16.9 (development, production, read-only), MySQL 8.4.5, SQLite (demo shop), DuckDB over a CSV.
+**Method:** a tmux session per tester, keys and SGR mouse events sent to Dexo, the screen read back.
+
+**Severity:** BLOCKER = crash, data loss, safety guard bypassed, or a feature that cannot be used at all. MAJOR = works wrongly, or breaks a TUI standard users will hit. MINOR = works but awkwardly. COSMETIC = looks wrong.
+
+**Standards checked:** dialogs walk with the arrows and Esc cancels; hotkeys shown and working; focus and selection visible; single-line inputs edit alike (Ctrl+A, word keys); documents bound to connections; nothing overlaps or is cut off, down to 80x24; clear messages without debug text; safety guards; no crash or freeze.
+
+## Summary
+
+_Filled in once every area is in._
+
+## Findings by area
+
+### MCP and agents (mcp-agents)
+
+
+
+Binary: development build of 1.4.2. Data home `homes/mcp-agents`. Profiles used: `pg-dev` (raw-read, allow `qa7.public.*`, deny `qa7.public.customers`, `--allow-tool data_execute_sql`), `pg-prod` (same, on the production connection), and a stray `bad name!`.
+
+##### [MINOR] MCP Profiles with no profile: empty state gives no way forward
+- **Where:** mcp.profiles (palette "MCP Profiles")
+- **Steps:** fresh data home, Ctrl+P, "MCP Prof", Enter
+- **Expected:** an empty state that says how to create a profile (there is no create action in the TUI), and the key hints (7, 6).
+- **Actual:** the popup says only `no MCP profiles`, no hint line at all (the `e enable/disable  g new grant ...` line is only drawn once a profile exists), and the status bar under it still shows the workbench hints. A new user does not learn that profiles are made with `dexo mcp profile create`.
+
+##### [MAJOR] `g` (New MCP Grant) in the empty MCP Profiles screen opens a form that cannot succeed
+- **Where:** mcp.grant, MCP Profiles with no profile
+- **Steps:** palette > MCP Profiles (empty), press `g`
+- **Expected:** a one-line refusal ("create a profile first") instead of a form (6, 7).
+- **Actual:** the full "New MCP grant" form opens with `For MCP profile` blank, the first focus is on `tools:` (not `connection:`), Enter reports `no MCP profile is selected` at the bottom of the form (the form grows by one line and the buttons move).
+
+##### [MINOR] Palette shows hotkey `g` for "New MCP Grant…" but it only works inside MCP Profiles; help does not list it
+- **Where:** mcp.grant
+- **Steps:** Ctrl+P "mcp": row shows `g`. Close the palette. In the SQL editor press `g`; in the explorer press `g`; F1 and search "grant".
+- **Expected:** (2) the hotkey listed in the palette does the action where it is meant to work, and F1 lists it with its context.
+- **Actual:** in the editor `g` is typed into the document (starts query-1.sql* and opens completion); in the explorer nothing happens; F1 search for `grant` says `no matches for 'grant'` (only `ctrl+alt+a Agent Activity` is listed under [Workbench]; New MCP Grant, Revoke All and MCP Profiles have no help entry).
+
+##### [MINOR] Agent Activity `r revoke all grants` closes Activity and opens the MCP Profiles screen with an unexplained pending "confirm revoke all grants"
+- **Where:** mcp.audit / mcp.revoke_all
+- **Steps:** Ctrl+Alt+A (empty), press `r`
+- **Expected:** a confirmation in the same screen with the keys to confirm or cancel (1, 7).
+- **Actual:** the Agent Activity popup is replaced by the "MCP profiles" popup, which reads `no MCP profiles` and `confirm revoke all grants` (what to press is not said; a second `r` says `no MCP profile selected`, Enter then says `revoked 0 grants`). The message `confirm revoke all grants` also stays as stale text and is shown again the next time MCP Profiles is opened.
+
+##### [MAJOR] MCP Profiles shows raw debug lines (`profile NAME enabled=false`, `mcp profile=... enabled=false confirm=true`)
+- **Where:** mcp.profiles with profiles present
+- **Steps:** create profiles from the CLI, palette > MCP Profiles
+- **Expected:** a readable list (name, enabled/disabled, connections) and a status line that says what is selected (7: no `foo=bar` dumps).
+- **Actual:**
+```
+│> profile bad name! enabled=false
+│  profile pg-dev enabled=false
+│  profile pg-prod enabled=false
+│mcp profile=bad name! enabled=false confirm=false
+│confirm revoke all grants
+│e enable/disable  g new grant  r revoke  R revoke all  esc close
+```
+Pressing `e` shows `confirm enable bad name!`, the second `e` shows `enabled bad name! scopes=0 tools=0`; the status line keeps `confirm=true/false` internals.
+
+##### [COSMETIC] MCP Profiles selected row has no highlight
+- **Where:** mcp.profiles
+- **Steps:** open the screen, `ansi`
+- **Expected:** the selected row visibly highlighted (3).
+- **Actual:** only the `>` marker; no reverse video or colour on the row.
+
+##### [MINOR] Inconsistent revoke-all keys between screens
+- **Where:** MCP Profiles vs Agent Activity
+- **Steps:** compare the hint lines
+- **Expected:** one key for one action (2).
+- **Actual:** Profiles: `r revoke  R revoke all`; Activity: `r revoke all grants`.
+
+##### [MINOR] CLI: `dexo mcp profile create` accepts any name, including `bad name!`, and there is no way to delete a profile
+- **Where:** CLI `mcp profile create`
+- **Steps:** `dexo mcp profile create --name 'bad name!'`
+- **Expected:** a name usable in `--profile NAME` and in client configs (letters, digits, `-`, `_`), and a way to remove a profile (also in the TUI).
+- **Actual:** `created bad name! enabled=false access=read_only`. There is no `profile delete` (CLI) and no delete in the TUI, so the profile stays forever.
+
+##### [MINOR] CLI: creating a profile with an existing name shows the raw SQLite error
+- **Where:** CLI `mcp profile create`
+- **Steps:** `dexo mcp profile create --name pg-dev` twice
+- **Expected:** `profile 'pg-dev' already exists` (7).
+- **Actual:**
+```
+Error: UNIQUE constraint failed: mcp_profiles.name
+
+Caused by:
+    Error code 2067: constraint failed
+```
+
+##### [MINOR] CLI: `profile show`/`policy` print Rust Debug names; empty answers are silent
+- **Where:** CLI `mcp profile show`, `mcp policy`, `mcp profile list`, `mcp audit`, `mcp grant list`, `mcp doctor`
+- **Steps:** `dexo mcp profile show --name pg-dev`; `dexo mcp grant list --profile nope`; `dexo mcp audit` with no events; `dexo mcp doctor` with no profile
+- **Expected:** human words for query mode (7) and a message when a list is empty or the profile does not exist.
+- **Actual:** `query_mode=StructuredOnly` / `RawReadSql` (enum Debug names, the flag is `raw-read`); `grant list --profile nope` prints nothing and exits 0 (an unknown profile is not reported); `profile list`, `audit` and `doctor` print nothing and exit 0 when there is nothing. `policy` prints `selector allow ...` while `allow`/`enable` print `scopes:` blocks for the same rules.
+
+##### [MAJOR] MCP Profiles popup is fixed-height: with a few grants the status line and the hint line are cut off, so a pending confirmation is invisible
+- **Where:** mcp.profiles / revoke
+- **Steps:** profile `pg-dev` with scopes (allow + deny), a tool rule and 3 grants; open MCP Profiles at 120x36, select `pg-dev`, press `r`
+- **Expected:** every line of the selected profile is reachable (scroll) and the status/confirmation line is always visible (6).
+- **Actual:** the popup is 13 rows tall; the detail lines (`scope ...`, `tool ...`, `grant ...` + `diff ...`, two rows per grant) push the status line and the `e enable/disable  g new grant  r revoke ...` hint line out of the box, the third grant shows only its first line and its `diff` line is cut. PageDown and the wheel do nothing (the wheel moves the profile selection). `r` asked for confirmation on its first press, which could not be seen; the second `r` then revoked all 3 grants (`revoked 3 grants` was visible only after the selection moved to the first profile and the detail got shorter).
+```
+ 15 │ tool data_execute_sql
+ 16 │ grant data_write data_update 1630s asks (120s)
+ 17 │ diff pg-dev allow qa7.public.orders
+ 18 │ grant data_write data_execute_sql 1630s asks (20s)
+ 19 │ diff pg-dev allow qa7.public.orders
+ 20 │ grant data_write data_insert 86400s
+ 21 └──────
+```
+
+##### [MINOR] MCP Profiles: key `r` is labelled "revoke" but revokes ALL grants of the selected profile (after a silent first press)
+- **Where:** mcp.profiles
+- **Steps:** select a profile with 3 grants, press `r` twice
+- **Expected:** a label that says what it does (`r revoke grants`), a visible `press r again to confirm`, and a way to pick one grant (the CLI has `grant revoke --id`; the TUI shows no grant ids and cannot revoke one grant) (1, 7).
+- **Actual:** the hint says `r revoke  R revoke all`; the first `r` sets an invisible/unlabelled pending state; the second says `revoked 3 grants` for the profile. `R revoke all` is for all profiles but is not explained either.
+
+##### [MINOR] MCP Profiles detail uses internal words and units: `diff pg-dev allow qa7.public.orders`, `grant data_write data_update 1796s asks (120s)`
+- **Where:** mcp.profiles detail lines
+- **Steps:** select a profile that has grants
+- **Expected:** a grant line says what it allows, on which connection and objects, and when it ends: `data_update on qa7.public.orders, pg-dev, asks before each write (120 s), expires in 29 min`.
+- **Actual:** `grant data_write data_update 1796s asks (120s)` followed by `diff pg-dev allow qa7.public.orders` (the word `diff` and `allow` are internal: it is the grant's connection and selector); a grant that is not `--ask` shows `grant data_write data_insert 86400s` (seconds left, not "one use, 24h"), no grant id. `scope allow ...`/`tool data_execute_sql` (a tool allow rule) are not explained either.
+
+##### [MINOR] MCP Profiles: status line is sticky across openings and stale
+- **Where:** mcp.profiles
+- **Steps:** press `e` on a profile (`disabled bad name!`), Esc, reopen the screen, move the selection
+- **Expected:** the status line is cleared when the screen is reopened or the selection moves (6, 7).
+- **Actual:** `disabled bad name!` / `confirm revoke all grants` / `Granted admin_cancel_query on qa7.public.orders for one wr...` are shown again the next time MCP Profiles is opened and stay while the selection moves to other profiles.
+
+##### [MINOR] MCP Profiles: list is a snapshot, it does not follow changes made by `dexo mcp` while it is open
+- **Where:** mcp.profiles
+- **Steps:** open the screen; `dexo mcp profile enable --name pg-dev --confirm` in another shell; look at the screen; close and reopen
+- **Expected:** a visible refresh (or a key to refresh), or at least that `e` toggles the real state.
+- **Actual:** `pg-dev enabled=false` stays until the screen is reopened.
+
+##### [MINOR] Enabling in MCP Profiles needs a second `e`, but the prompt does not say so; selection resets after actions
+- **Where:** mcp.profiles
+- **Steps:** select a disabled profile, `e`; `Enter`; `Down`; `Up`, `e`
+- **Expected:** `Press e again to enable bad name! (Esc cancels)`; the confirmation also says what enabling means (agents may use the profile).
+- **Actual:** the line says `confirm enable bad name!` plus `mcp profile=bad name! enabled=false confirm=true`; Enter does nothing; moving the selection cancels it silently; the second `e` enables (`enabled bad name! scopes=0 tools=0`) even for a profile with no connections, no scopes. Disabling needs one press (asymmetric, fine) and says only `disabled bad name!`. After creating a grant or revoking, the selection jumps back to the first profile, so the grant that was just made is not on screen.
+
+##### [MINOR] New MCP Grant: first focus is `tools:`, not `connection:`; the connection is not prefilled even when the profile has one connection
+- **Where:** mcp.grant
+- **Steps:** MCP Profiles, select `pg-dev` (single connection `pg-dev`), `g`
+- **Expected:** focus on the first field, connection prefilled (or chosen from the profile's connections) and capability as a choice (data_write / ddl / admin).
+- **Actual:** `> tools:` has focus, `connection:` is empty free text, `capability:` is free text (`data_write`; `data_writezzz` is accepted until submit, then `unknown grant capability`, which does not list the valid values).
+
+##### [MINOR] New MCP Grant: clicking the "ask before each write" checkbox only moves focus, it does not toggle it
+- **Where:** mcp.grant form
+- **Steps:** click on `[ ]` (col 45-47, row 15) or on its label; Space toggles
+- **Expected:** a click on a checkbox toggles it (1).
+- **Actual:** the row gets the `>` marker, `[ ]` stays `[ ]` on every click. Space works: `[x] each write waits for you in Agent Activity`. Clicking Create and Cancel works; clicking fields focuses them.
+
+##### [MINOR] New MCP Grant: validation messages are terse, stale or misleading
+- **Where:** mcp.grant form
+- **Steps:** submit with wrong values
+- **Expected:** a message that says what is wrong and what is accepted (7); an error that stops showing after the field is fixed.
+- **Actual:** `unknown grant capability` (no valid list); expires `abc`/`1d` -> `invalid ttl`, `25h`/`0m` -> `grant ttl must be 1s..=24h` (Rust range syntax; the accepted spellings `15m`, `2h` are not shown); empty selector -> `selectors allow exact names or explicit * only`; empty connection -> `unknown connection ''`; wrong confirm -> `type the connection or the selector to confirm` (does not say it did not match); selector outside the profile or denied -> `grant scope cannot be broader than the profile` (for a denied table too). Once shown, the error stays after the field is fixed until the next submit (`name the tools the grant allows` stays while `tools:` is filled), and the form grows by one row so the buttons move down by one. Focus stays on the field you were on, not on the wrong one. The `tools:` hint line lists `data_insert data_update data_delete data_execute_sql · schema_apply_ddl` without saying which capability each belongs to (admin tools missing) and is truncated at 80 columns (`schema_apply_d`).
+
+##### [COSMETIC] New MCP Grant: the checkbox label describes the unchecked state as a feature
+- **Where:** mcp.grant form
+- **Steps:** read the `ask before each write` row
+- **Expected:** a clear label for both states.
+- **Actual:** unchecked: `[ ] one write, then the grant is spent`; checked: `[x] each write waits for you in Agent Activity`. The second field `approval timeout (s): 120` stays editable and visible when ask is off and is silently ignored (even `12.5` is accepted then). There are two different rows starting with `confirm`: the field `confirm:` and the hint `confirm: type the connection or the selector again`.
+
+##### [MINOR] Form allows several tools in one grant, the TUI success message names only the tool and selector
+- **Where:** mcp.grant
+- **Steps:** tools `data_update data_delete`, Create
+- **Actual:** accepted (grant list shows `data_update,data_delete`); the message `Granted data_insert on qa7.public.orders for one write.` never says for how long it lasts (`expires 24h`) or on which connection. (A grant created with `ask` checked is shown in the CLI as `asks=120s`, valid until it expires, not "for one write".)
+
+##### [MAJOR] New MCP Grant from the palette silently targets the first profile; the form cannot choose a profile
+- **Where:** mcp.grant (palette "New MCP Grant…")
+- **Steps:** with profiles `bad name!`, `pg-dev`, `pg-prod`: workbench (SQL editor), Ctrl+P, "New MCP", Enter
+- **Expected:** a profile is chosen first (or the form has a profile selector), because a grant is security relevant (5, 8).
+- **Actual:** the form opens `For MCP profile bad name!` (the first row alphabetically) without any profile screen having been opened or any choice offered; the profile is a label only and cannot be changed in the form. Esc then lands on the MCP Profiles screen instead of the workbench (the palette command opened the profiles screen under the form).
+
+##### [MINOR] Ctrl+P (palette) is swallowed inside MCP Profiles; typed text acts as hotkeys there
+- **Where:** mcp.profiles
+- **Steps:** open MCP Profiles, press Ctrl+P and type `Revoke All`, Enter (as if the palette had opened)
+- **Expected:** the palette opens, or nothing happens; letters never trigger actions silently.
+- **Actual:** no palette; the typed letters were read as hotkeys (`R` = revoke all pending, `e` = enable twice), the first profile (`bad name!`) was **enabled** (`enabled bad name! scopes=0 tools=0`). Enabling a profile needs only two plain `e` presses.
+
+##### [MINOR] "Revoke All MCP Grants" (palette) only opens MCP Profiles with a pending confirmation, shows a stale snapshot, and says `1 grants`
+- **Where:** mcp.revoke_all
+- **Steps:** Ctrl+P, "Revoke All", Enter; then `R` (or Enter)
+- **Expected:** a confirm dialog that says what will be revoked (how many grants, which profiles) with Revoke/Cancel buttons (1).
+- **Actual:** the MCP Profiles popup opens with the line `confirm revoke all grants` (nothing says that `R` or Enter confirms; Esc closes and cancels); the list shown is the state of the previous opening (a profile I had just disabled in the CLI still showed `enabled=true`); the result is `revoked 1 grants` (plural). From Agent Activity, `r` does the same hop (see above). While a request waits, revoking denies it with the wrong reason (next entry).
+
+##### [MAJOR] Revoking grants denies the waiting request with the reason "a person denied this write"
+- **Where:** Agent Activity / revoke all, agent side and audit
+- **Steps:** `--ask` grant on pg-dev; client calls `data_update`; in the TUI `r` in Agent Activity then Enter (`revoked 2 grants`)
+- **Expected:** the agent is told the grant was revoked (docs: "revoking the grant denies its waiting requests"), the audit shows revoke as the reason (7).
+- **Actual:** the client gets `Error [POLICY_DENIED]: a person denied this write` and the audit/Activity line reads `grant data_update deny public.orders a person denied this write`, identical to a real human denial.
+
+##### [MAJOR] Agent Activity: with nothing waiting, PgDn scrolls for half a second and snaps back; only the newest 20 events can ever be seen
+- **Where:** mcp.audit / Agent Activity (audit view)
+- **Steps:** make > 20 tool calls with `dexo mcp serve` clients (the audit then holds 78 events), no request waiting, resize to 100x24 so the popup overflows (title `Agent activity · PgDn for more`), Ctrl+Alt+A, press PgDn
+- **Expected:** the list scrolls and stays where it is (6); older events can be read.
+- **Actual:** the content moves for about 0.4 s and returns to the top with the next refresh (sampled every 0.25 s: scrolled, then `Recent activity` back at row 4 and staying). Up/Down/Home/End/wheel do nothing. With a request waiting, PgDn scrolls the whole popup and the position holds (checked with a 60-line SQL: the last line `WHERE id > 0 -- touches EVERY row` is reachable), so the reset only happens in the audit-only view. At any size the screen shows only the newest 20 events (the audit holds 78) with no timestamps, so older events are unreachable in the TUI; only `dexo mcp audit` (raw JSON, epoch timestamps) shows them.
+
+##### [MINOR] Agent Activity: mouse is not supported
+- **Where:** Agent Activity
+- **Steps:** 3 waiting requests; click on the 1st/2nd request line; wheel over the list
+- **Expected:** a click selects the request, the wheel scrolls (1, 6). (MCP Profiles does select on click.)
+- **Actual:** nothing happens on click or wheel. Only the confirm buttons `[Approve]` and `[Cancel]` react to the mouse.
+
+##### [MINOR] Agent Activity rows are raw, contradictory and carry no time
+- **Where:** Agent Activity, Recent activity
+- **Steps:** make a read, a denied read, a refused `delete` via `query_execute_read`, a timeout, a human denial
+- **Expected:** one readable line per event with time, profile, tool, what was attempted, and the outcome in words (7).
+- **Actual:** lines are the audit columns joined by spaces:
+```
+pg-dev tools/call data_update allow public.orders POLICY_DENIED
+pg-dev grant data_update deny public.orders a person denied this write
+pg-dev grant data_execute_sql allow public.orders Succeeded Committed 1 rows affected
+pg-dev grant data_execute_sql approved public.orders approved
+pg-prod tools/call query_execute_read allow  POLICY_DENIED
+pg-dev tools/call list_connections allow  ok
+```
+Decision `allow` with status `POLICY_DENIED` contradicts itself; `Succeeded Committed 1 rows affected` is a Debug-style status (and `1 rows`); `approved ... approved` repeats; empty object leaves a double space; there is no timestamp, so I cannot tell when anything happened; the object appears as `public.orders` here and `qa7.public.orders` in the Waiting section; the first word is the profile name (`pg-dev`), but in the Waiting line `on pg-dev` is the connection (same name in my setup, ambiguous); six `POLICY_DENIED` rows for different refused statements look identical (no SQL, no reason), so the TUI does show refusals but not which one was what. The agent-facing text has the same Debug flavour: `outcome: "Succeeded Committed 1 rows affected"`, `(1 rows, 3 ms)`.
+
+##### [MINOR] Agent Activity: waiting requests - only the selected one shows its SQL, the confirm line does not repeat it
+- **Where:** Agent Activity
+- **Steps:** two `data_execute_sql` requests at the same time, select one, `a`
+- **Expected:** every request distinguishable; the approval dialog shows the statement that will run (8).
+- **Actual:** unselected requests show `data_execute_sql on pg-dev · qa7.public.orders · 297s left` twice, identical; the confirm reads `Run this write now? data_execute_sql on pg-dev · qa7.public.orders · 281s left` with no SQL. `data_update` is shown as raw JSON (`{"identity":{"id":7},"target":"public.orders","values":{"note":"small-term"}}`), not as a row change. Times are raw seconds (`296s left`, `103s left`). The first `a` has focus on `[Cancel]`; a second `a` does nothing (needs Left/Tab then Enter, or a mouse click); `d` opens `Refuse this write?` whose default focus is `[Deny]`, so deny and approve behave differently and the hint line does not say either needs a second step.
+
+##### [MINOR] The "waiting" notice is a short toast titled "warn"; nothing persistent shows pending requests
+- **Where:** notice when Agent Activity is closed
+- **Steps:** screen closed, a client calls a write under an `--ask` grant, watch for 20 s
+- **Expected:** a notice that stays until seen, or a status bar counter, since the request waits up to 120-3600 s (6).
+- **Actual:** a toast `warn` / `An agent's write is waiting for your approval in Agent Activity (Ctrl+Alt+A).` appears for roughly 6-12 s; afterwards the status bar shows nothing (`disconnected  Ctrl+J run ...`). Anyone who looks away misses it; the request then silently times out. (The text itself is fine; the label `warn` is a raw level name.)
+
+##### [MINOR] A killed agent: the request lingers as "waiting" and a late approval says "Approved: the agent's write runs now"
+- **Where:** Agent Activity
+- **Steps:** client calls a write; `kill -9` the `dexo mcp serve` process; look 2.5 s later and press `a`, Left, Enter
+- **Expected:** the request is marked withdrawn (docs: "Agent Activity says so instead of approving it"), and approving never says it runs.
+- **Actual:** for a few seconds the row stays under `Waiting for you`; approving then gives the toast `Approved: the agent's write runs now.` while nothing runs (row 7 unchanged in the database). After about 6 s the request leaves the Waiting list, and Recent activity keeps `pg-dev grant data_update ask public.orders waiting` forever for both killed requests (no `withdrawn` line). A cleanly cancelled call does show `CANCELLED` / `deny ... cancelled`.
+
+##### [MINOR] Timeout while the confirm dialog is open: the dialog just disappears
+- **Where:** Agent Activity
+- **Steps:** 20 s approval timeout; press `a` at 6 s left; wait for it to expire; Left, Enter
+- **Actual:** the dialog and the request vanish with no word that it expired; the Recent list shows `deny ... no one approved this write within 20s` (good); the later Left+Enter act on nothing.
+
+##### [COSMETIC] Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`)
+- **Where:** Agent Activity with 3 waiting requests
+- **Actual:** the popup is 2 rows taller than the space and its top border joins the pane's border on row 3; at 100x24 and 80x24 it also covers the tab bar row and the pane's bottom border shows a second `└──┘` row under it.
+
+##### [MAJOR] MCP Profiles: with more than 11 profiles the selection scrolls out of sight, and `e`/`r` act on rows you cannot see
+- **Where:** mcp.profiles
+- **Steps:** 17 profiles (`dexo mcp profile create --name extra-01` ...), open MCP Profiles, press Down 14 times, press `e`
+- **Expected:** the list scrolls with the selection and the selected row, its details, the status line and the hint line stay visible (6).
+- **Actual:** the popup shows the first 11 profiles and nothing else (no details, no status, no hint line); after the 12th Down the `>` marker is gone from the screen. `e` still acts on the hidden selection: it silently **disabled `pg-prod`** (it was enabled) and the second `e` started an invisible "confirm enable" for it. No feedback of any kind is shown. (Profiles 12-17 can never be seen in the TUI.)
+
+##### [MINOR] The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing
+- **Where:** Agent Activity with an `--ask` ddl grant
+- **Steps:** client calls `schema_apply_ddl` with `DROP TABLE public.qa_agent_t` and no `confirm_target`; approve with `a`, Left, Enter
+- **Expected:** the server refuses the call before asking a person (the confirm_target rule is checkable up front), or the TUI shows that it will fail.
+- **Actual:** the request waits; the toast after approving says `Approved: the agent's write runs now.`; the agent then gets `Error [PERMISSION_DENIED]: type public.qa_agent_t as confirm_target to confirm` and Recent activity shows `grant schema_apply_ddl allow public.qa_agent_t Failed RolledBack type public.qa_agent_t a...` (Debug words `Failed RolledBack`). The table stayed. With `confirm_target` it dropped fine (`Succeeded Committed committed`).
+
+##### [MINOR] Agent Activity: an admin request (`admin_terminate_session`) says nothing about what it would terminate
+- **Where:** Agent Activity, Waiting section
+- **Steps:** `--ask` admin grant, client calls `admin_terminate_session` with `session_id` 1147 (a `select pg_sleep(60)` psql session), look at the entry
+- **Expected:** the session's user/application/query (or at least the pid and that it is a termination) so a person can decide (8).
+- **Actual:** `admin_terminate_session on pg-dev · qa7.public · 118s left` then `{"confirm_target":"1147","session_id":"1147"}`; the object column shows `qa7.public` (the grant's selector), not the target. Approving killed the session; the result text is `Succeeded Committed signal sent`.
+
+##### [MINOR] `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
+- **Where:** mcp.grant form and `dexo mcp grant create`
+- **Steps:** `--expires 12s` or `expires: 90s`; `--expires 15`
+- **Expected:** the spelling in the error (`1s..=24h`) is accepted, or the field shows what is accepted; a bare `15` is refused or shown as `15s` (a user typing `15` for "15 minutes" gets a 15-second grant without any hint).
+- **Actual:** `Error: invalid ttl` for `12s`, `90s`, `1d`, `1h30m`, `1.5h`, `15 m`, `15min`; `15` and `900` are accepted as seconds; the form has no hint about the format. The message `grant ttl must be 1s..=24h` is Rust range syntax. When the grant expires before the approval timeout, the agent is told `no one approved this write within 20s` (it is the grant's expiry, not the approval timeout).
+
+##### [MINOR] CLI messages and output of `dexo mcp grant` are raw
+- **Where:** CLI `mcp grant create|list|revoke`
+- **Steps:** `dexo mcp grant revoke --id bogus`; `dexo mcp grant create ...`; `dexo mcp grant list --profile pg-dev`
+- **Expected:** `no grant with id 'bogus'`; readable times; the list shows what the grant covers (7).
+- **Actual:** `Error: invalid character: found `o` at 1` (UUID parser text); create prints `grant 5e2a6723-... expires_at=1790956500 asks: each write waits up to 120s for approval` (epoch seconds); list prints `5e2a6723-... data_write data_update asks=120s expires=1800` (seconds left, no connection, no selector, no ask/one-use words, e.g. `uses=1`); a TUI-made grant has no id visible anywhere in the TUI. `grant create --approval-timeout 50` without `--ask` is refused by clap (`the following required arguments were not provided: --ask`), while the TUI form accepts and silently ignores the timeout when ask is off.
+
+##### [MINOR] Agent side: raw Rust/serde and Debug text in errors and results
+- **Where:** MCP tool results (seen by the agent, and echoed in Agent Activity)
+- **Steps:** `object_describe {"object": ...}` with the wrong key; any approved write
+- **Actual:** `failed to deserialize parameters: missing field `name`` (serde text; the schema says `name`), `Succeeded Committed 1 rows affected`, `Succeeded Committed committed`, `Succeeded Committed signal sent`, `Succeeded Committed applied`, `Failed RolledBack ...`, `(1 rows, 3 ms)`. `object_describe` puts the table note only in the Markdown text; `structuredContent` (columns/rows only) lacks it. `catalog_search` returns internal ids (`pg:table:17128`).
+
+##### [MINOR] `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
+- **Where:** safety, agent side
+- **Steps:** grant (`data_execute_sql`) active on pg-dev; edit the pg-dev connection in the TUI, environment `production`; client: `list_connections`, `tools/list`, then the write
+- **Actual:** `list_connections` says `production ... writes to production connections are not available over MCP`, but `tools/list` still offers `data_execute_sql` (the grant stays active). The write failed with `Error [INVALID_INPUT]: verified TLS is required for this environment` (the demo server has no TLS), so the production-write guard itself could not be observed in this setup; the audit logs `allow` + `INVALID_INPUT`. Every read on that connection fails the same way.
+
+##### [MAJOR] (layout, found while testing popups) After the terminal is made 20 rows high and back to 120x36, the Sidebar and the Results pane stay hidden
+- **Where:** resize / workbench layout
+- **Steps:** `qa.sh start`; `qa.sh resize NAME 120 20` (or 60x20, 80x20), then `resize NAME 120 36`
+- **Expected:** the panes return when there is room again (6: resizing redraws cleanly).
+- **Actual:** only the SQL pane remains (`┌▸ SQL──...` starting at column 1, no `Sidebar`, no `Results`), also after restarting Dexo; only Ctrl+P > "Reset layout" brings them back. 80x24 and 60x30 round trips are fine; heights of 20 trigger it. The hidden sidebar made the "No document open"/connection workflow disappear until I used the palette.
+
+##### [MINOR] Object inspector (`i`, `n` note) shows internal ids
+- **Where:** explorer inspector (notes, item 6)
+- **Steps:** connect pg-dev, select `orders`, `i`
+- **Actual:** `deps: pg:schema:2200, pg:type:17094, pg:table:17104` and `dependents: pg:sequence:17127, pg:constraint:17137, ...` (internal catalog ids, not names; the line is also cut at the popup edge). For a column (`orders.status`) it shows the table's deps.
+
+#### Checked and fine
+
+- Palette lists `Agent Activity` (Ctrl+Alt+A), `MCP Profiles`, `New MCP Grant…` (g) and `Revoke All MCP Grants`; each runs. Ctrl+Alt+A opens Agent Activity from the editor, explorer and with the palette closed; F1 lists `ctrl+alt+a Agent Activity`.
+- MCP Profiles: Esc closes; click selects a row; Up/Down/wheel move the selection; `e` on a disabled profile asks first (second `e` enables), disabling is immediate; pending confirmations are cancelled by moving the selection or Esc; the popup fits at 80x24 and 60x20.
+- New MCP Grant form: Tab/BTab walk all 9 stops including Create and Cancel; Up/Down move between fields; Left/Right/wrap between the buttons; Enter on a button works; Esc cancels and returns to MCP Profiles; clicking fields, Create and Cancel works; Ctrl+A shows reverse video and typing replaces it; Ctrl+W, Ctrl+Left, Home/End work; Alt/Ctrl letters are not inserted; Space toggles the ask checkbox.
+- Grant rules enforced in the form: unknown capability, tool not valid for the capability, connection not in the profile, selector wider than the profile or denied by it, partial wildcards, ttl above 24 h, approval timeout outside 1-3600, wrong confirmation, production connection (`writes to production connections are not available over MCP`), read-only connection (`connection is read-only`, CLI).
+- `--ask` flow: toast when Agent Activity is closed; request in the list with SQL, time left and live countdown; approve (`a`, then Approve via Left+Enter or mouse) wrote the row (`note = 'agent'`, checked in `qa7`); deny gave `a person denied this write` and no write; timeout gave `no one approved this write within 20s` and no write; `r` while a request waits denied it; cancelled client call shows `CANCELLED`; multi-line and 3 KB SQL is wrapped and reachable with PgDn while a request waits; three requests at once: Up/Down pick, approving the selected one only; DDL (`CREATE TABLE`, `DROP` with `confirm_target`) and admin (`admin_terminate_session`) approvals work and change the database.
+- Agent side refusals: writes without a grant, writes on `pg-prod` (tools not listed, call answers `NOT_FOUND`), grants on production and read-only connections, a read of the denied table `customers` (`NOT_FOUND`, same as an unknown table), `query_execute_read` with `delete ...` (`statement is not allowed for this tool`), `set_config(...)` and `pg_sleep` (`function ... is not allowed`), `select 1; delete ...` (`exactly one statement is required`), a data-modifying CTE. All are written to the audit and show in Agent Activity (as `allow ... POLICY_DENIED`, see the findings above). Nothing reached the database. (A view over the denied table, `paid_orders`, does show customer names, the documented limit.)
+- Notes: `i` then `n` saves a table note and a column note in the inspector; `object_describe` shows both to the agent, `catalog_search` finds the table by its note, a `|` in a note is escaped in the Markdown table, a denied table is invisible to the agent.
+- `dexo mcp doctor --probe` (scratch HOME): lists profiles, probes enabled ones (pg-dev 13 tools, pg-prod 11), reports the four clients as `no config file`; `--json` returns one document; unknown profile gives `Error: unknown MCP profile 'nonexist'`. `mcp setup --dry-run` prints without writing.
+- Palette "Revoke All MCP Grants" and `R`/Enter in the profiles popup revoke the grants (`revoked 1 grants`); Esc cancels it.
+
+#### Not testable
+
+- The production-write guard itself on a real production connection: the demo server has no TLS, so a connection labelled `production` fails earlier with `verified TLS is required for this environment`. Grants on production and read-only connections are refused at creation and were checked.
+- `mcp setup` for real (Claude Desktop path comes from `XDG_CONFIG_HOME=/home/winx/.config`, not the scratch HOME, so it would touch the real config; Claude Code writes `.mcp.json` into the current directory), so only `--dry-run` was run.
+- MySQL grant flow (a grant on `mysql-dev` was created and revoked via CLI only); `ask` approvals on MySQL were not run.
+- Behaviour of the toast with a very narrow terminal (< 60 columns) and with `DEXO_NO_ANIMATION` unset.
