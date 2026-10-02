@@ -6,6 +6,40 @@ SQL execution streams result pages. Manual transactions stay visible. Closing a 
 
 Theme, keymap, mouse capture, Unicode, and animation persist in a local settings file and apply immediately. Mouse clicks map to the same commands as the keyboard.
 
+## Themes
+
+Settings' Theme row (`e`, or "Cycle Theme" in a keymap) steps through Dexo's own theme, five presets -- Dracula, Gruvbox, Nord, Catppuccin and Tokyo Night -- and your own files, applying each as it is shown. Mode and Accent belong to Dexo's own theme, and changing either goes back to it.
+
+A theme of your own is a TOML file in `themes/` in the data directory, chosen by its file name:
+
+```toml
+name = "Harbor"
+mode = "dark"          # dark, light or low-color: the base the roles override
+
+[roles]
+background = "#0f1720"
+foreground = "#d8dee9"
+focus = "#88c0d0"
+selection = "ansi:24"  # #RRGGBB, ansi:<0-255>, or a color name such as blue
+```
+
+The roles are `background`, `foreground`, `border`, `muted`, `production`, `staging`, `development`, `error`, `warning`, `success`, `selection`, `focus`, `zebra`, `on-focus` and `on-selection`; any left out keep the mode's color. A file that does not parse is left out, and the messages say which file and which line; Settings reads the folder again each time it opens.
+
+## Keymap overlay
+
+`keymap.toml` in the data directory changes keys over the keymap chosen in Settings, in the same format the built-in keymaps use: a section per place -- `global`, `editor`, `explorer`, `results`, `console`, `tabs`, `palette`, `modal` -- and `chord = "command id"`, with `""` to unbind:
+
+```toml
+[editor]
+"ctrl+r" = "query.execute_document"
+"ctrl+/" = ""
+
+[global]
+"f9" = "connection.test"
+```
+
+Command ids are the palette's. A chord that starts a longer one where both apply is refused, since Dexo would wait for the rest and the shorter would never fire; unbind the longer one first. A file with a problem is not used: the messages say its line, and the keymap is used as it is. The palette shows the keys the overlay gives.
+
 ## SQL editor
 
 | Key | Action |
