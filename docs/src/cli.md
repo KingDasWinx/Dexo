@@ -23,12 +23,27 @@ dexo doctor --json
 
 ## Language server
 
-`dexo lsp` brings Dexo's completion, diagnostics and formatting to any editor that speaks the Language Server Protocol, on stdin and stdout. It completes and checks against the catalog Dexo cached for a connection -- `--connection name`, or a file's first line `-- dexo: connection=name` -- and never dials the database itself, so open the connection once in Dexo (or run `dexo inspect`) to cache its catalog.
+`dexo lsp` brings Dexo's completion, diagnostics and formatting to any editor that speaks the Language Server Protocol, on stdin and stdout. It completes and checks against the catalog Dexo cached for a connection -- `--connection name`, or a file's first line `-- dexo: connection=name` -- and never dials the database itself, so open the connection once in Dexo, or run `dexo inspect --connection name --refresh`, to cache its catalog. A catalog cached or refreshed while the editor runs is picked up without restarting the server. Formatting follows the editor's tab size, or indents with tabs when it asks for them.
 
-Neovim:
+Neovim 0.11 and later:
 
 ```lua
-vim.lsp.start({ name = "dexo", cmd = { "dexo", "lsp", "--connection", "shop" }, filetypes = { "sql" } })
+vim.lsp.config("dexo", {
+  cmd = { "dexo", "lsp", "--connection", "shop" },
+  filetypes = { "sql" },
+})
+vim.lsp.enable("dexo")
+```
+
+Neovim 0.10, for every SQL buffer:
+
+```lua
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "sql",
+  callback = function(args)
+    vim.lsp.start({ name = "dexo", cmd = { "dexo", "lsp", "--connection", "shop" } }, { bufnr = args.buf })
+  end,
+})
 ```
 
 Helix (`languages.toml`):
@@ -41,4 +56,14 @@ args = ["lsp", "--connection", "shop"]
 [[language]]
 name = "sql"
 language-servers = ["dexo"]
+```
+
+VS Code has no setting for a language server of your own, so it takes an extension that starts one, such as Generic LSP Client (v2) (`zsol.vscode-glspc`). In `settings.json`:
+
+```json
+{
+  "glspc.server.command": "dexo",
+  "glspc.server.commandArguments": ["lsp", "--connection", "shop"],
+  "glspc.server.languageId": ["sql"]
+}
 ```
