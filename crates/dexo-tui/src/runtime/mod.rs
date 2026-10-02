@@ -346,7 +346,9 @@ impl WorkbenchRuntime {
                 secret,
                 token,
             } => self.submit_secret(kind, profile, secret, token).await,
-            crate::Effect::DuplicateProfile { id } => self.duplicate_profile(id).await,
+            crate::Effect::DuplicateProfile { id, taken } => {
+                self.duplicate_profile(id, taken).await
+            }
             crate::Effect::TestConnection { input, password } => {
                 self.test_input(input, password).await
             }
@@ -1391,8 +1393,11 @@ impl WorkbenchRuntime {
         .await;
     }
 
-    async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId) {
-        match self.with_repo(|repo| repo.duplicate(id).map_err(|error| error.to_string())) {
+    async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId, taken: Vec<String>) {
+        match self.with_repo(|repo| {
+            repo.duplicate(id, &taken)
+                .map_err(|error| error.to_string())
+        }) {
             Ok(profile) => self.emit(Action::ProfileSaved(profile)).await,
             Err(message) => self.emit(Action::ConnectionFormError { message }).await,
         }

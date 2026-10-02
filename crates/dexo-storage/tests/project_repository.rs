@@ -99,7 +99,7 @@ fn connection_crud_duplicate_group_and_project_list() {
         Some("prod/east")
     );
 
-    let copy = connections.duplicate(original.id).unwrap();
+    let copy = connections.duplicate(original.id, &[]).unwrap();
     assert_ne!(copy.id, original.id);
     assert_ne!(copy.secret_ref.as_str(), original.secret_ref.as_str());
     assert_eq!(copy.group_path.as_deref(), Some("prod/east"));
@@ -161,4 +161,25 @@ fn project_resources_can_be_listed_moved_cleared_and_deleted() {
             .unwrap()
             .is_none()
     );
+}
+
+/// A copy skips the names the caller says are taken, as well as the saved ones.
+#[test]
+fn a_copy_skips_names_the_caller_has_taken() {
+    let db = dexo_storage::Database::open_in_memory().unwrap();
+    let connections = dexo_storage::ConnectionRepository::new(db.connection());
+    let original = dexo_app::ConnectionProfile::new(
+        dexo_app::ConnectionId(uuid::Uuid::new_v4()),
+        None,
+        "pg",
+        "postgres",
+        "local",
+        serde_json::json!({"host": "h"}),
+        dexo_app::SecretRef::new("ref".into()),
+    );
+    connections.save(&original).unwrap();
+    let copy = connections
+        .duplicate(original.id, &["pg (copy)".to_string()])
+        .unwrap();
+    assert_eq!(copy.name, "pg (copy 2)");
 }

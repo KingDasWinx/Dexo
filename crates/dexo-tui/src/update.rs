@@ -473,10 +473,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 .warn("This connection is temporary: save it first (Save Connection…).".into());
             Vec::new()
         }
+        // Sessions are found by name: the copy must not be called what an open
+        // temporary connection is, or it would take that session over.
         Action::DuplicateConnection => model
             .connections
             .selected()
-            .map(|profile| Effect::DuplicateProfile { id: profile.id })
+            .map(|profile| Effect::DuplicateProfile {
+                id: profile.id,
+                taken: model
+                    .connections
+                    .temporary
+                    .iter()
+                    .map(|temporary| temporary.name.clone())
+                    .collect(),
+            })
             .into_iter()
             .collect(),
         Action::TestConnection => test_connection(model),
@@ -2282,6 +2292,25 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             vec![Effect::ImportConfig { path }]
         }
         Action::ApplyConfigImport => {
+            // An imported connection called what an open temporary one is would take
+            // its session over, as sessions are found by name.
+            let clash = model.config_transfer.preview.as_ref().and_then(|preview| {
+                preview
+                    .connections_needing_secret
+                    .iter()
+                    .map(|name| match model.config_transfer.resolutions.get(name) {
+                        Some(dexo_storage::ImportResolution::Rename(renamed)) => renamed,
+                        _ => name,
+                    })
+                    .find(|name| model.connections.is_temporary(name))
+                    .cloned()
+            });
+            if let Some(name) = clash {
+                model.config_transfer.message = Some(format!(
+                    "{name} is the name of an open temporary connection; rename it on import (r), or save or close that one first"
+                ));
+                return Vec::new();
+            }
             let path = model.config_transfer.path.clone();
             let resolutions = model.config_transfer.resolutions.clone();
             vec![Effect::ApplyConfigImport { path, resolutions }]
@@ -10206,6 +10235,31 @@ mod tests {
         assert_eq!(
             model.startup_warning,
             Some(("shop (2)".to_string(), "careful".to_string()))
+        );
+    }
+
+    /// A copy is never called what an open temporary connection is.
+    #[test]
+    fn a_copy_avoids_the_temporary_connections_names() {
+        let mut model = Model::default();
+        let profile = |name: &str| {
+            dexo_app::ConnectionProfile::new(
+                dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+                None,
+                name,
+                "postgres",
+                "local",
+                serde_json::json!({"host": "h"}),
+                dexo_app::connection_profile::SecretRef::new("ref".into()),
+            )
+        };
+        model.connections.temporary = vec![profile("pg (copy)")];
+        model.connections.load_profiles(vec![profile("pg")]);
+        model.connections.selected_profile = 0;
+        let effects = update(&mut model, Action::DuplicateConnection);
+        assert!(
+            matches!(effects.as_slice(), [Effect::DuplicateProfile { taken, .. }] if taken == &["pg (copy)".to_string()]),
+            "{effects:?}"
         );
     }
 

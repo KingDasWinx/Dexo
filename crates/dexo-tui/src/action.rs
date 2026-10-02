@@ -840,6 +840,8 @@ pub enum Effect {
     },
     DuplicateProfile {
         id: dexo_app::ConnectionId,
+        /// The open temporary connections' names, which the copy must not take.
+        taken: Vec<String>,
     },
     TestConnection {
         input: NewConnection,

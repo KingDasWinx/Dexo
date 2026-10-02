@@ -65,12 +65,18 @@ impl<'a> ConnectionRepository<'a> {
         self.save(profile)
     }
 
-    pub fn duplicate(&self, id: ConnectionId) -> anyhow::Result<ConnectionProfile> {
+    /// A copy of the connection under a name no saved connection has, nor any of
+    /// `taken` -- the caller's temporary connections, whose sessions are found by name.
+    pub fn duplicate(
+        &self,
+        id: ConnectionId,
+        taken: &[String],
+    ) -> anyhow::Result<ConnectionProfile> {
         let mut profile = self
             .get(id)?
             .ok_or_else(|| anyhow::anyhow!("unknown connection {}", id.0))?;
         profile.id = ConnectionId(Uuid::new_v4());
-        profile.name = unique_copy_name(&profile.name, self)?;
+        profile.name = unique_copy_name(&profile.name, self, taken)?;
         profile.secret_refs = profile
             .secret_refs
             .keys()
@@ -263,14 +269,21 @@ fn persist_secret_refs(profile: &ConnectionProfile) -> anyhow::Result<BTreeMap<S
     Ok(refs)
 }
 
-fn unique_copy_name(name: &str, repo: &ConnectionRepository<'_>) -> anyhow::Result<String> {
+fn unique_copy_name(
+    name: &str,
+    repo: &ConnectionRepository<'_>,
+    taken: &[String],
+) -> anyhow::Result<String> {
+    let free = |candidate: &str| -> anyhow::Result<bool> {
+        Ok(repo.get_by_name(candidate)?.is_none() && !taken.iter().any(|name| name == candidate))
+    };
     let candidate = format!("{name} (copy)");
-    if repo.get_by_name(&candidate)?.is_none() {
+    if free(&candidate)? {
         return Ok(candidate);
     }
     for n in 2..1000 {
         let candidate = format!("{name} (copy {n})");
-        if repo.get_by_name(&candidate)?.is_none() {
+        if free(&candidate)? {
             return Ok(candidate);
         }
     }
