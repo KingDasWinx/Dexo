@@ -295,6 +295,7 @@ fn pragma_reads(sql: &str) -> bool {
         "wal_checkpoint",
         "shrink_memory",
     ];
+    use sqlparser::tokenizer::{Token, Whitespace};
     // Comments read as part of the pragma: a trailing one hid `optimize`'s name, a
     // leading one the word PRAGMA.
     let Ok(tokens) =
@@ -307,13 +308,18 @@ fn pragma_reads(sql: &str) -> bool {
         .filter(|token| {
             !matches!(
                 token,
-                sqlparser::tokenizer::Token::Whitespace(
-                    sqlparser::tokenizer::Whitespace::SingleLineComment { .. }
-                        | sqlparser::tokenizer::Whitespace::MultiLineComment(_)
+                Token::Whitespace(
+                    Whitespace::SingleLineComment { .. } | Whitespace::MultiLineComment(_)
                 )
             )
         })
-        .map(ToString::to_string)
+        // A name means itself quoted too -- `"optimize"`, `[optimize]`, `'optimize'` --
+        // and kept its quotes here, so it never matched.
+        .map(|token| match token {
+            Token::Word(word) => word.value.clone(),
+            Token::SingleQuotedString(text) => text.clone(),
+            other => other.to_string(),
+        })
         .collect();
     let body = uncommented.trim().trim_end_matches(';').trim_end();
     let Some(rest) = body
@@ -613,6 +619,20 @@ mod tests {
         assert!(!sqlite("pragma /* x */ optimize"));
         assert!(sqlite("-- columns\npragma table_info(t)"));
         assert!(sqlite("/* a */ pragma journal_mode -- b"));
+        // A quoted name is the same name.
+        for quoted in [
+            "pragma \"incremental_vacuum\"",
+            "pragma [optimize]",
+            "pragma `optimize`",
+            "pragma 'optimize'",
+            "pragma main.\"optimize\"",
+            "pragma \"journal_mode\" = wal",
+            "pragma [journal_mode](wal)",
+        ] {
+            assert!(!sqlite(quoted), "{quoted}");
+        }
+        assert!(sqlite("pragma \"table_info\"('orders')"));
+        assert!(sqlite("pragma [journal_mode]"));
         for sql in [
             "pragma user_version = 3",
             "detach database x",
