@@ -4,7 +4,7 @@ use dexo_driver_api::{
 };
 use tokio_postgres::types::ToSql;
 
-use crate::decode::{column_meta, decode_row};
+use crate::decode::{column_meta, decode_row_named};
 use crate::error::map_error;
 use crate::session::PostgresSession;
 
@@ -344,6 +344,12 @@ impl DataMutator for PostgresSession {
             guard.end(&self.client).await;
         }
         let rows = rows?;
+        let names = match rows.first() {
+            Some(row) if crate::decode::needs_names(row.columns()) => {
+                crate::decode::reg_names(&self.client, &rows).await
+            }
+            _ => crate::decode::RegNames::default(),
+        };
         let columns = rows
             .first()
             .map(|row| row.columns().iter().map(column_meta).collect())
@@ -360,7 +366,9 @@ impl DataMutator for PostgresSession {
             });
         Ok(DataPage::from_fetched(
             columns,
-            rows.iter().map(|row| cap_row(decode_row(row))).collect(),
+            rows.iter()
+                .map(|row| cap_row(decode_row_named(row, &names)))
+                .collect(),
             request.page.offset,
             request.page.limit,
         ))

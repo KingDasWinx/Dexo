@@ -1,4 +1,3 @@
-use std::pin::pin;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -254,6 +253,11 @@ async fn run_postgres_query(
     };
     let refs: Vec<&(dyn ToSql + Sync)> = params.iter().map(|value| value as _).collect();
     let columns: Vec<ColumnMeta> = statement.columns().iter().map(column_meta).collect();
+    // A reg* value shows the name the server gives it, asked once all the rows are in:
+    // asked while the result streams, the lookup would wait behind it.
+    // ponytail: such a result shows only once whole, held in memory up to the row limit;
+    // casting those columns to text in the statement would stream it.
+    let named = crate::decode::needs_names(statement.columns());
     let rows = match client.query_raw(&statement, refs).await {
         Ok(rows) => rows,
         Err(error) => {
@@ -271,7 +275,7 @@ async fn run_postgres_query(
     if tx.send(Ok(QueryEvent::Columns(columns))).await.is_err() {
         return;
     }
-    let mut rows = pin!(rows);
+    let mut rows = Box::pin(rows);
     let mut batch = Vec::new();
     let mut emitted = 0_u64;
     let mut truncated = false;
@@ -282,12 +286,13 @@ async fn run_postgres_query(
         }
         match rows.next().await {
             Some(Ok(row)) => {
-                batch.push(decode_row(&row));
+                batch.push(row);
                 emitted += 1;
-                if batch.len() >= ROW_BATCH_SIZE
+                if !named
+                    && batch.len() >= ROW_BATCH_SIZE
                     && tx
                         .send(Ok(QueryEvent::Rows(RowBatch {
-                            rows: std::mem::take(&mut batch),
+                            rows: std::mem::take(&mut batch).iter().map(decode_row).collect(),
                         })))
                         .await
                         .is_err()
@@ -302,15 +307,27 @@ async fn run_postgres_query(
             None => break,
         }
     }
-    if !batch.is_empty()
-        && tx
-            .send(Ok(QueryEvent::Rows(RowBatch { rows: batch })))
+    let rows_affected = rows.rows_affected();
+    // Dropped, so a result cut at the limit no longer holds the connection.
+    drop(rows);
+    let names = if named {
+        crate::decode::reg_names(&client, &batch).await
+    } else {
+        crate::decode::RegNames::default()
+    };
+    for chunk in batch.chunks(ROW_BATCH_SIZE) {
+        let rows = chunk
+            .iter()
+            .map(|row| crate::decode::decode_row_named(row, &names))
+            .collect();
+        if tx
+            .send(Ok(QueryEvent::Rows(RowBatch { rows })))
             .await
             .is_err()
-    {
-        return;
+        {
+            return;
+        }
     }
-    let rows_affected = rows.rows_affected();
     let _ = tx
         .send(Ok(QueryEvent::ResultSetFinished {
             index: 0,

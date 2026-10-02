@@ -1,3 +1,4 @@
+use std::collections::{BTreeSet, HashMap};
 use std::error::Error;
 use std::fmt::Write as _;
 
@@ -34,7 +35,17 @@ impl<'a> FromSql<'a> for Raw<'a> {
 }
 
 pub fn decode_row(row: &Row) -> Vec<DbValue> {
-    (0..row.len()).map(|idx| decode_at(row, idx)).collect()
+    decode_row_named(row, &RegNames::default())
+}
+
+/// A row whose reg* values show the names `names` holds for them.
+pub fn decode_row_named(row: &Row, names: &RegNames) -> Vec<DbValue> {
+    (0..row.len())
+        .map(|idx| match row.try_get::<_, Option<Raw<'_>>>(idx) {
+            Ok(Some(Raw(raw))) => decode_with(row.columns()[idx].type_(), raw, names),
+            _ => DbValue::Null,
+        })
+        .collect()
 }
 
 pub fn decode_at(row: &Row, idx: usize) -> DbValue {
@@ -45,15 +56,106 @@ pub fn decode_at(row: &Row, idx: usize) -> DbValue {
     }
 }
 
+/// What psql prints for reg* values -- `pg_class` for a regclass, `integer` for a
+/// regtype -- by the type's OID and the value's. Their binary form is the OID alone, and
+/// only the server can name it: as it does for psql, against this session's search_path.
+#[derive(Default)]
+pub struct RegNames(HashMap<(u32, u32), String>);
+
+fn is_reg(ty: &Type) -> bool {
+    matches!(
+        *ty,
+        Type::REGCLASS
+            | Type::REGTYPE
+            | Type::REGPROC
+            | Type::REGPROCEDURE
+            | Type::REGOPER
+            | Type::REGOPERATOR
+            | Type::REGNAMESPACE
+            | Type::REGROLE
+            | Type::REGCONFIG
+            | Type::REGDICTIONARY
+            | Type::REGCOLLATION
+    )
+}
+
+/// Whether a column holds reg* values, alone, in an array or under a domain.
+fn holds_reg(ty: &Type) -> bool {
+    match ty.kind() {
+        Kind::Domain(inner) | Kind::Array(inner) => holds_reg(inner),
+        _ => is_reg(ty),
+    }
+}
+
+pub fn needs_names(columns: &[tokio_postgres::Column]) -> bool {
+    columns.iter().any(|column| holds_reg(column.type_()))
+}
+
+/// The names of the reg* values in `rows`, one query per reg type for the OIDs the rows
+/// hold. The rows must all have arrived: a query sent while a result still streams on
+/// the connection waits behind it. A lookup that fails leaves the OIDs showing.
+pub async fn reg_names(client: &tokio_postgres::Client, rows: &[Row]) -> RegNames {
+    fn collect(ty: &Type, raw: &[u8], wanted: &mut HashMap<Type, BTreeSet<u32>>) {
+        match ty.kind() {
+            Kind::Domain(inner) => collect(inner, raw, wanted),
+            Kind::Array(inner) => {
+                let Ok(array) = wire::array_from_sql(raw) else {
+                    return;
+                };
+                let mut values = array.values();
+                while let Ok(Some(value)) = values.next() {
+                    if let Some(bytes) = value {
+                        collect(inner, bytes, wanted);
+                    }
+                }
+            }
+            _ if is_reg(ty) => {
+                if let Ok(oid) = wire::oid_from_sql(raw) {
+                    wanted.entry(ty.clone()).or_default().insert(oid);
+                }
+            }
+            _ => {}
+        }
+    }
+    let mut wanted = HashMap::new();
+    for row in rows {
+        for (idx, column) in row.columns().iter().enumerate() {
+            if holds_reg(column.type_())
+                && let Ok(Some(Raw(raw))) = row.try_get::<_, Option<Raw<'_>>>(idx)
+            {
+                collect(column.type_(), raw, &mut wanted);
+            }
+        }
+    }
+    let mut names = RegNames::default();
+    for (ty, oids) in wanted {
+        let oids: Vec<u32> = oids.into_iter().collect();
+        let sql = format!(
+            "SELECT o, o::{}::text FROM unnest($1::oid[]) AS o",
+            ty.name()
+        );
+        if let Ok(found) = client.query(&sql, &[&oids]).await {
+            for row in found {
+                names.0.insert((ty.oid(), row.get(0)), row.get(1));
+            }
+        }
+    }
+    names
+}
+
 pub fn decode_value(ty: &Type, raw: &[u8]) -> DbValue {
+    decode_with(ty, raw, &RegNames::default())
+}
+
+fn decode_with(ty: &Type, raw: &[u8], names: &RegNames) -> DbValue {
     match ty.kind() {
         // A domain is its base type with a constraint bolted on; the wire format is the
         // base type's.
-        Kind::Domain(inner) => return decode_value(inner, raw),
+        Kind::Domain(inner) => return decode_with(inner, raw, names),
         // An enum is sent as its label, even in binary format.
         Kind::Enum(_) => return text(raw).unwrap_or_else(|| undecoded(ty, raw)),
         Kind::Array(inner) => {
-            return array_text(inner, raw)
+            return array_text(inner, raw, names)
                 .map(|text| native(ty, raw, text))
                 .unwrap_or_else(|| undecoded(ty, raw));
         }
@@ -65,7 +167,7 @@ pub fn decode_value(ty: &Type, raw: &[u8]) -> DbValue {
         _ => {}
     }
     scalar(ty, raw)
-        .or_else(|| other(ty, raw))
+        .or_else(|| other(ty, raw, names))
         .unwrap_or_else(|| undecoded(ty, raw))
 }
 
@@ -136,7 +238,7 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
 /// `ltree` and its queries as a version byte and their text, pgvector's `vector` as its
 /// floats -- known by name, and only as the plain types they are: a composite type of
 /// the user's called `vector` read as an empty one.
-fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
+fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
     let utf8 = |bytes: &[u8]| std::str::from_utf8(bytes).ok().map(str::to_string);
     let versioned = || match raw.split_first() {
         Some((1, rest)) => utf8(rest),
@@ -156,19 +258,15 @@ fn other(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         // Numbers, but kept as the type they are: read as a plain integer, a value went
         // back as a bigint, and the grid's delete, which compares every column, failed
         // with "operator does not exist: xid = bigint".
-        Type::XID
-        | Type::CID
-        | Type::REGCLASS
-        | Type::REGTYPE
-        | Type::REGPROC
-        | Type::REGNAMESPACE
-        | Type::REGROLE
-        | Type::REGOPER
-        | Type::REGOPERATOR
-        | Type::REGPROCEDURE
-        | Type::REGCONFIG
-        | Type::REGDICTIONARY
-        | Type::REGCOLLATION => u32_at(0)?.to_string(),
+        Type::XID | Type::CID => u32_at(0)?.to_string(),
+        // The name the server gave it, or its OID where none was asked for.
+        _ if is_reg(ty) => {
+            let oid = u32_at(0)?;
+            match names.0.get(&(ty.oid(), oid)) {
+                Some(name) => name.clone(),
+                None => oid.to_string(),
+            }
+        }
         Type::XID8 => u64::from_be_bytes(raw.try_into().ok()?).to_string(),
         Type::TID => format!(
             "({},{})",
@@ -270,8 +368,8 @@ fn undecoded(ty: &Type, raw: &[u8]) -> DbValue {
 
 /// The display form of a decoded value, for the types that nest others: arrays and
 /// ranges hold element payloads, not text.
-fn element_text(ty: &Type, raw: &[u8]) -> String {
-    match decode_value(ty, raw) {
+fn element_text(ty: &Type, raw: &[u8], names: &RegNames) -> String {
+    match decode_with(ty, raw, names) {
         DbValue::Null => "NULL".into(),
         DbValue::Bool(value) => value.to_string(),
         DbValue::I64(value) => value.to_string(),
@@ -287,7 +385,7 @@ fn element_text(ty: &Type, raw: &[u8]) -> String {
     }
 }
 
-fn array_text(inner: &Type, raw: &[u8]) -> Option<String> {
+fn array_text(inner: &Type, raw: &[u8], names: &RegNames) -> Option<String> {
     let array = wire::array_from_sql(raw).ok()?;
     let dimensions: Vec<usize> = array
         .dimensions()
@@ -299,7 +397,7 @@ fn array_text(inner: &Type, raw: &[u8]) -> Option<String> {
     while let Some(element) = values.next().ok()? {
         elements.push(match element {
             None => "NULL".to_string(),
-            Some(bytes) => quote_element(&element_text(inner, bytes)),
+            Some(bytes) => quote_element(&element_text(inner, bytes, names)),
         });
     }
     Some(nest(&dimensions, &elements))
@@ -339,7 +437,7 @@ fn range_text(inner: &Type, raw: &[u8]) -> Option<String> {
 
     let bound_text = |bound: &RangeBound<Option<&[u8]>>| match bound {
         RangeBound::Inclusive(value) | RangeBound::Exclusive(value) => value
-            .map(|bytes| element_text(inner, bytes))
+            .map(|bytes| element_text(inner, bytes, &RegNames::default()))
             .unwrap_or_default(),
         RangeBound::Unbounded => String::new(),
     };

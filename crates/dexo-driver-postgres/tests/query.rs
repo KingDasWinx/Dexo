@@ -530,7 +530,7 @@ async fn extension_and_numeric_types_read_as_postgres_prints_them() {
         ]
     );
     assert_eq!(texts[13], "'cats' 'fat' 'the'");
-    assert_eq!(texts[14], "11");
+    assert_eq!(texts[14], "pg_catalog");
 
     // A composite type of the user's is not pgvector's for its name: it read as `[]`.
     let setup = QueryRequest::write("create type vector as (a int, b int)");
@@ -541,6 +541,101 @@ async fn extension_and_numeric_types_read_as_postgres_prints_them() {
     )
     .await;
     assert_ne!(texts[0], "[]");
+}
+
+/// A reg* value showed its OID; psql shows the name, schema-qualified where the
+/// search_path does not reach it. In arrays too, in a result cut at the row limit, and
+/// in the grid's pages.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn reg_values_read_as_their_names() {
+    let fixture = connect_postgres_fixture().await;
+    let session = &*fixture.session;
+    for sql in [
+        "create schema hidden",
+        "create table hidden.t (id int primary key, r regclass)",
+        "insert into hidden.t values (1, 'hidden.t'), (2, 'pg_class')",
+    ] {
+        collect(session.execute(QueryRequest::write(sql)).await.unwrap()).await;
+    }
+    let texts = first_row_texts(
+        session,
+        QueryRequest::read(
+            "select 'pg_class'::regclass, 'hidden.t'::regclass, 0::regclass, 'int4'::regtype,
+                    'now'::regproc, 'sum(int4)'::regprocedure, '||/'::regoper,
+                    '+(int4,int4)'::regoperator, 'public'::regnamespace, 'dexo'::regrole,
+                    'english'::regconfig, 'simple'::regdictionary, '\"C\"'::regcollation,
+                    array['pg_class', 'hidden.t']::regclass[]",
+            0,
+        ),
+    )
+    .await;
+    assert_eq!(
+        texts,
+        [
+            "pg_class",
+            "hidden.t",
+            "-",
+            "integer",
+            "now",
+            "sum(integer)",
+            "||/",
+            "+(integer,integer)",
+            "public",
+            "dexo",
+            "english",
+            "simple",
+            "\"C\"",
+            "{pg_class,hidden.t}",
+        ]
+    );
+    // Cut at the limit, the rest of the result no longer holds the connection.
+    let events = collect(
+        session
+            .execute(QueryRequest::read("select oid::regclass from pg_class", 3))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let rows: Vec<_> = events
+        .iter()
+        .filter_map(|event| match event {
+            QueryEvent::Rows(batch) => Some(batch.rows.clone()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(rows.len(), 3);
+    assert!(
+        rows.iter().all(|row| matches!(&row[0],
+            dexo_driver_api::DbValue::Native { text, .. } if text.parse::<u32>().is_err())),
+        "{rows:?}"
+    );
+    let page = session
+        .data()
+        .unwrap()
+        .fetch(dexo_driver_api::DataRequest {
+            clauses: Default::default(),
+            object: dexo_driver_api::QualifiedName::new(None::<String>, Some("hidden"), "t"),
+            columns: vec![],
+            filter: None,
+            sort: vec![dexo_driver_api::Sort {
+                column: dexo_driver_api::ColumnId("id".into()),
+                descending: false,
+            }],
+            page: dexo_driver_api::Page::new(0, 10).unwrap(),
+        })
+        .await
+        .unwrap();
+    let shown: Vec<_> = page
+        .rows
+        .iter()
+        .map(|row| match &row[1] {
+            dexo_driver_api::DbValue::Native { text, .. } => text.clone(),
+            other => format!("{other:?}"),
+        })
+        .collect();
+    assert_eq!(shown, ["hidden.t", "pg_class"]);
 }
 
 /// The first row's cells as text: what the grid shows for each.
