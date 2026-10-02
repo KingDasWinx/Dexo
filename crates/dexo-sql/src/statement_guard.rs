@@ -250,6 +250,14 @@ pub fn clauses_read(clauses: &dexo_driver_api::RawClauses, dialect: Dialect) -> 
     if where_sql.contains(';') || order.contains(';') {
         return Err("a clause is one part of one statement: no `;`".into());
     }
+    // What MySQL and MariaDB run from inside a comment has no place in a clause, and
+    // `/*M! … */` read as a comment let a write past this check.
+    if [where_sql, order]
+        .iter()
+        .any(|text| executable_comment(text))
+    {
+        return Err("a clause cannot hold an executable comment (`/*! … */`, `/*M! … */`)".into());
+    }
     let mut probe = "SELECT * FROM _dexo_clauses".to_string();
     if !where_sql.is_empty() {
         probe.push_str(&format!(" WHERE ({where_sql})"));
@@ -377,9 +385,22 @@ impl Visitor for DestructiveFinder {
     }
 }
 
+/// Whether `text` holds a comment MySQL or MariaDB runs: `/*!`, `/*!50000`, `/*M!` or
+/// `/*M!100100`, in any case.
+fn executable_comment(text: &str) -> bool {
+    text.contains("/*!") || text.to_ascii_lowercase().contains("/*m!")
+}
+
 fn parse_one(sql: &str, dialect: Dialect) -> Result<Statement, GuardRejection> {
     let mut statements = match dialect {
         Dialect::Postgres => Parser::parse_sql(&PostgreSqlDialect {}, sql),
+        // sqlparser reads MySQL's `/*! … */` as code, as the server runs it, but takes
+        // MariaDB's `/*M! … */` for a comment. Written the MySQL way -- same length, so
+        // positions in errors hold -- it is read as the code MariaDB runs.
+        Dialect::Mysql if executable_comment(sql) => Parser::parse_sql(
+            &MySqlDialect {},
+            &sql.replace("/*M!", " /*!").replace("/*m!", " /*!"),
+        ),
         Dialect::Mysql => Parser::parse_sql(&MySqlDialect {}, sql),
         Dialect::Sqlite => Parser::parse_sql(&SQLiteDialect {}, sql),
     }
@@ -530,6 +551,49 @@ mod tests {
         assert!(check("", "id; drop table t").is_err());
         assert!(check("pg_terminate_backend(42)", "").is_err());
         assert!(check("id = (", "").is_err());
+    }
+
+    /// MariaDB runs `/*M! … */` as MySQL runs `/*! … */`: in a bar's text either is
+    /// refused, whatever its case, version or spacing, and on MySQL a statement holding
+    /// one is read as the code inside it.
+    #[test]
+    fn executable_comments_are_code() {
+        let check = |where_sql: &str, order: &str, dialect| {
+            super::clauses_read(
+                &dexo_driver_api::RawClauses {
+                    where_sql: Some(where_sql.into()),
+                    order_by: Some(order.into()),
+                },
+                dialect,
+            )
+        };
+        for dialect in [Dialect::Mysql, Dialect::Postgres, Dialect::Sqlite] {
+            for order in [
+                "id /*M! LIMIT 1 INTO OUTFILE '/tmp/x' */ -- x",
+                "id /*M!100100 LIMIT 1 INTO OUTFILE '/tmp/x' */",
+                "id /*m! , sleep(5) */",
+                "id /*M!\n  , sleep(5)\n*/",
+                "id /*M!/* x */ , sleep(5) */",
+                "id /*!50000 , sleep(5) */",
+                "id /*! , sleep(5) */",
+            ] {
+                assert!(check("", order, dialect).is_err(), "{order}");
+                assert!(check(order, "", dialect).is_err(), "{order}");
+            }
+            // A comment that only says something is still fine.
+            assert!(check("id > 1 /* M! not code */", "id /* ! */", dialect).is_ok());
+        }
+        let mysql = |sql: &str| is_read(sql, Dialect::Mysql);
+        assert!(!mysql("select 1 /*M! into outfile '/tmp/x' */"));
+        assert!(!mysql("select 1 /*M!100100 , sleep(5) */"));
+        assert!(!mysql("select 1 /*m!, sleep(5) */"));
+        assert!(!mysql("/*M! delete from t */"));
+        assert!(!mysql("/*M!100100 delete from t */"));
+        assert!(mysql("select 1 /* M! a plain comment */"));
+        assert_eq!(
+            destructive("/*M! delete from t */", Dialect::Mysql),
+            Some(Destructive::DeleteWithoutWhere)
+        );
     }
 
     /// A PRAGMA that only reports is a read; one that sets or acts is a write, and
