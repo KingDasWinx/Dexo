@@ -30,7 +30,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 ## Questions
 
-**Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree (with estimated and actual rows on Postgres, MySQL and MariaDB), schema diffs, import and export -- for Postgres, MySQL, MariaDB and SQLite in one tool.
+**Why not psql, pgcli or mycli?** Keep them for a quick query. Dexo is for the session around it: a catalog tree, results you page, sort, filter and edit in a grid with a review step before anything is written, plans drawn as a tree (with estimated and actual rows on Postgres, MySQL and MariaDB), schema diffs, import and export — for Postgres, MySQL, MariaDB and SQLite in one tool.
 
 **Why not DataGrip or DBeaver?** Dexo starts in a terminal in a moment and runs over SSH, where a desktop IDE cannot. It does not try to be an IDE for every database.
 
@@ -40,7 +40,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 **Does it need Python?** No. Dexo is one binary: Homebrew, Scoop, the installer scripts, `.deb` and `.rpm`, or `cargo install`.
 
-**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid and the agents' tools, and the server refuses them too -- Postgres, MySQL and MariaDB sessions start read-only, SQLite and DuckDB files open read-only.
+**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid and the agents' tools, and the server refuses them too — Postgres, MySQL and MariaDB sessions start read-only, SQLite and DuckDB files open read-only.
 
 ## How it compares
 
