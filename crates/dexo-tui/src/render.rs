@@ -1067,7 +1067,7 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let popup = centered(area, 76, area.height.saturating_sub(2).max(12));
     frame.render_widget(Clear, popup);
     let query = model.help.query.as_str();
-    let mut lines = vec![format!("Search: {query}"), String::new()];
+    let mut lines = Vec::new();
     let mut any_match = false;
     for (section, rows) in model.keymap.help_sections() {
         let mut section_lines = Vec::new();
@@ -1095,21 +1095,27 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             format!("no matches for '{query}'")
         });
     }
-    let inner_h = popup.height.saturating_sub(2) as usize;
-    let max_scroll = lines.len().saturating_sub(inner_h.max(1));
+    // The search stays on the top line, a blank under it, and only the list scrolls:
+    // it used to scroll away with the list on the first PageDown.
+    let block = overlay_block(model, "Keybindings  Esc to close");
+    let [search, _, list] = Layout::vertical([
+        Constraint::Length(1),
+        Constraint::Length(1),
+        Constraint::Min(0),
+    ])
+    .areas(block.inner(popup));
+    let max_scroll = lines.len().saturating_sub(usize::from(list.height).max(1));
     hits.set_scroll_limit(crate::mouse::ScrollArea::Help, max_scroll);
     let scroll = (model.help.scroll as usize).min(max_scroll) as u16;
-    frame.render_widget(
-        Paragraph::new(lines.join("\n"))
-            .scroll((scroll, 0))
-            .block(overlay_block(model, "Keybindings  Esc to close")),
-        popup,
-    );
+    frame.render_widget(block, popup);
+    frame.render_widget(Paragraph::new(format!("Search: {query}")), search);
+    frame.render_widget(Paragraph::new(lines.join("\n")).scroll((scroll, 0)), list);
     register_overlay(hits, popup);
+    // Over the title's own "Esc to close": on the first inner row it lay over the search.
     register_label(
         hits,
-        crate::mouse::line_rect(popup_inner(popup), 0),
-        "Esc to close",
+        Rect::new(popup.x + 1, popup.y, popup.width.saturating_sub(2), 1),
+        "Keybindings  Esc to close",
         "Esc to close",
         HitTarget::Button(HitButton::Close),
     );
@@ -2986,14 +2992,40 @@ mod tests {
         model.hits = hits;
         let key = |code| crate::Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
         crate::update::update(&mut model, key(KeyCode::PageDown));
-        assert_eq!(model.help.scroll, 25);
+        // The list shows 24 of the popup's 26 rows, under the search and a blank.
+        assert_eq!(model.help.scroll, 23);
         crate::update::update(&mut model, key(KeyCode::End));
         let bottom = model.help.scroll;
-        assert!(bottom > 25);
+        assert!(bottom > 23);
         crate::update::update(&mut model, key(KeyCode::PageUp));
-        assert_eq!(model.help.scroll, bottom - 25);
+        assert_eq!(model.help.scroll, bottom - 23);
         crate::update::update(&mut model, key(KeyCode::Home));
         assert_eq!(model.help.scroll, 0);
+    }
+
+    /// The search line scrolled away with the list after a PageDown.
+    #[test]
+    fn the_keybindings_search_stays_above_the_list() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut model = Model::default();
+        model.apply_size(100, 30);
+        model.help.open = true;
+        let mut hits = crate::mouse::HitMap::default();
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        terminal
+            .draw(|frame| super::render(frame, &model, &mut hits))
+            .unwrap();
+        model.hits = hits;
+        let first = render_to_string(&model, 100, 30);
+        let key = |code| crate::Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        crate::update::update(&mut model, key(KeyCode::PageDown));
+        assert!(model.help.scroll > 0);
+        let paged = render_to_string(&model, 100, 30);
+        let search_row = |view: &str| view.lines().position(|line| line.contains("Search: "));
+        assert!(search_row(&first).is_some(), "{first}");
+        assert_eq!(search_row(&paged), search_row(&first), "{paged}");
+        assert_ne!(first, paged, "the list did not move");
     }
 
     #[test]

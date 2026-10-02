@@ -5131,9 +5131,9 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
-            // A page is what the popup shows, less a line kept for context; PageUp and
-            // PageDown used to move one line, like the arrows.
-            let page = i32::from(model.height.saturating_sub(5)).max(1);
+            // A page is what the list shows under the search, less a line kept for
+            // context; PageUp and PageDown used to move one line, like the arrows.
+            let page = i32::from(model.height.saturating_sub(7)).max(1);
             let delta = match key.code {
                 KeyCode::Up => -1,
                 KeyCode::Down => 1,
