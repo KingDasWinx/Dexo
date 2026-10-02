@@ -5916,12 +5916,27 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
         model.data.bars.applied.clone(),
     ) {
         Ok(request) => {
+            // What runs, filters and all: the log said a bare SELECT for rows a foreign
+            // key or a WHERE had narrowed.
+            let mut shown = format!("SELECT * FROM {}", target.display_unquoted());
+            let typed = request
+                .filter
+                .as_ref()
+                .map(crate::screens::data_browser::describe_filter);
+            if let Some(condition) = request.clauses.condition(typed) {
+                shown.push_str(&format!(" WHERE {condition}"));
+            }
+            if let Some(order) = request.clauses.order() {
+                shown.push_str(&format!(" ORDER BY {order}"));
+            }
+            shown.push_str(&format!(" LIMIT {}", request.page.limit));
+            if request.page.offset > 0 {
+                shown.push_str(&format!(" OFFSET {}", request.page.offset));
+            }
             model.documents[index].console_log.push(format!(
-                "[{}] {}> SELECT * FROM {} LIMIT {}",
+                "[{}] {}> {shown}",
                 crate::model::clock(),
                 target.display_unquoted(),
-                target.display_unquoted(),
-                model.data.page_limit
             ));
             vec![
                 Effect::LoadTableData {

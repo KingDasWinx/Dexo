@@ -317,6 +317,14 @@ fn result_banner(model: &Model) -> String {
         extra.push_str(" crumbs:");
         extra.push_str(&model.data.crumbs.len().to_string());
     }
+    // The rows a foreign key led to: the WHERE bar does not hold this filter, so the
+    // title says it.
+    if model.active_document().kind.is_table()
+        && let Some(filter) = &model.data.filter
+    {
+        extra.push_str(" where ");
+        extra.push_str(&crate::screens::data_browser::describe_filter(filter));
+    }
     if model.data.page_offset > 0 || model.data.has_more {
         extra.push_str(&format!(
             " page:{}+{}",

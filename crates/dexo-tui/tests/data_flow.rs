@@ -964,6 +964,18 @@ fn related_rows_open_both_ways_and_back_returns_to_the_row() {
         ))
     );
     assert!(model.data.related_picker.is_none());
+    // The filter the key brought is said, in the title and in the console's log.
+    let screen = dexo_tui::render::render_to_string(&model, 120, 30);
+    assert!(screen.contains("where id = 9"), "{screen}");
+    assert!(
+        model
+            .active_document()
+            .console_log
+            .iter()
+            .any(|line| line.contains("SELECT * FROM shop.public.customers WHERE id = 9 LIMIT")),
+        "{:?}",
+        model.active_document().console_log
+    );
 
     update(&mut model, Action::DataNavBack);
     assert_eq!(model.active_document, orders_doc);

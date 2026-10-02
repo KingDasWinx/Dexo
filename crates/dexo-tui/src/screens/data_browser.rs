@@ -21,6 +21,33 @@ impl DataScreen {
     }
 }
 
+/// `customer_id = 1 AND region = 'eu'`: the filter as a person reads it.
 pub fn describe_filter(filter: &Filter) -> String {
-    format!("{filter:?}")
+    let value = |value: &dexo_driver_api::DbValue| match value {
+        dexo_driver_api::DbValue::Text(text) => format!("'{text}'"),
+        other => dexo_app::data::display_value(other),
+    };
+    let join = |parts: &[Filter], with: &str| {
+        parts
+            .iter()
+            .map(|part| match part {
+                Filter::And(_) | Filter::Or(_) => format!("({})", describe_filter(part)),
+                _ => describe_filter(part),
+            })
+            .collect::<Vec<_>>()
+            .join(with)
+    };
+    match filter {
+        Filter::Eq(column, v) => format!("{} = {}", column.0, value(v)),
+        Filter::Ne(column, v) => format!("{} <> {}", column.0, value(v)),
+        Filter::Gt(column, v) => format!("{} > {}", column.0, value(v)),
+        Filter::Gte(column, v) => format!("{} >= {}", column.0, value(v)),
+        Filter::Lt(column, v) => format!("{} < {}", column.0, value(v)),
+        Filter::Lte(column, v) => format!("{} <= {}", column.0, value(v)),
+        Filter::IsNull(column) => format!("{} IS NULL", column.0),
+        Filter::IsNotNull(column) => format!("{} IS NOT NULL", column.0),
+        Filter::And(parts) => join(parts, " AND "),
+        Filter::Or(parts) => join(parts, " OR "),
+        Filter::Not(inner) => format!("NOT ({})", describe_filter(inner)),
+    }
 }
