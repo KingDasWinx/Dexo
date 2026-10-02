@@ -365,7 +365,6 @@ fn default_model_explains_missing_context() {
         ("query.execute_statement", "connect a session first"),
         ("data.copy.csv", "no results available"),
         ("explorer.copy_name", "select an explorer object first"),
-        ("editor.history.clear", "history is empty"),
     ] {
         let entry = entries.iter().find(|entry| entry.id == id).unwrap();
         assert_eq!(entry.disabled_reason.as_deref(), Some(reason));
@@ -472,7 +471,6 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
                 model.set_sql("select :id");
                 dexo_tui::screens::editor::refresh_intelligence(model, false);
             }
-            History => model.editor.history.push("select 1".into()),
         }
     }
 
@@ -498,7 +496,6 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
             }
             Requirement::ActiveQuery => model.active_operation = None,
             Requirement::Parameters => model.editor.parameters.clear(),
-            Requirement::History => model.editor.history.clear(),
         }
         model
     }

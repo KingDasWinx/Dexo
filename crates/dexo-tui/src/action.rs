@@ -156,6 +156,8 @@ pub enum Action {
         position: Option<u32>,
     },
     CheckpointTick,
+    /// Typing may have paused: syntax errors held back for the cursor are looked at again.
+    DiagnosticsTick,
     OnboardingTick,
     TransactionChanged {
         session: crate::runtime::SessionId,
@@ -348,6 +350,8 @@ pub enum Action {
     ClipboardFailed {
         message: String,
     },
+    /// The system clipboard could not be read: what Dexo copied last is pasted instead.
+    ClipboardUnreadable,
     OfflineCatalogLoaded {
         generation: u64,
         list: dexo_driver_api::CatalogList,
@@ -418,8 +422,10 @@ pub enum Action {
     SchemaDiffToggleAdded,
     SchemaDiffToggleRemoved,
     SchemaDiffToggleChanged,
-    ConfirmSchemaDiff,
-    ApplySchemaDiff,
+    /// The script of the comparison on screen, in a document of its own.
+    SchemaDiffOpenScript,
+    /// The saved snapshots a comparison can start from.
+    SchemaSourcesLoaded(Vec<(String, String)>),
     SchemaDiffLoaded {
         from_label: String,
         to_label: String,
@@ -550,11 +556,21 @@ pub enum Action {
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
     SnippetPick,
     DdlPreviewed {
-        sql: String,
+        statements: Vec<String>,
         confirmation: dexo_app::schema::Confirmation,
         warnings: Vec<String>,
+        risk: dexo_driver_api::ChangeRisk,
     },
+    /// A schema change went through, or ended in a state the person must hear of
+    /// (`ok` false). `refresh` is what it touched, whose place in the explorer is read
+    /// again.
     SchemaApplied {
+        message: String,
+        refresh: Option<dexo_driver_api::QualifiedName>,
+        ok: bool,
+    },
+    /// A schema change the server or the connection refused, and why.
+    SchemaFailed {
         message: String,
     },
     ExplainLoaded {
@@ -808,6 +824,21 @@ pub struct FlushedDocument {
     pub path: Option<std::path::PathBuf>,
 }
 
+/// One side of a schema comparison.
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffSide {
+    /// An open connection, read now.
+    Live {
+        session: SessionId,
+        driver: String,
+        name: String,
+    },
+    /// A snapshot saved by name.
+    Snapshot { name: String },
+    /// A snapshot file.
+    File { path: std::path::PathBuf },
+}
+
 #[derive(Clone, Debug)]
 pub enum Effect {
     StartScript(ScriptRequest),
@@ -972,10 +1003,13 @@ pub enum Effect {
         session: SessionId,
         generation: u64,
     },
+    /// Read the names of the saved schema snapshots.
+    LoadSchemaSources,
     LoadSchemaDiff {
-        session: SessionId,
-        left: dexo_app::schema_diff::DiffSource,
-        right: dexo_app::schema_diff::DiffSource,
+        left: DiffSide,
+        right: DiffSide,
+        /// The session whose driver writes the migration script.
+        render_session: Option<SessionId>,
         generation: u64,
     },
     LoadSecurity {

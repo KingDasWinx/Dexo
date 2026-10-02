@@ -128,11 +128,10 @@ pub fn open(model: &mut Model, replace: bool) {
     }
     model.find.open = true;
     model.find.replacing = replace;
-    model.find.field = if replace && !model.find.query.is_empty() {
-        FindField::Replace
-    } else {
-        FindField::Query
-    };
+    // What you look for comes first, so typing goes to the query -- selected when one
+    // is left from the last time, so it is replaced rather than appended to.
+    model.find.field = FindField::Query;
+    model.find.query.select_all();
     seek(model);
 }
 
@@ -355,6 +354,59 @@ mod tests {
         press(&mut model, KeyCode::Char('h'), KeyModifiers::CONTROL);
         assert!(!model.find.open);
         assert_eq!(model.active_document().text(), "select ");
+    }
+
+    /// Ctrl+R opens Find and Replace on any terminal, and the palette names it where
+    /// Ctrl+H would delete a word instead.
+    #[test]
+    fn ctrl_r_opens_replace_and_is_the_key_the_palette_names_without_kitty_keys() {
+        let mut model = editor_with("select name");
+        press(&mut model, KeyCode::Char('r'), KeyModifiers::CONTROL);
+        assert!(model.find.open && model.find.replacing);
+        assert_eq!(model.active_document().text(), "select name");
+        let shortcut = crate::palette::palette_entries(&model)
+            .into_iter()
+            .find(|entry| entry.id == "editor.replace")
+            .and_then(|entry| entry.shortcut);
+        assert_eq!(shortcut.as_deref(), Some("Ctrl+R"));
+    }
+
+    /// The query takes the typing first, and one left from last time is selected, so
+    /// typing replaces it instead of appending.
+    #[test]
+    fn reopening_the_bar_selects_the_old_query_and_focuses_it() {
+        let mut model = editor_with("select name, nome from t");
+        model.keys_disambiguated = true;
+        press(&mut model, KeyCode::Char('f'), KeyModifiers::CONTROL);
+        for ch in "om".chars() {
+            press(&mut model, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        press(&mut model, KeyCode::Esc, KeyModifiers::NONE);
+        press(&mut model, KeyCode::Char('h'), KeyModifiers::CONTROL);
+        assert_eq!(model.find.field, super::FindField::Query);
+        assert!(model.find.query.is_selected());
+        for ch in "ne".chars() {
+            press(&mut model, KeyCode::Char(ch), KeyModifiers::NONE);
+        }
+        assert_eq!(model.find.query.as_str(), "ne");
+    }
+
+    /// The hint gives way to the width instead of ending mid-word, and the label of the
+    /// field with the focus is not the colour of the other.
+    #[test]
+    fn the_bar_hint_fits_the_pane_and_marks_the_focused_field() {
+        let mut model = editor_with("select name");
+        model.keys_disambiguated = true;
+        press(&mut model, KeyCode::Char('h'), KeyModifiers::CONTROL);
+        for width in [120u16, 80, 60] {
+            let screen = crate::render::render_to_string(&model, width, 24);
+            let row = screen
+                .lines()
+                .find(|line| line.contains("Find "))
+                .expect("the find row");
+            let tail = row.trim_end().trim_end_matches('│').trim_end();
+            assert!(tail.ends_with("Esc"), "{width}: {row}");
+        }
     }
 
     #[test]

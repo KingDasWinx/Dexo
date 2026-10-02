@@ -58,9 +58,41 @@ pub fn expand_placeholders(body: &str) -> String {
     expand(body).text
 }
 
+/// The snippets every install has. Nothing in the program makes a snippet, so without
+/// these Insert Snippet only ever said there were none.
+pub fn builtin_snippets() -> Vec<Snippet> {
+    [
+        ("select", "SELECT ${1:*}\nFROM ${2:table}\nWHERE ${3:condition};"),
+        ("insert", "INSERT INTO ${1:table} (${2:columns})\nVALUES (${3:values});"),
+        ("update", "UPDATE ${1:table}\nSET ${2:column} = ${3:value}\nWHERE ${4:condition};"),
+        ("delete", "DELETE FROM ${1:table}\nWHERE ${2:condition};"),
+        ("count", "SELECT count(*)\nFROM ${1:table}\nWHERE ${2:condition};"),
+        ("join", "SELECT ${1:*}\nFROM ${2:a}\nJOIN ${3:b} ON ${3:b}.${4:a_id} = ${2:a}.id;"),
+        ("cte", "WITH ${1:name} AS (\n  SELECT ${2:*}\n  FROM ${3:table}\n)\nSELECT *\nFROM ${1:name};"),
+        ("group by", "SELECT ${1:column}, count(*)\nFROM ${2:table}\nGROUP BY ${1:column}\nORDER BY count(*) DESC;"),
+    ]
+    .into_iter()
+    .map(|(name, body)| Snippet {
+        name: name.into(),
+        body: body.into(),
+    })
+    .collect()
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{expand, expand_placeholders};
+    use super::{builtin_snippets, expand, expand_placeholders};
+
+    #[test]
+    fn the_builtin_snippets_expand_and_have_holes_to_fill() {
+        let all = builtin_snippets();
+        assert!(all.iter().any(|snippet| snippet.name == "select"));
+        for snippet in all {
+            let expansion = expand(&snippet.body);
+            assert!(!expansion.stops.is_empty(), "{}", snippet.name);
+            assert!(!expansion.text.contains("${"), "{}", snippet.name);
+        }
+    }
 
     #[test]
     fn expands_tabstop_defaults() {

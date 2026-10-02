@@ -42,6 +42,6 @@ pub use project::{ProjectDeletePreview, ProjectRepository};
 pub use recent::RecentItemsRepository;
 pub use recovery::{RecoveryDocument, RecoveryRepository};
 pub use saved_query::{SavedQuery, SavedQueryRepository};
-pub use schema_snapshot::SchemaSnapshotStore;
+pub use schema_snapshot::{SchemaSnapshotStore, SnapshotInfo};
 pub use session_recovery::{SessionRecoveryRepository, SessionRecoveryState};
 pub use snippet::SnippetRepository;

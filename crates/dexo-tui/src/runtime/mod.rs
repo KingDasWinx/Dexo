@@ -674,22 +674,33 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
+            crate::Effect::LoadSchemaSources => {
+                tokio::spawn(schema_manager::list_sources(self.action_tx.clone()));
+            }
             crate::Effect::LoadSchemaDiff {
-                session,
                 left,
                 right,
+                render_session,
                 generation: _,
             } => {
-                if let Some(active) = self.sessions.get(session) {
-                    schema_manager::diff_live(
-                        Arc::clone(&active.session),
-                        session.0.to_string(),
-                        left,
-                        right,
-                        self.action_tx.clone(),
-                    )
-                    .await;
-                }
+                let session_of = |side: &crate::action::DiffSide| match side {
+                    crate::action::DiffSide::Live { session, .. } => self
+                        .sessions
+                        .get(*session)
+                        .map(|active| Arc::clone(&active.session)),
+                    _ => None,
+                };
+                let sides = (session_of(&left), session_of(&right));
+                let render = render_session
+                    .and_then(|id| self.sessions.get(id))
+                    .map(|active| Arc::clone(&active.session));
+                // Spawned: both catalogs are read whole, which takes as long as they are big.
+                tokio::spawn(schema_manager::compare(
+                    (left, sides.0),
+                    (right, sides.1),
+                    render,
+                    self.action_tx.clone(),
+                ));
             }
             crate::Effect::LoadSecurity {
                 session,
@@ -988,7 +999,7 @@ impl WorkbenchRuntime {
             crate::Effect::ReadClipboard => match clipboard::read_text() {
                 Ok(text) if !text.is_empty() => self.emit(Action::Paste(text)).await,
                 Ok(_) => {}
-                Err(message) => self.emit(Action::ClipboardFailed { message }).await,
+                Err(_) => self.emit(Action::ClipboardUnreadable).await,
             },
             // Both paths, always: arboard can report success and still reach no other
             // program (XWayland, tmux, SSH), and the terminal cannot report at all.

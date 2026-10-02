@@ -48,18 +48,12 @@ impl RunPrompt {
     }
 
     pub fn title(&self) -> &'static str {
-        // Nothing here is destructive when Dexo merely could not parse the statement:
-        // the title said so for `selec 4`.
-        let unreadable = dexo_sql::Destructive::Unrecognized.describe();
+        // A statement Dexo could not read is not called destructive: nothing says it is.
+        let unread = dexo_sql::Destructive::Unrecognized.describe();
         if self.expected.is_some() {
             "Run on production"
-        } else if !self.flagged.is_empty()
-            && self
-                .flagged
-                .iter()
-                .all(|flagged| flagged.reason == unreadable)
-        {
-            "Run statements Dexo cannot read?"
+        } else if !self.flagged.is_empty() && self.flagged.iter().all(|f| f.reason == unread) {
+            "Run statements Dexo cannot read"
         } else {
             "Run destructive statements"
         }
@@ -112,4 +106,46 @@ fn preview(sql: &str, width: usize) -> String {
     let mut cut: String = first.chars().take(width.saturating_sub(1)).collect();
     cut.push('…');
     cut
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RunPrompt;
+    use dexo_app::run_guard::Flagged;
+    use dexo_sql::Destructive;
+
+    fn flagged(sql: &str, why: Destructive) -> Flagged {
+        Flagged {
+            index: 0,
+            sql: sql.into(),
+            reason: why.describe(),
+        }
+    }
+
+    /// A statement Dexo could not read was titled "Run destructive statements" over a
+    /// body that said it could not read it.
+    #[test]
+    fn an_unreadable_statement_is_not_called_destructive() {
+        let unread = RunPrompt::new(
+            vec!["4".into()],
+            vec![flagged("4", Destructive::Unrecognized)],
+            None,
+        );
+        assert_eq!(unread.title(), "Run statements Dexo cannot read");
+        let drop = RunPrompt::new(
+            vec!["drop table t".into()],
+            vec![flagged("drop table t", Destructive::Drop)],
+            None,
+        );
+        assert_eq!(drop.title(), "Run destructive statements");
+        let mixed = RunPrompt::new(
+            Vec::new(),
+            vec![
+                flagged("4", Destructive::Unrecognized),
+                flagged("drop table t", Destructive::Drop),
+            ],
+            None,
+        );
+        assert_eq!(mixed.title(), "Run destructive statements");
+    }
 }

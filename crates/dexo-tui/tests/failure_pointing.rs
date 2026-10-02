@@ -113,7 +113,7 @@ fn a_statement_dexo_cannot_read_is_not_called_destructive() {
     let frame = dexo_tui::render::render_to_string(&model, 100, 30);
 
     assert!(
-        frame.contains("Run statements Dexo cannot read?"),
+        frame.contains("Run statements Dexo cannot read"),
         "{frame}"
     );
     assert!(!frame.contains("Run destructive statements"), "{frame}");

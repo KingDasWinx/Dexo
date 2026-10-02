@@ -243,8 +243,24 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
     };
     let (query_cursor, query_shown) = window(&find.query);
     let (replacement_cursor, replacement_shown) = window(&find.replacement);
+    // The label of the field the keys go to is in the accent, the other stays quiet.
+    let label = |text: &'static str, field: FindField| {
+        Span::styled(text, if find.field == field { on } else { muted })
+    };
+    // The hint gives way, a piece at a time, to whatever the row has left: cut at the
+    // pane's edge it ended mid-word.
+    let fit = |used: usize, hints: &[&'static str]| -> &'static str {
+        let left = (area.width as usize).saturating_sub(used);
+        hints
+            .iter()
+            .copied()
+            .find(|hint| hint.chars().count() <= left)
+            .unwrap_or("")
+    };
+    let used =
+        FIND_LABEL.len() + query_shown.width() + 2 + count.chars().count() + 2 + "Aa Word".len();
     let mut rows = vec![Line::from(vec![
-        Span::styled(FIND_LABEL, muted),
+        label(FIND_LABEL, FindField::Query),
         query_shown,
         Span::raw("  "),
         Span::raw(count),
@@ -253,15 +269,35 @@ fn render_find_bar(frame: &mut Frame, area: Rect, model: &Model, found: &[std::o
         Span::raw(" "),
         toggle("Word", find.options.whole_word),
         Span::styled(
-            "  Enter next · Shift+Enter prev · Alt+C case · Alt+W word · Alt+R replace · Esc",
+            fit(
+                used,
+                &[
+                    "  Enter next · Shift+Enter prev · Alt+C case · Alt+W word · Alt+R replace · Esc",
+                    "  Enter next · Alt+C case · Alt+W word · Alt+R replace · Esc",
+                    "  Enter next · Alt+R replace · Esc",
+                    "  Enter next · Esc",
+                    "  Esc",
+                ],
+            ),
             muted,
         ),
     ])];
     if find.replacing {
+        let used = REPLACE_LABEL.len() + replacement_shown.width();
         rows.push(Line::from(vec![
-            Span::styled(REPLACE_LABEL, muted),
+            label(REPLACE_LABEL, FindField::Replace),
             replacement_shown,
-            Span::styled("  Enter replace · Alt+A all · Tab switch", muted),
+            Span::styled(
+                fit(
+                    used,
+                    &[
+                        "  Enter replace · Alt+A all · Tab switch",
+                        "  Enter replace · Alt+A all",
+                        "  Enter replace",
+                    ],
+                ),
+                muted,
+            ),
         ]));
     }
     frame.render_widget(Paragraph::new(rows), area);

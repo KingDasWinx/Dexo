@@ -918,23 +918,7 @@ async fn collect_snapshot(
     reader: &dyn CatalogReader,
     parent: Option<&dexo_driver_api::ObjectId>,
 ) -> anyhow::Result<Vec<CatalogObject>> {
-    let page =
-        CatalogService::list_children(reader, parent, &CatalogListOptions::default()).await?;
-    let mut objects = page.objects;
-    let children = objects.clone();
-    for child in children {
-        if matches!(
-            child.kind,
-            dexo_driver_api::ObjectKind::Catalog
-                | dexo_driver_api::ObjectKind::Schema
-                | dexo_driver_api::ObjectKind::Table
-                | dexo_driver_api::ObjectKind::View
-                | dexo_driver_api::ObjectKind::MaterializedView
-        ) {
-            objects.extend(Box::pin(collect_snapshot(reader, Some(&child.id))).await?);
-        }
-    }
-    Ok(objects)
+    Ok(CatalogService::collect_objects(reader, parent).await?)
 }
 
 /// The connection's password: from its password command when it has one, run off the

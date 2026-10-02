@@ -348,40 +348,24 @@ pub async fn preview_live(
     match manager_for(session, &session_id) {
         Ok(manager) => match manager.preview_schema(&session_id, change).await {
             Ok(preview) => {
-                let sql = preview.plan.sqls().collect::<Vec<_>>().join(";\n");
                 let _ = tx
                     .send(crate::action::Action::DdlPreviewed {
-                        sql,
+                        statements: preview.plan.sqls().map(str::to_string).collect(),
                         confirmation: preview.confirmation,
+                        risk: preview.plan.risk,
                         warnings: preview.plan.warnings,
                     })
                     .await;
             }
             Err(message) => {
                 let _ = tx
-                    .send(crate::action::Action::OperationFailed {
-                        key: crate::runtime::OperationKey::new(
-                            crate::runtime::OperationId::new(),
-                            "",
-                            "",
-                            0,
-                        ),
-                        message,
-                    })
+                    .send(crate::action::Action::SchemaFailed { message })
                     .await;
             }
         },
         Err(message) => {
             let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
-                    message,
-                })
+                .send(crate::action::Action::SchemaFailed { message })
                 .await;
         }
     }
@@ -394,119 +378,214 @@ pub async fn apply_live(
     typed: String,
     tx: tokio::sync::mpsc::Sender<crate::action::Action>,
 ) {
+    let fail = |message: String| crate::action::Action::SchemaFailed {
+        message: format!("Could not apply the change: {message}"),
+    };
     let Ok(manager) = manager_for(session, &session_id) else {
         let _ = tx
-            .send(crate::action::Action::SchemaApplied {
-                message: "driver has no DDL".into(),
-            })
+            .send(fail("this driver has no schema changes".into()))
             .await;
         return;
     };
-    match manager.preview_schema(&session_id, change).await {
-        Ok(preview) => {
-            let answer = if typed.is_empty() {
-                ConfirmationAnswer::None
-            } else {
-                ConfirmationAnswer::Text(typed)
-            };
-            match manager.apply_schema(preview.operation_id, answer).await {
-                Ok(outcome) => {
-                    let _ = tx
-                        .send(crate::action::Action::SchemaApplied {
-                            message: format!("ddl {outcome:?}"),
-                        })
-                        .await;
-                }
-                Err(message) => {
-                    let _ = tx
-                        .send(crate::action::Action::OperationFailed {
-                            key: crate::runtime::OperationKey::new(
-                                crate::runtime::OperationId::new(),
-                                "",
-                                "",
-                                0,
-                            ),
-                            message,
-                        })
-                        .await;
-                }
+    let preview = match manager.preview_schema(&session_id, change.clone()).await {
+        Ok(preview) => preview,
+        Err(message) => {
+            let _ = tx.send(fail(message)).await;
+            return;
+        }
+    };
+    let answer = if typed.is_empty() {
+        ConfirmationAnswer::None
+    } else {
+        ConfirmationAnswer::Text(typed)
+    };
+    let action = match manager.apply_schema(preview.operation_id, answer).await {
+        Ok(outcome) => {
+            let (message, ok) = applied_message(&change, outcome);
+            crate::action::Action::SchemaApplied {
+                message,
+                refresh: Some(change.target().clone()),
+                ok,
             }
         }
-        Err(message) => {
-            let _ = tx
-                .send(crate::action::Action::OperationFailed {
-                    key: crate::runtime::OperationKey::new(
-                        crate::runtime::OperationId::new(),
-                        "",
-                        "",
-                        0,
-                    ),
-                    message,
-                })
-                .await;
-        }
+        Err(message) => fail(message),
+    };
+    let _ = tx.send(action).await;
+}
+
+/// What a finished change says, in words, and whether it all went through. The toast read
+/// `ddl Committed`, the Rust name of the outcome.
+pub fn applied_message(change: &SchemaChange, outcome: DdlOutcome) -> (String, bool) {
+    let target = change.target().display_unquoted();
+    match outcome {
+        DdlOutcome::Committed => (
+            match change {
+                SchemaChange::CreateTable { .. } => format!("Created {target}."),
+                SchemaChange::AlterTable { .. } => format!("Altered {target}."),
+                SchemaChange::CreateView { .. } => format!("Created view {target}."),
+                SchemaChange::AlterRoutine { .. } => format!("Saved {target}."),
+                SchemaChange::CreateIndex { .. } => format!("Created an index on {target}."),
+                SchemaChange::DropObject { .. } => format!("Dropped {target}."),
+                SchemaChange::RenameObject { new_name, .. } => {
+                    format!("Renamed {target} to {}.", new_name.object())
+                }
+                SchemaChange::Grant { def, .. } => format!(
+                    "Granted {} on {target} to {}.",
+                    def.privileges.join(", "),
+                    def.principal.object()
+                ),
+                SchemaChange::Revoke { def, .. } => format!(
+                    "Revoked {} on {target} from {}.",
+                    def.privileges.join(", "),
+                    def.principal.object()
+                ),
+            },
+            true,
+        ),
+        DdlOutcome::RolledBack => (
+            format!("Nothing was changed on {target}: the change was rolled back."),
+            false,
+        ),
+        DdlOutcome::PartiallyCommitted { committed } => (
+            format!(
+                "Only {committed} of the statements ran on {target} before one failed; check what it holds."
+            ),
+            false,
+        ),
+        DdlOutcome::Unknown => (
+            format!(
+                "Could not tell whether the change to {target} went through; refresh the catalog to see."
+            ),
+            false,
+        ),
     }
 }
 
-pub async fn diff_live(
-    session: std::sync::Arc<dyn dexo_driver_api::Session>,
-    session_id: String,
-    left: DiffSource,
-    right: DiffSource,
-    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
-) {
-    let from_label = format!("{left:?}");
-    let to_label = format!("{right:?}");
-    let result = async {
-        let manager = manager_for(Arc::clone(&session), &session_id)?;
-        hydrate_source(&manager, session.as_ref(), &left).await?;
-        hydrate_source(&manager, session.as_ref(), &right).await?;
-        manager
-            .diff(DiffRequest {
-                left,
-                right,
-                filters: DiffFilters::all(),
-                renames: vec![],
+/// The names of the saved schema snapshots, for the picker.
+pub async fn list_sources(tx: tokio::sync::mpsc::Sender<crate::action::Action>) {
+    let listed = tokio::task::spawn_blocking(|| {
+        let paths = dexo_storage::AppPaths::discover().ok()?;
+        let db = dexo_storage::Database::open(&paths.database).ok()?;
+        dexo_storage::SchemaSnapshotStore::new(db.connection())
+            .list()
+            .ok()
+    })
+    .await
+    .ok()
+    .flatten()
+    .unwrap_or_default();
+    let _ = tx
+        .send(crate::action::Action::SchemaSourcesLoaded(
+            listed
+                .into_iter()
+                .map(|info| (info.name, info.driver))
+                .collect(),
+        ))
+        .await;
+}
+
+type Side = (
+    crate::action::DiffSide,
+    Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
+);
+
+/// What a side is called in the dialog.
+fn side_label(side: &crate::action::DiffSide) -> String {
+    match side {
+        crate::action::DiffSide::Live { name, .. } => name.clone(),
+        crate::action::DiffSide::Snapshot { name } => format!("snapshot {name}"),
+        crate::action::DiffSide::File { path } => path
+            .file_name()
+            .map(|name| name.to_string_lossy().into_owned())
+            .unwrap_or_else(|| path.display().to_string()),
+    }
+}
+
+/// The snapshot a side stands for: a live connection's whole catalog as of now, a saved
+/// snapshot by name, a file read and checked.
+async fn snapshot_of(side: &Side) -> Result<SchemaSnapshot, String> {
+    use crate::action::DiffSide;
+    match (&side.0, &side.1) {
+        (DiffSide::Live { driver, name, .. }, Some(session)) => {
+            let reader = session
+                .catalog()
+                .ok_or_else(|| format!("{name} has no catalog to read"))?;
+            let objects = dexo_app::CatalogService::collect_objects(reader, None)
+                .await
+                .map_err(|error| error.to_string())?;
+            Ok(SchemaSnapshot::capture(
+                driver.clone(),
+                String::new(),
+                chrono::Local::now().to_rfc3339(),
+                name.clone(),
+                objects,
+            ))
+        }
+        (DiffSide::Live { name, .. }, None) => Err(format!(
+            "{name} is no longer connected; connect it and compare again."
+        )),
+        (DiffSide::Snapshot { name }, _) => {
+            let name = name.clone();
+            tokio::task::spawn_blocking(move || {
+                let paths = dexo_storage::AppPaths::discover().map_err(|e| e.to_string())?;
+                let db =
+                    dexo_storage::Database::open(&paths.database).map_err(|e| e.to_string())?;
+                dexo_storage::SchemaSnapshotStore::new(db.connection())
+                    .load_by_name(&name)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("There is no snapshot named {name}."))
             })
             .await
-    }
-    .await;
-    match result {
-        Ok(outcome) => {
-            let _ = tx
-                .send(crate::action::Action::SchemaDiffLoaded {
-                    from_label,
-                    to_label,
-                    ordered: outcome.ordered,
-                })
-                .await;
+            .map_err(|error| error.to_string())?
         }
-        Err(message) => {
-            let _ = tx
-                .send(crate::action::Action::SchemaDiffFailed { message })
-                .await;
+        (DiffSide::File { path }, _) => {
+            let json = tokio::fs::read_to_string(path)
+                .await
+                .map_err(|error| format!("Could not read {}: {error}", path.display()))?;
+            dexo_storage::SchemaSnapshotStore::load_json(&json)
+                .map_err(|_| format!("{} is not a Dexo schema snapshot.", path.display()))
         }
     }
 }
 
-async fn hydrate_source(
-    manager: &SchemaManager,
-    session: &dyn dexo_driver_api::Session,
-    source: &DiffSource,
-) -> Result<(), String> {
-    let DiffSource::Live(id) = source else {
-        return Ok(());
+/// Reads both sides, and sends what the second has that the first lacks, in the order
+/// the script has to run, or why it could not.
+pub async fn compare(
+    left: Side,
+    right: Side,
+    render: Option<std::sync::Arc<dyn dexo_driver_api::Session>>,
+    tx: tokio::sync::mpsc::Sender<crate::action::Action>,
+) {
+    let (from_label, to_label) = (side_label(&left.0), side_label(&right.0));
+    let result = async {
+        let from = snapshot_of(&left).await?;
+        let to = snapshot_of(&right).await?;
+        if from.driver != to.driver {
+            return Err(format!(
+                "A {} schema cannot be compared with a {} one.",
+                from.driver, to.driver
+            ));
+        }
+        // The script is written in the dialect of a connection that is open; with none,
+        // plainly.
+        let (_, ordered, _) = plan_migration(&from, &to, &[], |change| match &render {
+            Some(session) => session
+                .ddl()
+                .ok_or_else(|| "this connection has no schema changes".to_string())?
+                .plan_change(change)
+                .map_err(|error| error.to_string()),
+            None => dexo_app::schema_diff::render_unquoted(change),
+        });
+        Ok(ordered)
+    }
+    .await;
+    let action = match result {
+        Ok(ordered) => crate::action::Action::SchemaDiffLoaded {
+            from_label,
+            to_label,
+            ordered,
+        },
+        Err(message) => crate::action::Action::SchemaDiffFailed { message },
     };
-    let catalog = session
-        .catalog()
-        .ok_or_else(|| "catalog is unavailable".to_string())?;
-    let list = catalog
-        .list_children(None, &dexo_driver_api::CatalogListOptions::default())
-        .await
-        .map_err(|error| error.to_string())?;
-    manager.put_live(
-        id.clone(),
-        SchemaSnapshot::capture("postgres", "0", "now", id.clone(), list.objects),
-    );
-    Ok(())
+    let _ = tx.send(action).await;
 }

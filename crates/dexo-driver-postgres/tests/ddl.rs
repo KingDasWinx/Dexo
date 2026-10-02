@@ -529,3 +529,36 @@ async fn privileges_follow_the_relation_and_the_current_role() {
     );
     drain(session, "RESET ROLE").await;
 }
+
+/// A change the server refuses comes back as its error, with the server's words:
+/// `Ok(RolledBack)` told the user nothing was done and not why.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_refused_ddl_carries_the_servers_reason() {
+    let fixture = connect().await;
+    let change = SchemaChange::CreateTable {
+        target: q("public", "dexo_twice"),
+        def: TableDef {
+            shape: TableShape::Table,
+            columns: vec![col("id", "integer")],
+            constraints: vec![],
+            partition: None,
+            engine: None,
+            charset: None,
+            collation: None,
+        },
+    };
+    assert_eq!(
+        apply(fixture.session.as_ref(), change.clone()).await,
+        DdlOutcome::Committed
+    );
+    let plan = render_ddl(&change).unwrap();
+    let error = fixture
+        .session
+        .ddl()
+        .unwrap()
+        .apply_ddl(&plan)
+        .await
+        .expect_err("the table exists");
+    assert!(error.to_string().contains("already exists"), "{error}");
+}

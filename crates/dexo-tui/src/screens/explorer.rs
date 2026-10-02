@@ -601,6 +601,24 @@ impl ExplorerState {
     /// Expands every ancestor of `id` so the node lands inside `visible_ids`.
     /// Without it a goto into a collapsed group selects a row nobody can see and
     /// the cursor falls back to row 0.
+    /// The schema (or, where a database has none, the catalog) named `name`, to read again
+    /// after something was created in it.
+    pub fn find_container(&self, name: &str) -> Option<ObjectId> {
+        fn walk(nodes: &[ExplorerNode], name: &str, kind: &ObjectKind) -> Option<ObjectId> {
+            for node in nodes {
+                if node.kind == *kind && node.label.eq_ignore_ascii_case(name) {
+                    return Some(node.id.clone());
+                }
+                if let Some(found) = walk(&node.children, name, kind) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        walk(&self.roots, name, &ObjectKind::Schema)
+            .or_else(|| walk(&self.roots, name, &ObjectKind::Catalog))
+    }
+
     pub fn reveal(&mut self, id: &ObjectId) -> bool {
         fn walk(nodes: &mut [ExplorerNode], id: &ObjectId) -> bool {
             for node in nodes {

@@ -10,30 +10,30 @@ demo  local  public
 │      mysql.… [restricted]││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││           ┌Schema diff───────────────────────────────────────────────────────────────────┐                                       │
-│                          ││           │prod@v1 -> prod@v2                                                            │                                       │
-│                          ││           │filters added=true removed=true changed=true                                  │                                       │
-│                          ││           │confirm=false apply=blocked                                                   │                                       │
-│                          ││           │> added db.public.orders_new destructive=false data_loss=false reversible=true│                                       │
-│                          ││           │  removed db.public.gone destructive=true data_loss=true reversible=false     │                                       │
-│                          ││           │  changed db.public.users destructive=false data_loss=true reversible=false   │                                       │
-│                          ││           │--- script ---                                                                │                                       │
-│                          ││           │-- dexo:risk destructive=true data_loss=true lock=AccessExclusive reversible=f│                                       │
-│                          ││           │DROP TABLE db.public.gone;                                                    │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           │                                                                              │                                       │
-│                          ││           └──────────────────────────────────────────────────────────────────────────────┘                                       │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
+│                          ││       ┌Compare Schema · prod@v1──────────────────────────────────────────────────────────────┐                                   │
+│                          ││       │prod@v1 -> prod@v2: 3 differences                                                     │                                   │
+│                          ││       │Show: [x] added 1  [x] removed 1  [x] changed 1   (a / r / c)                         │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │> added    table db.public.orders_new                                                 │                                   │
+│                          ││       │  removed  table db.public.gone  (drops it, may lose data, cannot be undone)          │                                   │
+│                          ││       │  changed  column db.public.users.age  (may lose data, cannot be undone)              │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │Migration script                                                                      │                                   │
+│                          ││       │  DROP TABLE db.public.gone;                                                          │                                   │
+│                          ││       │ [Open script]   [Cancel]                                                             │                                   │
+│                          ││       │  a/r/c filter  Enter opens the script  Esc closes                                    │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       │                                                                                      │                                   │
+│                          ││       └──────────────────────────────────────────────────────────────────────────────────────┘                                   │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

@@ -40,7 +40,7 @@ pub use navigation::definition_at;
 pub use order::{OrderKey, cycle_order, order_keys, order_text};
 pub use parameter::{HistoryEntry, HistoryPolicy, bind_named, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
-pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
+pub use snippet::{Expansion, Snippet, builtin_snippets, expand, expand_placeholders};
 pub use statement::{
     StatementEffect, StatementSpan, is_backslash_command, split_statements, split_statements_in,
     statement_at, statement_at_in,

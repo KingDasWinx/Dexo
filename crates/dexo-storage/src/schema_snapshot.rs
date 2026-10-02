@@ -1,6 +1,14 @@
 use dexo_app::schema_diff::{SchemaSnapshot, SnapshotError};
 use rusqlite::{Connection, OptionalExtension, params};
 
+/// A saved snapshot as a list shows it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SnapshotInfo {
+    pub name: String,
+    pub driver: String,
+    pub created_at: String,
+}
+
 pub struct SchemaSnapshotStore<'a> {
     conn: &'a Connection,
 }
@@ -45,6 +53,23 @@ impl<'a> SchemaSnapshotStore<'a> {
         Ok(Some(snapshot))
     }
 
+    /// The saved snapshots, newest first, one per name: what a person can pick to compare.
+    pub fn list(&self) -> anyhow::Result<Vec<SnapshotInfo>> {
+        let mut statement = self.conn.prepare(
+            "SELECT name, driver, created_at FROM schema_diff_snapshots
+             WHERE rowid IN (SELECT max(rowid) FROM schema_diff_snapshots GROUP BY name)
+             ORDER BY created_at DESC, name",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(SnapshotInfo {
+                name: row.get(0)?,
+                driver: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     pub fn load_json(json: &str) -> Result<SchemaSnapshot, SnapshotError> {
         let snapshot: SchemaSnapshot =
             serde_json::from_str(json).map_err(|_| SnapshotError::Tampered)?;
@@ -84,6 +109,13 @@ mod tests {
             )],
         );
         store.save("prod", &snapshot).unwrap();
+        store.save("prod", &snapshot).unwrap();
+        store.save("staging", &snapshot).unwrap();
+        let listed = store.list().unwrap();
+        let mut names: Vec<&str> = listed.iter().map(|info| info.name.as_str()).collect();
+        names.sort_unstable();
+        assert_eq!(names, ["prod", "staging"], "one row per name");
+        assert!(listed.iter().all(|info| info.driver == "postgres"));
         let loaded = store.load_by_name("prod").unwrap().unwrap();
         assert_eq!(loaded.digest, snapshot.digest);
         assert!(SchemaSnapshotStore::load_json(r#"{"format_version":1,"driver":"postgres","server_version":"16","captured_at":"x","scope":"db","objects":[],"digest":"deadbeef"}"#).is_err());

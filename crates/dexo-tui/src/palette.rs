@@ -75,7 +75,6 @@ pub enum Requirement {
     PendingChanges,
     ActiveQuery,
     Parameters,
-    History,
 }
 
 impl Requirement {
@@ -90,7 +89,6 @@ impl Requirement {
             Self::PendingChanges => "no pending changes",
             Self::ActiveQuery => "no query is running",
             Self::Parameters => "no query parameters",
-            Self::History => "history is empty",
         }
     }
 }
@@ -549,9 +547,9 @@ mod tests {
     #[test]
     fn fuzzy_word_start_beats_subsequence() {
         let entries = palette_entries(&Model::default());
-        // "Submit Parameters" starts a word with the query; "Compare Schema" only
-        // holds its letters scattered. Once something matches by its words, the
-        // scattered ones are not listed at all.
+        // "Edit Parameters…" starts a word with the query; "Compare Schema" only
+        // matches it as a scattered subsequence. Asserting the pair rather than
+        // index 0 keeps the test about ranking, not about the rest of the registry.
         let filtered = filter_entries(&entries, "para");
         let rank = |id: &str| filtered.iter().position(|entry| entry.id == id);
         assert_eq!(rank("editor.parameters"), Some(0), "{filtered:?}");

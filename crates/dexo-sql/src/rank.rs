@@ -84,6 +84,10 @@ pub struct Boosts {
     /// `id`, or something ending in `_id` -- the columns a join or a filter is usually
     /// reaching for.
     pub key_column: bool,
+    /// A table a foreign key ties to one the statement already reads.
+    pub related: bool,
+    /// A table outside the schemas a bare name reaches.
+    pub other_schema: bool,
 }
 
 impl Boosts {
@@ -97,6 +101,12 @@ impl Boosts {
         }
         if self.key_column {
             total += 500;
+        }
+        if self.related {
+            total += 800;
+        }
+        if self.other_schema {
+            total -= 200;
         }
         total
     }
@@ -123,7 +133,7 @@ pub fn finish(mut items: Vec<CompletionItem>) -> Vec<CompletionItem> {
     let weight = |item: &CompletionItem| item.score + kind_priority(item.kind);
     items.sort_by_key(|item| std::cmp::Reverse(weight(item)));
     let mut seen = std::collections::HashSet::new();
-    items.retain(|item| seen.insert((item.kind, item.label.clone())));
+    items.retain(|item| seen.insert((item.kind, item.qualifier.clone(), item.label.clone())));
     items.truncate(CAP);
     items
 }

@@ -59,37 +59,37 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## ED: SQL editor
 
-- [ ] **ED-01** `MAJOR` Table completion inserts a bare name for a table outside the search path, so the accepted query fails
-- [ ] **ED-05** `MAJOR` Ctrl+H (Find and Replace) does not open Replace; it deletes text
-- [ ] **ED-09** `MAJOR` Paste fails when the system clipboard is unavailable, with a raw backend error
-- [ ] **ED-13** `MAJOR` Picking an entry in History replaces the active document tab (no Save / Don't save prompt) and runs the statement
-- [ ] **ED-14** `MAJOR` "Search History" has no search
-- [ ] **ED-15** `MAJOR` Clear History: the confirmation is an empty box, and the command refuses when history was not loaded
-- [ ] **ED-16** `MAJOR` Parameters prompt starts pre-filled with the last value typed anywhere, so typing appends to stale text
-- [ ] **ED-25** `MAJOR` Unbound Alt+letter combinations are typed into the document
-- [ ] **ED-26** `MAJOR` Emacs keymap is only a partial overlay: Emacs motion keys do other things
+- [x] **ED-01** `MAJOR` Table completion inserts a bare name for a table outside the search path, so the accepted query fails
+- [x] **ED-05** `MAJOR` Ctrl+H (Find and Replace) does not open Replace; it deletes text
+- [x] **ED-09** `MAJOR` Paste fails when the system clipboard is unavailable, with a raw backend error
+- [x] **ED-13** `MAJOR` Picking an entry in History replaces the active document tab (no Save / Don't save prompt) and runs the statement
+- [x] **ED-14** `MAJOR` "Search History" has no search
+- [x] **ED-15** `MAJOR` Clear History: the confirmation is an empty box, and the command refuses when history was not loaded
+- [x] **ED-16** `MAJOR` Parameters prompt starts pre-filled with the last value typed anywhere, so typing appends to stale text
+- [x] **ED-25** `MAJOR` Unbound Alt+letter combinations are typed into the document
+- [x] **ED-26** `MAJOR` Emacs keymap is only a partial overlay: Emacs motion keys do other things
 - [x] **ED-30** `MAJOR` Writes on MySQL give no feedback at all (no "N rows affected", empty Results, nothing in Messages)
-- [ ] **ED-02** `MINOR` `join ` table list ranks a table from another schema first and unrelated tables ahead of the FK target
-- [ ] **ED-03** `MINOR` No live diagnostic for a mistyped keyword or other syntax error
-- [ ] **ED-04** `MINOR` Enter right after typing a complete table name only accepts the completion, the newline is swallowed
-- [ ] **ED-06** `MINOR` "Find and Replace" opens with the Replace field focused and nothing shows which field has focus
-- [ ] **ED-07** `MINOR` Reopening Find keeps the previous term but does not select it
-- [ ] **ED-10** `MINOR` Go To Definition says "no definition at cursor" unless the object is already loaded in the explorer
-- [ ] **ED-12** `MINOR` Input sequence glued to a preceding Esc is typed into the document as text
-- [ ] **ED-17** `MINOR` Parameter values are reused silently on the next run; the way to change them is a command called "Submit Parameters"
-- [ ] **ED-18** `MINOR` A statement Dexo cannot read is called "destructive"
-- [ ] **ED-19** `MINOR` Insert Snippet is a dead end
-- [ ] **ED-21** `MINOR` Ctrl+A in an empty document swallows the next typed character
-- [ ] **ED-23** `MINOR` Completion in a join inserts an ambiguous bare column name
+- [x] **ED-02** `MINOR` `join ` table list ranks a table from another schema first and unrelated tables ahead of the FK target
+- [x] **ED-03** `MINOR` No live diagnostic for a mistyped keyword or other syntax error
+- [x] **ED-04** `MINOR` Enter right after typing a complete table name only accepts the completion, the newline is swallowed
+- [x] **ED-06** `MINOR` "Find and Replace" opens with the Replace field focused and nothing shows which field has focus
+- [x] **ED-07** `MINOR` Reopening Find keeps the previous term but does not select it
+- [x] **ED-10** `MINOR` Go To Definition says "no definition at cursor" unless the object is already loaded in the explorer
+- [x] **ED-12** `MINOR` Input sequence glued to a preceding Esc is typed into the document as text
+- [x] **ED-17** `MINOR` Parameter values are reused silently on the next run; the way to change them is a command called "Submit Parameters"
+- [x] **ED-18** `MINOR` A statement Dexo cannot read is called "destructive"
+- [x] **ED-19** `MINOR` Insert Snippet is a dead end
+- [x] **ED-21** `MINOR` Ctrl+A in an empty document swallows the next typed character
+- [x] **ED-23** `MINOR` Completion in a join inserts an ambiguous bare column name
 - [ ] **ED-24** `MINOR` Clicking an item in the completion popup does not accept it
-- [ ] **ED-27** `MINOR` History is not scoped to the connection, but "Clear History" is
+- [x] **ED-27** `MINOR` History is not scoped to the connection, but "Clear History" is
 - [ ] **ED-28** `MINOR` After the window was shrunk to 60x20, explorer and results stay hidden when it grows again
 - [ ] **ED-32** `MINOR` Tabs of documents on an offline connection do not say which connection they belong to
-- [ ] **ED-08** `COSMETIC` Find bar hint is cut off at the right edge
-- [ ] **ED-11** `COSMETIC` Ctrl+Home / Ctrl+End do not go to the start / end of the document
-- [ ] **ED-20** `COSMETIC` SQLite errors are printed with `SQLSTATE 1`
-- [ ] **ED-22** `COSMETIC` Wheel-scrolling the Messages tab past the last message leaves an almost empty pane
-- [ ] **ED-29** `COSMETIC` Completion popup is not repositioned to fit narrow terminals
+- [x] **ED-08** `COSMETIC` Find bar hint is cut off at the right edge
+- [x] **ED-11** `COSMETIC` Ctrl+Home / Ctrl+End do not go to the start / end of the document
+- [x] **ED-20** `COSMETIC` SQLite errors are printed with `SQLSTATE 1`
+- [x] **ED-22** `COSMETIC` Wheel-scrolling the Messages tab past the last message leaves an almost empty pane
+- [x] **ED-29** `COSMETIC` Completion popup is not repositioned to fit narrow terminals
 - [ ] **ED-31** `COSMETIC` Welcome text names Ctrl+J, the palette and F1 name Ctrl+Enter for the same action
 
 ## RD: Results grid and table data
@@ -155,18 +155,18 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ES-09** `MAJOR` Inspect Object offers itself on constraints, functions, types, sequences and group nodes and answers "Select an object in Explorer."
 - [ ] **ES-10** `MAJOR` Copy Object Name on a schema / database returns a doubled name
 - [ ] **ES-11** `MAJOR` "Show Dependencies" is just the Inspect dialog with raw catalog ids
-- [ ] **ES-15** `MAJOR` Manage Grants (Security panel): the "DDL preview" opens underneath the panel and cannot be read; Apply answers "ddl RolledBack"
+- [x] **ES-15** `MAJOR` Manage Grants (Security panel): the "DDL preview" opens underneath the panel and cannot be read; Apply answers "ddl RolledBack"
 - [ ] **ES-16** `MAJOR` Security panel is a 40-column box that truncates every grant and has no hints
 - [ ] **ES-17** `MAJOR` Refresh Catalog (all) and `r` on a connection / group node do not refresh anything; no feedback either way
 - [ ] **ES-20** `MAJOR` Hotkey `n` of "Edit Object Note…" does not work from the explorer: it opens "Add connection"
-- [ ] **ES-24** `MAJOR` Preview DDL form: `defaults`, `indexes`, `constraints` and `foreign_keys` fields are ignored by the preview and by Apply
-- [ ] **ES-25** `MAJOR` Preview DDL form: the columns field is a hidden mini-language; commas inside `numeric(10,2)` break the DDL, and unknown words are dropped silently
-- [ ] **ES-26** `MAJOR` Applying DDL answers `ddl Committed` / `ddl RolledBack` (Rust enum names); a failure never says why
-- [ ] **ES-32** `MAJOR` Apply Raw DDL dialog: raw `key=value` dump, leftover form values shown as removed lines, and ADD COLUMN labelled destructive
-- [ ] **ES-33** `MAJOR` DDL preview cannot be scrolled: long DDL is cut with "…" and still offers [Apply]
+- [x] **ES-24** `MAJOR` Preview DDL form: `defaults`, `indexes`, `constraints` and `foreign_keys` fields are ignored by the preview and by Apply
+- [x] **ES-25** `MAJOR` Preview DDL form: the columns field is a hidden mini-language; commas inside `numeric(10,2)` break the DDL, and unknown words are dropped silently
+- [x] **ES-26** `MAJOR` Applying DDL answers `ddl Committed` / `ddl RolledBack` (Rust enum names); a failure never says why
+- [x] **ES-32** `MAJOR` Apply Raw DDL dialog: raw `key=value` dump, leftover form values shown as removed lines, and ADD COLUMN labelled destructive
+- [x] **ES-33** `MAJOR` DDL preview cannot be scrolled: long DDL is cut with "…" and still offers [Apply]
 - [ ] **ES-34** `MAJOR` After a restart, Preview DDL ran for the explorer's last connection (MySQL) while the visible document belonged to pg-readonly
-- [ ] **ES-38** `MAJOR` Compare Schema cannot compare two different databases or a snapshot: it only ever diffs the current connection with itself
-- [ ] **ES-39** `MAJOR` Schema diff dialog is an unlabelled raw dump with hidden keys and no buttons
+- [x] **ES-38** `MAJOR` Compare Schema cannot compare two different databases or a snapshot: it only ever diffs the current connection with itself
+- [x] **ES-39** `MAJOR` Schema diff dialog is an unlabelled raw dump with hidden keys and no buttons
 - [x] **ES-41** `MAJOR` Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused
 - [ ] **ES-01** `MINOR` After the welcome dialog, focus is in the empty editor, not the explorer
 - [ ] **ES-02** `MINOR` Explorer labels are cut at the pane edge with no ellipsis at the default width
@@ -180,12 +180,12 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ES-19** `MINOR` Show Favorites Only: header is a raw filter string, and there is no way back except the palette
 - [ ] **ES-21** `MINOR` MySQL tree shows two rows `mysql.users [restricted]` and `mysql.roles [restricted]` with no explanation
 - [ ] **ES-22** `MINOR` Index / constraint names in Inspect have no table: `qa4.PRIMARY`, `qa4.customer_id`, `qa4.public.order_items_pkey`
-- [ ] **ES-23** `MINOR` DDL dialog cuts long lines and cannot scroll sideways
-- [ ] **ES-27** `MINOR` The Schema form opens prefilled with the name of an existing table (`public.orders`) and Apply happily tries to create it
-- [ ] **ES-28** `MINOR` DDL preview: `risk: destructive=false lock=None` is a debug dump
-- [ ] **ES-29** `MINOR` Schema form text fields do not scroll to the cursor and cut the text at the border
-- [ ] **ES-30** `MINOR` Esc / Cancel in the DDL preview closes the whole form, there is no way back to edit
-- [ ] **ES-35** `MINOR` pg-readonly: Apply refuses only after the preview; the refusal leaves the preview open
+- [x] **ES-23** `MINOR` DDL dialog cuts long lines and cannot scroll sideways
+- [x] **ES-27** `MINOR` The Schema form opens prefilled with the name of an existing table (`public.orders`) and Apply happily tries to create it
+- [x] **ES-28** `MINOR` DDL preview: `risk: destructive=false lock=None` is a debug dump
+- [x] **ES-29** `MINOR` Schema form text fields do not scroll to the cursor and cut the text at the border
+- [x] **ES-30** `MINOR` Esc / Cancel in the DDL preview closes the whole form, there is no way back to edit
+- [x] **ES-35** `MINOR` pg-readonly: Apply refuses only after the preview; the refusal leaves the preview open
 - [ ] **ES-36** `MINOR` There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
 - [ ] **ES-37** `MINOR` After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
 - [ ] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect

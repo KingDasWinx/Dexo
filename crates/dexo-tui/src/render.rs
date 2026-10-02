@@ -101,9 +101,6 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.data.cell_edit.is_some() {
         render_cell_edit(frame, model, hits);
     }
-    if let Some(preview) = &model.schema_editor.preview {
-        render_ddl_preview(frame, model, preview, hits);
-    }
     if model.schema_diff.open {
         render_schema_diff(frame, model, hits);
     }
@@ -112,6 +109,10 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     if model.security.open {
         render_security(frame, model, hits);
+    }
+    // Above the panel that asked for it, which drew over it and left a few columns of it.
+    if let Some(preview) = &model.schema_editor.preview {
+        render_ddl_preview(frame, model, preview, hits);
     }
     if model.admin.open {
         render_admin(frame, model, hits);
@@ -1077,6 +1078,27 @@ fn show_input(
     }
 }
 
+/// [`show_input`] for a value drawn as the stretch of it around the cursor
+/// ([`TextInput::window`]), so a value wider than `line` scrolls with the cursor.
+fn show_windowed_input(
+    frame: &mut Frame,
+    line: Rect,
+    before: &str,
+    input: &crate::widgets::text_input::TextInput,
+) {
+    use unicode_width::UnicodeWidthStr;
+    let start = before.width();
+    let room = usize::from(line.width).saturating_sub(start).max(1);
+    let (shown, at) = input.window(room);
+    if input.is_selected() {
+        paint_reversed(frame, line, start, shown.trim_end().width());
+    }
+    let x = start + at;
+    if x < usize::from(line.width) {
+        frame.set_cursor_position(ratatui::layout::Position::new(line.x + x as u16, line.y));
+    }
+}
+
 /// The focused field of a form, drawn `> label: value` on `line`.
 fn show_form_field(
     frame: &mut Frame,
@@ -1705,14 +1727,22 @@ fn render_ddl_preview(
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let room = popup_inner(centered(area, 72, area.height.saturating_sub(2).min(20))).height;
-    let lines = crate::modals::preview_lines(preview, usize::from(room));
+    let frame_popup = centered(area, 72, area.height.saturating_sub(2).min(20));
+    let inner = popup_inner(frame_popup);
+    let (lines, max_scroll) =
+        crate::modals::preview_lines(preview, usize::from(inner.height), usize::from(inner.width));
+    hits.set_scroll_limit(crate::mouse::ScrollArea::DdlPreview, max_scroll);
     let popup = centered(area, 72, lines.len() as u16 + 2);
+    let title = if model.connection.name.is_empty() {
+        "DDL preview".to_string()
+    } else {
+        format!("DDL preview · {}", model.connection.name)
+    };
     paint_popup(
         frame,
         model,
         popup,
-        overlay_block(model, "DDL preview"),
+        overlay_block(model, &title),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
@@ -1743,84 +1773,74 @@ fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let popup = centered(area, 80, 18);
-    let lines = model.schema_diff.lines();
-    let entries = model.schema_diff.filtered();
-    let entry_count = entries.len();
-    let script_lines = model.schema_diff.script.lines().count();
-    let entry_start = lines
-        .len()
-        .saturating_sub(entry_count.saturating_add(script_lines).saturating_add(1));
-    let selected_line = entry_start.saturating_add(
-        model
-            .schema_diff
-            .selected
-            .min(entry_count.saturating_sub(1)),
-    );
-    let offset = scroll_to_selection(
-        selected_line,
-        0,
-        lines.len(),
-        popup_inner(popup).height as usize,
-    );
-    let visible = lines
-        .iter()
-        .skip(offset)
-        .take(popup_inner(popup).height as usize)
-        .cloned()
-        .collect::<Vec<_>>();
+    let diff = &model.schema_diff;
+    let popup = centered(area, 88, area.height.saturating_sub(2).min(24));
+    let inner = popup_inner(popup);
+    let (body, selected_line, entries_from) = diff.body(usize::from(inner.width));
+    // Two rows keep the bottom: the buttons and what the keys do.
+    let room = usize::from(inner.height).saturating_sub(2).max(1);
+    let offset = scroll_to_selection(selected_line.unwrap_or(0), 0, body.len(), room);
+    let mut lines: Vec<String> = body.iter().skip(offset).take(room).cloned().collect();
+    let footer_row = lines.len();
+    let footer = crate::widgets::form::footer_line(diff.submit_label(), diff.footer);
+    lines.push(footer.clone());
+    lines.push(crate::model::truncate_cell(
+        if diff.source_prompt {
+            "  Left/Right change a source  Enter compares  Esc cancels"
+        } else {
+            "  a/r/c filter  Enter opens the script  Esc closes"
+        },
+        usize::from(inner.width),
+    ));
+    let title = if diff.source_prompt {
+        "Compare Schema".to_string()
+    } else {
+        format!("Compare Schema \u{b7} {}", diff.from_label)
+    };
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("Schema diff"),
-        visible.join("\n"),
+        overlay_block(model, &title),
+        lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &visible, |i, line, rect| {
-        let source_index = offset + i;
-        if line.starts_with("filters ") {
-            register_label(
-                hits,
-                rect,
-                line,
-                "added=",
-                HitTarget::Button(HitButton::ToggleAdded),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "removed=",
-                HitTarget::Button(HitButton::ToggleRemoved),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "changed=",
-                HitTarget::Button(HitButton::ToggleChanged),
-            );
-        } else if line.starts_with("confirm=") {
-            register_label(
-                hits,
-                rect,
-                line,
-                "confirm=",
-                HitTarget::Button(HitButton::ConfirmDiff),
-            );
-            register_label(
-                hits,
-                rect,
-                line,
-                "apply=",
-                HitTarget::Button(HitButton::ApplyDiff),
-            );
+    let shown = filter_count(diff);
+    for_popup_lines(popup, &lines, |i, line, rect| {
+        if i == footer_row {
+            crate::widgets::form::register_footer(hits, rect, &footer, diff.submit_label());
+            return;
         }
-        if (entry_start..entry_start.saturating_add(entry_count)).contains(&source_index) {
-            hits.register(HitTarget::ListRow(source_index - entry_start), rect);
+        let at = offset + i;
+        if diff.source_prompt {
+            if (2..=4).contains(&at) {
+                hits.register(HitTarget::FormField(at - 2), rect);
+                if at == 4 && diff.uses_file() && diff.row == 2 {
+                    paint_selection(frame, rect, "> File: ", &diff.file, true);
+                }
+            }
+            return;
+        }
+        if line.starts_with("Show:") {
+            for (needle, button) in [
+                ("[x] added", HitButton::ToggleAdded),
+                ("[ ] added", HitButton::ToggleAdded),
+                ("[x] removed", HitButton::ToggleRemoved),
+                ("[ ] removed", HitButton::ToggleRemoved),
+                ("[x] changed", HitButton::ToggleChanged),
+                ("[ ] changed", HitButton::ToggleChanged),
+            ] {
+                register_label(hits, rect, line, needle, HitTarget::Button(button));
+            }
+        } else if at >= entries_from && at < entries_from + shown {
+            hits.register(HitTarget::ListRow(at - entries_from), rect);
         }
     });
+}
+
+/// How many differences the filters let through.
+fn filter_count(diff: &crate::screens::schema_diff::SchemaDiffScreen) -> usize {
+    diff.filtered().len()
 }
 
 fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
@@ -2777,9 +2797,9 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let popup = centered(area, 76, area.height.saturating_sub(2).min(20));
     let editor = &model.schema_editor;
-    let fields = crate::widgets::form::render_lines(editor);
     // The buttons keep the bottom of the popup: raw SQL a page long would push them out.
     let inner = popup_inner(popup);
+    let fields = editor.lines_within(usize::from(inner.width));
     let room = usize::from(inner.height.saturating_sub(2));
     let body: Vec<String> = fields
         .iter()
@@ -2802,9 +2822,15 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         "  tab/arrows move  enter {}  esc cancel",
         submit.to_lowercase()
     ));
+    let title = match (editor.is_raw(), model.connection.name.as_str()) {
+        (true, "") => "Apply Raw DDL".to_string(),
+        (true, name) => format!("Apply Raw DDL · {name}"),
+        (false, "") => "Schema".to_string(),
+        (false, name) => format!("Schema · {name}"),
+    };
     frame.render_widget(Clear, popup);
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).block(overlay_block(model, "Schema")),
+        Paragraph::new(lines.join("\n")).block(overlay_block(model, &title)),
         popup,
     );
     register_overlay(hits, popup);
@@ -2822,7 +2848,12 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(line) = focus_line.filter(|line| shown.contains(line))
         && let Some(field) = editor.fields.get(editor.focus)
     {
-        show_form_field(frame, crate::mouse::line_rect(inner, line - offset), field);
+        show_windowed_input(
+            frame,
+            crate::mouse::line_rect(inner, line - offset),
+            &format!("> {}: ", field.label),
+            &field.value,
+        );
     }
     let footer_row = crate::mouse::line_rect(inner, footer_index);
     crate::widgets::form::register_footer(hits, footer_row, &footer, submit);
@@ -3180,20 +3211,28 @@ fn completion_popup_rect(area: Rect, model: &Model, items: &[String]) -> Rect {
         .max()
         .unwrap_or(16)
         .clamp(12, 42) as u16;
-    let width = width.min(area.width.max(1));
-    let height = (items.len().clamp(1, 8) as u16)
-        .saturating_add(2)
-        .min(area.height.max(1));
-    let x = if cursor_x.saturating_add(width) > area.width {
-        area.width.saturating_sub(width)
+    // The popup stays inside the editor pane: on a small terminal it ran over the pane's
+    // border and into the results, and past the screen's right edge.
+    let pane = plan.content;
+    let width = width.min(pane.width.max(1));
+    let height = (items.len().clamp(1, 8) as u16).saturating_add(2);
+    let x = if cursor_x.saturating_add(width) > pane.right() {
+        pane.right().saturating_sub(width).max(pane.x)
     } else {
         cursor_x
     };
-    let below = area.height.saturating_sub(cursor_y.saturating_add(1));
-    let y = if below >= height {
-        cursor_y.saturating_add(1)
+    // Below the cursor if the list fits there, else above it, else where there is more
+    // room, with fewer rows.
+    let room_below = pane.bottom().saturating_sub(cursor_y.saturating_add(1));
+    let room_above = cursor_y.saturating_sub(pane.y);
+    let (y, height) = if room_below >= height {
+        (cursor_y.saturating_add(1), height)
+    } else if room_above >= height {
+        (cursor_y - height, height)
+    } else if room_below >= room_above {
+        (cursor_y.saturating_add(1), room_below)
     } else {
-        cursor_y.saturating_sub(height)
+        (cursor_y - room_above, room_above)
     };
     Rect::new(x, y, width, height)
 }
@@ -3213,7 +3252,11 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         frame,
         model,
         popup,
-        Block::bordered().title("Parameters"),
+        Block::bordered().title(format!(
+            "Parameters ({} of {})",
+            model.editor.parameter_index + 1,
+            model.editor.parameters.len().max(1)
+        )),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
@@ -3330,32 +3373,97 @@ fn render_related_picker(
 }
 
 fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    if model.editor.history_confirm_clear {
-        let target = if model.connection.name.is_empty() {
-            "all"
-        } else {
-            model.connection.name.as_str()
-        };
-        render_list_overlay(
-            frame,
-            model,
-            &format!("clear history for {target}?"),
-            &[],
-            0,
-            0,
-            hits,
-        );
-    } else {
-        render_list_overlay(
-            frame,
-            model,
-            "History",
-            &model.editor.history,
-            model.editor.history_selected,
-            0,
-            hits,
-        );
+    use crate::widgets::form::footer_line;
+    let editor = &model.editor;
+    let area = frame.area();
+    if area.width < 10 || area.height < 5 {
+        return;
     }
+    let name = model.connection.name.as_str();
+    if editor.history_confirm_clear {
+        let popup = centered(area, 60, 7);
+        let question = if name.is_empty() {
+            "Clear all of the history?".to_string()
+        } else {
+            format!("Clear the history of {name}?")
+        };
+        let lines = vec![
+            question,
+            "The statements it holds are removed for good.".into(),
+            String::new(),
+            footer_line("Clear", editor.history_footer),
+        ];
+        paint_popup(
+            frame,
+            model,
+            popup,
+            overlay_block(model, "Clear history"),
+            lines.join("\n"),
+        );
+        register_overlay(hits, popup);
+        for_popup_lines(popup, &lines, |_, line, rect| {
+            if line.contains("[Cancel]") {
+                crate::widgets::form::register_footer(hits, rect, line, "Clear");
+            }
+        });
+        return;
+    }
+    let popup = centered(area, 100, area.height.saturating_sub(2).min(18));
+    let inner = popup_inner(popup);
+    let width = inner.width as usize;
+    let rows = (inner.height as usize).saturating_sub(2).max(1);
+    let matches = editor.history_matches();
+    let offset = scroll_to_selection(editor.history_selected, 0, matches.len(), rows);
+    let mut lines = vec![
+        editor
+            .history_search
+            .inline_line_within("search: ", true, width),
+    ];
+    for row in 0..rows {
+        let index = offset + row;
+        let line = match matches.get(index) {
+            Some(sql) => {
+                let marker = if index == editor.history_selected {
+                    ">"
+                } else {
+                    " "
+                };
+                // One line per statement; its layout is the editor's to show.
+                let flat = sql.split_whitespace().collect::<Vec<_>>().join(" ");
+                format!(
+                    "{marker} {}",
+                    crate::model::truncate_cell(&flat, width.saturating_sub(2))
+                )
+            }
+            None if row == 0 && editor.history.is_empty() => {
+                "  Nothing has run yet on this connection.".into()
+            }
+            None if row == 0 => "  No statement matches.".into(),
+            None => String::new(),
+        };
+        lines.push(line);
+    }
+    lines.push("Enter opens it in a new document · Esc closes".into());
+    let title = if name.is_empty() {
+        "History".to_string()
+    } else {
+        format!("History · {name}")
+    };
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, &title),
+        lines.join("\n"),
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &lines, |i, _, rect| {
+        if i == 0 {
+            paint_selection(frame, rect, "search: ", &editor.history_search, true);
+        } else if i <= rows && offset + i - 1 < matches.len() {
+            hits.register(HitTarget::ListRow(offset + i - 1), rect);
+        }
+    });
 }
 
 fn render_snippets(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
@@ -3479,6 +3587,33 @@ mod tests {
     #[test]
     fn compact_terminal_does_not_panic() {
         let _ = render_to_string(&Model::default(), 20, 8);
+    }
+
+    /// The completion list stays inside the editor pane at 80x24 and 60x20: it ran over
+    /// the pane's bottom border into the results and past the screen's right edge.
+    #[test]
+    fn the_completion_popup_stays_inside_the_editor_pane() {
+        use ratatui::layout::Rect;
+        for (width, height) in [(80u16, 24u16), (60, 20), (120, 36)] {
+            let mut model = Model::default();
+            model.apply_size(width, height);
+            model.set_sql("select * from customers c where c.");
+            let sql_len = model.active_document().text().chars().count();
+            model.active_document_mut().sql.set_cursor(sql_len).unwrap();
+            let items: Vec<String> = (0..12)
+                .map(|n| format!("created_at_column_{n}  main.customers"))
+                .collect();
+            let area = Rect::new(0, 0, width, height);
+            let plan = crate::layout::LayoutPlan::for_area_with_document_tabs(
+                area,
+                Some(&model.effective_panes()),
+                true,
+            );
+            let popup = super::completion_popup_rect(area, &model, &items);
+            assert!(popup.right() <= plan.content.right(), "{width}x{height}");
+            assert!(popup.bottom() <= plan.content.bottom(), "{width}x{height}");
+            assert!(popup.x >= plan.content.x && popup.y >= plan.content.y);
+        }
     }
 
     /// On production the analyze dialog says so in the warning colour, on that line

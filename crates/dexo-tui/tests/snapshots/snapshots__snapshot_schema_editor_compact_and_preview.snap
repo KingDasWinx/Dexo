@@ -2,21 +2,21 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
-┌Schema────────────────────────────────────────────────────┐
-│schema table                                              │
+┌Schema · local────────────────────────────────────────────┐
+│New table:                                                │
 │> target: public.orders                                   │
 │  columns: id bigint identity pk                          │
-│  defaults:                                               │
-│  indexes:                                                │
 │  constraints:                                            │
 │  foreign_keys:                                           │
 │                                                          │
+│  columns: name type [pk] [not null] [unique] [identity]  │
+│    [default x], ...                                      │
+│  a type may hold commas: numeric(10,2)                   │
+│  constraints: check (price > 0), unique (a, b)           │
+│  foreign_keys: customer_id references customers(id)      │
+│                                                          │
 │ [Preview]   [Cancel]                                     │
 │  tab/arrows move  enter preview  esc cancel              │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘

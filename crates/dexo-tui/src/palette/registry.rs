@@ -1367,7 +1367,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "editor.parameters",
-            title: "Submit Parameters",
+            title: "Edit Parameters…",
             keywords: &["bind", "params"],
             shortcut: None,
             requirements: &[],
@@ -1495,6 +1495,14 @@ pub(crate) fn shortcut_for(
         })
         .collect();
     let bindings = if usable.is_empty() { bindings } else { usable };
+    // Ctrl+H on such a terminal is Ctrl+Backspace (see `handle_key`): a key that deletes
+    // a word is not the one to name for Find and Replace.
+    let bindings: Vec<&crate::keymap::Binding> = bindings
+        .into_iter()
+        .filter(|binding| {
+            model.keys_disambiguated || crate::keymap::chord_label(&binding.chord) != "ctrl+h"
+        })
+        .collect();
     let here = crate::update::active_key_context(model);
     let bound_here = bindings
         .iter()
@@ -1572,7 +1580,6 @@ fn unmet_requirement(model: &Model, requirement: Requirement) -> Option<String> 
         Requirement::PendingChanges => model.data.changes.pending().is_empty(),
         Requirement::ActiveQuery => model.active_operation.is_none(),
         Requirement::Parameters => model.editor.parameters.is_empty(),
-        Requirement::History => model.editor.history.is_empty(),
     };
     unmet.then(|| requirement.reason().to_string())
 }
@@ -1718,7 +1725,6 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         "data.revert" | "data.review" | "data.discard_all" => &[PendingChanges],
         "query.cancel" => &[ActiveQuery],
         "editor.parameters" => &[Parameters],
-        "editor.history.clear" => &[History],
         _ => &[],
     }
 }

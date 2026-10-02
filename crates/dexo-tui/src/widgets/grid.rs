@@ -84,10 +84,23 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             frame.render_widget(Paragraph::new(plan).scroll((scroll, 0)), body);
         }
         ResultsView::Messages => {
+            let lines = message_lines(model);
+            // The log stops with its last row at the bottom of the pane: scrolled on, it
+            // left two lines and a blank pane.
+            let rows: usize = lines
+                .iter()
+                .map(|line| {
+                    let text: String = line.spans.iter().map(|s| s.content.as_ref()).collect();
+                    wrapped_rows(&text, body.width as usize)
+                })
+                .sum();
+            let max_scroll = rows.saturating_sub((body.height as usize).max(1));
+            hits.set_scroll_limit(crate::mouse::ScrollArea::Messages, max_scroll);
+            let scroll = (model.results.messages_scroll as usize).min(max_scroll) as u16;
             frame.render_widget(
-                Paragraph::new(message_lines(model))
+                Paragraph::new(lines)
                     .wrap(Wrap { trim: false })
-                    .scroll((model.results.messages_scroll, 0)),
+                    .scroll((scroll, 0)),
                 body,
             );
         }
@@ -737,6 +750,32 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
         ));
     }
     lines
+}
+
+/// Rows `text` takes in a pane `width` columns wide, wrapped at spaces the way the
+/// paragraph wraps it; a word wider than the pane breaks across rows.
+fn wrapped_rows(text: &str, width: usize) -> usize {
+    use unicode_width::UnicodeWidthStr;
+    if width == 0 {
+        return 1;
+    }
+    let mut rows = 1;
+    let mut used = 0;
+    for word in text.split_inclusive(' ') {
+        let full = word.width();
+        let bare = word.trim_end().width();
+        if used + bare <= width {
+            used = (used + full).min(width);
+            continue;
+        }
+        if used > 0 {
+            rows += 1;
+        }
+        let extra = bare.saturating_sub(1) / width;
+        rows += extra;
+        used = (full - extra * width).min(width);
+    }
+    rows
 }
 
 /// The log, oldest first so the newest is where you land after scrolling down -- and so a

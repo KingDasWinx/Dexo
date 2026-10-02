@@ -213,3 +213,28 @@ fn toggling_a_comment_leaves_a_cursor_in_the_indent() {
     update(&mut model, Action::EditorToggleComment);
     assert_eq!(model.active_document().cursor(), 1);
 }
+
+/// A letter with Alt or Ctrl is a command: where nothing is bound to it, it does nothing
+/// instead of being typed (Alt+J, Alt+Z and Alt+F left `jzf` in the document).
+#[test]
+fn an_unbound_alt_letter_is_not_typed() {
+    let mut model = editor_with("select 1", 8);
+    for letter in ['j', 'z', 'f'] {
+        press(&mut model, KeyCode::Char(letter), KeyModifiers::ALT);
+    }
+    assert_eq!(model.active_document().text(), "select 1");
+    press(&mut model, KeyCode::Char('j'), KeyModifiers::NONE);
+    assert_eq!(model.active_document().text(), "select 1j");
+}
+
+/// Select All on an empty document left a selection that began with the first letter
+/// typed, and the second letter replaced it: `abc` came out as `bc`.
+#[test]
+fn select_all_in_an_empty_document_does_not_eat_the_first_letter() {
+    let mut model = editor_with("", 0);
+    press(&mut model, KeyCode::Char('a'), KeyModifiers::CONTROL);
+    for letter in ['a', 'b', 'c'] {
+        press(&mut model, KeyCode::Char(letter), KeyModifiers::NONE);
+    }
+    assert_eq!(model.active_document().text(), "abc");
+}

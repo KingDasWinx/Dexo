@@ -1306,6 +1306,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.messages.error(message);
             Vec::new()
         }
+        // Over SSH, in a container or with no display there is no clipboard to read, yet
+        // a copy still reaches the terminal. Paste what Dexo copied last, as an editor's
+        // own register would, instead of failing with the backend's error.
+        Action::ClipboardUnreadable => {
+            if model.data.clipboard.is_empty() {
+                model.messages.warn(
+                    "The system clipboard cannot be read here. Paste with the terminal's own shortcut, or copy in Dexo first."
+                        .into(),
+                );
+                Vec::new()
+            } else {
+                let text = model.data.clipboard.clone();
+                update(model, Action::Paste(text))
+            }
+        }
         Action::OfflineCatalogLoaded {
             generation,
             list,
@@ -1514,7 +1529,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::DataNavBack => data_nav_back(model),
-        Action::OpenDdlPreview => open_ddl_preview(model),
+        Action::OpenDdlPreview => execute_on_document_connection(model, action),
         Action::ConfirmDdl => {
             model.schema_editor.confirm_typed();
             Vec::new()
@@ -1550,12 +1565,22 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.schema_diff.toggle_changed();
             Vec::new()
         }
-        Action::ConfirmSchemaDiff => {
-            model.schema_diff.confirm();
-            Vec::new()
-        }
-        Action::ApplySchemaDiff => {
-            model.schema_diff.apply();
+        Action::SchemaDiffOpenScript => crate::screens::schema_diff::open_script(model),
+        Action::SchemaSourcesLoaded(snapshots) => {
+            use crate::screens::schema_diff::{DiffOption, DiffOptionKind};
+            if model.schema_diff.open && model.schema_diff.source_prompt {
+                model.schema_diff.add_snapshots(
+                    snapshots
+                        .into_iter()
+                        .map(|(name, driver)| DiffOption {
+                            label: format!("snapshot {name}  ({driver})"),
+                            name,
+                            kind: DiffOptionKind::Snapshot,
+                            driver,
+                        })
+                        .collect(),
+                );
+            }
             Vec::new()
         }
         Action::SchemaDiffLoaded {
@@ -1563,15 +1588,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             to_label,
             ordered,
         } => {
-            let left = model.schema_diff.left.clone();
-            let right = model.schema_diff.right.clone();
+            // The sources stay for another look, with the result over them.
+            let from_connection = model.schema_diff.from_connection.take();
             model.schema_diff = crate::screens::schema_diff::SchemaDiffScreen::from_ordered(
                 from_label, to_label, &ordered,
             );
-            model.schema_diff.left = left;
-            model.schema_diff.right = right;
-            model.schema_diff.loading = false;
-            model.schema_diff.source_prompt = false;
+            model.schema_diff.from_connection = from_connection;
             Vec::new()
         }
         Action::SchemaDiffFailed { message } => {
@@ -1603,6 +1625,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ToastTick => {
             model.messages.tick();
+            Vec::new()
+        }
+        Action::DiagnosticsTick => {
+            crate::screens::editor::settle_diagnostics(model);
             Vec::new()
         }
         Action::CycleResultsView => {
@@ -2016,33 +2042,37 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SubmitParameters => submit_parameter_prompt(model),
         Action::SearchHistory => {
             model.editor.history_open = true;
+            model.editor.history_confirm_clear = false;
             model.editor.history_selected = 0;
+            model.editor.history_search.clear();
+            // This connection's statements; with none connected, all of them.
             vec![Effect::LoadHistory {
-                connection_id: None,
+                connection_id: (!model.connection.name.is_empty())
+                    .then(|| model.connection.name.clone()),
             }]
         }
         Action::ClearHistory => confirm_clear_history(model),
-        Action::HistoryLoaded(entries) => {
+        Action::HistoryLoaded(mut entries) => {
+            // Newest first, so keeping the first of each statement keeps the latest run
+            // of it: the same query run ten times is one row.
+            let mut seen = std::collections::HashSet::new();
+            entries.retain(|sql| seen.insert(sql.clone()));
             model.editor.history = entries;
-            model.editor.history_open = true;
             model.editor.history_selected = 0;
             Vec::new()
         }
-        Action::HistoryPick => {
-            if crate::screens::editor::pick_history(model) {
-                crate::screens::workbench::execute_document(model);
-                start_query(model)
-            } else {
-                Vec::new()
-            }
-        }
-        Action::SnippetsLoaded(snippets) => {
+        Action::HistoryPick => open_history_entry(model),
+        Action::SnippetsLoaded(mut snippets) => {
             model.editor.snippet_pending = false;
-            model.editor.snippets = snippets;
-            model.editor.snippet_open = !model.editor.snippets.is_empty();
-            if model.editor.snippets.is_empty() {
-                model.messages.warn("no snippets available".into());
+            // The built-in ones follow the person's own, which win on a name.
+            for builtin in dexo_sql::builtin_snippets() {
+                if !snippets.iter().any(|own| own.name == builtin.name) {
+                    snippets.push(builtin);
+                }
             }
+            model.editor.snippets = snippets;
+            model.editor.snippet_open = true;
+            model.editor.snippet_selected = 0;
             Vec::new()
         }
         Action::SnippetPick => {
@@ -2050,31 +2080,62 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::DdlPreviewed {
-            sql,
+            statements,
             confirmation,
             warnings,
+            risk,
         } => {
             let preview = dexo_app::schema::DdlPreview {
                 plan: {
                     let mut plan = dexo_driver_api::DdlPlan::default();
-                    if !sql.is_empty() {
+                    for sql in statements {
                         plan.push(sql, false);
                     }
                     plan.warnings = warnings;
                     plan
                 },
-                risk: dexo_driver_api::ChangeRisk::default(),
+                risk,
                 dependents: Vec::new(),
                 grants: Vec::new(),
                 confirmation,
                 warnings: Vec::new(),
             };
-            model.schema_editor.open_preview(preview);
+            let (origin, change) = match model.schema_editor.pending.take() {
+                Some((origin, change)) => (origin, Some(change)),
+                None => (crate::screens::schema_editor::PreviewOrigin::Form, None),
+            };
+            model
+                .schema_editor
+                .open_preview_for(preview, origin, change);
             Vec::new()
         }
-        Action::SchemaApplied { message } => {
-            model.messages.info(message);
+        Action::SchemaApplied {
+            message,
+            refresh,
+            ok,
+        } => {
+            if ok {
+                model.messages.info(message);
+            } else {
+                model.messages.warn(message);
+            }
             model.schema_editor.preview = None;
+            model.schema_editor.applying = None;
+            refresh
+                .map(|target| refresh_after_schema_change(model, &target))
+                .unwrap_or_default()
+        }
+        Action::SchemaFailed { message } => {
+            model.messages.error(message);
+            // A change that failed from the form is fixed in the form, whose fields are
+            // as they were.
+            if model.schema_editor.applying.take()
+                == Some(crate::screens::schema_editor::PreviewOrigin::Form)
+                && model.schema_editor.preview.is_none()
+            {
+                model.schema_editor.open = true;
+                model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
+            }
             Vec::new()
         }
         Action::ExplainLoaded {
@@ -2307,7 +2368,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     );
                 }
                 crate::model::ResultsView::Messages => {
-                    model.results.messages_scroll = model.results.messages_scroll.saturating_sub(1);
+                    model.results.messages_scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Messages,
+                        model.results.messages_scroll,
+                        -1,
+                    );
                 }
                 crate::model::ResultsView::Grid if record_view_shown(model) => {
                     record_move_field(model, -1)
@@ -2326,13 +2391,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     );
                 }
                 crate::model::ResultsView::Messages => {
-                    // Bounded by the log itself; it is the one list here that only grows.
-                    // An entry can span several rows, so the bound counts rows, not entries.
-                    model.results.messages_scroll = model
-                        .results
-                        .messages_scroll
-                        .saturating_add(1)
-                        .min(model.messages.line_count().saturating_sub(1) as u16);
+                    // Bounded by what the last frame drew: the log is the one list here
+                    // that only grows, and an entry can span several rows.
+                    model.results.messages_scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Messages,
+                        model.results.messages_scroll,
+                        1,
+                    );
                 }
                 crate::model::ResultsView::Grid if record_view_shown(model) => {
                     record_move_field(model, 1)
@@ -3361,9 +3426,13 @@ fn mouse_file_picker(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
 
 fn mouse_history(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     if model.editor.history_confirm_clear {
+        // Only the buttons answer: a click anywhere in the box used to clear everything.
         return match hit {
-            Some(HitTarget::Button(HitButton::Confirm) | HitTarget::Overlay) => {
-                confirm_clear_history(model)
+            Some(HitTarget::FooterSubmit) => confirm_clear_history(model),
+            Some(HitTarget::FooterCancel) => {
+                model.editor.history_confirm_clear = false;
+                model.editor.history_open = false;
+                Vec::new()
             }
             _ => Vec::new(),
         };
@@ -3425,10 +3494,7 @@ fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
         Some(HitTarget::FooterSubmit) => apply_ddl(model),
-        Some(HitTarget::FooterCancel) => {
-            model.schema_editor.preview = None;
-            Vec::new()
-        }
+        Some(HitTarget::FooterCancel) => cancel_ddl_preview(model),
         Some(HitTarget::FormField(0)) => {
             if let Some(preview) = model.schema_editor.preview.as_mut() {
                 preview.footer = crate::widgets::form::FooterFocus::Input;
@@ -3453,12 +3519,29 @@ fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             model.schema_diff.toggle_changed();
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::ConfirmDiff)) => {
-            model.schema_diff.confirm();
+        // A click on a source steps to the next one; the keys step either way.
+        Some(HitTarget::FormField(side)) if model.schema_diff.source_prompt && side < 2 => {
+            model.schema_diff.footer = crate::widgets::form::FooterFocus::Input;
+            model.schema_diff.row = side;
+            model.schema_diff.cycle(side, 1);
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::ApplyDiff)) => {
-            model.schema_diff.apply();
+        Some(HitTarget::FormField(2)) if model.schema_diff.source_prompt => {
+            model.schema_diff.footer = crate::widgets::form::FooterFocus::Input;
+            model.schema_diff.row = 2;
+            Vec::new()
+        }
+        Some(HitTarget::ListRow(index)) if !model.schema_diff.source_prompt => {
+            model.schema_diff.selected = index;
+            model.schema_diff.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
+        Some(HitTarget::FooterSubmit) if model.schema_diff.source_prompt => {
+            crate::screens::schema_diff::request(model)
+        }
+        Some(HitTarget::FooterSubmit) => crate::screens::schema_diff::open_script(model),
+        Some(HitTarget::FooterCancel) => {
+            model.schema_diff.open = false;
             Vec::new()
         }
         _ => Vec::new(),
@@ -4164,9 +4247,9 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
     if overlay == Some(OverlayKind::History) {
         if delta < 0 {
             model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
-        } else if !model.editor.history.is_empty() {
-            model.editor.history_selected = (model.editor.history_selected + 1)
-                .min(model.editor.history.len().saturating_sub(1));
+        } else {
+            model.editor.history_selected += 1;
+            model.editor.clamp_history();
         }
         return Vec::new();
     }
@@ -4223,6 +4306,16 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             } else {
                 model.schema_diff.selected = (model.schema_diff.selected + 1).min(count - 1);
             }
+        }
+        return Vec::new();
+    }
+    if overlay == Some(OverlayKind::DdlPreview) {
+        if let Some(preview) = model.schema_editor.preview.as_mut() {
+            preview.scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::DdlPreview,
+                preview.scroll.min(usize::from(u16::MAX)) as u16,
+                delta,
+            ) as usize;
         }
         return Vec::new();
     }
@@ -4552,52 +4645,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return ddl_preview_key(model, key);
     }
     if model.schema_diff.open {
-        return match key.code {
-            KeyCode::Esc => {
-                model.schema_diff.open = false;
-                Vec::new()
-            }
-            KeyCode::Char('l') if model.schema_diff.source_prompt => {
-                if let Some(session) = model.active_session {
-                    model.schema_diff.left = Some(dexo_app::schema_diff::DiffSource::Live(
-                        session.0.to_string(),
-                    ));
-                    model.schema_diff.error = None;
-                }
-                Vec::new()
-            }
-            KeyCode::Char('r') if model.schema_diff.source_prompt => {
-                if let Some(session) = model.active_session {
-                    model.schema_diff.right = Some(dexo_app::schema_diff::DiffSource::Live(
-                        session.0.to_string(),
-                    ));
-                    model.schema_diff.error = None;
-                }
-                Vec::new()
-            }
-            KeyCode::Enter if model.schema_diff.source_prompt => request_schema_diff(model),
-            KeyCode::Char('a') => {
-                model.schema_diff.toggle_added();
-                Vec::new()
-            }
-            KeyCode::Char('r') => {
-                model.schema_diff.toggle_removed();
-                Vec::new()
-            }
-            KeyCode::Char('c') => {
-                model.schema_diff.toggle_changed();
-                Vec::new()
-            }
-            KeyCode::Char('y') => {
-                model.schema_diff.confirm();
-                Vec::new()
-            }
-            KeyCode::Enter => {
-                model.schema_diff.apply();
-                Vec::new()
-            }
-            _ => Vec::new(),
-        };
+        return crate::screens::schema_diff::handle_key(model, key);
     }
     if model.security.open {
         return match key.code {
@@ -6501,6 +6549,10 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             effects.extend(refresh_table_data(model));
             return effects;
         }
+        Action::OpenDdlPreview => {
+            effects.extend(open_ddl_preview(model));
+            return effects;
+        }
         Action::OpenExplain | Action::RunExplainAnalyze => {
             effects.extend(explain_effect(
                 model,
@@ -6544,8 +6596,26 @@ fn start_query(model: &mut Model) -> Vec<Effect> {
             .iter()
             .any(|parameter| matches!(parameter.value, DbValue::Null))
     {
-        model.editor.parameter_prompt = true;
+        crate::screens::editor::begin_parameter_prompt(model);
         return Vec::new();
+    }
+    if !model.editor.parameters.is_empty() {
+        // Values given before are used again without asking: say which, and how to
+        // change them. A secret's value is not repeated.
+        let used = model
+            .editor
+            .parameters
+            .iter()
+            .map(|parameter| match (&parameter.value, parameter.sensitive) {
+                (_, true) => format!("{} = ****", parameter.name),
+                (DbValue::Text(text), false) => format!("{} = {text}", parameter.name),
+                _ => parameter.name.clone(),
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        model
+            .messages
+            .info(format!("Using {used}; Edit Parameters changes them."));
     }
     let statements = crate::screens::workbench::planned_statements(model);
     if statements.is_empty() {
@@ -8671,24 +8741,68 @@ fn load_inspector(model: &mut Model) -> Vec<Effect> {
     }]
 }
 
+/// Go To Definition: the object under the cursor is shown in the explorer when the tree
+/// has it, and its DDL opens when only the catalog does. It only knew what the explorer
+/// had expanded, and otherwise said "no definition at cursor" and nothing else.
 fn goto_definition(model: &mut Model) -> Vec<Effect> {
     let sql = model.active_document().text();
     let cursor = model.active_document().byte_cursor();
-    let catalog = dexo_app::SnapshotCatalog::new(flatten_explorer(&model.explorer));
+    let whole_catalog =
+        !model.catalog_objects.is_empty() && model.catalog_connection == model.connection.name;
+    let objects = if whole_catalog {
+        model.catalog_objects.clone()
+    } else {
+        flatten_explorer(&model.explorer)
+    };
+    let catalog = dexo_app::SnapshotCatalog::new(objects);
     let Some(target) = dexo_sql::definition_at(&sql, cursor, &catalog) else {
-        model.messages.warn("no definition at cursor".into());
+        model.messages.warn(
+            "No definition here: put the cursor on a table or column the catalog knows.".into(),
+        );
         return Vec::new();
     };
     let wanted = target.display_unquoted();
     if let Some(id) = find_qualified(&model.explorer, &wanted) {
         model.explorer.reveal(&id);
         model.explorer.select(id.clone());
+        model.panes.explorer_visible = true;
+        model
+            .messages
+            .info(format!("{wanted} is selected in the explorer."));
         let operation = crate::runtime::OperationId::new();
         if model.explorer.expand_with(&id, operation) {
             return catalog_load_effect(model, Some(id), operation, false);
         }
+        return Vec::new();
     }
-    Vec::new()
+    // Not in the tree, whose schemas may be collapsed and never read: the catalog has it,
+    // and its definition is the DDL.
+    let found = model
+        .catalog_objects
+        .iter()
+        .find(|object| {
+            object.qualified_name.display_unquoted() == wanted
+                && crate::screens::explorer::opens_table_data(&object.kind)
+        })
+        .map(|object| object.id.clone());
+    match (found, model.active_session) {
+        (Some(id), Some(session)) => {
+            model.inspector = crate::screens::object_inspector::ObjectInspector::loading(&wanted);
+            model.inspector.open = true;
+            model.inspector.facet = crate::screens::object_inspector::InspectorFacet::Ddl;
+            vec![Effect::LoadObjectInspector {
+                id,
+                session,
+                generation: model.session_generation,
+            }]
+        }
+        _ => {
+            model.messages.warn(format!(
+                "{wanted} is not in the explorer; expand its schema there, or refresh the catalog."
+            ));
+            Vec::new()
+        }
+    }
 }
 
 fn flatten_explorer(
@@ -9476,6 +9590,10 @@ fn open_ddl_preview(model: &mut Model) -> Vec<Effect> {
     let Ok(change) = model.schema_editor.to_change() else {
         return Vec::new();
     };
+    model.schema_editor.pending = Some((
+        crate::screens::schema_editor::PreviewOrigin::Form,
+        change.clone(),
+    ));
     let Some(session) = model.active_session else {
         let sql = format!(
             "{} {}",
@@ -9522,6 +9640,21 @@ fn ddl_preview_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let Some(preview) = model.schema_editor.preview.as_mut() else {
         return Vec::new();
     };
+    // A statement longer than the dialog is read a page at a time.
+    let page = i32::from((model.height / 3).max(3));
+    let paged = match key.code {
+        KeyCode::PageDown => Some(page),
+        KeyCode::PageUp => Some(-page),
+        _ => None,
+    };
+    if let Some(delta) = paged {
+        preview.scroll = model.hits.scroll(
+            crate::mouse::ScrollArea::DdlPreview,
+            preview.scroll.min(usize::from(u16::MAX)) as u16,
+            delta,
+        ) as usize;
+        return Vec::new();
+    }
     let outcome = if preview.needs_typing() {
         footer_key(&mut preview.footer, &key)
     } else {
@@ -9529,10 +9662,7 @@ fn ddl_preview_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     };
     match outcome {
         FooterKey::Submit => apply_ddl(model),
-        FooterKey::Cancel => {
-            model.schema_editor.preview = None;
-            Vec::new()
-        }
+        FooterKey::Cancel => cancel_ddl_preview(model),
         FooterKey::Moved => Vec::new(),
         FooterKey::Pass => {
             if preview.needs_typing()
@@ -9545,6 +9675,50 @@ fn ddl_preview_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+/// Cancel in the preview goes back to what asked for it: the form, with its fields as
+/// they were, to be changed -- it closed the form with the preview, and the way back was
+/// the palette -- or the Security panel underneath.
+fn cancel_ddl_preview(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::schema_editor::PreviewOrigin;
+    let origin = model
+        .schema_editor
+        .preview
+        .as_ref()
+        .map(|preview| preview.origin);
+    model.schema_editor.preview = None;
+    if origin == Some(PreviewOrigin::Form) {
+        model.schema_editor.open = true;
+        model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
+    }
+    Vec::new()
+}
+
+/// Reads again the place of the explorer a schema change touched: the schema it created
+/// a table in, or the database of a MySQL table. The tree kept showing what was there
+/// before until `r` was pressed on the schema.
+fn refresh_after_schema_change(
+    model: &mut Model,
+    target: &dexo_driver_api::QualifiedName,
+) -> Vec<Effect> {
+    let Some(session) = model.active_session else {
+        return Vec::new();
+    };
+    let wanted = target.schema().or(target.catalog()).map(str::to_string);
+    let Some(wanted) = wanted else {
+        return Vec::new();
+    };
+    let id = model.explorer.find_container(&wanted);
+    let Some(id) = id else {
+        return Vec::new();
+    };
+    let operation = crate::runtime::OperationId::new();
+    if model.explorer.expand_with(&id, operation) {
+        let _ = session;
+        return catalog_load_effect(model, Some(id), operation, false);
+    }
+    Vec::new()
 }
 
 fn apply_ddl(model: &mut Model) -> Vec<Effect> {
@@ -9562,12 +9736,16 @@ fn apply_ddl(model: &mut Model) -> Vec<Effect> {
     let mut what = vec![format!("Apply to {}:", preview.target)];
     what.extend(preview.sql.lines().take(3).map(|line| format!("  {line}")));
     let typed = preview.typed.as_str().to_string();
+    // What was previewed is what is applied: a grant from the Security panel used to be
+    // answered with the Schema form's table, and "ddl RolledBack".
+    let origin = preview.origin;
+    let Some(change) = preview.change.clone() else {
+        return Vec::new();
+    };
     if !production_cleared(model, what, Action::ApplyDdl) {
         return Vec::new();
     }
-    let Ok(change) = model.schema_editor.to_change() else {
-        return Vec::new();
-    };
+    model.schema_editor.applying = Some(origin);
     let Some(session) = model.active_session else {
         model.messages.info("ddl queued".into());
         model.schema_editor.preview = None;
@@ -10572,37 +10750,33 @@ fn build_transfer_request(
     }
 }
 
+/// Compare Schema opens on the connections that are open and the snapshots saved, to pick
+/// two from. It took both sides from the one selected connection.
 fn open_schema_diff(model: &mut Model) -> Vec<Effect> {
-    model.schema_diff.open = true;
-    model.schema_diff.source_prompt = true;
-    model.schema_diff.entries.clear();
-    model.schema_diff.ordered.clear();
-    model.schema_diff.left = None;
-    model.schema_diff.right = None;
-    model.schema_diff.loading = false;
-    model.schema_diff.error = None;
-    model.schema_diff.confirmed = false;
-    model.schema_diff.applied = false;
-    Vec::new()
-}
-
-fn request_schema_diff(model: &mut Model) -> Vec<Effect> {
-    let (Some(left), Some(right), Some(session)) = (
-        model.schema_diff.left.clone(),
-        model.schema_diff.right.clone(),
-        model.active_session,
-    ) else {
-        model.schema_diff.error = Some("select both schema sources".into());
-        return Vec::new();
-    };
-    model.schema_diff.loading = true;
-    model.schema_diff.error = None;
-    vec![Effect::LoadSchemaDiff {
-        session,
-        left,
-        right,
-        generation: model.session_generation,
-    }]
+    use crate::screens::schema_diff::{DiffOption, DiffOptionKind};
+    let mut options: Vec<DiffOption> = model
+        .connections
+        .profiles
+        .iter()
+        .filter_map(|row| {
+            let session = model.connections.session_for(&row.profile.name)?;
+            Some(DiffOption {
+                label: format!("{}  (connected)", row.profile.name),
+                name: row.profile.name.clone(),
+                kind: DiffOptionKind::Live(session.id),
+                driver: row.profile.driver.clone(),
+            })
+        })
+        .collect();
+    options.push(DiffOption {
+        label: "a snapshot file...".into(),
+        name: String::new(),
+        kind: DiffOptionKind::File,
+        driver: String::new(),
+    });
+    let active = (!model.connection.name.is_empty()).then(|| model.connection.name.clone());
+    model.schema_diff.open_picker(options, active.as_deref());
+    vec![Effect::LoadSchemaSources]
 }
 
 fn open_security(model: &mut Model) -> Vec<Effect> {
@@ -10632,6 +10806,10 @@ fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
         model.data.target.clone(),
         &principal,
     );
+    model.schema_editor.pending = Some((
+        crate::screens::schema_editor::PreviewOrigin::Security,
+        change.clone(),
+    ));
     vec![Effect::PreviewDdl {
         change,
         session,
@@ -10703,13 +10881,15 @@ fn apply_transfer_failed(
 
 fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.editor.history_confirm_clear {
-        return match key.code {
-            KeyCode::Esc => {
+        use crate::widgets::form::{FooterKey, confirm_key};
+        return match confirm_key(&mut model.editor.history_footer, &key) {
+            FooterKey::Submit => confirm_clear_history(model),
+            FooterKey::Cancel => {
                 model.editor.history_confirm_clear = false;
+                model.editor.history_open = false;
                 Vec::new()
             }
-            KeyCode::Enter => confirm_clear_history(model),
-            _ => Vec::new(),
+            FooterKey::Moved | FooterKey::Pass => Vec::new(),
         };
     }
     if key.code == KeyCode::Enter {
@@ -11576,29 +11756,26 @@ fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
 }
 
 fn open_snippets(model: &mut Model) -> Vec<Effect> {
-    if model.editor.snippets.is_empty() {
-        model.editor.snippet_pending = true;
-        return vec![Effect::LoadSnippets];
-    }
-    model.editor.snippet_open = true;
-    model.editor.snippet_selected = 0;
-    Vec::new()
+    // Always read: what comes back is the person's snippets with the built-in ones.
+    model.editor.snippet_pending = true;
+    vec![Effect::LoadSnippets]
 }
 
 fn open_parameters(model: &mut Model) -> Vec<Effect> {
+    // Reading the statement again forgets the values; each parameter keeps its own, so
+    // Edit Parameters starts from what was given.
+    let given = std::mem::take(&mut model.editor.parameters);
     crate::screens::editor::refresh_intelligence(model, false);
+    for parameter in &mut model.editor.parameters {
+        if let Some(before) = given.iter().find(|before| before.name == parameter.name) {
+            parameter.value = before.value.clone();
+        }
+    }
     if model.editor.parameters.is_empty() {
         model.messages.warn("no query parameters".into());
         return Vec::new();
     }
-    model.editor.parameter_index = model
-        .editor
-        .parameters
-        .iter()
-        .position(|parameter| matches!(parameter.value, DbValue::Null))
-        .unwrap_or(0);
-    model.editor.parameter_draft.clear();
-    model.editor.parameter_prompt = true;
+    crate::screens::editor::begin_parameter_prompt(model);
     Vec::new()
 }
 
@@ -11614,16 +11791,79 @@ fn submit_parameter_prompt(model: &mut Model) -> Vec<Effect> {
     }
 }
 
+/// Asks first, whether or not the list has been read: the palette used to refuse with
+/// "history is empty" until Search History had loaded it.
 fn open_clear_history(model: &mut Model) -> Vec<Effect> {
     model.editor.history_open = true;
     model.editor.history_confirm_clear = true;
+    // Cancel holds the focus: an Enter out of habit keeps the history.
+    model.editor.history_footer = crate::widgets::form::FooterFocus::Cancel;
     Vec::new()
 }
 
 fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
     let connection_id = model.connection.name.clone();
     model.editor.history_confirm_clear = false;
+    model.editor.history_open = false;
+    model.editor.history.clear();
+    model.editor.history_selected = 0;
+    model.messages.info(if connection_id.is_empty() {
+        "History cleared.".into()
+    } else {
+        format!("History of {connection_id} cleared.")
+    });
     vec![Effect::ClearHistory { connection_id }]
+}
+
+/// Enter in the history: the statement opens in a new document of the connection, as a
+/// saved query does, and does not run. It used to replace the active document, unsaved
+/// work included, and run at once.
+fn open_history_entry(model: &mut Model) -> Vec<Effect> {
+    let Some(sql) = crate::screens::editor::picked_history(model) else {
+        model.editor.history_open = false;
+        return Vec::new();
+    };
+    model.editor.history_open = false;
+    let name = suggested_document_name(model);
+    open_text_document(model, &name, &sql, None)
+}
+
+/// A new document holding `text`, on the connection `connection` names, or else the one
+/// the active document is on. Nothing runs, and nothing already open is replaced.
+pub(crate) fn open_text_document(
+    model: &mut Model,
+    title: &str,
+    text: &str,
+    connection: Option<&str>,
+) -> Vec<Effect> {
+    let named = connection.and_then(|name| {
+        model
+            .connections
+            .profiles
+            .iter()
+            .find(|row| row.profile.name == name)
+            .map(|row| row.profile.id.0.to_string())
+    });
+    let connection = named
+        .or_else(|| model.active_document().connection_id.clone())
+        .or_else(|| active_connection_uuid(model));
+    let title = if model
+        .documents
+        .iter()
+        .any(|document| document.title.eq_ignore_ascii_case(title))
+    {
+        suggested_document_name(model)
+    } else {
+        title.to_string()
+    };
+    let mut document = crate::model::EditorDocument::new_unique(title, None, connection);
+    document.sql = dexo_sql::SqlDocument::new(text);
+    model.documents.push(document);
+    let index = model.documents.len() - 1;
+    let effects = activate_document(model, index);
+    model.focus_active_document_tab();
+    model.focus = Focus::Editor;
+    effects
 }
 
 fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::DiagnosticBundle {
@@ -11800,6 +12040,13 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::DataReview) => update(model, Action::OpenReview),
         // The fields come first: previewing straight away previewed a form nobody saw.
         PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
+            if model.connection.read_only {
+                model.messages.warn(format!(
+                    "{} is read-only: a schema change cannot be applied here.",
+                    model.connection.name
+                ));
+                return Vec::new();
+            }
             model.schema_editor.raw_sql.clear();
             model.schema_editor.form_diff = None;
             model.schema_editor.errors.clear();

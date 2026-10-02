@@ -240,7 +240,7 @@ impl Destructive {
             Self::Drop => "DROP removes the object and what it holds",
             Self::Truncate => "TRUNCATE removes every row",
             Self::AlterDrop => "ALTER ... DROP removes part of the table",
-            Self::Unrecognized => "Dexo could not read this statement",
+            Self::Unrecognized => "Dexo could not read it, so it cannot tell what it changes",
         }
     }
 }

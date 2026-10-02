@@ -1,3 +1,5 @@
+use std::collections::HashSet;
+
 use crate::context::{Confidence, CursorContext, Intent, RowSource, RowSourceKind, analyze};
 use crate::dialect::Dialect;
 use crate::rank;
@@ -137,6 +139,11 @@ pub struct CompletionItem {
     pub detail: Option<String>,
     pub target_id: Option<String>,
     pub signature: Option<String>,
+    /// What goes before the name when the item is accepted: the schema of a table the
+    /// search path may not reach (`reporting.daily`), the alias of a column two tables of
+    /// the statement have (`c.id`). Written out, the bare name ran into "relation does
+    /// not exist" and "column reference is ambiguous".
+    pub qualifier: Option<String>,
     /// How well this answers what was typed, and how much the position wanted it. Higher
     /// sorts first. It was a private rank of 1 to 5 that only knew whether a table was
     /// starred.
@@ -183,7 +190,7 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
             push_aliases(&mut items, context, prefix);
             // No FROM yet: `select users.` is as likely as a function.
             if context.row_sources.is_empty() {
-                push_tables(&mut items, catalog, prefix, None);
+                push_tables(&mut items, catalog, prefix, None, context, &HashSet::new());
             }
             push_functions(&mut items, catalog, prefix);
             push_builtins(&mut items, prefix);
@@ -204,9 +211,17 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
             // schema's tables. If nothing matches it was not a schema after all, so
             // offer the whole list rather than an empty popup.
             let schema = context.qualifier.last().cloned();
-            push_tables(&mut items, catalog, prefix, schema.as_deref());
+            let related = related_tables(context, catalog);
+            push_tables(
+                &mut items,
+                catalog,
+                prefix,
+                schema.as_deref(),
+                context,
+                &related,
+            );
             if items.is_empty() {
-                push_tables(&mut items, catalog, prefix, None);
+                push_tables(&mut items, catalog, prefix, None, context, &related);
             }
         }
         // A qualifier the statement does not declare: `select venda.` typed before the
@@ -221,6 +236,8 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
                 catalog,
                 prefix,
                 context.qualifier.last().map(String::as_str),
+                context,
+                &HashSet::new(),
             );
         }
         Intent::Routine => push_functions(&mut items, catalog, prefix),
@@ -233,7 +250,7 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
         }
         Intent::Keyword => {
             // Nothing recognised, so nothing is ruled out.
-            push_tables(&mut items, catalog, prefix, None);
+            push_tables(&mut items, catalog, prefix, None, context, &HashSet::new());
             push_functions(&mut items, catalog, prefix);
             push_builtins(&mut items, prefix);
             push_keywords(&mut items, KEYWORDS, prefix);
@@ -243,7 +260,7 @@ pub fn complete_with(context: &CursorContext, catalog: &dyn Catalog) -> Vec<Comp
     // an empty box; keywords are always a legitimate answer. Not after a dot, though:
     // only a member of what precedes it can go there.
     if items.is_empty() && context.confidence != Confidence::High && context.qualifier.is_empty() {
-        push_tables(&mut items, catalog, prefix, None);
+        push_tables(&mut items, catalog, prefix, None, context, &HashSet::new());
         push_keywords(&mut items, KEYWORDS, prefix);
     }
     rank::finish(items)
@@ -264,6 +281,7 @@ fn push_columns(items: &mut Vec<CompletionItem>, table: &TableInfo, prefix: &str
             detail: Some(table.qualified.clone()),
             target_id: Some(format!("{}.{}", table.qualified, column)),
             signature: None,
+            qualifier: None,
             score: score + boosts.total(),
         });
     }
@@ -319,6 +337,7 @@ fn push_join_conditions(
                     detail: Some(format!("foreign key · {}", left_table.qualified)),
                     target_id: Some(left_table.qualified.clone()),
                     signature: None,
+                    qualifier: None,
                     score: score + rank::FOREIGN_KEY,
                 });
             }
@@ -351,6 +370,8 @@ fn push_scope_columns(
     catalog: &dyn Catalog,
     prefix: &str,
 ) {
+    let first = items.len();
+    let mut owners = Vec::new();
     for source in &context.row_sources {
         let Some(table) = resolve_source(source, catalog) else {
             continue;
@@ -362,6 +383,20 @@ fn push_scope_columns(
             for item in &mut items[before..] {
                 item.detail = Some(format!("{qualifier} · {}", table.qualified));
             }
+            owners.extend(std::iter::repeat_n(qualifier, items.len() - before));
+        }
+    }
+    // A column two of the tables have is accepted with its table's name or alias: bare,
+    // the server answers that the reference is ambiguous.
+    for (index, qualifier) in owners.into_iter().enumerate() {
+        let name = items[first + index].label.to_ascii_lowercase();
+        let shared = items[first..]
+            .iter()
+            .filter(|other| other.label.to_ascii_lowercase() == name)
+            .count()
+            > 1;
+        if shared {
+            items[first + index].qualifier = Some(qualifier);
         }
     }
 }
@@ -382,9 +417,56 @@ fn push_aliases(items: &mut Vec<CompletionItem>, context: &CursorContext, prefix
             detail: Some(source.qualified()),
             target_id: None,
             signature: None,
+            qualifier: None,
             score,
         });
     }
+}
+
+/// Schemas a name reaches without being qualified: Postgres's `public`, SQLite's and
+/// DuckDB's `main`, SQL Server's `dbo`, and MySQL's tables, which have no schema of
+/// their own. A table in any other is written with its schema.
+fn is_default_schema(schema: &str) -> bool {
+    schema.is_empty()
+        || ["public", "main", "dbo"]
+            .iter()
+            .any(|default| schema.eq_ignore_ascii_case(default))
+}
+
+/// The tables a foreign key ties to one the statement already reads, either way round,
+/// by lowercased qualified name: after `from orders o join`, `customers` and
+/// `order_items` are the likely ones.
+fn related_tables(context: &CursorContext, catalog: &dyn Catalog) -> HashSet<String> {
+    let mut related = HashSet::new();
+    let sources: Vec<TableInfo> = context
+        .row_sources
+        .iter()
+        .filter_map(|source| resolve_source(source, catalog))
+        .collect();
+    if sources.is_empty() {
+        return related;
+    }
+    let tables = catalog.tables();
+    for table in &tables {
+        let is_source = sources
+            .iter()
+            .any(|source| source.qualified.eq_ignore_ascii_case(&table.qualified));
+        for key in catalog.foreign_keys(&table.qualified) {
+            if is_source {
+                // The statement's table points at these.
+                for target in tables.iter().filter(|t| references(&key.referenced, t)) {
+                    related.insert(target.qualified.to_ascii_lowercase());
+                }
+            } else if sources
+                .iter()
+                .any(|source| references(&key.referenced, source))
+            {
+                // This one points at a table the statement reads.
+                related.insert(table.qualified.to_ascii_lowercase());
+            }
+        }
+    }
+    related
 }
 
 fn push_tables(
@@ -392,6 +474,8 @@ fn push_tables(
     catalog: &dyn Catalog,
     prefix: &str,
     schema: Option<&str>,
+    context: &CursorContext,
+    related: &HashSet<String>,
 ) {
     for table in catalog.tables() {
         if let Some(schema) = schema
@@ -405,14 +489,20 @@ fn push_tables(
         let boosts = rank::Boosts {
             favorite: table.favorite,
             recent: table.recency > 0,
+            related: related.contains(&table.qualified.to_ascii_lowercase()),
+            other_schema: !is_default_schema(&table.schema),
             ..Default::default()
         };
+        // Typed after `reporting.`, the schema is already there.
+        let qualifier = (context.qualifier.is_empty() && !is_default_schema(&table.schema))
+            .then(|| table.schema.clone());
         items.push(CompletionItem {
             label: table.name.clone(),
             kind: CompletionKind::Table,
             detail: Some(table.qualified.clone()),
             target_id: Some(table.qualified.clone()),
             signature: None,
+            qualifier,
             score: score + boosts.total(),
         });
     }
@@ -429,6 +519,7 @@ fn push_functions(items: &mut Vec<CompletionItem>, catalog: &dyn Catalog, prefix
             detail: None,
             target_id: Some(function.name.clone()),
             signature: Some(function.signature.clone()),
+            qualifier: None,
             score,
         });
     }
@@ -447,6 +538,7 @@ fn push_builtins(items: &mut Vec<CompletionItem>, prefix: &str) {
             detail: Some("built-in".into()),
             target_id: None,
             signature: Some((*signature).into()),
+            qualifier: None,
             score,
         });
     }
@@ -465,6 +557,7 @@ fn push_keywords(items: &mut Vec<CompletionItem>, words: &[&str], prefix: &str) 
             detail: None,
             target_id: None,
             signature: None,
+            qualifier: None,
             score,
         });
     }
@@ -701,6 +794,73 @@ mod tests {
             Dialect::Postgres,
         );
         assert_eq!(labels(items), ["id", "email"]);
+    }
+
+    fn shop() -> FakeCatalog {
+        let mut catalog = FakeCatalog::default();
+        catalog.add_table("reporting.daily", ["day", "total"], false, 0);
+        catalog.add_table("public.products", ["id", "name"], false, 0);
+        catalog.add_table("public.customers", ["id", "name"], false, 0);
+        catalog.add_table("public.orders", ["id", "customer_id"], false, 0);
+        catalog.add_foreign_key("public.orders", ["customer_id"], "public.customers", ["id"]);
+        catalog
+    }
+
+    /// `daily` lives in `reporting`: written bare, the accepted query did not run.
+    #[test]
+    fn a_table_outside_the_default_schema_is_accepted_with_its_schema() {
+        let items = complete("select * from dai", 17, &shop(), Dialect::Postgres);
+        assert_eq!(items[0].label, "daily");
+        assert_eq!(items[0].qualifier.as_deref(), Some("reporting"));
+        let items = complete("select * from cust", 18, &shop(), Dialect::Postgres);
+        assert_eq!(items[0].label, "customers");
+        assert_eq!(items[0].qualifier, None, "public is reached bare");
+        // Typed after the schema, nothing is added a second time.
+        let items = complete(
+            "select * from reporting.dai",
+            27,
+            &shop(),
+            Dialect::Postgres,
+        );
+        assert_eq!(items[0].label, "daily");
+        assert_eq!(items[0].qualifier, None);
+    }
+
+    /// After a join the tables a foreign key ties to the one read lead, and the schema
+    /// off the search path comes after the ones in it.
+    #[test]
+    fn a_join_lists_the_tables_a_foreign_key_ties_first() {
+        let sql = "select * from orders o join ";
+        let items = complete(sql, sql.len(), &shop(), Dialect::Postgres);
+        let tables: Vec<&str> = items
+            .iter()
+            .filter(|item| item.kind == super::CompletionKind::Table)
+            .map(|item| item.label.as_str())
+            .collect();
+        assert_eq!(tables[0], "customers", "{tables:?}");
+        assert_eq!(*tables.last().unwrap(), "daily", "{tables:?}");
+    }
+
+    /// `id` is in both tables of the join: bare, the server calls it ambiguous.
+    #[test]
+    fn a_column_two_tables_have_is_accepted_with_its_alias() {
+        let sql = "select * from customers c join orders o on o.customer_id = c.id where ";
+        let items = complete(sql, sql.len(), &shop(), Dialect::Postgres);
+        let owners: Vec<Option<&str>> = items
+            .iter()
+            .filter(|item| item.label == "id" && item.kind == super::CompletionKind::Column)
+            .map(|item| item.qualifier.as_deref())
+            .collect();
+        assert_eq!(owners.len(), 2, "{items:?}");
+        assert!(
+            owners.contains(&Some("c")) && owners.contains(&Some("o")),
+            "{owners:?}"
+        );
+        let customer_id = items
+            .iter()
+            .find(|item| item.label == "customer_id")
+            .unwrap();
+        assert_eq!(customer_id.qualifier, None, "only one table has it");
     }
 
     #[test]

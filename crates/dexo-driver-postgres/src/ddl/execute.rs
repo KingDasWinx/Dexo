@@ -58,8 +58,9 @@ pub async fn apply_ddl(
         for statement in &plan.statements {
             if let Err(error) = session.client.batch_execute(&statement.sql).await {
                 let _ = session.client.batch_execute("ROLLBACK").await;
-                let _ = error;
-                return Ok(DdlOutcome::RolledBack);
+                // The server's reason, as MySQL's first failure gives it: "the change
+                // was rolled back" with no why left the user guessing.
+                return Err(map_error(error));
             }
         }
         return match session.client.batch_execute("COMMIT").await {
@@ -71,7 +72,7 @@ pub async fn apply_ddl(
     for statement in &plan.statements {
         match session.client.batch_execute(&statement.sql).await {
             Ok(()) => committed += 1,
-            Err(_) if committed == 0 => return Ok(DdlOutcome::RolledBack),
+            Err(error) if committed == 0 => return Err(map_error(error)),
             Err(_) => return Ok(DdlOutcome::PartiallyCommitted { committed }),
         }
     }

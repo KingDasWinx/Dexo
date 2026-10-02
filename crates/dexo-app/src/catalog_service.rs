@@ -32,6 +32,31 @@ impl CatalogService {
         reader.object(id).await.map_err(map_driver_error)
     }
 
+    /// Every object under `parent` (the whole connection when `None`): the databases,
+    /// their schemas, and each table's or view's columns, keys and indexes. What a schema
+    /// snapshot is made of, for the command line and the workbench alike.
+    pub async fn collect_objects(
+        reader: &dyn CatalogReader,
+        parent: Option<&ObjectId>,
+    ) -> Result<Vec<CatalogObject>, AppError> {
+        let page = Self::list_children(reader, parent, &CatalogListOptions::default()).await?;
+        let mut objects = page.objects;
+        let children = objects.clone();
+        for child in children {
+            if matches!(
+                child.kind,
+                ObjectKind::Catalog
+                    | ObjectKind::Schema
+                    | ObjectKind::Table
+                    | ObjectKind::View
+                    | ObjectKind::MaterializedView
+            ) {
+                objects.extend(Box::pin(Self::collect_objects(reader, Some(&child.id))).await?);
+            }
+        }
+        Ok(objects)
+    }
+
     pub async fn ddl(reader: &dyn CatalogReader, id: &ObjectId) -> Result<ObjectDdl, AppError> {
         reader.ddl(id).await.map_err(map_driver_error)
     }

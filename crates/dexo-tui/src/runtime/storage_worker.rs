@@ -205,7 +205,12 @@ impl StorageWorker {
                         }
                         StorageCommand::ClearHistory { connection_id } => {
                             let repo = HistoryRepository::new(db.connection());
-                            let _ = repo.clear_for_connection(&connection_id);
+                            // No connection is the dialog asking for all of it.
+                            let _ = if connection_id.is_empty() {
+                                repo.clear_all()
+                            } else {
+                                repo.clear_for_connection(&connection_id)
+                            };
                         }
                         StorageCommand::ListSnippets { reply } => {
                             let repo = SnippetRepository::new(db.connection());

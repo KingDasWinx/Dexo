@@ -68,8 +68,6 @@ pub enum HitButton {
     ToggleAdded,
     ToggleRemoved,
     ToggleChanged,
-    ConfirmDiff,
-    ApplyDiff,
     Export,
     Revoke,
     ConfirmDirty,
@@ -161,6 +159,8 @@ pub enum ScrollArea {
     McpAudit,
     Value,
     Review,
+    Messages,
+    DdlPreview,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -250,6 +250,12 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.saved_queries.open, OverlayKind::SavedQueries),
         (model.editor.history_open, OverlayKind::History),
         (model.editor.parameter_prompt, OverlayKind::Parameters),
+        // The preview of a change is above whatever asked for it: the Security panel
+        // stayed on top of it, and took its clicks.
+        (
+            model.schema_editor.preview.is_some(),
+            OverlayKind::DdlPreview,
+        ),
         (model.schema_editor.open, OverlayKind::SchemaForm),
         (model.inspector.open, OverlayKind::ObjectOverlay),
         (model.data.viewer.is_some(), OverlayKind::ValueViewer),
@@ -279,10 +285,6 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.security.open, OverlayKind::Security),
         (model.transfer.open, OverlayKind::Transfer),
         (model.schema_diff.open, OverlayKind::SchemaDiff),
-        (
-            model.schema_editor.preview.is_some(),
-            OverlayKind::DdlPreview,
-        ),
         (model.data.review.is_some(), OverlayKind::Review),
         (model.results_menu.open, OverlayKind::ResultsMenu),
         (model.node_menu.open, OverlayKind::NodeMenu),

@@ -494,13 +494,7 @@ pub fn describe_query_error(
         .and_then(|position| sql_location(sql, position));
     let mut header = Vec::new();
     if let Some(code) = error.native_code() {
-        // SQLite's result code is a small number, not a SQLSTATE.
-        let label = if code.len() < 5 && code.chars().all(|ch| ch.is_ascii_digit()) {
-            "error code"
-        } else {
-            "SQLSTATE"
-        };
-        header.push(format!("{label} {code}"));
+        header.push(describe_native_code(code));
     }
     if let Some((line, column, _)) = &location {
         header.push(format!("line {line}, column {column}"));
@@ -526,6 +520,32 @@ pub fn describe_query_error(
         lines.push(format!("HINT: {hint}"));
     }
     lines
+}
+
+/// The driver's own code for a failure, named for what it is: Postgres gives a SQLSTATE,
+/// MySQL its error number with the SQLSTATE after it, SQLite a result code, which has no
+/// SQLSTATE, and DuckDB the kind of error.
+fn describe_native_code(code: &str) -> String {
+    let sqlstate = |text: &str| {
+        text.len() == 5
+            && text
+                .chars()
+                .all(|ch| ch.is_ascii_digit() || ch.is_ascii_uppercase())
+    };
+    if sqlstate(code) {
+        return format!("SQLSTATE {code}");
+    }
+    if let Some((number, state)) = code.split_once(" (")
+        && let Some(state) = state.strip_suffix(')')
+        && sqlstate(state)
+        && number.chars().all(|ch| ch.is_ascii_digit())
+    {
+        return format!("error {number} · SQLSTATE {state}");
+    }
+    if code.chars().all(|ch| ch.is_ascii_digit()) {
+        return format!("error code {code}");
+    }
+    code.to_string()
 }
 
 /// 1-based line and column of a 1-based character offset, with that line's text (tabs
@@ -1460,6 +1480,50 @@ pub fn truncate_cell(text: &str, width: usize) -> String {
     }
     out.push('…');
     out
+}
+
+/// `text` in rows of at most `width` columns, broken at a space where there is one and
+/// otherwise inside a word. A continuation row is indented under the first, two columns
+/// further in. For text a dialog must show whole: cut at its border, the end of a long
+/// DDL line was out of reach.
+pub fn wrap_line(text: &str, width: usize) -> Vec<String> {
+    use unicode_width::{UnicodeWidthChar, UnicodeWidthStr};
+    if width < 8 || text.width() <= width {
+        return vec![text.to_string()];
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let indent = chars
+        .iter()
+        .take_while(|ch| **ch == ' ')
+        .count()
+        .min(width / 2);
+    let continuation = " ".repeat(indent + 2);
+    let column = |ch: &char| ch.width().unwrap_or(0);
+    let mut rows = Vec::new();
+    let mut start = 0;
+    while start < chars.len() {
+        let prefix = if rows.is_empty() { "" } else { &continuation };
+        let room = width - prefix.len();
+        let (mut end, mut used) = (start, 0);
+        while end < chars.len() && used + column(&chars[end]) <= room {
+            used += column(&chars[end]);
+            end += 1;
+        }
+        if end < chars.len() {
+            if let Some(space) = (start + 1..end).rev().find(|at| chars[*at] == ' ') {
+                end = space + 1;
+            } else if end == start {
+                end = start + 1;
+            }
+        }
+        let row: String = chars[start..end].iter().collect();
+        rows.push(format!("{prefix}{}", row.trim_end()));
+        start = end;
+        while start < chars.len() && chars[start] == ' ' {
+            start += 1;
+        }
+    }
+    rows
 }
 
 /// Breathing room past the widest value in a column. Sized to the content alone, the
@@ -2493,7 +2557,42 @@ impl Model {
 
 #[cfg(test)]
 mod editor_document_tests {
-    use super::EditorDocument;
+    use super::{EditorDocument, describe_native_code};
+
+    #[test]
+    fn a_long_line_wraps_at_spaces_and_indents_what_follows() {
+        use super::wrap_line;
+        assert_eq!(wrap_line("short", 20), ["short"]);
+        assert_eq!(
+            wrap_line(
+                "  CONSTRAINT orders_fkey FOREIGN KEY (customer_id) REFERENCES customers",
+                30
+            ),
+            [
+                "  CONSTRAINT orders_fkey",
+                "    FOREIGN KEY (customer_id)",
+                "    REFERENCES customers"
+            ]
+        );
+        // No space to break at: inside the word.
+        assert_eq!(
+            wrap_line("abcdefghijklmnopqrstuvwxyz", 10),
+            ["abcdefghij", "  klmnopqr", "  stuvwxyz"]
+        );
+    }
+
+    /// SQLite's result code `1` was printed as `SQLSTATE 1`.
+    #[test]
+    fn a_driver_code_is_named_for_what_it_is() {
+        assert_eq!(describe_native_code("42P01"), "SQLSTATE 42P01");
+        assert_eq!(
+            describe_native_code("1146 (42S02)"),
+            "error 1146 · SQLSTATE 42S02"
+        );
+        assert_eq!(describe_native_code("1"), "error code 1");
+        assert_eq!(describe_native_code("2067"), "error code 2067");
+        assert_eq!(describe_native_code("Catalog"), "Catalog");
+    }
 
     #[test]
     fn new_documents_get_unique_ids_and_connection() {

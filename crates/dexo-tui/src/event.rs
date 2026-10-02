@@ -1,7 +1,7 @@
-use crossterm::event::{Event, EventStream, KeyEventKind};
+use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use dexo_app::DriverRegistry;
 use dexo_storage::AppPaths;
-use futures_util::StreamExt;
+use futures_util::{FutureExt, StreamExt};
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::collections::VecDeque;
@@ -13,6 +13,108 @@ use crate::model::Model;
 use crate::runtime::WorkbenchRuntime;
 use crate::runtime::storage_worker::StorageWorker;
 use crate::terminal::{CrosstermTerminal, TerminalGuard, TuiError};
+
+fn is_plain_escape(event: &Event) -> bool {
+    matches!(
+        event,
+        Event::Key(key) if key.code == KeyCode::Esc
+            && key.modifiers.is_empty()
+            && key.kind == KeyEventKind::Press
+    )
+}
+
+/// The key a CSI sequence names, for the parameters between `[` and its final character:
+/// `1;5` and `D` are Ctrl+Left, `15` and `~` is F5.
+fn csi_key(params: &str, last: char) -> Option<KeyEvent> {
+    let mut numbers = params.split(';').map(|part| part.parse::<u8>().ok());
+    let first = numbers.next().flatten();
+    // xterm's modifier parameter is 1 plus shift 1, alt 2 and ctrl 4.
+    let mut modifiers = KeyModifiers::NONE;
+    if let Some(code) = numbers.next().flatten().filter(|code| *code > 1) {
+        let bits = code - 1;
+        for (bit, modifier) in [
+            (1, KeyModifiers::SHIFT),
+            (2, KeyModifiers::ALT),
+            (4, KeyModifiers::CONTROL),
+        ] {
+            if bits & bit != 0 {
+                modifiers |= modifier;
+            }
+        }
+    }
+    let code = match (last, first) {
+        ('A', _) => KeyCode::Up,
+        ('B', _) => KeyCode::Down,
+        ('C', _) => KeyCode::Right,
+        ('D', _) => KeyCode::Left,
+        ('H', _) | ('~', Some(1 | 7)) => KeyCode::Home,
+        ('F', _) | ('~', Some(4 | 8)) => KeyCode::End,
+        ('~', Some(2)) => KeyCode::Insert,
+        ('~', Some(3)) => KeyCode::Delete,
+        ('~', Some(5)) => KeyCode::PageUp,
+        ('~', Some(6)) => KeyCode::PageDown,
+        ('~', Some(15)) => KeyCode::F(5),
+        ('~', Some(17)) => KeyCode::F(6),
+        ('~', Some(18)) => KeyCode::F(7),
+        ('~', Some(19)) => KeyCode::F(8),
+        ('~', Some(20)) => KeyCode::F(9),
+        ('~', Some(21)) => KeyCode::F(10),
+        ('~', Some(23)) => KeyCode::F(11),
+        ('~', Some(24)) => KeyCode::F(12),
+        _ => return None,
+    };
+    Some(KeyEvent::new(code, modifiers))
+}
+
+/// An Esc and a key that reached the terminal in one write -- `ESC ESC [ 1 ~` -- are read
+/// as one Esc and the characters `[1~`, which went into the document as text. When a
+/// plain Esc is followed at once by the characters of a CSI sequence, they are the key
+/// the sequence names: Esc, then that key. Anything else is left as it came.
+pub fn unglue_escape(events: Vec<Event>) -> Vec<Event> {
+    let plain = |event: &Event| match event {
+        Event::Key(key)
+            if key.kind == KeyEventKind::Press
+                && !key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT) =>
+        {
+            match key.code {
+                KeyCode::Char(ch) => Some(ch),
+                _ => None,
+            }
+        }
+        _ => None,
+    };
+    let mut out = Vec::with_capacity(events.len());
+    let mut at = 0;
+    while at < events.len() {
+        out.push(events[at].clone());
+        let esc = is_plain_escape(&events[at]);
+        at += 1;
+        if !esc || events.get(at).and_then(plain) != Some('[') {
+            continue;
+        }
+        let mut end = at + 1;
+        let mut params = String::new();
+        while let Some(ch) = events.get(end).and_then(plain) {
+            if ch.is_ascii_digit() || ch == ';' {
+                params.push(ch);
+                end += 1;
+            } else {
+                break;
+            }
+        }
+        let key = events
+            .get(end)
+            .and_then(plain)
+            .and_then(|last| csi_key(&params, last));
+        if let Some(key) = key {
+            out.push(Event::Key(key));
+            at = end + 1;
+        }
+    }
+    out
+}
 
 pub fn action_from_event(event: Event) -> Option<Action> {
     match event {
@@ -126,6 +228,10 @@ async fn run_loop(
     // Only runs while a toast that can age out is up, the same shape as onboarding_tick.
     let mut toast_tick = toast_clock(Duration::from_secs(1));
     let mut toast_ageing = false;
+    // Runs only while a syntax error waits for the cursor to leave it: two ticks without
+    // a key between them mean the typing has paused.
+    let mut pause_tick = tokio::time::interval(Duration::from_millis(700));
+    pause_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // Agent Activity is live: the requests and the calls are read again every second.
@@ -156,10 +262,23 @@ async fn run_loop(
         tokio::select! {
             terminal_event = events.next() => {
                 let Some(event) = terminal_event else { break };
-                let Some(action) = action_from_event(event?) else { continue };
-                let effects = crate::update::update(&mut model, action);
-                if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
-                    return Ok(());
+                let mut batch = vec![event?];
+                if is_plain_escape(&batch[0]) {
+                    // What came with the Esc in the same write, to tell a key glued to it
+                    // from text.
+                    while batch.len() < 16
+                        && let Some(Some(next)) = events.next().now_or_never()
+                    {
+                        batch.push(next?);
+                    }
+                    batch = unglue_escape(batch);
+                }
+                for event in batch {
+                    let Some(action) = action_from_event(event) else { continue };
+                    let effects = crate::update::update(&mut model, action);
+                    if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+                        return Ok(());
+                    }
                 }
             }
             runtime_action = action_rx.recv() => {
@@ -174,6 +293,9 @@ async fn run_loop(
             }
             _ = toast_tick.tick(), if model.messages.expires() => {
                 let _ = crate::update::update(&mut model, Action::ToastTick);
+            }
+            _ = pause_tick.tick(), if model.editor.hides_errors() => {
+                let _ = crate::update::update(&mut model, Action::DiagnosticsTick);
             }
             _ = agent_tick.tick(), if model.mcp_audit.open || model.mcp_profiles.open => {
                 let effects = crate::update::update(&mut model, Action::AgentActivityTick);
@@ -320,8 +442,55 @@ fn arm_toast_clock(clock: &mut tokio::time::Interval, ageing: &mut bool, now_age
 
 #[cfg(test)]
 mod tests {
+    use crossterm::event::{Event, KeyCode, KeyEvent, KeyModifiers};
     use futures_util::FutureExt;
     use std::time::Duration;
+
+    fn key(code: KeyCode) -> Event {
+        Event::Key(KeyEvent::new(code, KeyModifiers::NONE))
+    }
+
+    fn typed(text: &str) -> Vec<Event> {
+        text.chars().map(|ch| key(KeyCode::Char(ch))).collect()
+    }
+
+    /// `Escape Home` sent in one write left `[1~` in the document.
+    #[test]
+    fn a_key_glued_to_an_escape_is_that_key_not_text() {
+        for (glued, wanted) in [
+            ("[1~", KeyEvent::new(KeyCode::Home, KeyModifiers::NONE)),
+            ("[D", KeyEvent::new(KeyCode::Left, KeyModifiers::NONE)),
+            ("[A", KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)),
+            ("[15~", KeyEvent::new(KeyCode::F(5), KeyModifiers::NONE)),
+            ("[1;5D", KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL)),
+        ] {
+            let mut events = vec![key(KeyCode::Esc)];
+            events.extend(typed(glued));
+            assert_eq!(
+                super::unglue_escape(events),
+                vec![key(KeyCode::Esc), Event::Key(wanted)],
+                "{glued}"
+            );
+        }
+    }
+
+    #[test]
+    fn text_after_an_escape_and_lone_escapes_are_left_alone() {
+        let mut events = vec![key(KeyCode::Esc)];
+        events.extend(typed("[x"));
+        assert_eq!(super::unglue_escape(events.clone()), events);
+        let lone = vec![key(KeyCode::Esc)];
+        assert_eq!(super::unglue_escape(lone.clone()), lone);
+        // The text before the Esc is not touched, nor what follows a whole sequence.
+        let mut mixed = typed("ab");
+        mixed.push(key(KeyCode::Esc));
+        mixed.extend(typed("[Bz"));
+        let mut wanted = typed("ab");
+        wanted.push(key(KeyCode::Esc));
+        wanted.push(key(KeyCode::Down));
+        wanted.extend(typed("z"));
+        assert_eq!(super::unglue_escape(mixed), wanted);
+    }
 
     /// A toast that goes up after the clock sat idle waits a whole period for its first
     /// tick instead of taking the missed ones at once.

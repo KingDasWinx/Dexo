@@ -70,6 +70,11 @@ impl<'a> HistoryRepository<'a> {
         Ok(())
     }
 
+    pub fn clear_all(&self) -> anyhow::Result<()> {
+        self.conn.execute("DELETE FROM sql_history", [])?;
+        Ok(())
+    }
+
     pub fn list_for_project(&self, project_id: &str) -> anyhow::Result<Vec<(String, String)>> {
         let mut stmt = self.conn.prepare(
             "SELECT id, sql FROM sql_history WHERE project_id = ?1 ORDER BY created_at DESC",

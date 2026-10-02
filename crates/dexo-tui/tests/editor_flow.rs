@@ -241,14 +241,23 @@ fn completion_popup_accepts_selected_item() {
 }
 
 #[test]
-fn history_overlay_enter_reruns() {
+fn history_overlay_enter_opens_the_statement_in_a_new_document() {
     let mut model = Model::default();
-    model.editor.history = vec!["select 9".into()];
+    model.set_sql("select 1 -- being written");
+    update(&mut model, Action::SearchHistory);
     update(&mut model, Action::HistoryLoaded(vec!["select 9".into()]));
     assert!(model.editor.history_open);
     update(&mut model, Action::HistoryPick);
     assert_eq!(model.active_document().text(), "select 9");
     assert!(!model.editor.history_open);
+    // The document that was being written is still there, and nothing ran.
+    assert!(
+        model
+            .documents
+            .iter()
+            .any(|document| document.text() == "select 1 -- being written")
+    );
+    assert!(model.active_operation.is_none());
 }
 
 fn choose_effects(model: &mut Model, query: &str) -> Vec<dexo_tui::Effect> {

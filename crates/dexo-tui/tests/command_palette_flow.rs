@@ -229,7 +229,6 @@ fn model_satisfying(requirements: &[dexo_tui::palette::Requirement]) -> Model {
                 model.set_sql("select :id");
                 dexo_tui::screens::editor::refresh_intelligence(&mut model, false);
             }
-            Requirement::History => model.editor.history.push("select 1".into()),
         }
     }
     if model.active_document().text().is_empty() {

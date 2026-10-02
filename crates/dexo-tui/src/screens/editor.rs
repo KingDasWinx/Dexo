@@ -34,6 +34,9 @@ pub struct EditorState {
     known: Option<((u64, u64), dexo_sql::KnownObjects)>,
     /// Keeps each statement's diagnostics until it changes.
     diagnoser: dexo_sql::Diagnoser,
+    /// The document, revision and cursor the last pause tick saw, to tell a pause from
+    /// typing: see [`settle_diagnostics`].
+    settle_mark: Option<(String, u64, usize)>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
     pub completion_open: bool,
@@ -51,6 +54,10 @@ pub struct EditorState {
     pub history_open: bool,
     pub history_selected: usize,
     pub history_confirm_clear: bool,
+    /// The focus of the clear confirmation's two buttons.
+    pub history_footer: crate::widgets::form::FooterFocus,
+    /// What the history list is narrowed to.
+    pub history_search: crate::widgets::text_input::TextInput,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
     /// The completion catalog, and the catalog and explorer revisions it was built from.
@@ -101,6 +108,7 @@ impl Clone for EditorState {
             server_diagnostic: self.server_diagnostic.clone(),
             known: self.known.clone(),
             diagnoser: self.diagnoser.clone(),
+            settle_mark: self.settle_mark.clone(),
             parameters: self.parameters.clone(),
             completions: self.completions.clone(),
             completion_open: self.completion_open,
@@ -118,6 +126,8 @@ impl Clone for EditorState {
             history_open: self.history_open,
             history_selected: self.history_selected,
             history_confirm_clear: self.history_confirm_clear,
+            history_footer: self.history_footer,
+            history_search: self.history_search.clone(),
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
             catalog_key: None,
@@ -147,6 +157,12 @@ impl EditorState {
     pub fn reset_parse(&mut self) {
         self.last_sql.clear();
     }
+
+    /// Whether a syntax error is being kept from showing because the cursor is by it. The
+    /// pause tick runs only while this holds.
+    pub fn hides_errors(&self) -> bool {
+        self.diagnoser.is_hiding()
+    }
 }
 
 impl Default for EditorState {
@@ -161,6 +177,7 @@ impl Default for EditorState {
             server_diagnostic: None,
             known: None,
             diagnoser: dexo_sql::Diagnoser::default(),
+            settle_mark: None,
             parameters: Vec::new(),
             completions: Vec::new(),
             completion_open: false,
@@ -178,6 +195,8 @@ impl Default for EditorState {
             history_open: false,
             history_selected: 0,
             history_confirm_clear: false,
+            history_footer: crate::widgets::form::FooterFocus::Cancel,
+            history_search: Default::default(),
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::default(),
             catalog_key: None,
@@ -343,6 +362,27 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
     let editor = &mut model.editor;
     let known = editor.known.as_ref().map(|(_, known)| known);
     editor.diagnostics = editor.diagnoser.diagnose(sql, dialect, known, byte_cursor);
+}
+
+/// A syntax error by the cursor is not shown while typing, the statement may just not be
+/// finished. When two ticks in a row find the document and the cursor as they were, it
+/// is finished as far as the user goes, and the error shows: `selec 1` was left plain
+/// however long it sat.
+pub fn settle_diagnostics(model: &mut Model) {
+    if !model.editor.hides_errors() || model.active_document().kind.is_table() {
+        model.editor.settle_mark = None;
+        return;
+    }
+    let doc = model.active_document();
+    let mark = (doc.id.clone(), doc.sql.revision(), doc.cursor());
+    if model.editor.settle_mark.as_ref() != Some(&mark) {
+        model.editor.settle_mark = Some(mark);
+        return;
+    }
+    // A cursor nowhere in the document: nothing is being typed.
+    let sql = model.active_document().text();
+    refresh_diagnostics(model, &sql, usize::MAX);
+    model.editor.settle_mark = None;
 }
 
 /// The diagnostics on screen for the active document: its own, and the server's from
@@ -872,16 +912,27 @@ fn move_snippet_stop(model: &mut Model, delta: i32) -> bool {
     true
 }
 
-pub fn accept_completion(model: &mut Model) {
-    let index = model.editor.completion_selected;
-    let Some(item) = model.editor.completions.get(index).cloned() else {
-        return;
-    };
+/// What accepting the highlighted item writes, where, and whether it is a call whose
+/// cursor goes between the parentheses it brings.
+fn completion_edit(model: &Model) -> Option<(std::ops::Range<usize>, String, bool)> {
+    let item = model
+        .editor
+        .completions
+        .get(model.editor.completion_selected)?;
     let dialect = editor_dialect(model);
     let text = match item.kind {
         // A join condition is already written out; quoting it would break it.
         dexo_sql::CompletionKind::Keyword | dexo_sql::CompletionKind::Snippet => item.label.clone(),
-        _ => dialect.quote_if_needed(&item.label),
+        kind => {
+            let name = dialect.quote_if_needed(&item.label);
+            match (&item.qualifier, kind) {
+                // The alias is written as the statement has it; a schema is quoted if
+                // its name needs it.
+                (Some(alias), dexo_sql::CompletionKind::Column) => format!("{alias}.{name}"),
+                (Some(schema), _) => format!("{}.{name}", dialect.quote_if_needed(schema)),
+                (None, _) => name,
+            }
+        }
     };
     let range = model.editor.completion_replace.clone();
     // A function comes with its parentheses and the cursor between them, unless they
@@ -891,6 +942,23 @@ pub fn accept_completion(model: &mut Model) {
         !sql[range.end.min(sql.len())..].starts_with('(')
     };
     let text = if call { format!("{text}()") } else { text };
+    Some((range, text, call))
+}
+
+/// Whether accepting would write what is already there: a complete name typed out is
+/// its own completion. Enter then is a new line, not a second press to get one.
+pub fn accepting_changes_nothing(model: &Model) -> bool {
+    let Some((range, text, _)) = completion_edit(model) else {
+        return false;
+    };
+    let sql = model.active_document().text();
+    sql.get(range).is_some_and(|written| written == text)
+}
+
+pub fn accept_completion(model: &mut Model) {
+    let Some((range, text, call)) = completion_edit(model) else {
+        return;
+    };
     replace_range(model, range, &text);
     if call {
         let doc = model.active_document_mut();
@@ -934,6 +1002,37 @@ fn replace_range(model: &mut Model, range: std::ops::Range<usize>, text: &str) {
     let _ = doc.sql.replace_bytes(range, text);
 }
 
+/// Opens the parameter prompt on the first parameter with no value, or the first one
+/// when all have one (Edit Parameters).
+pub fn begin_parameter_prompt(model: &mut Model) {
+    model.editor.parameter_index = model
+        .editor
+        .parameters
+        .iter()
+        .position(|parameter| matches!(parameter.value, DbValue::Null))
+        .unwrap_or(0);
+    load_parameter_draft(model);
+    model.editor.parameter_footer = crate::widgets::form::FooterFocus::Input;
+    model.editor.parameter_prompt = true;
+}
+
+/// The field starts on that parameter's own value, selected so typing replaces it, or
+/// empty. It used to keep whatever the last parameter was answered with, anywhere, and
+/// typing went on the end of it.
+fn load_parameter_draft(model: &mut Model) {
+    let value = match model
+        .editor
+        .parameters
+        .get(model.editor.parameter_index)
+        .map(|parameter| &parameter.value)
+    {
+        Some(DbValue::Text(text)) => text.clone(),
+        _ => String::new(),
+    };
+    model.editor.parameter_draft.set_text(value);
+    model.editor.parameter_draft.select_all();
+}
+
 pub fn submit_parameters(model: &mut Model) {
     if !model.editor.parameter_draft.is_empty() {
         let index = model.editor.parameter_index;
@@ -942,19 +1041,15 @@ pub fn submit_parameters(model: &mut Model) {
         }
     }
     let next = model.editor.parameter_index + 1;
-    if next < model.editor.parameters.len()
-        && model
-            .editor
-            .parameters
-            .iter()
-            .any(|parameter| matches!(parameter.value, DbValue::Null))
-    {
+    if next < model.editor.parameters.len() {
         model.editor.parameter_index = next;
+        load_parameter_draft(model);
         model.editor.parameter_prompt = true;
         return;
     }
     model.editor.parameter_prompt = false;
     model.editor.parameter_index = 0;
+    model.editor.parameter_draft.clear();
 }
 
 pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
@@ -964,6 +1059,9 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
     let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
     let alt = key.modifiers.contains(KeyModifiers::ALT);
+    if model.keymap.name == "emacs" && emacs_key(model, key) {
+        return true;
+    }
     // Sideways keys mean "not this": they close the popup even when the cursor has
     // nowhere to go, like Right at the end of the text.
     let sideways = matches!(
@@ -975,7 +1073,9 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
         close_completion(model);
     }
     match key.code {
-        KeyCode::Char(ch) if !ctrl => {
+        // A letter pressed with Ctrl or Alt is a command, never text: the ones nothing
+        // is bound to do nothing, where they used to be typed into the document.
+        KeyCode::Char(ch) if !ctrl && !alt => {
             let end = word_end(model);
             insert_text(model, &ch.to_string());
             if !(ch.is_alphanumeric() || matches!(ch, '_' | '$' | '.')) {
@@ -984,11 +1084,12 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             suggest_live(model);
             true
         }
-        KeyCode::Enter if model.editor.completion_open => {
+        KeyCode::Enter if model.editor.completion_open && !accepting_changes_nothing(model) => {
             accept_completion(model);
             true
         }
         KeyCode::Enter => {
+            close_completion(model);
             let end = word_end(model);
             insert_newline(model);
             capitalize_keyword(model, end);
@@ -1062,11 +1163,11 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> bool {
             true
         }
         KeyCode::Home => {
-            move_line_edge(model, true, shift);
+            move_line_edge(model, true, shift, ctrl);
             true
         }
         KeyCode::End => {
-            move_line_edge(model, false, shift);
+            move_line_edge(model, false, shift, ctrl);
             true
         }
         // Ctrl+Up and Ctrl+Down move the view and leave the cursor, as in VS Code.
@@ -1155,6 +1256,9 @@ fn insert_text(model: &mut Model, text: &str) {
     let mark = edit_mark(model);
     let doc = model.active_document_mut();
     let range = doc.selection();
+    if range.is_none() {
+        doc.anchor = None;
+    }
     if range.is_some() && doc.typing {
         doc.sql.end_group();
         doc.typing = false;
@@ -1543,7 +1647,9 @@ pub fn select_all(model: &mut Model) {
     end_typing(model);
     let doc = model.active_document_mut();
     let len = doc.sql.text().chars().count();
-    doc.anchor = Some(0);
+    // Nothing to select in an empty document. An anchor left on its cursor was a
+    // selection that began with the first letter typed, and the second replaced it.
+    doc.anchor = (len > 0).then_some(0);
     let _ = doc.sql.set_cursor(len);
 }
 
@@ -1563,12 +1669,72 @@ fn move_chars(model: &mut Model, delta: i32, shift: bool, word: bool) {
     apply_move(doc, cursor, shift);
 }
 
-fn move_line_edge(model: &mut Model, home: bool, shift: bool) {
+/// Home and End: the line's edge, or with `document` (Ctrl) the document's.
+fn move_line_edge(model: &mut Model, home: bool, shift: bool, document: bool) {
     end_typing(model);
     let doc = model.active_document_mut();
     let text = doc.sql.text();
-    let (line_start, line_end) = line_bounds(&text, doc.sql.cursor());
+    let (line_start, line_end) = if document {
+        (0, text.chars().count())
+    } else {
+        line_bounds(&text, doc.sql.cursor())
+    };
     apply_move(doc, if home { line_start } else { line_end }, shift);
+}
+
+/// Ctrl+K in the Emacs profile: from the cursor to the end of the line, and at the end
+/// of a line the newline after it, so the next line comes up.
+fn kill_line(model: &mut Model) {
+    let mark = edit_mark(model);
+    end_typing(model);
+    let doc = model.active_document_mut();
+    let text = doc.sql.text();
+    let cursor = doc.sql.cursor();
+    let (_, line_end) = line_bounds(&text, cursor);
+    let end = if cursor == line_end {
+        (line_end + 1).min(text.chars().count())
+    } else {
+        line_end
+    };
+    doc.anchor = None;
+    if cursor < end {
+        let _ = doc.sql.delete(cursor..end);
+    }
+    shift_snippet_stops(model, mark);
+}
+
+/// The Emacs profile's motion and kill keys. The keymap has no commands for moving the
+/// cursor -- the arrows are the editor's own keys -- so these are read here, once the
+/// keymap has passed them by. They were only the overlay on the default profile before:
+/// Ctrl+A selected everything, Ctrl+F opened Find, and Alt+F typed an f.
+fn emacs_key(model: &mut Model, key: KeyEvent) -> bool {
+    let ctrl = key.modifiers.contains(KeyModifiers::CONTROL);
+    let alt = key.modifiers.contains(KeyModifiers::ALT);
+    let KeyCode::Char(letter) = key.code else {
+        return false;
+    };
+    let popup = model.editor.completion_open;
+    match (ctrl, alt, letter.to_ascii_lowercase()) {
+        (true, false, 'a') => move_line_edge(model, true, false, false),
+        (true, false, 'e') => move_line_edge(model, false, false, false),
+        (true, false, 'b') => move_chars(model, -1, false, false),
+        (true, false, 'f') => move_chars(model, 1, false, false),
+        (true, false, 'n') if popup => move_completion(model, 1),
+        (true, false, 'p') if popup => move_completion(model, -1),
+        (true, false, 'n') => move_vertical(model, 1, false),
+        (true, false, 'p') => move_vertical(model, -1, false),
+        (true, false, 'd') => delete(model, false),
+        (true, false, 'k') => kill_line(model),
+        (true, false, 'v') => page(model, 1, false),
+        (false, true, 'f') => move_chars(model, 1, false, true),
+        (false, true, 'b') => move_chars(model, -1, false, true),
+        (false, true, 'd') => delete(model, true),
+        (false, true, 'v') => page(model, -1, false),
+        (false, true, '<') => move_line_edge(model, true, false, true),
+        (false, true, '>') => move_line_edge(model, false, false, true),
+        _ => return false,
+    }
+    true
 }
 
 fn move_vertical(model: &mut Model, delta: i32, shift: bool) {
@@ -1863,39 +2029,70 @@ fn cursor_at(text: &str, line: usize, col: usize) -> usize {
     text.chars().count()
 }
 
-pub fn handle_history_key(model: &mut Model, key: KeyEvent) -> bool {
-    match key.code {
-        KeyCode::Esc => {
-            model.editor.history_open = false;
-            true
-        }
-        KeyCode::Up => {
-            model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
-            true
-        }
-        KeyCode::Down => {
-            if model.editor.history_selected + 1 < model.editor.history.len() {
-                model.editor.history_selected += 1;
-            }
-            true
-        }
-        _ => false,
+impl EditorState {
+    /// The history the search leaves, newest first; no search leaves all of it.
+    pub fn history_matches(&self) -> Vec<&String> {
+        let needle = self.history_search.as_str().trim().to_lowercase();
+        self.history
+            .iter()
+            .filter(|sql| needle.is_empty() || sql.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    /// Keeps the highlight on a row the search still lists.
+    pub fn clamp_history(&mut self) {
+        let count = self.history_matches().len();
+        self.history_selected = self.history_selected.min(count.saturating_sub(1));
     }
 }
 
-pub fn pick_history(model: &mut Model) -> bool {
-    let Some(sql) = model
+/// Rows the history list takes a PageUp or PageDown.
+const HISTORY_PAGE: usize = 8;
+
+pub fn handle_history_key(model: &mut Model, key: KeyEvent) -> bool {
+    let editor = &mut model.editor;
+    match key.code {
+        KeyCode::Esc => {
+            editor.history_open = false;
+            true
+        }
+        KeyCode::Up => {
+            editor.history_selected = editor.history_selected.saturating_sub(1);
+            true
+        }
+        KeyCode::Down => {
+            editor.history_selected += 1;
+            editor.clamp_history();
+            true
+        }
+        KeyCode::PageUp => {
+            editor.history_selected = editor.history_selected.saturating_sub(HISTORY_PAGE);
+            true
+        }
+        KeyCode::PageDown => {
+            editor.history_selected += HISTORY_PAGE;
+            editor.clamp_history();
+            true
+        }
+        // Anything else is the search, which edits like any input.
+        _ => {
+            if editor.history_search.handle_key(key) {
+                editor.history_selected = 0;
+                true
+            } else {
+                false
+            }
+        }
+    }
+}
+
+/// The statement the highlight is on.
+pub fn picked_history(model: &Model) -> Option<String> {
+    model
         .editor
-        .history
+        .history_matches()
         .get(model.editor.history_selected)
-        .cloned()
-    else {
-        model.editor.history_open = false;
-        return false;
-    };
-    model.editor.history_open = false;
-    model.set_sql(&sql);
-    true
+        .map(|sql| (*sql).clone())
 }
 
 pub fn handle_snippet_key(model: &mut Model, key: KeyEvent) -> bool {

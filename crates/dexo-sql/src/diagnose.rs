@@ -227,6 +227,11 @@ impl Diagnoser {
     pub fn hidden_away_from(&self, cursor: usize) -> bool {
         self.hidden.iter().any(|near| !near.contains(&cursor))
     }
+
+    /// Whether an error was left out at the last look because the cursor is by it.
+    pub fn is_hiding(&self) -> bool {
+        !self.hidden.is_empty()
+    }
 }
 
 /// One statement's problems, offsets within it.
@@ -236,7 +241,7 @@ fn statement_problems(body: &str, dialect: Dialect, known: Option<&KnownObjects>
         Some("SELECT" | "WITH" | "INSERT" | "UPDATE" | "DELETE" | "VALUES")
     );
     if !checked {
-        return Vec::new();
+        return mistyped_keyword(body);
     }
     let mut found = Vec::new();
     match parse(body, dialect) {
@@ -267,6 +272,58 @@ fn statement_problems(body: &str, dialect: Dialect, known: Option<&KnownObjects>
         }
     }
     found
+}
+
+/// The statements a first word is mistaken for.
+const COMMON_STARTS: [&str; 9] = [
+    "SELECT", "INSERT", "UPDATE", "DELETE", "CREATE", "ALTER", "TRUNCATE", "VALUES", "EXPLAIN",
+];
+
+/// `selec 1`: a statement whose first word is one slip from a common one and no keyword of
+/// its own. Statements that start with other words are left alone, as the editor does not
+/// know every dialect's commands; only a near miss is told.
+fn mistyped_keyword(body: &str) -> Vec<Problem> {
+    let start = body.len() - body.trim_start().len();
+    let word: String = body[start..]
+        .chars()
+        .take_while(|ch| ch.is_ascii_alphabetic())
+        .collect();
+    let next = body[start + word.len()..].chars().next();
+    // `\dt` is a command, `select_x` or `a.b` is not a word of its own.
+    if word.len() < 4 || next.is_some_and(|ch| ch.is_ascii_alphanumeric() || "_.$".contains(ch)) {
+        return Vec::new();
+    }
+    let upper = word.to_ascii_uppercase();
+    let Some(wanted) = COMMON_STARTS
+        .iter()
+        .find(|known| one_slip_apart(&upper, known))
+    else {
+        return Vec::new();
+    };
+    vec![Problem {
+        message: format!("unknown word {word}: did you mean {wanted}?"),
+        range: start..start + word.len(),
+        parse: true,
+        table: None,
+    }]
+}
+
+/// Whether `a` becomes `b` by one letter added, dropped, changed or swapped with its
+/// neighbour (and is not `b`).
+fn one_slip_apart(a: &str, b: &str) -> bool {
+    let (a, b): (Vec<char>, Vec<char>) = (a.chars().collect(), b.chars().collect());
+    if a == b || a.len().abs_diff(b.len()) > 1 {
+        return false;
+    }
+    let common = a.iter().zip(&b).take_while(|(x, y)| x == y).count();
+    let (a, b) = (&a[common..], &b[common..]);
+    match a.len().cmp(&b.len()) {
+        std::cmp::Ordering::Equal => {
+            a[1..] == b[1..] || (a.len() >= 2 && a[0] == b[1] && a[1] == b[0] && a[2..] == b[2..])
+        }
+        std::cmp::Ordering::Less => a == &b[1..],
+        std::cmp::Ordering::Greater => &a[1..] == b,
+    }
 }
 
 /// Whether a parse error at `at` is the SQL's and not the parser's. sqlparser knows only
@@ -853,6 +910,39 @@ mod tests {
                 .is_empty()
         );
         assert!(!diagnoser.hidden_away_from(open.len()));
+    }
+
+    /// A first word one slip from SELECT, INSERT and the like is told, and nothing else:
+    /// the editor does not know every dialect's commands.
+    #[test]
+    fn a_mistyped_statement_keyword_is_told() {
+        let told = |sql: &str| {
+            diagnose(sql, Dialect::Postgres, None, usize::MAX)
+                .into_iter()
+                .map(|found| (found.message, found.byte_range.unwrap()))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            told("selec 1"),
+            [("unknown word selec: did you mean SELECT?".to_string(), 0..5)]
+        );
+        assert_eq!(told("  slect * from t").len(), 1);
+        assert_eq!(told("selcet 1").len(), 1, "two letters swapped");
+        assert_eq!(told("updte t set a = 1").len(), 1);
+        for fine in [
+            "select 1",
+            "pragma table_info(t)",
+            "show tables",
+            "vacuum",
+            "\\dt",
+            "set x = 1",
+            "describe t",
+            "call p()",
+            "TABLE t",
+            "select_x",
+        ] {
+            assert!(told(fine).is_empty(), "{fine}");
+        }
     }
 
     /// A kept answer is the one a fresh look gives: after the statement, the catalog or
