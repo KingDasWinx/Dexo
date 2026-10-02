@@ -191,18 +191,29 @@ dexo schema diff --from before --to after
 dexo doctor --json
 ```
 
-Also available: `run`, `inspect`, `export`, `import`, `explain`, `sessions`, `config`, `mcp`, and `completion`. With `--non-interactive`, Dexo never prompts, and destructive actions require an explicit confirmation flag.
+Also available: `run`, `inspect`, `export`, `import`, `explain`, `sessions`, `config`, `mcp`, `completion`, and `lsp`, which brings Dexo's completion, diagnostics and formatting to Neovim, Helix, VS Code or any editor that speaks the Language Server Protocol. With `--non-interactive`, Dexo never prompts, and destructive actions require an explicit confirmation flag.
 
 ## MCP server
 
-Dexo is an MCP server only, over stdio; it opens no network listener.
+Dexo is an MCP server only, over stdio; it opens no network listener. Give an agent a profile, the objects it may see, and a place in its client's config:
 
 ```sh
-dexo mcp config print --profile assistant
-dexo mcp serve --profile assistant
+dexo mcp profile create --name assistant
+dexo mcp profile set --name assistant --connection local --query-mode raw-read
+dexo mcp allow --profile assistant --selector 'app.public.*'
+dexo mcp profile enable --name assistant --confirm
+dexo mcp setup --client claude-code --profile assistant --skill   # or codex, cursor, claude-desktop
+dexo mcp doctor --probe
 ```
 
-Profiles start disabled and read-only. Write tools require a temporary grant created from the TUI or the CLI. The MCP process cannot create grants, list objects outside its allowlist, or write secrets to stdout. Audit logs stay local and sanitized.
+Profiles start disabled and read-only. To let the agent write for a while, grant it from the TUI or the CLI; with `--ask`, each write waits in the TUI's Agent Activity (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd>) until you approve or deny it:
+
+```sh
+dexo mcp grant create --profile assistant --connection local --capability data_write \
+  --tool data_update --selector 'app.public.orders' --expires 15m --ask --confirm-target local
+```
+
+The MCP process cannot create grants, list objects outside its allowlist, or write secrets to stdout. Audit logs stay local and sanitized. See the [MCP guide](docs/src/mcp.md).
 
 ## Compatibility
 
