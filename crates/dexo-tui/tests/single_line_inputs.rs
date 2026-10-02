@@ -86,6 +86,57 @@ fn fields() -> Vec<Field> {
             masked: false,
         },
         Field {
+            name: "transfer path",
+            open: |m| m.transfer.open = true,
+            text: |m| m.transfer.path.as_str().to_string(),
+            masked: false,
+        },
+        Field {
+            name: "project name",
+            open: |m| {
+                m.projects.open = true;
+                m.projects.mode = dexo_tui::screens::projects::ProjectsMode::Create;
+            },
+            text: |m| m.projects.name_input.as_str().to_string(),
+            masked: false,
+        },
+        Field {
+            name: "project delete confirmation",
+            open: |m| {
+                m.projects.open = true;
+                m.projects.mode = dexo_tui::screens::projects::ProjectsMode::DeleteConfirm;
+                m.projects.delete = Some(dexo_tui::screens::projects::ProjectDeletePrompt {
+                    project: dexo_app::Project {
+                        id: dexo_app::ProjectId(uuid::Uuid::nil()),
+                        name: "acme".into(),
+                        created_at: String::new(),
+                    },
+                    preview: Default::default(),
+                    delete_connections: false,
+                    typed: Default::default(),
+                });
+            },
+            text: |m| {
+                let delete = m.projects.delete.as_ref().unwrap();
+                delete.typed.as_str().to_string()
+            },
+            masked: false,
+        },
+        Field {
+            name: "query parameter",
+            open: |m| {
+                m.active_document_mut().sql = dexo_sql::SqlDocument::new("select :n");
+                m.editor.parameters = vec![dexo_tui::screens::editor::ParameterValue {
+                    name: "n".into(),
+                    value: dexo_driver_api::DbValue::Null,
+                    sensitive: false,
+                }];
+                m.editor.parameter_prompt = true;
+            },
+            text: |m| m.editor.parameter_draft.as_str().to_string(),
+            masked: false,
+        },
+        Field {
             name: "secret prompt",
             open: |m| m.secret_prompt.open = true,
             text: |m| m.secret_prompt.buffer.expose().to_string(),
@@ -213,4 +264,36 @@ fn the_word_keys_edit_and_ctrl_letters_are_not_text() {
             field.name
         );
     }
+}
+
+/// A plain `c` toggled whether the project's connections go too, so a project with a
+/// `c` in its name could never be typed to confirm. Alt+C toggles it now.
+#[test]
+fn a_project_named_with_a_c_can_be_deleted() {
+    let mut model = workbench();
+    let open = fields()
+        .into_iter()
+        .find(|field| field.name == "project delete confirmation")
+        .unwrap()
+        .open;
+    open(&mut model);
+    type_text(&mut model, "acme");
+    press(&mut model, KeyCode::Char('c'), KeyModifiers::ALT);
+    let delete = model.projects.delete.as_ref().unwrap();
+    assert_eq!(delete.typed.as_str(), "acme");
+    assert!(delete.delete_connections);
+    let effects = update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::DeleteProject {
+                delete_connections: true,
+                ..
+            }
+        )),
+        "{effects:?}"
+    );
 }

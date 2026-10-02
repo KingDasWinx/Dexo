@@ -1580,8 +1580,13 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         visible.join("\n"),
     );
     register_overlay(hits, popup);
+    let transfer = &model.transfer;
     for_popup_lines(popup, &visible, |i, line, rect| {
         if offset + i == 0 {
+            if transfer.footer == crate::widgets::form::FooterFocus::Input {
+                let before = format!("{} ", transfer.mode.as_str());
+                show_input(frame, rect, &before, &transfer.path, false);
+            }
             hits.register(HitTarget::FormField(0), rect);
         }
         if line.contains("[Cancel]") {
@@ -1847,12 +1852,26 @@ fn render_projects(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    let projects = &model.projects;
     for_popup_lines(popup, &lines, |i, line, rect| {
-        if i < model.projects.list.len() {
+        if i < projects.list.len() {
             hits.register(HitTarget::ListRow(i), rect);
         }
         if line.starts_with("create:") || line.starts_with("rename:") {
+            if projects.footer == crate::widgets::form::FooterFocus::Input {
+                let before = if line.starts_with("create:") {
+                    "create: "
+                } else {
+                    "rename: "
+                };
+                show_input(frame, rect, before, &projects.name_input, false);
+            }
             hits.register(HitTarget::FormField(0), rect);
+        }
+        if let Some(delete) = &projects.delete
+            && line.starts_with("type name to confirm (")
+        {
+            show_input(frame, rect, "type name to confirm (", &delete.typed, false);
         }
         if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Submit");
@@ -2622,7 +2641,7 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .map(|parameter| parameter.name.as_str())
         .unwrap_or("param");
     let popup = centered(frame.area(), 48, 6);
-    let body = format!("{name} = {}", model.editor.parameter_draft);
+    let body = format!("{name} = {}", model.editor.parameter_draft.as_str());
     let footer = crate::widgets::form::footer_line("Submit", model.editor.parameter_footer);
     let lines = vec![body, footer];
     paint_popup(
@@ -2635,6 +2654,10 @@ fn render_parameters(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, line, rect| {
         if i == 0 {
+            if model.editor.parameter_footer == crate::widgets::form::FooterFocus::Input {
+                let before = format!("{name} = ");
+                show_input(frame, rect, &before, &model.editor.parameter_draft, false);
+            }
             hits.register(HitTarget::FormField(0), rect);
         } else {
             crate::widgets::form::register_footer(hits, rect, line, "Submit");

@@ -41,7 +41,7 @@ pub struct EditorState {
     pub completion_offset: usize,
     pub parameter_prompt: bool,
     pub parameter_index: usize,
-    pub parameter_draft: String,
+    pub parameter_draft: crate::widgets::text_input::TextInput,
     pub parameter_footer: crate::widgets::form::FooterFocus,
     pub snippets: Vec<Snippet>,
     pub snippet_open: bool,
@@ -168,7 +168,7 @@ impl Default for EditorState {
             completion_offset: 0,
             parameter_prompt: false,
             parameter_index: 0,
-            parameter_draft: String::new(),
+            parameter_draft: Default::default(),
             parameter_footer: crate::widgets::form::FooterFocus::Input,
             snippets: Vec::new(),
             snippet_open: false,
@@ -936,7 +936,7 @@ pub fn submit_parameters(model: &mut Model) {
     if !model.editor.parameter_draft.is_empty() {
         let index = model.editor.parameter_index;
         if let Some(parameter) = model.editor.parameters.get_mut(index) {
-            parameter.value = DbValue::Text(std::mem::take(&mut model.editor.parameter_draft));
+            parameter.value = DbValue::Text(model.editor.parameter_draft.as_str().to_string());
         }
     }
     let next = model.editor.parameter_index + 1;
@@ -1941,17 +1941,9 @@ pub fn handle_parameter_key(model: &mut Model, key: KeyEvent) -> crate::widgets:
             model.editor.parameter_footer = FooterFocus::Input;
         }
         FooterKey::Moved => {}
-        FooterKey::Pass if model.editor.parameter_footer == FooterFocus::Input => match key.code {
-            KeyCode::Backspace => {
-                model.editor.parameter_draft.pop();
-            }
-            KeyCode::Char(ch)
-                if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT =>
-            {
-                model.editor.parameter_draft.push(ch);
-            }
-            _ => {}
-        },
+        FooterKey::Pass if model.editor.parameter_footer == FooterFocus::Input => {
+            model.editor.parameter_draft.handle_key(key);
+        }
         FooterKey::Pass => {}
     }
     outcome

@@ -2349,7 +2349,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 project,
                 preview,
                 delete_connections: false,
-                typed: String::new(),
+                typed: Default::default(),
             });
             Vec::new()
         }
@@ -3981,12 +3981,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             FooterKey::Pass => {}
         }
         return match key.code {
-            KeyCode::Backspace
-                if model.transfer.footer == crate::widgets::form::FooterFocus::Input =>
-            {
-                model.transfer.path.pop();
-                Vec::new()
-            }
             KeyCode::Char('o') if key.modifiers.contains(KeyModifiers::CONTROL) => {
                 open_file_picker(model, crate::screens::file_picker::FilePickerMode::Transfer);
                 Vec::new()
@@ -3998,11 +3992,8 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 );
                 Vec::new()
             }
-            KeyCode::Char(ch)
-                if model.transfer.footer == crate::widgets::form::FooterFocus::Input
-                    && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-            {
-                model.transfer.path.push(ch);
+            _ if model.transfer.footer == crate::widgets::form::FooterFocus::Input => {
+                model.transfer.path.handle_key(key);
                 Vec::new()
             }
             _ => Vec::new(),
@@ -9068,7 +9059,7 @@ fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
             effects
         }
         crate::screens::file_picker::FilePickerMode::Transfer => {
-            model.transfer.path = path.display().to_string();
+            model.transfer.path.set_text(path.display().to_string());
             run_transfer(model)
         }
         crate::screens::file_picker::FilePickerMode::Diagnostics => {
@@ -9132,7 +9123,7 @@ fn confirm_project_delete(model: &mut Model) -> Vec<Effect> {
     let Some(delete) = model.projects.delete.take() else {
         return Vec::new();
     };
-    if delete.typed != delete.project.name {
+    if delete.typed.as_str() != delete.project.name {
         model
             .messages
             .warn("type the project name to confirm".into());
@@ -9184,19 +9175,16 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             KeyCode::Enter => update(model, Action::ConfirmProjectDelete),
-            KeyCode::Char('c') => {
+            // Alt+C: a plain `c` toggled this, so a name with a `c` in it could never be
+            // typed to confirm.
+            KeyCode::Char('c') if key.modifiers == KeyModifiers::ALT => {
                 delete.delete_connections = !delete.delete_connections;
                 Vec::new()
             }
-            KeyCode::Backspace => {
-                delete.typed.pop();
+            _ => {
+                delete.typed.handle_key(key);
                 Vec::new()
             }
-            KeyCode::Char(ch) => {
-                delete.typed.push(ch);
-                Vec::new()
-            }
-            _ => Vec::new(),
         };
     }
     match model.projects.mode {
@@ -9215,21 +9203,10 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 FooterKey::Moved => return Vec::new(),
                 FooterKey::Pass => {}
             }
-            match key.code {
-                KeyCode::Backspace
-                    if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
-                {
-                    model.projects.name_input.pop();
-                    Vec::new()
-                }
-                KeyCode::Char(ch)
-                    if model.projects.footer == crate::widgets::form::FooterFocus::Input =>
-                {
-                    model.projects.name_input.push(ch);
-                    Vec::new()
-                }
-                _ => Vec::new(),
+            if model.projects.footer == FooterFocus::Input {
+                model.projects.name_input.handle_key(key);
             }
+            Vec::new()
         }
         crate::screens::projects::ProjectsMode::Browse
         | crate::screens::projects::ProjectsMode::DeleteConfirm => match key.code {
@@ -9263,11 +9240,12 @@ fn handle_projects_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             }
             KeyCode::Char('r') => {
                 model.projects.mode = crate::screens::projects::ProjectsMode::Rename;
-                model.projects.name_input = model
+                let name = model
                     .projects
                     .selected()
                     .map(|project| project.name.clone())
                     .unwrap_or_default();
+                model.projects.name_input.set_text(name);
                 model.projects.footer = crate::widgets::form::FooterFocus::Input;
                 Vec::new()
             }
@@ -9369,7 +9347,7 @@ fn choose_project_intent(model: &mut Model) -> Vec<Effect> {
         }
         Some(crate::screens::projects::ProjectIntent::Rename) => {
             model.projects.mode = crate::screens::projects::ProjectsMode::Rename;
-            model.projects.name_input = project.name;
+            model.projects.name_input.set_text(project.name);
             model.projects.error = None;
             Vec::new()
         }

@@ -26,7 +26,7 @@ impl TransferMode {
 pub struct TransferScreen {
     pub open: bool,
     pub mode: TransferMode,
-    pub path: String,
+    pub path: crate::widgets::text_input::TextInput,
     pub format: String,
     pub preview: Vec<String>,
     pub progress: ExportProgress,
@@ -46,7 +46,7 @@ impl Default for TransferScreen {
         Self {
             open: false,
             mode: TransferMode::Export,
-            path: String::new(),
+            path: Default::default(),
             format: "csv".into(),
             preview: Vec::new(),
             progress: ExportProgress { rows: 0, bytes: 0 },
@@ -158,7 +158,7 @@ impl TransferScreen {
 
     pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
-            format!("{} {}", self.mode.as_str(), self.path),
+            format!("{} {}", self.mode.as_str(), self.path.as_str()),
             format!(
                 "format={} (Ctrl+F to cycle) strategy={:?}",
                 self.format, self.strategy

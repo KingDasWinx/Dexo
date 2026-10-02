@@ -419,7 +419,7 @@ fn a_read_only_connection_refuses_import_and_restore() {
                 _ => "backup.restore",
             },
         );
-        model.transfer.path = source.display().to_string();
+        model.transfer.path.set_text(source.display().to_string());
         model.transfer.confirm_restore = true;
         press(&mut model, crossterm::event::KeyCode::Enter)
             .iter()

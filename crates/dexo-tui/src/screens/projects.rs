@@ -3,6 +3,7 @@ use dexo_storage::ProjectDeletePreview;
 
 use crate::runtime::project_manager::ProjectSwitch;
 use crate::widgets::form::{FooterFocus, footer_line};
+use crate::widgets::text_input::TextInput;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum ProjectsMode {
@@ -25,7 +26,7 @@ pub struct ProjectDeletePrompt {
     pub project: Project,
     pub preview: ProjectDeletePreview,
     pub delete_connections: bool,
-    pub typed: String,
+    pub typed: TextInput,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -33,7 +34,7 @@ pub struct ProjectsScreen {
     pub open: bool,
     pub list: Vec<Project>,
     pub selected: usize,
-    pub name_input: String,
+    pub name_input: TextInput,
     pub mode: ProjectsMode,
     pub pending: Option<ProjectSwitch>,
     pub delete: Option<ProjectDeletePrompt>,
@@ -88,11 +89,11 @@ impl ProjectsScreen {
         }
         match self.mode {
             ProjectsMode::Create => {
-                lines.push(format!("create: {}", self.name_input));
+                lines.push(format!("create: {}", self.name_input.as_str()));
                 lines.push(footer_line("Submit", self.footer));
             }
             ProjectsMode::Rename => {
-                lines.push(format!("rename: {}", self.name_input));
+                lines.push(format!("rename: {}", self.name_input.as_str()));
                 lines.push(footer_line("Submit", self.footer));
             }
             ProjectsMode::Browse => {}
@@ -114,8 +115,8 @@ impl ProjectsScreen {
                 ));
             }
             lines.push(format!(
-                "type name to confirm ({}) connections:{}",
-                delete.typed,
+                "type name to confirm ({}) connections:{} Alt+C",
+                delete.typed.as_str(),
                 if delete.delete_connections {
                     "delete"
                 } else {
