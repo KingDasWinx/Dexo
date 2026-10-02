@@ -2765,6 +2765,32 @@ mod tests {
         assert!(view.contains("Search: disc"));
     }
 
+    /// PageUp and PageDown moved one line, like the arrows.
+    #[test]
+    fn the_keybindings_scroll_a_page_at_a_time() {
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let mut model = Model::default();
+        model.apply_size(100, 30);
+        model.help.open = true;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| super::render(frame, &model, &mut hits))
+            .unwrap();
+        model.hits = hits;
+        let key = |code| crate::Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        crate::update::update(&mut model, key(KeyCode::PageDown));
+        assert_eq!(model.help.scroll, 25);
+        crate::update::update(&mut model, key(KeyCode::End));
+        let bottom = model.help.scroll;
+        assert!(bottom > 25);
+        crate::update::update(&mut model, key(KeyCode::PageUp));
+        assert_eq!(model.help.scroll, bottom - 25);
+        crate::update::update(&mut model, key(KeyCode::Home));
+        assert_eq!(model.help.scroll, 0);
+    }
+
     #[test]
     fn help_search_filters_bindings_by_action_or_chord() {
         let mut model = Model::default();

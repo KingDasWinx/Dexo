@@ -5120,18 +5120,31 @@ fn handle_help_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.help.query.clear();
             Vec::new()
         }
-        KeyCode::Up | KeyCode::PageUp => {
+        KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => {
+            // A page is what the popup shows, less a line kept for context; PageUp and
+            // PageDown used to move one line, like the arrows.
+            let page = i32::from(model.height.saturating_sub(5)).max(1);
+            let delta = match key.code {
+                KeyCode::Up => -1,
+                KeyCode::Down => 1,
+                KeyCode::PageUp => -page,
+                _ => page,
+            };
             model.help.scroll =
                 model
                     .hits
-                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, -1);
+                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, delta);
             Vec::new()
         }
-        KeyCode::Down | KeyCode::PageDown => {
+        KeyCode::Home => {
+            model.help.scroll = 0;
+            Vec::new()
+        }
+        KeyCode::End => {
             model.help.scroll =
                 model
                     .hits
-                    .scroll(crate::mouse::ScrollArea::Help, model.help.scroll, 1);
+                    .scroll(crate::mouse::ScrollArea::Help, 0, i32::from(u16::MAX));
             Vec::new()
         }
         KeyCode::Backspace => {
