@@ -494,7 +494,13 @@ pub fn describe_query_error(
         .and_then(|position| sql_location(sql, position));
     let mut header = Vec::new();
     if let Some(code) = error.native_code() {
-        header.push(format!("SQLSTATE {code}"));
+        // SQLite's result code is a small number, not a SQLSTATE.
+        let label = if code.len() < 5 && code.chars().all(|ch| ch.is_ascii_digit()) {
+            "error code"
+        } else {
+            "SQLSTATE"
+        };
+        header.push(format!("{label} {code}"));
     }
     if let Some((line, column, _)) = &location {
         header.push(format!("line {line}, column {column}"));

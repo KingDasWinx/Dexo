@@ -6146,9 +6146,6 @@ fn point_at_failure(
     message: &str,
     position: Option<u32>,
 ) {
-    let Some(position) = position.filter(|position| *position > 0) else {
-        return;
-    };
     let Some((offset, revision)) = model
         .results
         .tabs
@@ -6170,6 +6167,18 @@ fn point_at_failure(
         return;
     }
     let text = doc.text();
+    // MySQL and SQLite name no position: the cursor still goes to the statement that
+    // failed, as it does where the server points inside it.
+    let Some(position) = position.filter(|position| *position > 0) else {
+        let cursor = text[..offset.min(text.len())].chars().count();
+        let doc = &mut model.documents[document];
+        doc.anchor = None;
+        let _ = doc.sql.set_cursor(cursor);
+        if document == model.active_document {
+            crate::screens::editor::follow_cursor(model);
+        }
+        return;
+    };
     let Some(within) = text[offset.min(text.len())..]
         .char_indices()
         .nth(position as usize - 1)
@@ -6178,9 +6187,11 @@ fn point_at_failure(
         return;
     };
     let at = offset + within;
+    // The token ends at a space or at the semicolon that ends the statement: the
+    // underline covered the `;`.
     let end = text[at..]
         .char_indices()
-        .find(|(_, ch)| ch.is_whitespace())
+        .find(|(_, ch)| ch.is_whitespace() || *ch == ';')
         .map_or(text.len(), |(width, _)| at + width)
         .max(at + text[at..].chars().next().map_or(0, char::len_utf8));
     let mut diagnostic = dexo_sql::Diagnostic::server(message, "", None);

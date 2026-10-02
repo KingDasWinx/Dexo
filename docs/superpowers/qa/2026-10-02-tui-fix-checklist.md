@@ -46,13 +46,13 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
 - [ ] **PC-27** `MINOR` Tab strip / tab focus details
 - [ ] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
-- [ ] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
+- [x] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
 - [ ] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
 - [x] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
 - [x] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
 - [x] **PC-04** `COSMETIC` "Reset layout" is not Title Case
 - [ ] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20
-- [ ] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`
+- [x] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`
 - [ ] **PC-31** `COSMETIC` Single-line inputs never scroll horizontally (palette query, New document, Rename, Save, name field)
 - [x] **PC-32** `COSMETIC` Narrow status bar shows lower-case `ctrl+p  F1` before `Alt+1 connections  Ctrl+P commands`
 - [ ] **PC-39** `COSMETIC` Diagnostics export: file name field starts empty, bundle is a ZIP whatever the name, log tail is empty, key=value text
