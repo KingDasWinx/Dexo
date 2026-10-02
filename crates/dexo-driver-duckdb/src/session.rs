@@ -419,12 +419,18 @@ fn run_statements(
         if !send(QueryEvent::ResultSetStarted { index }) {
             return Ok(());
         }
-        if let Some(status) = Status::of(&schema).filter(|_| !is_read(text)) {
+        let effect = dexo_sql::split_statements_in(text, Dialect::Duckdb)
+            .first()
+            .map(|span| span.effect);
+        if let Some(status) = Status::of(&schema).filter(|_| answers_with_status(text, effect)) {
             let mut affected = 0;
             while let Some(chunk) = statement.step().map_err(map_error)? {
                 affected += status.count(chunk.columns().first());
             }
-            let rows_affected = matches!(status, Status::Count).then_some(affected);
+            // A CREATE answers with a count too, of nothing it changed.
+            let schema_write = effect == Some(dexo_sql::StatementEffect::SchemaWrite);
+            let rows_affected =
+                (matches!(status, Status::Count) && !schema_write).then_some(affected);
             last_affected = rows_affected;
             if !send(QueryEvent::Columns(Vec::new()))
                 || !send(QueryEvent::ResultSetFinished {
@@ -512,9 +518,27 @@ pub(crate) fn decode_rows(
     rows
 }
 
+/// Whether a `Count` or `Success` column is DuckDB's answer about `text` rather than rows
+/// it returns: not for a query -- `SELECT count(*) AS "Count"` -- nor for a write that
+/// returns rows of its own, `INSERT ... RETURNING id AS "Count"`.
+fn answers_with_status(text: &str, effect: Option<dexo_sql::StatementEffect>) -> bool {
+    let returning = || {
+        dexo_sql::tokenize(text, Dialect::Duckdb)
+            .iter()
+            .any(|token| {
+                token.kind == dexo_sql::TokenKind::Word
+                    && text[token.span.clone()].eq_ignore_ascii_case("returning")
+            })
+    };
+    match effect {
+        Some(dexo_sql::StatementEffect::ReadOnly) => false,
+        Some(dexo_sql::StatementEffect::DataWrite) => !returning(),
+        _ => true,
+    }
+}
+
 /// What DuckDB answers a statement that returns no rows of its own with: a `Count` of
-/// the rows an INSERT, UPDATE or DELETE changed, or a `Success` flag for the rest. A
-/// statement that reads -- `SELECT count(*) AS "Count"` -- keeps its column.
+/// the rows an INSERT, UPDATE, DELETE or COPY changed, or a `Success` flag for the rest.
 #[derive(Clone, Copy)]
 enum Status {
     Count,
@@ -528,7 +552,8 @@ impl Status {
         };
         match (field.name().as_str(), field.data_type()) {
             ("Count", DataType::Int64) => Some(Self::Count),
-            ("Success", DataType::Boolean) => Some(Self::Success),
+            // A BOOLEAN arrives as a byte, Arrow's `bool8`.
+            ("Success", DataType::Boolean | DataType::Int8) => Some(Self::Success),
             _ => None,
         }
     }

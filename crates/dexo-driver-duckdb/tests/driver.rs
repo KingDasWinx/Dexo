@@ -163,6 +163,24 @@ async fn queries_bind_parameters_honour_the_row_limit_and_report_writes() {
         .await
         .unwrap();
     assert!(events.contains(&QueryEvent::Columns(Vec::new())));
+    // A CREATE changes no rows; DuckDB's count of them is not one.
+    assert!(events.contains(&QueryEvent::ResultSetFinished {
+        index: 0,
+        rows_affected: None,
+        truncated: false
+    }));
+    // A write returning a column named like DuckDB's own count keeps it.
+    let events = run(
+        &*session,
+        QueryRequest::write("insert into t2 values (5) returning x::BIGINT as \"Count\""),
+    )
+    .await
+    .unwrap();
+    assert_eq!(texts(&events), [["5"]]);
+    let events = run(&*session, QueryRequest::write("drop table t2"))
+        .await
+        .unwrap();
+    assert!(events.contains(&QueryEvent::Columns(Vec::new())));
 }
 
 /// Every value reads as DuckDB writes it cast to VARCHAR -- which DuckDB reads back as
