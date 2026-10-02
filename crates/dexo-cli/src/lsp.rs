@@ -20,6 +20,12 @@ struct Schema {
     dialect: Dialect,
 }
 
+/// A connection's schema as last read, and the state of Dexo's database file then.
+struct Cached {
+    stamp: Option<(std::time::SystemTime, u64)>,
+    schema: Option<Schema>,
+}
+
 struct Document {
     text: String,
     diagnoser: Diagnoser,
@@ -29,8 +35,8 @@ pub struct Server {
     connection: Option<String>,
     database: Option<std::path::PathBuf>,
     documents: HashMap<String, Document>,
-    /// Read once per connection; `None` when it has no cached catalog.
-    schemas: HashMap<String, Option<Schema>>,
+    /// Read per connection, again whenever Dexo's database file changes.
+    schemas: HashMap<String, Cached>,
     /// Whether the client asked the server to shut down; `exit` without it is an error.
     shut_down: bool,
 }
@@ -138,14 +144,28 @@ impl Server {
             .or_else(|| self.connection.clone())
     }
 
-    /// The schema of `connection`, read from the cache the first time it is asked for.
+    /// The schema of `connection`, read from the cache when it is first asked for and
+    /// again once Dexo's database file has changed, so a catalog cached or refreshed
+    /// while the editor runs -- or a first one after none -- is seen without a restart.
     fn schema(&mut self, connection: Option<&str>) -> Option<&Schema> {
         let connection = connection?;
-        if !self.schemas.contains_key(connection) {
-            let loaded = self.load(connection);
-            self.schemas.insert(connection.to_string(), loaded);
+        let stamp = self
+            .database
+            .as_ref()
+            .and_then(|path| std::fs::metadata(path).ok())
+            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+        if self
+            .schemas
+            .get(connection)
+            .is_none_or(|cached| cached.stamp != stamp)
+        {
+            let schema = self.load(connection);
+            self.schemas
+                .insert(connection.to_string(), Cached { stamp, schema });
         }
-        self.schemas.get(connection).and_then(Option::as_ref)
+        self.schemas
+            .get(connection)
+            .and_then(|cached| cached.schema.as_ref())
     }
 
     /// The connection's cached catalog: the command line's cache first (by the
@@ -193,7 +213,7 @@ impl Server {
         let schema = connection
             .as_deref()
             .and_then(|name| self.schemas.get(name))
-            .and_then(Option::as_ref);
+            .and_then(|cached| cached.schema.as_ref());
         let (dialect, known) = schema.map_or((Dialect::Postgres, None), |schema| {
             (schema.dialect, schema.known.as_ref())
         });
@@ -571,6 +591,63 @@ mod tests {
             Some("shop")
         );
         assert_eq!(server.connection_of("select 1").as_deref(), Some("default"));
+    }
+
+    /// A catalog cached after the server first looked, when there was none, is offered
+    /// without restarting the server.
+    #[test]
+    fn a_catalog_cached_later_is_seen() {
+        use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        let profile = dexo_app::ConnectionProfile::new(
+            dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+            None,
+            "shop",
+            "postgres",
+            "local",
+            json!({"host": "h", "database": "shop"}),
+            dexo_app::connection_profile::SecretRef::new("ref".into()),
+        );
+        let db = dexo_storage::Database::open(&path).unwrap();
+        dexo_storage::ConnectionRepository::new(db.connection())
+            .save(&profile)
+            .unwrap();
+        let mut server = Server::new(Some("shop".into()), Some(path));
+        let uri = "file:///q.sql";
+        server.handle(
+            &json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": uri, "languageId": "sql", "version": 1, "text": "select * from ord"}
+            }}),
+        );
+        let labels = |server: &mut Server| -> Vec<String> {
+            server
+                .handle(
+                    &json!({"jsonrpc": "2.0", "id": 1, "method": "textDocument/completion", "params": {
+                        "textDocument": {"uri": uri}, "position": {"line": 0, "character": 17}
+                    }}),
+                )
+                .unwrap()[0]["result"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter_map(|item| item["label"].as_str().map(str::to_string))
+                .collect()
+        };
+        assert!(!labels(&mut server).contains(&"orders".to_string()));
+        dexo_storage::CatalogCache::new(db.connection())
+            .replace_snapshot(
+                &profile.id.0.to_string(),
+                "shop",
+                &[CatalogObject::new(
+                    ObjectId::new("table:orders"),
+                    ObjectKind::Table,
+                    QualifiedName::new(Some("shop"), Some("public"), "orders"),
+                    None,
+                )],
+            )
+            .unwrap();
+        assert!(labels(&mut server).contains(&"orders".to_string()));
     }
 
     /// Completion and diagnostics read the connection's cached catalog: its tables are
