@@ -63,7 +63,9 @@ fn render_fetch(request: &DataRequest, rowid: Option<&str>) -> (String, Binder) 
     let mut binder = Binder::default();
     let cols = if request.columns.is_empty() {
         match rowid {
-            Some(alias) => format!("{alias}, *"),
+            // Named as asked: SQLite calls `_rowid_` and `oid` `rowid` in the result,
+            // which is the user's column when it took that name.
+            Some(alias) => format!("{alias} AS {}, *", quote(alias)),
             None => "*".to_string(),
         }
     } else {

@@ -677,6 +677,9 @@ async fn odd_names_keep_their_ids_and_their_keys() {
         .unwrap();
     assert_eq!(page.rows[0][0], DbValue::I64(1));
     assert_eq!(page.rows[1][0], DbValue::I64(2));
+    // SQLite names an unaliased `_rowid_` column `rowid`, the user's column's name, and
+    // the grid then found no key to edit the row by.
+    assert_eq!(page.columns[0].name, "_rowid_");
 }
 
 /// Cancelling one query never interrupts another that holds the connection; a query
