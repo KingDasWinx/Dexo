@@ -76,6 +76,8 @@ impl PostgresSession {
 impl AdministrationProvider for PostgresSession {
     async fn list_sessions(&self) -> Result<AdminList<SessionInfo>, DriverError> {
         let restriction = self.session_restriction().await?;
+        // Not the session that asks, and not the server's own processes. The order is by
+        // the column: a bare `pid` is the output column, which is text, so 56 followed 541.
         let rows = match self
             .client
             .query(
@@ -83,7 +85,8 @@ impl AdministrationProvider for PostgresSession {
                         (EXTRACT(EPOCH FROM (now() - COALESCE(query_start, backend_start))) * 1000)::bigint,
                         NULLIF(btrim(query), '')
                  FROM pg_stat_activity
-                 ORDER BY pid",
+                 WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'
+                 ORDER BY pg_stat_activity.pid",
                 &[],
             )
             .await
@@ -380,10 +383,10 @@ async fn signal_backend(
     Ok(AdminOutcome {
         ok: true,
         idempotent_noop: !sent,
-        message: if sent {
-            "signal sent".into()
-        } else {
-            "target already finished".into()
+        message: match (sent, terminate) {
+            (true, true) => format!("Session {session_id} terminated."),
+            (true, false) => format!("The query of session {session_id} was cancelled."),
+            (false, _) => format!("Session {session_id} had already ended."),
         },
     })
 }

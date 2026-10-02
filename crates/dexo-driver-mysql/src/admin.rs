@@ -25,6 +25,16 @@ fn parse_id(id: &str) -> Result<u32, DriverError> {
     })
 }
 
+/// MySQL's command names in the words Postgres's states use, so one list reads alike on
+/// both.
+fn session_state(command: &str) -> String {
+    match command {
+        "Sleep" => "idle".into(),
+        "Query" => "active".into(),
+        other => other.to_ascii_lowercase(),
+    }
+}
+
 fn is_unknown_thread(error: &mysql_async::Error) -> bool {
     matches!(error, mysql_async::Error::Server(err) if err.code == 1094)
         || error
@@ -96,7 +106,10 @@ impl AdministrationProvider for MysqlSession {
             i64,
             Option<String>,
         )> = match conn
-            .query("SELECT ID, USER, DB, COMMAND, TIME, INFO FROM information_schema.PROCESSLIST")
+            .query(
+                "SELECT ID, USER, DB, COMMAND, TIME, INFO FROM information_schema.PROCESSLIST
+                 WHERE ID <> CONNECTION_ID() ORDER BY ID",
+            )
             .await
         {
             Ok(rows) => rows,
@@ -116,7 +129,7 @@ impl AdministrationProvider for MysqlSession {
                     id: id.to_string(),
                     user,
                     database,
-                    state,
+                    state: session_state(&state),
                     duration_ms: Some((time_s.max(0) as u64).saturating_mul(1000)),
                     current_query: query,
                 })
@@ -336,12 +349,26 @@ impl AdministrationProvider for MysqlSession {
             Ok(()) => Ok(AdminOutcome {
                 ok: true,
                 idempotent_noop: false,
-                message: "action completed".into(),
+                message: match &action {
+                    AdminAction::CancelQuery { session_id } => {
+                        format!("The query of session {session_id} was cancelled.")
+                    }
+                    AdminAction::TerminateSession { session_id } => {
+                        format!("Session {session_id} terminated.")
+                    }
+                    _ => "action completed".into(),
+                },
             }),
             Err(error) if is_unknown_thread(&error) => Ok(AdminOutcome {
                 ok: true,
                 idempotent_noop: true,
-                message: "target already finished".into(),
+                message: match &action {
+                    AdminAction::CancelQuery { session_id }
+                    | AdminAction::TerminateSession { session_id } => {
+                        format!("Session {session_id} had already ended.")
+                    }
+                    _ => "target already finished".into(),
+                },
             }),
             Err(error) => Err(map_error(error)),
         }
@@ -376,5 +403,17 @@ pub fn preview_mysql(action: &AdminAction) -> Result<AdminPreview, DriverError> 
         AdminAction::Reindex { .. } => {
             Err(DriverError::unsupported("REINDEX is not a MySQL command"))
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::session_state;
+
+    #[test]
+    fn the_list_speaks_postgress_state_words() {
+        assert_eq!(session_state("Sleep"), "idle");
+        assert_eq!(session_state("Query"), "active");
+        assert_eq!(session_state("Binlog Dump"), "binlog dump");
     }
 }

@@ -54,6 +54,8 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
         ))
     };
     let admin = connect().await.unwrap();
+    // The list leaves out the session that reads it: there has to be another to show.
+    let _other = connect().await.unwrap();
     let provider = admin.admin().unwrap();
     let created = admin
         .execute(dexo_driver_api::QueryRequest::write(

@@ -278,8 +278,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-12** `MINOR` Error toasts never go away on their own and survive later successful actions
 - [ ] **AT-14** `MINOR` Nothing on screen says a connection is read-only until a write is refused
 - [x] **AT-15** `MINOR` Destructive-statement guard is bypassed by a tautological WHERE
-- [ ] **AT-17** `MINOR` Terminate success message is "signal sent"
-- [ ] **AT-18** `MINOR` Sessions list ignores Home/End/PageUp/PageDown and the mouse wheel; ids sort as text
+- [x] **AT-17** `MINOR` Terminate success message is "signal sent"
+- [x] **AT-18** `MINOR` Sessions list ignores Home/End/PageUp/PageDown and the mouse wheel; ids sort as text
 - [ ] **AT-19** `MINOR` Sessions list shows every database on the server and does not mark the user's own sessions
 - [ ] **AT-21** `MINOR` Blocking line is cryptic: `419 blocks 764 · ShareLock on -`
 - [ ] **AT-23** `MINOR` Sessions: `t` on a read-only connection is refused only after the dialog is already open; fine message, but the dialog is a full admin view
@@ -294,7 +294,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-40** `MINOR` Transfer keys are not in the keybindings help
 - [ ] **AT-46** `MINOR` Import of a file that does not exist: `error: No such file or directory (os error 2)` without the file name
 - [ ] **AT-48** `MINOR` Rollback on a non-transactional table (MySQL MyISAM) says nothing and keeps the rows
-- [ ] **AT-49** `MINOR` Sessions on MySQL: rows in no clear order, different state vocabulary
+- [x] **AT-49** `MINOR` Sessions on MySQL: rows in no clear order, different state vocabulary
 - [x] **AT-56** `MINOR` SQLite Native Restore shows the backup text: `a SQLite database is its file: copy the file to back it up`
 - [ ] **AT-57** `MINOR` Backup/Restore/Import/Export hotkeys: none
 - [ ] **AT-58** `MINOR` After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves
