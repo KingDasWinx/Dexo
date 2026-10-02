@@ -234,16 +234,19 @@ impl PostgresSession {
                 "a hypothetical index exists only for the planner: try it on an estimated plan",
             ));
         }
-        for index in indexes {
-            if !is_create_index(index) {
-                return Err(DriverError::new(
-                    DriverErrorCategory::Syntax,
-                    format!(
-                        "not an index definition: {index} (write CREATE INDEX ON table (columns))"
-                    ),
-                ));
-            }
-        }
+        let indexes = indexes
+            .iter()
+            .map(|index| {
+                index_definition(index).ok_or_else(|| {
+                    DriverError::new(
+                        DriverErrorCategory::Syntax,
+                        format!(
+                            "not an index definition: {index} (write CREATE INDEX ON table (columns))"
+                        ),
+                    )
+                })
+            })
+            .collect::<Result<Vec<&str>, _>>()?;
         let installed = self
             .client
             .query_opt("SELECT 1 FROM pg_extension WHERE extname = 'hypopg'", &[])
@@ -273,7 +276,7 @@ impl PostgresSession {
         // the ones the user made on this session.
         let mut made = Vec::new();
         let mut failed = None;
-        for index in indexes {
+        for index in &indexes {
             match self
                 .client
                 .query("SELECT indexrelid FROM hypopg_create_index($1)", &[index])
@@ -320,18 +323,32 @@ impl PostgresSession {
     }
 }
 
-/// `CREATE [UNIQUE] INDEX ...`: what hypopg takes, and nothing else.
-fn is_create_index(definition: &str) -> bool {
-    let words: Vec<String> = definition
-        .split_whitespace()
-        .take(3)
-        .map(str::to_ascii_uppercase)
+/// `CREATE [UNIQUE] INDEX ...` as one statement, what hypopg takes and nothing else,
+/// without its trailing `;`. A `;` in a string, a quoted name or a comment is part of the
+/// definition; any other ends it, and something after that is a second statement.
+fn index_definition(definition: &str) -> Option<&str> {
+    use dexo_sql::TokenKind;
+    let tokens: Vec<dexo_sql::Token> = dexo_sql::tokenize(definition, dexo_sql::Dialect::Postgres)
+        .into_iter()
+        .filter(|token| token.kind != TokenKind::Comment)
         .collect();
-    !definition.contains(';')
-        && words.first().map(String::as_str) == Some("CREATE")
-        && (words.get(1).map(String::as_str) == Some("INDEX")
-            || (words.get(1).map(String::as_str) == Some("UNIQUE")
-                && words.get(2).map(String::as_str) == Some("INDEX")))
+    let semicolon =
+        |token: &dexo_sql::Token| token.kind == TokenKind::Punct && token.text(definition) == ";";
+    let (body, end) = match tokens.split_last() {
+        Some((last, body)) if semicolon(last) => (body, last.span.start),
+        _ => (&tokens[..], definition.len()),
+    };
+    let words: Vec<String> = body
+        .iter()
+        .take(3)
+        .map(|token| token.text(definition).to_ascii_uppercase())
+        .collect();
+    let words: Vec<&str> = words.iter().map(String::as_str).collect();
+    let create_index = matches!(
+        words.as_slice(),
+        ["CREATE", "INDEX", ..] | ["CREATE", "UNIQUE", "INDEX"]
+    );
+    (create_index && !body.iter().any(semicolon)).then(|| definition[..end].trim())
 }
 
 #[cfg(test)]
@@ -340,15 +357,26 @@ mod tests {
 
     #[test]
     fn only_an_index_definition_is_tried() {
-        assert!(super::is_create_index(
-            "CREATE INDEX ON orders (customer_id)"
-        ));
-        assert!(super::is_create_index("create unique index on t (a, b)"));
-        assert!(!super::is_create_index("drop table orders"));
-        assert!(!super::is_create_index(
-            "create index on t (a); drop table t"
-        ));
-        assert!(!super::is_create_index("create table t (a int)"));
+        let tried = super::index_definition;
+        assert_eq!(
+            tried("CREATE INDEX ON orders (customer_id)"),
+            Some("CREATE INDEX ON orders (customer_id)")
+        );
+        assert!(tried("create unique index on t (a, b)").is_some());
+        assert!(tried("drop table orders").is_none());
+        assert!(tried("create index on t (a); drop table t").is_none());
+        assert!(tried("create index on t (a);;").is_none());
+        assert!(tried("create table t (a int)").is_none());
+        // One trailing `;` is dropped, and one in a literal, a quoted name or a comment
+        // is part of the definition.
+        assert_eq!(
+            tried("CREATE INDEX ON orders (customer_id);  -- try it\n"),
+            Some("CREATE INDEX ON orders (customer_id)")
+        );
+        assert_eq!(
+            tried("create index on \"a;b\" (c) where note <> 'x;y' /* ; */;"),
+            Some("create index on \"a;b\" (c) where note <> 'x;y' /* ; */")
+        );
     }
 
     #[test]

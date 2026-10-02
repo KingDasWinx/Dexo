@@ -390,7 +390,7 @@ async fn a_hypothetical_index_is_planned_with_and_then_gone() {
     let with = explain
         .explain(dexo_driver_api::ExplainRequest::with_indexes(
             sql,
-            vec!["CREATE INDEX ON hypo_probe (a)".into()],
+            vec!["CREATE INDEX ON hypo_probe (a) /* ; */ WHERE a < 1000;".into()],
         ))
         .await
         .unwrap();

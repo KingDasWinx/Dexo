@@ -696,6 +696,22 @@ mod tests {
         .unwrap();
         assert_eq!(index.relations, [["shop", "orders"]]);
         assert!(super::inspect_index("DROP TABLE orders", Dialect::Postgres).is_err());
+        // What the Postgres driver tries: one trailing `;`, and any in a literal.
+        assert!(super::inspect_index("CREATE INDEX ON orders (a);", Dialect::Postgres).is_ok());
+        assert!(
+            super::inspect_index(
+                "CREATE INDEX ON orders (a) WHERE b <> ';'",
+                Dialect::Postgres
+            )
+            .is_ok()
+        );
+        assert!(
+            super::inspect_index(
+                "CREATE INDEX ON orders (a); DROP TABLE t",
+                Dialect::Postgres
+            )
+            .is_err()
+        );
         for writes in [
             "lo_put(1, 0, 'x') is not null",
             "lo_truncate(1, 0) = 0",
