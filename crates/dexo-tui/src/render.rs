@@ -1890,27 +1890,42 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 40, 12);
-    let lines = model.security.lines();
+    let area = frame.area();
+    let width = 84.min(area.width.saturating_sub(2));
+    let popup = centered(area, width, 14.min(area.height.saturating_sub(2)));
+    let target = model.data.target.display_unquoted();
+    let lines = model
+        .security
+        .lines(popup_inner(popup).width as usize, &target);
+    let rows = popup_inner(popup).height as usize;
+    // The hint stays at the bottom, whatever the roles and grants take.
+    let (hint, list) = lines.split_at(lines.len().saturating_sub(1));
+    let room = rows.saturating_sub(1);
     let offset = scroll_to_selection(
         model.security.selected,
         0,
         model.security.principals.len(),
-        popup_inner(popup).height as usize,
+        room,
     );
-    let visible = lines
+    let mut visible = list
         .iter()
         .skip(offset)
-        .take(popup_inner(popup).height as usize)
+        .take(room)
         .cloned()
         .collect::<Vec<_>>();
-    render_panel(frame, popup, model, "Security", true, visible.join("\n"));
+    visible.resize(room, String::new());
+    visible.extend(hint.iter().cloned());
+    paint_popup(
+        frame,
+        model,
+        popup,
+        Block::bordered().title(format!("Security on {}", model.connection.name)),
+        visible.join("\n"),
+    );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &visible, |i, line, rect| {
+    for_popup_lines(popup, &visible, |i, _, rect| {
         let source_index = offset + i;
-        if (line.starts_with('>') || line.starts_with("  "))
-            && source_index < model.security.principals.len()
-        {
+        if i < room && source_index < model.security.principals.len() {
             hits.register(HitTarget::ListRow(source_index), rect);
         }
     });

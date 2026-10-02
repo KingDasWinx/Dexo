@@ -156,7 +156,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-10** `MAJOR` Copy Object Name on a schema / database returns a doubled name
 - [x] **ES-11** `MAJOR` "Show Dependencies" is just the Inspect dialog with raw catalog ids
 - [x] **ES-15** `MAJOR` Manage Grants (Security panel): the "DDL preview" opens underneath the panel and cannot be read; Apply answers "ddl RolledBack"
-- [ ] **ES-16** `MAJOR` Security panel is a 40-column box that truncates every grant and has no hints
+- [x] **ES-16** `MAJOR` Security panel is a 40-column box that truncates every grant and has no hints
 - [x] **ES-17** `MAJOR` Refresh Catalog (all) and `r` on a connection / group node do not refresh anything; no feedback either way
 - [x] **ES-20** `MAJOR` Hotkey `n` of "Edit Object Note…" does not work from the explorer: it opens "Add connection"
 - [x] **ES-24** `MAJOR` Preview DDL form: `defaults`, `indexes`, `constraints` and `foreign_keys` fields are ignored by the preview and by Apply

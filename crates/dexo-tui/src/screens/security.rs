@@ -48,23 +48,43 @@ impl SecurityScreen {
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
+    /// The roles, then what the selected one holds, then what the keys do; each line at
+    /// most `width` columns. `target` is the table Enter grants on.
+    pub fn lines(&self, width: usize, target: &str) -> Vec<String> {
+        let fit = |text: String| crate::model::truncate_cell(&text, width);
         let mut lines = Vec::new();
         for (index, principal) in self.principals.iter().enumerate() {
             let marker = if index == self.selected { ">" } else { " " };
-            lines.push(format!("{marker} {principal}"));
+            lines.push(fit(format!("{marker} {principal}")));
         }
-        for grant in &self.grants {
-            lines.push(format!(
-                "grant {} on {} ({})",
-                grant.principal.object(),
-                grant.target.display_unquoted(),
-                grant.privileges.join(",")
-            ));
+        if let Some(selected) = self.principals.get(self.selected) {
+            lines.push(String::new());
+            let held: Vec<&GrantRecord> = self
+                .grants
+                .iter()
+                .filter(|grant| grant.principal.object() == selected)
+                .collect();
+            if held.is_empty() {
+                lines.push(fit(format!("{selected} holds no grants here")));
+            }
+            for grant in held {
+                lines.push(fit(format!(
+                    "  {} on {}",
+                    grant.privileges.join(", "),
+                    grant.target.display_unquoted()
+                )));
+            }
         }
         if self.has_password {
             lines.push("password: ***".into());
         }
+        lines.push(String::new());
+        let hint = if target.is_empty() {
+            "Up/Down pick a role · Esc closes".to_string()
+        } else {
+            format!("Up/Down pick a role · Enter grants SELECT on {target} to it · Esc closes")
+        };
+        lines.push(fit(hint));
         lines
     }
 }
@@ -81,7 +101,7 @@ mod tests {
             ..SecurityScreen::default()
         };
         screen.open = true;
-        let dump = screen.lines().join("\n");
+        let dump = screen.lines(60, "").join("\n");
         assert!(dump.contains("***"));
         assert!(!dump.to_ascii_lowercase().contains("s3cret"));
         assert!(!dump.to_ascii_lowercase().contains("password="));
