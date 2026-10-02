@@ -61,6 +61,48 @@ async fn connect() -> Fixture {
     }
 }
 
+/// A name without a schema is the table the search_path finds, for the estimate and
+/// the key columns alike; a partitioned table's estimate is its partitions'.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn estimates_follow_the_search_path_and_add_up_partitions() {
+    let fixture = connect().await;
+    for sql in [
+        "create schema sales",
+        "create table sales.orders (code text primary key)",
+        "insert into sales.orders select g::text from generate_series(1, 7) g",
+        "create table public.orders (id int primary key)",
+        "create table events (at date not null) partition by range (at)",
+        "create table events_2025 partition of events
+             for values from ('2025-01-01') to ('2026-01-01')",
+        "create table events_2026 partition of events
+             for values from ('2026-01-01') to ('2027-01-01')",
+        "insert into events select date '2025-06-01' from generate_series(1, 30)",
+        "insert into events select date '2026-06-01' from generate_series(1, 12)",
+        "analyze",
+        "set search_path = sales, public",
+    ] {
+        drain(
+            fixture
+                .session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let data = fixture.session.data().unwrap();
+    let bare = |name: &str| QualifiedName::new(None::<String>, None::<String>, name);
+    assert_eq!(data.estimate_rows(&bare("orders")).await.unwrap(), Some(7));
+    let keys = data.table_columns(&bare("orders")).await.unwrap();
+    assert_eq!(keys.len(), 1);
+    assert!(keys[0].name == "code" && keys[0].primary_key);
+    let public = QualifiedName::new(None::<String>, Some("public"), "orders");
+    assert_eq!(data.estimate_rows(&public).await.unwrap(), Some(0));
+    assert_eq!(data.estimate_rows(&bare("events")).await.unwrap(), Some(42));
+    assert_eq!(data.estimate_rows(&bare("missing")).await.unwrap(), None);
+}
+
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn postgres_paging_and_typed_filter() {

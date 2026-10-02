@@ -260,22 +260,26 @@ fn predicate(
 #[async_trait::async_trait]
 impl DataMutator for PostgresSession {
     async fn estimate_rows(&self, target: &QualifiedName) -> Result<Option<u64>, DriverError> {
-        // `reltuples` is -1 until the table is first vacuumed or analyzed.
-        let schema = target.schema().unwrap_or("public").to_string();
-        let object = target.object().to_string();
-        let refs: Vec<&(dyn ToSql + Sync)> = vec![&object, &schema];
+        // The table the server reads for this name: a name without a schema through the
+        // search_path, not as `public`. `reltuples` is -1 until a table is first
+        // vacuumed or analyzed. A partitioned table keeps no count of its own, so its
+        // leaf partitions' are added up -- none while one of them has none.
         let row = self
             .client
             .query_opt(
-                "SELECT c.reltuples::bigint FROM pg_class c
-                 JOIN pg_namespace n ON n.oid = c.relnamespace
-                 WHERE c.relname = $1 AND n.nspname = $2",
-                &refs,
+                "SELECT (CASE WHEN c.relkind = 'p' THEN
+                           (SELECT CASE WHEN bool_and(l.reltuples >= 0) THEN sum(l.reltuples) END
+                            FROM pg_partition_tree(c.oid) t
+                            JOIN pg_class l ON l.oid = t.relid
+                            WHERE t.isleaf)
+                         ELSE c.reltuples END)::bigint
+                 FROM pg_class c WHERE c.oid = to_regclass($1)",
+                &[&qualify(target)],
             )
             .await
             .map_err(map_error)?;
         Ok(row
-            .map(|row| row.get::<_, i64>(0))
+            .and_then(|row| row.get::<_, Option<i64>>(0))
             .and_then(|rows| u64::try_from(rows).ok()))
     }
 
@@ -300,18 +304,17 @@ impl DataMutator for PostgresSession {
                       AND a.attnum = ANY (c.conkey)
                 ) AS is_unique
             FROM pg_attribute a
-            JOIN pg_class t ON t.oid = a.attrelid
-            JOIN pg_namespace n ON n.oid = t.relnamespace
-            WHERE t.relname = $1
-              AND n.nspname = $2
+            WHERE a.attrelid = to_regclass($1)
               AND a.attnum > 0
               AND NOT a.attisdropped
             ORDER BY a.attnum
         ";
-        let schema = target.schema().unwrap_or("public").to_string();
-        let object = target.object().to_string();
-        let refs: Vec<&(dyn ToSql + Sync)> = vec![&object, &schema];
-        let rows = self.client.query(sql, &refs).await.map_err(map_error)?;
+        // Resolved as the fetch's own statement resolves it, not as `public`.
+        let rows = self
+            .client
+            .query(sql, &[&qualify(target)])
+            .await
+            .map_err(map_error)?;
         Ok(rows
             .iter()
             .map(|row| dexo_driver_api::ColumnKeyInfo {
