@@ -740,6 +740,90 @@ async fn an_asking_grant_waits_for_a_person() {
     assert!(ledger.pending_approvals(now).is_empty());
 }
 
+/// An asking grant on `users` that waits up to `secs` for each write.
+fn asking_grant(secs: u32) -> Grant {
+    Grant::new(
+        &profile(),
+        "local",
+        GrantCapability::DataWrite,
+        vec!["data_insert".into()],
+        vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+        dexo_mcp::tools_write::now_secs(),
+        DEFAULT_TTL_SECS,
+    )
+    .unwrap()
+    .asking(secs)
+}
+
+/// The first request waiting for a person, once the server has written it down.
+async fn first_pending(ledger: &MemoryGrantLedger) -> dexo_app::mcp::Approval {
+    loop {
+        let now = dexo_mcp::tools_write::now_secs();
+        if let Some(request) = ledger.pending_approvals(now).into_iter().next() {
+            return request;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+}
+
+/// A write the agent cancels while it waits takes its request away: no one can approve
+/// it afterwards, and nothing reaches the database.
+#[tokio::test]
+async fn a_cancelled_write_cannot_be_approved() {
+    use dexo_app::mcp::ApprovalDecision;
+    let session = users();
+    let (mut client, _, ledger) =
+        client_with(FakeBackend::with_session("local", session.clone())).await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let waiting = client
+        .send_request(
+            "tools/call",
+            json!({"name": "data_insert", "arguments":
+                {"operation_id": "op-cancel", "target": "users", "values": {"id": 9}}}),
+        )
+        .await;
+    let request = first_pending(&ledger).await;
+    client
+        .notify(
+            "notifications/cancelled",
+            json!({"requestId": waiting, "reason": "test"}),
+        )
+        .await;
+    let mut settled = None;
+    for _ in 0..100 {
+        let current = ledger.approval(request.id).unwrap();
+        if current.decision != ApprovalDecision::Pending {
+            settled = Some(current);
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+    }
+    let settled = settled.expect("the cancel settles the request");
+    assert_eq!(settled.decision, ApprovalDecision::Cancelled);
+    assert!(settled.statement.is_empty());
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(
+        !ledger
+            .settle_approval(request.id, ApprovalDecision::Approved, now)
+            .unwrap()
+    );
+    let listed = client.call("list_connections", json!({})).await;
+    assert!(!is_error(&listed), "{listed}");
+    assert!(
+        !session
+            .log()
+            .iter()
+            .any(|entry| entry.starts_with("columns") || entry.starts_with("apply")),
+        "{:?}",
+        session.log()
+    );
+}
+
 /// E2: notes say what a table and its columns mean -- the person's note, else the
 /// database's comment -- in object_describe and catalog_search, which also finds a
 /// table by its note; a hidden table's note is never found.

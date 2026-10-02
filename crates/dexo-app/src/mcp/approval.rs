@@ -17,6 +17,8 @@ pub enum ApprovalDecision {
     Approved,
     Denied,
     Expired,
+    /// The agent stopped waiting: it cancelled the call.
+    Cancelled,
 }
 
 impl ApprovalDecision {
@@ -26,6 +28,7 @@ impl ApprovalDecision {
             Self::Approved => "approved",
             Self::Denied => "denied",
             Self::Expired => "expired",
+            Self::Cancelled => "cancelled",
         }
     }
 
@@ -36,6 +39,7 @@ impl ApprovalDecision {
             "pending" => Self::Pending,
             "approved" => Self::Approved,
             "expired" => Self::Expired,
+            "cancelled" => Self::Cancelled,
             _ => Self::Denied,
         }
     }
@@ -110,6 +114,7 @@ mod tests {
             ApprovalDecision::Approved,
             ApprovalDecision::Denied,
             ApprovalDecision::Expired,
+            ApprovalDecision::Cancelled,
         ] {
             assert_eq!(ApprovalDecision::parse(decision.as_str()), decision);
         }

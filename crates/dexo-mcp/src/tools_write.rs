@@ -18,6 +18,7 @@ use rmcp::{tool, tool_router};
 use serde::Serialize;
 use serde_json::json;
 use serde_json::{Map, Value};
+use tokio_util::sync::CancellationToken;
 
 use crate::render::text_result;
 use crate::schema::{
@@ -32,6 +33,7 @@ impl DexoMcpServer {
         name: &str,
         connection: Option<String>,
         input: &impl Serialize,
+        cancel: CancellationToken,
     ) -> CallToolResult {
         let arguments = serde_json::to_value(input)
             .ok()
@@ -40,12 +42,20 @@ impl DexoMcpServer {
         // A write an asking grant covers waits for a person first, before the connection
         // is taken: the session stays free for other calls while it waits.
         let approved = match self.inner.router.resolve(connection.as_deref()) {
-            Ok(slot) => match self.await_approval(name, &slot.meta, &arguments).await {
+            Ok(slot) => match self
+                .await_approval(name, &slot.meta, &arguments, &cancel)
+                .await
+            {
                 Ok(approved) => approved,
                 Err(error) => return crate::error::app_error(&error),
             },
             Err(_) => None,
         };
+        // A call the agent cancelled does not run, approved or not: rmcp only cancels
+        // the token, and the handler goes on unless it looks.
+        if cancel.is_cancelled() {
+            return crate::error::app_error(&cancelled_by_agent());
+        }
         let mut lease = match self.open(connection.as_deref()).await {
             Ok(lease) => lease,
             Err(result) => return result,
@@ -69,14 +79,16 @@ impl DexoMcpServer {
 impl DexoMcpServer {
     /// Waits for a person's decision when only an asking grant covers this write: the
     /// request goes to the database, where Dexo's Agent Activity screen shows it, and the
-    /// answer is read back every quarter second until the grant's time runs out. Any
-    /// other write -- replayed, refused, or covered by a grant that does not ask -- goes
-    /// straight on, and is judged where it runs.
+    /// answer is read back every quarter second until the grant's time runs out, or the
+    /// agent cancels the call, which takes the request away so no one can approve it.
+    /// Any other write -- replayed, refused, or covered by a grant that does not ask --
+    /// goes straight on, and is judged where it runs.
     async fn await_approval(
         &self,
         name: &str,
         connection: &McpConnection,
         arguments: &Map<String, Value>,
+        cancel: &CancellationToken,
     ) -> Result<Option<uuid::Uuid>, AppError> {
         let service = &self.inner.service;
         let ledger = self.inner.ledger.as_ref();
@@ -131,7 +143,26 @@ impl DexoMcpServer {
             None,
         );
         loop {
-            tokio::time::sleep(std::time::Duration::from_millis(250)).await;
+            tokio::select! {
+                () = tokio::time::sleep(std::time::Duration::from_millis(250)) => {}
+                () = cancel.cancelled() => {
+                    let now = now_secs();
+                    ledger.settle_approval(approval.id, ApprovalDecision::Cancelled, now)?;
+                    audit(
+                        ledger,
+                        service,
+                        name,
+                        operation,
+                        target,
+                        "deny",
+                        Some(&grant_id),
+                        "cancelled",
+                        now,
+                        None,
+                    );
+                    return Err(cancelled_by_agent());
+                }
+            }
             let now = now_secs();
             let decision = ledger
                 .approval(approval.id)
@@ -165,6 +196,7 @@ impl DexoMcpServer {
                 ApprovalDecision::Expired => {
                     format!("no one approved this write within {}s", grant.ask_secs)
                 }
+                ApprovalDecision::Cancelled => "this write's request was cancelled".to_string(),
             };
             audit(
                 ledger,
@@ -233,22 +265,34 @@ fn covering_grant(
 impl DexoMcpServer {
     /// Insert one row. Appears only while a data_write grant covering `target` is active; one successful call spends the grant.
     #[tool(annotations(read_only_hint = false, destructive_hint = false))]
-    async fn data_insert(&self, Parameters(input): Parameters<DataInsertInput>) -> CallToolResult {
-        self.write("data_insert", input.connection.clone(), &input)
+    async fn data_insert(
+        &self,
+        Parameters(input): Parameters<DataInsertInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_insert", input.connection.clone(), &input, cancel)
             .await
     }
 
     /// Update the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
-    async fn data_update(&self, Parameters(input): Parameters<DataUpdateInput>) -> CallToolResult {
-        self.write("data_update", input.connection.clone(), &input)
+    async fn data_update(
+        &self,
+        Parameters(input): Parameters<DataUpdateInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_update", input.connection.clone(), &input, cancel)
             .await
     }
 
     /// Delete the one row named by `identity`. Appears only while a data_write grant covering `target` is active.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
-    async fn data_delete(&self, Parameters(input): Parameters<DataDeleteInput>) -> CallToolResult {
-        self.write("data_delete", input.connection.clone(), &input)
+    async fn data_delete(
+        &self,
+        Parameters(input): Parameters<DataDeleteInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("data_delete", input.connection.clone(), &input, cancel)
             .await
     }
 
@@ -257,15 +301,20 @@ impl DexoMcpServer {
     async fn data_execute_sql(
         &self,
         Parameters(input): Parameters<DataSqlInput>,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        self.write("data_execute_sql", input.connection.clone(), &input)
+        self.write("data_execute_sql", input.connection.clone(), &input, cancel)
             .await
     }
 
     /// Apply one DDL statement. Destructive DDL needs `confirm_target` equal to `target`. MySQL commits DDL implicitly.
     #[tool(annotations(read_only_hint = false, destructive_hint = true))]
-    async fn schema_apply_ddl(&self, Parameters(input): Parameters<DdlInput>) -> CallToolResult {
-        self.write("schema_apply_ddl", input.connection.clone(), &input)
+    async fn schema_apply_ddl(
+        &self,
+        Parameters(input): Parameters<DdlInput>,
+        cancel: CancellationToken,
+    ) -> CallToolResult {
+        self.write("schema_apply_ddl", input.connection.clone(), &input, cancel)
             .await
     }
 
@@ -274,9 +323,15 @@ impl DexoMcpServer {
     async fn admin_cancel_query(
         &self,
         Parameters(input): Parameters<AdminActionInput>,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        self.write("admin_cancel_query", input.connection.clone(), &input)
-            .await
+        self.write(
+            "admin_cancel_query",
+            input.connection.clone(),
+            &input,
+            cancel,
+        )
+        .await
     }
 
     /// Terminate one server session. Needs an admin grant for this connection and `confirm_target` equal to `session_id`.
@@ -284,9 +339,15 @@ impl DexoMcpServer {
     async fn admin_terminate_session(
         &self,
         Parameters(input): Parameters<AdminActionInput>,
+        cancel: CancellationToken,
     ) -> CallToolResult {
-        self.write("admin_terminate_session", input.connection.clone(), &input)
-            .await
+        self.write(
+            "admin_terminate_session",
+            input.connection.clone(),
+            &input,
+            cancel,
+        )
+        .await
     }
 }
 
@@ -772,6 +833,10 @@ pub fn now_secs() -> i64 {
         .duration_since(std::time::UNIX_EPOCH)
         .map(|duration| duration.as_secs() as i64)
         .unwrap_or(0)
+}
+
+fn cancelled_by_agent() -> AppError {
+    AppError::new(ErrorCategory::Cancelled, "the agent cancelled this write")
 }
 
 #[cfg(test)]
