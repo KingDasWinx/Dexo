@@ -74,10 +74,21 @@ pub fn run(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
 fn stop_tree(child: &mut std::process::Child) {
     #[cfg(unix)]
     {
-        // `shell` made the child a process group leader, so its pid is the group's.
-        // SAFETY: killpg only sends a signal; a group that has gone already is ESRCH.
-        unsafe {
-            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
+        // The command stays in the terminal's process group, where one that prompts on
+        // the terminal can read it (in a group of its own it was stopped by SIGTTIN, and
+        // Ctrl+C never reached it); so its descendants are found by parent instead,
+        // all of them before any is stopped and re-parented.
+        let mut tree = vec![child.id()];
+        let mut at = 0;
+        while let Some(&parent) = tree.get(at) {
+            tree.extend(children_of(parent));
+            at += 1;
+        }
+        for pid in tree.into_iter().skip(1) {
+            // SAFETY: kill only sends a signal; a process that has gone already is ESRCH.
+            unsafe {
+                libc::kill(pid as libc::pid_t, libc::SIGKILL);
+            }
         }
     }
     #[cfg(windows)]
@@ -93,6 +104,23 @@ fn stop_tree(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+/// The processes whose parent is `pid`, as `pgrep -P` lists them.
+#[cfg(unix)]
+fn children_of(pid: u32) -> Vec<u32> {
+    Command::new("pgrep")
+        .args(["-P", &pid.to_string()])
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .map(|output| {
+            String::from_utf8_lossy(&output.stdout)
+                .split_whitespace()
+                .filter_map(|pid| pid.parse().ok())
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
 #[cfg(windows)]
 fn shell(command: &str) -> Command {
     use std::os::windows::process::CommandExt;
@@ -105,11 +133,8 @@ fn shell(command: &str) -> Command {
 
 #[cfg(not(windows))]
 fn shell(command: &str) -> Command {
-    use std::os::unix::process::CommandExt;
     let mut shell = Command::new("sh");
     shell.args(["-c", command]);
-    // Its own process group, so a timeout can stop all of it.
-    shell.process_group(0);
     shell
 }
 
@@ -165,6 +190,16 @@ mod tests {
             "still running: {}",
             String::from_utf8_lossy(&left)
         );
+    }
+
+    /// The command shares the terminal's process group, so one that reads the terminal
+    /// is not stopped for it.
+    #[test]
+    fn the_command_runs_in_dexos_process_group() {
+        let group = run("ps -o pgid= -p $$", Duration::from_secs(5)).unwrap();
+        // SAFETY: getpgrp has no preconditions.
+        let ours = unsafe { libc::getpgrp() };
+        assert_eq!(group.expose_secret().trim(), ours.to_string());
     }
 
     #[test]
