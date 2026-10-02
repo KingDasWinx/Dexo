@@ -462,8 +462,13 @@ pub enum McpGrantCommand {
         /// Activity screen; the grant lasts until it expires.
         #[arg(long)]
         ask: bool,
-        /// Seconds a write waits for approval before it is refused.
-        #[arg(long, default_value_t = 120, requires = "ask")]
+        /// Seconds a write waits for approval before it is refused, 1 to 3600.
+        #[arg(
+            long,
+            default_value_t = 120,
+            requires = "ask",
+            value_parser = clap::value_parser!(u32).range(1..=3600)
+        )]
         approval_timeout: u32,
     },
     List {

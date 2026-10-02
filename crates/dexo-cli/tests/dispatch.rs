@@ -89,3 +89,33 @@ fn connections_add_refuses_options_that_cannot_go_together() {
         .is_err()
     );
 }
+
+/// An asking grant's wait is 1 s to an hour; zero or more is refused, not stored.
+#[test]
+fn approval_timeout_is_bounded() {
+    let create = |timeout: &str| {
+        Args::try_parse_from([
+            "dexo",
+            "mcp",
+            "grant",
+            "create",
+            "--profile",
+            "p",
+            "--connection",
+            "c",
+            "--capability",
+            "data_write",
+            "--tool",
+            "data_insert",
+            "--selector",
+            "db.public.t",
+            "--ask",
+            "--approval-timeout",
+            timeout,
+        ])
+    };
+    assert!(create("120").is_ok());
+    assert!(create("3600").is_ok());
+    assert!(create("0").is_err());
+    assert!(create("3601").is_err());
+}

@@ -85,10 +85,10 @@ pub struct Grant {
 }
 
 impl Grant {
-    /// The grant made to ask, every write it covers waiting up to `timeout_secs` for a
-    /// person's decision. An asking grant lasts until it expires.
+    /// The grant made to ask, every write it covers waiting up to `timeout_secs` (1 s to
+    /// an hour) for a person's decision. An asking grant lasts until it expires.
     pub fn asking(mut self, timeout_secs: u32) -> Self {
-        self.ask_secs = timeout_secs.max(1);
+        self.ask_secs = timeout_secs.clamp(1, crate::mcp::approval::MAX_TIMEOUT_SECS);
         self.remaining_uses = u32::MAX;
         self
     }
@@ -251,6 +251,26 @@ mod tests {
             )
             .is_err()
         );
+    }
+
+    /// An asking grant waits at least a second and at most an hour per write.
+    #[test]
+    fn the_approval_wait_is_bounded() {
+        let grant = || {
+            Grant::new(
+                &profile(),
+                "local",
+                GrantCapability::DataWrite,
+                vec!["data_insert".into()],
+                vec![SelectorRule::parse(Effect::Allow, "db.public.items").unwrap()],
+                0,
+                DEFAULT_TTL_SECS,
+            )
+            .unwrap()
+        };
+        assert_eq!(grant().asking(0).ask_secs, 1);
+        assert_eq!(grant().asking(120).ask_secs, 120);
+        assert_eq!(grant().asking(u32::MAX).ask_secs, 3600);
     }
 
     #[test]

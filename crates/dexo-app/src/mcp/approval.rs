@@ -8,6 +8,9 @@ use uuid::Uuid;
 /// How long a write waits for a decision when the grant does not say.
 pub const DEFAULT_TIMEOUT_SECS: u32 = 120;
 
+/// The longest a write may wait for a decision: an agent's call stays open all along.
+pub const MAX_TIMEOUT_SECS: u32 = 3600;
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 pub enum ApprovalDecision {
     Pending,
@@ -26,12 +29,14 @@ impl ApprovalDecision {
         }
     }
 
+    /// A value Dexo never writes reads as denied: read as pending, it could never be
+    /// settled, and the server asked again forever.
     pub fn parse(value: &str) -> Self {
         match value {
+            "pending" => Self::Pending,
             "approved" => Self::Approved,
-            "denied" => Self::Denied,
             "expired" => Self::Expired,
-            _ => Self::Pending,
+            _ => Self::Denied,
         }
     }
 }
@@ -91,4 +96,24 @@ fn statement_of(arguments: &serde_json::Map<String, serde_json::Value>) -> Strin
         .map(|(key, value)| (key.clone(), value.clone()))
         .collect();
     serde_json::Value::Object(shown).to_string()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::ApprovalDecision;
+
+    /// Only what Dexo writes reads back as itself; anything else stops the wait as denied.
+    #[test]
+    fn an_unknown_decision_is_a_denial() {
+        for decision in [
+            ApprovalDecision::Pending,
+            ApprovalDecision::Approved,
+            ApprovalDecision::Denied,
+            ApprovalDecision::Expired,
+        ] {
+            assert_eq!(ApprovalDecision::parse(decision.as_str()), decision);
+        }
+        assert_eq!(ApprovalDecision::parse("maybe"), ApprovalDecision::Denied);
+        assert_eq!(ApprovalDecision::parse(""), ApprovalDecision::Denied);
+    }
 }
