@@ -39,24 +39,45 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 ## Screenshots
 
-<table>
-  <tr>
-    <td width="50%"><img src="assets/screenshots/table-data.webp" alt="Browsing a table"><br><sub><b>Table data.</b> Open a table from the tree; the grid pages on demand and the console logs each fetch.</sub></td>
-    <td width="50%"><img src="assets/screenshots/record.webp" alt="Record detail"><br><sub><b>Record detail.</b> Enter on a row shows every field, with copy, filter, and refresh actions.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/actions.webp" alt="Connection actions"><br><sub><b>Node actions.</b> <kbd>a</kbd> on any tree node lists what it supports, with each shortcut.</sub></td>
-    <td><img src="assets/screenshots/palette.webp" alt="Command palette"><br><sub><b>Command palette.</b> <kbd>Ctrl</kbd>+<kbd>P</kbd> reaches every command, grouped by area.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/connection-form.webp" alt="Add connection form"><br><sub><b>Connections.</b> TLS, SSH, and proxy settings sit under advanced options.</sub></td>
-    <td><img src="assets/screenshots/help.webp" alt="Keybindings reference"><br><sub><b>Keybindings.</b> <kbd>F1</kbd> lists the active keymap for each pane.</sub></td>
-  </tr>
-  <tr>
-    <td><img src="assets/screenshots/workbench-light.webp" alt="Light theme"><br><sub><b>Light theme.</b> The same workbench in light mode with the violet accent.</sub></td>
-    <td><img src="assets/screenshots/settings-light.webp" alt="Settings"><br><sub><b>Settings.</b> Theme, mode, accent, keymap (Default, Vim, Emacs), mouse, animation, Unicode, and the update check.</sub></td>
-  </tr>
-</table>
+<p align="center">
+  <img src="assets/screenshots/table-data.webp" width="100%" alt="Browsing a table"><br>
+  <sub>Browse a table: the grid pages on demand.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/record.webp" width="100%" alt="Record detail"><br>
+  <sub><kbd>Enter</kbd> on a row shows every field.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/palette.webp" width="100%" alt="Command palette"><br>
+  <sub><kbd>Ctrl</kbd>+<kbd>P</kbd> reaches every command.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/actions.webp" width="100%" alt="Node actions"><br>
+  <sub><kbd>a</kbd> on a tree node lists what it can do.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/connection-form.webp" width="100%" alt="Connection form"><br>
+  <sub>TLS, SSH and proxies under advanced options.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/help.webp" width="100%" alt="Keybindings"><br>
+  <sub><kbd>F1</kbd> lists every key.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/workbench-light.webp" width="100%" alt="Light theme"><br>
+  <sub>The light theme, with the violet accent.</sub>
+</p>
+
+<p align="center">
+  <img src="assets/screenshots/settings-light.webp" width="100%" alt="Settings"><br>
+  <sub>Theme, accent, keymap and more, applied at once.</sub>
+</p>
 
 ## Installation
 
