@@ -203,6 +203,11 @@ fn run_export(
     format: TransferCliFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
+    // An SQL export is written in the connection's own dialect.
+    let driver =
+        ConnectionRepository::new(Database::open(&AppPaths::discover()?.database)?.connection())
+            .get_by_name(&connection)?
+            .map(|profile| profile.driver);
     let batches = tokio::runtime::Runtime::new()?.block_on(execute_script(
         registry,
         connection,
@@ -227,6 +232,9 @@ fn run_export(
     let mut options = dexo_app::transfer::FormatOptions::default();
     if format == TransferCliFormat::Tsv {
         options.delimiter = b'\t';
+    }
+    if let Some(driver) = driver {
+        options.dialect = dexo_app::dialect_for_driver(&driver).into();
     }
     // ponytail: CLI buffers query events from execute_script; million-row bound lives in export_rows.
     dexo_app::transfer::export_rows(

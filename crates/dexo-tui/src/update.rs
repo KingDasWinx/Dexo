@@ -4068,11 +4068,7 @@ fn connect_selected(model: &mut Model) -> Vec<Effect> {
 /// own statements quote in -- set together, so switching sessions cannot leave the one
 /// a previous connection spoke.
 fn set_connection_driver(model: &mut Model, driver: String) {
-    model.data.dialect = match dexo_app::dialect_for_driver(&driver) {
-        dexo_sql::Dialect::Mysql => dexo_app::data::SqlDialect::Mysql,
-        dexo_sql::Dialect::Sqlite => dexo_app::data::SqlDialect::Sqlite,
-        dexo_sql::Dialect::Postgres => dexo_app::data::SqlDialect::Postgres,
-    };
+    model.data.dialect = dexo_app::dialect_for_driver(&driver).into();
     model.connection.driver = driver;
 }
 

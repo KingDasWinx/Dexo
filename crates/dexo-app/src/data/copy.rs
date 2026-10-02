@@ -20,6 +20,16 @@ pub enum SqlDialect {
     Sqlite,
 }
 
+impl From<dexo_sql::Dialect> for SqlDialect {
+    fn from(dialect: dexo_sql::Dialect) -> Self {
+        match dialect {
+            dexo_sql::Dialect::Postgres => Self::Postgres,
+            dexo_sql::Dialect::Mysql => Self::Mysql,
+            dexo_sql::Dialect::Sqlite => Self::Sqlite,
+        }
+    }
+}
+
 pub fn copy_selection(
     columns: &[String],
     rows: &[Vec<DbValue>],
