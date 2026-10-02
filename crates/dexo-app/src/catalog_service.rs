@@ -90,9 +90,15 @@ impl CatalogService {
     }
 }
 
+/// The name in full, `shop.public.orders`, or its last parts, `public.orders` or
+/// `orders`: what a user types leaves out the database it is connected to.
 fn matches_name(object: &CatalogObject, qualified: &str) -> bool {
-    object.qualified_name.display_unquoted() == qualified
+    let full = object.qualified_name.display_unquoted();
+    full == qualified
         || object.qualified_name.object() == qualified
+        || full
+            .strip_suffix(qualified)
+            .is_some_and(|before| before.ends_with('.'))
 }
 
 fn matches_restricted(
@@ -346,6 +352,22 @@ mod tests {
     use super::SnapshotCatalog;
     use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
     use dexo_sql::{Catalog, Dialect, complete, labels};
+
+    #[test]
+    fn an_object_is_found_by_its_last_name_parts() {
+        let table = CatalogObject::new(
+            ObjectId::new("t1"),
+            ObjectKind::Table,
+            QualifiedName::new(Some("shop"), Some("public"), "orders"),
+            None,
+        );
+        for name in ["shop.public.orders", "public.orders", "orders"] {
+            assert!(super::matches_name(&table, name), "{name}");
+        }
+        for name in ["lic.orders", "hop.public.orders", "public"] {
+            assert!(!super::matches_name(&table, name), "{name}");
+        }
+    }
 
     #[test]
     fn offline_snapshot_powers_autocomplete() {
