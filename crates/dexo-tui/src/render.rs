@@ -1228,7 +1228,13 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             if !crate::palette::matches_any(&[&chord, title, &command], query) {
                 continue;
             }
-            section_lines.push(format!("  {chord:<16} {title}"));
+            // Spelled as the palette and the status bar spell keys.
+            let keys = chord
+                .split(" / ")
+                .map(crate::palette::pretty_chord)
+                .collect::<Vec<_>>()
+                .join(" / ");
+            section_lines.push(format!("  {keys:<16} {title}"));
         }
         if section_lines.is_empty() {
             continue;
@@ -3523,7 +3529,7 @@ mod tests {
 
         let view = render_to_string(&model, 100, 40);
 
-        assert!(view.contains("shift+d"));
+        assert!(view.contains("Shift+D"));
         assert!(view.contains("Disconnect Connection"));
         assert!(!view.contains("New Connection"));
     }

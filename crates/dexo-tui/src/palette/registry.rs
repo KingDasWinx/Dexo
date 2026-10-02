@@ -1508,7 +1508,7 @@ pub(crate) fn shortcut_for(
 
 /// `ctrl+shift+d` as `Ctrl+Shift+D`, `ctrl+x ctrl+e` as `Ctrl+X Ctrl+E`. A bare letter
 /// stays as it is typed -- `s`, not an `S` that reads as Shift+S next to it.
-fn pretty_chord(label: &str) -> String {
+pub(crate) fn pretty_chord(label: &str) -> String {
     label
         .split(' ')
         .map(|key| {

@@ -183,17 +183,23 @@ impl Keymap {
     }
 
     pub fn help_sections(&self) -> Vec<(&'static str, Vec<(String, String)>)> {
-        let mut buckets: [(KeyContext, Vec<(String, String)>); 6] = [
+        let mut buckets: [(KeyContext, Vec<(String, String)>); 7] = [
             (KeyContext::Editor, Vec::new()),
             (KeyContext::Results, Vec::new()),
             (KeyContext::Explorer, Vec::new()),
             (KeyContext::DocumentTabs, Vec::new()),
             (KeyContext::Global, Vec::new()),
             (KeyContext::Palette, Vec::new()),
+            (KeyContext::Global, Vec::new()),
         ];
         for binding in &self.bindings {
             let chord = chord_label(&binding.chord);
             let entry = (chord, binding.command.clone());
+            // Pane sizes are one topic wherever the key is bound: they sat under Editor.
+            if binding.command.starts_with("layout.") {
+                buckets[6].1.push(entry);
+                continue;
+            }
             match binding.context {
                 KeyContext::Editor => buckets[0].1.push(entry),
                 // the console is the results pane wearing a different hat
@@ -211,6 +217,7 @@ impl Keymap {
             "Tabs",
             "Workbench",
             "Overlays",
+            "Layout",
         ];
         buckets
             .into_iter()
@@ -219,9 +226,22 @@ impl Keymap {
                 if rows.is_empty() {
                     return None;
                 }
-                rows.sort_by(|a, b| a.0.cmp(&b.0).then(a.1.cmp(&b.1)));
+                // By command, so related keys sit together, and one row per command with
+                // its other keys after the first: `ctrl+/`, `ctrl+_` and `ctrl+7` were
+                // three rows for one action.
+                rows.sort_by(|a, b| a.1.cmp(&b.1).then(a.0.cmp(&b.0)));
                 rows.dedup();
-                Some((name, rows))
+                let mut merged: Vec<(String, String)> = Vec::new();
+                for (chord, command) in rows {
+                    match merged.last_mut() {
+                        Some((keys, last)) if *last == command => {
+                            keys.push_str(" / ");
+                            keys.push_str(&chord);
+                        }
+                        _ => merged.push((chord, command)),
+                    }
+                }
+                Some((name, merged))
             })
             .collect()
     }

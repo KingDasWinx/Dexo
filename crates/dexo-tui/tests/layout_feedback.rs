@@ -47,6 +47,28 @@ fn both_border_cells_of_a_divider_start_a_drag() {
     );
 }
 
+/// F1 spelled keys in lower case and listed the pane-size keys under Editor.
+#[test]
+fn help_spells_keys_like_the_palette_and_groups_layout_keys() {
+    let mut model = Model::default();
+    update(
+        &mut model,
+        Action::Resize {
+            width: 120,
+            height: 60,
+        },
+    );
+    update(&mut model, Action::ToggleHelp);
+    model.help.query = dexo_tui::widgets::text_input::TextInput::new("execute document");
+    let frame = dexo_tui::render::render_to_string(&model, 120, 60);
+    assert!(frame.contains("Ctrl+Shift+F10"), "{frame}");
+    assert!(!frame.contains("ctrl+shift+f10"), "{frame}");
+    model.help.query = dexo_tui::widgets::text_input::TextInput::new("pane");
+    let frame = dexo_tui::render::render_to_string(&model, 120, 60);
+    assert!(frame.contains("[Layout]"), "{frame}");
+    assert!(!frame.contains("[Editor]"), "{frame}");
+}
+
 #[test]
 fn a_click_in_the_help_search_does_not_close_help() {
     let mut model = Model::default();

@@ -2,8 +2,8 @@ use crate::action::Action;
 use crate::model::Model;
 
 mod registry;
-pub(crate) use registry::shortcut_for;
 pub use registry::{command_spec, command_specs, palette_entries};
+pub(crate) use registry::{pretty_chord, shortcut_for};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum FlowIntent {
