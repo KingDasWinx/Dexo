@@ -9,7 +9,9 @@ use duckdb::profiling::ProfilingInfo;
 use serde_json::{Value, json};
 
 use crate::error::{map_error, writes_refused};
-use crate::session::{DuckdbSession, begin_own, first_word, reads, split_differently, statements};
+use crate::session::{
+    DuckdbSession, begin_own, close_own, first_word, reads, split_differently, statements,
+};
 
 #[async_trait::async_trait]
 impl ExplainProvider for DuckdbSession {
@@ -116,7 +118,7 @@ fn analyzed(conn: &Connection, sql: &str, read_only: bool) -> Result<ExplainPlan
     let profiled = run();
     let _ = conn.execute_batch("PRAGMA disable_profiling");
     if fenced {
-        conn.execute_batch("ROLLBACK").map_err(map_error)?;
+        close_own(conn)?;
     }
     let info = profiled?.ok_or_else(|| {
         DriverError::new(

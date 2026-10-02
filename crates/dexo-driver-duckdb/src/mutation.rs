@@ -8,7 +8,7 @@ use duckdb::{Connection, OptionalExt, params};
 use crate::catalog::{place_of, rows};
 use crate::decode::{column_meta, compared_as_text, qualify, quote, to_sql};
 use crate::error::{map_error, writes_refused};
-use crate::session::{DuckdbSession, begin_own, decode_rows};
+use crate::session::{DuckdbSession, begin_own, close_own, decode_rows};
 
 #[derive(Default)]
 struct Binder {
@@ -344,7 +344,7 @@ fn read_rows(
         Ok((columns, rows))
     })();
     if fenced {
-        conn.execute_batch("ROLLBACK").map_err(map_error)?;
+        close_own(conn)?;
     }
     read
 }
@@ -370,7 +370,7 @@ fn apply_all(conn: &Connection, mutations: &[Mutation]) -> Result<(), DriverErro
     match (own, applied) {
         (true, Ok(())) => conn.execute_batch("COMMIT").map_err(map_error),
         (true, Err(error)) => {
-            let _ = conn.execute_batch("ROLLBACK");
+            let _ = close_own(conn);
             Err(error)
         }
         (false, Err(error)) => Err(error.with_hint(

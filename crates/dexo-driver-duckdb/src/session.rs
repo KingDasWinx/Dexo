@@ -103,12 +103,19 @@ impl DuckdbSession {
         *self.tx_state.lock().unwrap_or_else(PoisonError::into_inner) = state;
     }
 
+    /// A COMMIT DuckDB refuses -- a conflict with another writer -- rolls the transaction
+    /// back, so whether one is still open is asked, not assumed.
     async fn end(&self, sql: &'static str, failed: TransactionState) -> Result<(), DriverError> {
-        let result = self.exec_batch(sql).await;
-        self.set_state(if result.is_ok() {
-            TransactionState::Idle
-        } else {
-            failed
+        let (result, open) = self
+            .with_conn(move |conn| {
+                let result = conn.execute_batch(sql).map_err(map_error);
+                let open = result.is_err() && in_transaction(conn);
+                Ok((result, open))
+            })
+            .await?;
+        self.set_state(match (&result, open) {
+            (Ok(()), _) | (Err(_), false) => TransactionState::Idle,
+            (Err(_), true) => failed,
         });
         result
     }
@@ -211,6 +218,28 @@ pub(crate) fn first_word(sql: &str) -> Option<String> {
 pub(crate) fn reads(conn: &Connection, sql: &str) -> Result<bool, DriverError> {
     crate::parse::parse(sql)?;
     Ok(crate::parse::only_queries(conn, sql)? && statements(sql).iter().all(|text| is_read(text)))
+}
+
+/// Whether the connection has a transaction open, asked of DuckDB by trying to open one:
+/// its own flag for it reads true inside one.
+pub(crate) fn in_transaction(conn: &Connection) -> bool {
+    match conn.execute_batch("BEGIN TRANSACTION") {
+        Ok(()) => {
+            let _ = conn.execute_batch("ROLLBACK");
+            false
+        }
+        Err(_) => true,
+    }
+}
+
+/// Rolls back a transaction Dexo opened, again if the first try failed and it is still
+/// open: one left open made every later request run inside it, as if it were the
+/// user's, with no fence of its own.
+pub(crate) fn close_own(conn: &Connection) -> Result<(), DriverError> {
+    if conn.execute_batch("ROLLBACK").is_ok() || !in_transaction(conn) {
+        return Ok(());
+    }
+    conn.execute_batch("ROLLBACK").map_err(map_error)
 }
 
 /// Opens a transaction for Dexo's own use, or says the user already has one open:
@@ -366,7 +395,7 @@ fn run_script(
     let fenced = guard.reads_only && begin_own(conn, "BEGIN TRANSACTION READ ONLY")?;
     let outcome = run_statements(conn, &statements, parameters, row_limit, events, cancelled);
     if fenced {
-        let rolled_back = conn.execute_batch("ROLLBACK").map_err(map_error);
+        let rolled_back = close_own(conn);
         outcome?;
         rolled_back?;
         return Ok(());

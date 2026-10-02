@@ -963,3 +963,35 @@ async fn a_data_file_is_the_file_its_path_names() {
         assert_eq!(texts(&events), [["1"]], "{name}");
     }
 }
+
+/// A COMMIT DuckDB refuses rolls the transaction back: the session is idle after it, not
+/// failed with nothing open.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_refused_commit_leaves_no_transaction() {
+    let (_dir, path) = seeded().await;
+    let first = open(&path, false).await;
+    let second = open(&path, false).await;
+    let (one, two) = (
+        first.transactions().unwrap(),
+        second.transactions().unwrap(),
+    );
+    one.begin(TransactionMode::ReadWrite).await.unwrap();
+    two.begin(TransactionMode::ReadWrite).await.unwrap();
+    run(
+        &*first,
+        QueryRequest::write("update customers set score = 1 where id = 1"),
+    )
+    .await
+    .unwrap();
+    let conflict = run(
+        &*second,
+        QueryRequest::write("update customers set score = 2 where id = 1"),
+    )
+    .await;
+    one.commit().await.unwrap();
+    let committed = two.commit().await;
+    assert!(conflict.is_err() || committed.is_err());
+    assert_eq!(two.state(), dexo_driver_api::TransactionState::Idle);
+    two.begin(TransactionMode::ReadWrite).await.unwrap();
+    two.rollback().await.unwrap();
+}
