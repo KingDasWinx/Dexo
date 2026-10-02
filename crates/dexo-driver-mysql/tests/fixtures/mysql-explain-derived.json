@@ -1,0 +1,102 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "2.65"
+    },
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ALL",
+          "possible_keys": [
+            "PRIMARY"
+          ],
+          "rows_examined_per_scan": 3,
+          "rows_produced_per_join": 3,
+          "filtered": "100.00",
+          "cost_info": {
+            "read_cost": "0.25",
+            "eval_cost": "0.30",
+            "prefix_cost": "0.55",
+            "data_read_per_join": "264"
+          },
+          "used_columns": [
+            "id",
+            "name"
+          ]
+        }
+      },
+      {
+        "table": {
+          "table_name": "t",
+          "access_type": "ref",
+          "possible_keys": [
+            "<auto_key0>"
+          ],
+          "key": "<auto_key0>",
+          "used_key_parts": [
+            "customer_id"
+          ],
+          "key_length": "5",
+          "ref": [
+            "d.c.id"
+          ],
+          "rows_examined_per_scan": 2,
+          "rows_produced_per_join": 6,
+          "filtered": "100.00",
+          "cost_info": {
+            "read_cost": "1.50",
+            "eval_cost": "0.60",
+            "prefix_cost": "2.65",
+            "data_read_per_join": "192"
+          },
+          "used_columns": [
+            "customer_id",
+            "s"
+          ],
+          "materialized_from_subquery": {
+            "using_temporary_table": true,
+            "dependent": false,
+            "cacheable": true,
+            "query_block": {
+              "select_id": 2,
+              "cost_info": {
+                "query_cost": "0.65"
+              },
+              "grouping_operation": {
+                "using_filesort": false,
+                "table": {
+                  "table_name": "o",
+                  "access_type": "index",
+                  "possible_keys": [
+                    "customer_id"
+                  ],
+                  "key": "customer_id",
+                  "used_key_parts": [
+                    "customer_id"
+                  ],
+                  "key_length": "5",
+                  "rows_examined_per_scan": 4,
+                  "rows_produced_per_join": 4,
+                  "filtered": "100.00",
+                  "cost_info": {
+                    "read_cost": "0.25",
+                    "eval_cost": "0.40",
+                    "prefix_cost": "0.65",
+                    "data_read_per_join": "64"
+                  },
+                  "used_columns": [
+                    "id",
+                    "customer_id",
+                    "total"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    ]
+  }
+}

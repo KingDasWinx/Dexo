@@ -106,26 +106,55 @@ fn parse_value(value: &serde_json::Value) -> PlanNode {
     parse_block(value)
 }
 
-/// A query block's plan, with the subqueries MariaDB lists beside it under it.
+/// The steps [`parse_step`] draws by name, in the order it looks for them.
+const STEPS: &[&str] = &[
+    "union_result",
+    "window_functions_computation",
+    "windowing",
+    "nested_loop",
+    "table",
+    "read_sorted_file",
+    "filesort",
+    "temporary_table",
+    "ordering_operation",
+    "grouping_operation",
+    "duplicates_removal",
+];
+
+/// A query block's plan, with what sits beside its step under it: MariaDB's
+/// `subqueries`, MySQL's `select_list_subqueries` and the like. A step this does not
+/// know by name has made them its children already.
 fn parse_block(value: &serde_json::Value) -> PlanNode {
     let mut node = parse_step(value);
-    if let Some(subqueries) = value
-        .get("subqueries")
-        .and_then(serde_json::Value::as_array)
-    {
-        node.children
-            .extend(subqueries.iter().map(|subquery| PlanNode {
-                kind: "Subquery".into(),
-                relation: None,
-                detail: None,
-                estimates: PlanMetrics::default(),
-                actual: PlanMetrics::default(),
-                loops: None,
-                children: vec![parse_value(subquery)],
-                native: subquery.clone(),
-            }));
+    if let Some(step) = STEPS.iter().find(|step| value.get(**step).is_some()) {
+        node.children.extend(plan_members(value, Some(step)));
     }
     node
+}
+
+/// Each member of `value` but `drawn` that holds a plan, as a node named after its key
+/// -- a derived table's `materialized_from_subquery`, a subquery list, a step this does
+/// not know -- with that plan under it.
+fn plan_members(value: &serde_json::Value, drawn: Option<&str>) -> Vec<PlanNode> {
+    value
+        .as_object()
+        .into_iter()
+        .flatten()
+        .filter(|(key, inner)| Some(key.as_str()) != drawn && holds_plan(inner))
+        .map(|(key, inner)| PlanNode {
+            kind: humanize(key),
+            relation: None,
+            detail: None,
+            estimates: PlanMetrics::default(),
+            actual: PlanMetrics::default(),
+            loops: None,
+            children: match inner {
+                serde_json::Value::Array(items) => items.iter().map(parse_value).collect(),
+                _ => vec![parse_value(inner)],
+            },
+            native: inner.clone(),
+        })
+        .collect()
 }
 
 fn parse_step(value: &serde_json::Value) -> PlanNode {
@@ -257,25 +286,6 @@ fn parse_step(value: &serde_json::Value) -> PlanNode {
     }
     // A step this does not know by name still shows what is under it: each member
     // that holds a plan becomes a child, named after its key.
-    let children = value
-        .as_object()
-        .into_iter()
-        .flatten()
-        .filter(|(key, inner)| key.as_str() != "subqueries" && holds_plan(inner))
-        .map(|(key, inner)| PlanNode {
-            kind: humanize(key),
-            relation: None,
-            detail: None,
-            estimates: PlanMetrics::default(),
-            actual: PlanMetrics::default(),
-            loops: None,
-            children: match inner {
-                serde_json::Value::Array(items) => items.iter().map(parse_value).collect(),
-                _ => vec![parse_block(inner)],
-            },
-            native: inner.clone(),
-        })
-        .collect();
     PlanNode {
         kind: "Query block".into(),
         relation: None,
@@ -283,7 +293,7 @@ fn parse_step(value: &serde_json::Value) -> PlanNode {
         estimates: cost_metrics(value),
         actual: PlanMetrics::default(),
         loops: None,
-        children,
+        children: plan_members(value, None),
         native: value.clone(),
     }
 }
@@ -357,7 +367,9 @@ fn parse_table(value: &serde_json::Value) -> PlanNode {
             .get("r_loops")
             .and_then(json_f64)
             .map(|loops| loops as u64),
-        children: Vec::new(),
+        // What a derived table or a CTE is made from, and the subqueries checked per
+        // row, hang off the table that reads them.
+        children: plan_members(value, None),
         native: value.clone(),
     }
 }
@@ -688,7 +700,34 @@ mod tests {
         ))
         .unwrap();
         assert_eq!(relations(&plan.root), ["o", "o2", "c"]);
-        assert_eq!(plan.root.children.last().unwrap().kind, "Subquery");
+        assert_eq!(plan.root.children.last().unwrap().kind, "Subqueries");
+        // A subquery in the select list, a derived table and a CTE: each read through
+        // a table of the outer query, whose plan holds theirs.
+        for (fixture, tables) in [
+            (
+                include_str!("../tests/fixtures/mysql-explain-select-subquery.json"),
+                vec!["c", "o"],
+            ),
+            (
+                include_str!("../tests/fixtures/mysql-explain-derived.json"),
+                vec!["c", "t", "o"],
+            ),
+            (
+                include_str!("../tests/fixtures/mysql-explain-cte.json"),
+                vec!["c", "t", "o"],
+            ),
+            (
+                include_str!("../tests/fixtures/mariadb-explain-derived.json"),
+                vec!["c", "<derived2>", "o"],
+            ),
+            (
+                include_str!("../tests/fixtures/mariadb-explain-cte.json"),
+                vec!["c", "<derived2>", "o"],
+            ),
+        ] {
+            let plan = parse_json(fixture).unwrap();
+            assert_eq!(relations(&plan.root), tables, "{fixture}");
+        }
         // An unknown wrapper is descended into, not left empty.
         let wrapped =
             parse_json(r#"{"query_block": {"some_new_step": {"table": {"table_name": "t"}}}}"#)

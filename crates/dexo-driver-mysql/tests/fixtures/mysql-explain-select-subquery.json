@@ -1,0 +1,70 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost_info": {
+      "query_cost": "0.55"
+    },
+    "table": {
+      "table_name": "c",
+      "access_type": "index",
+      "key": "PRIMARY",
+      "used_key_parts": [
+        "id"
+      ],
+      "key_length": "4",
+      "rows_examined_per_scan": 3,
+      "rows_produced_per_join": 3,
+      "filtered": "100.00",
+      "using_index": true,
+      "cost_info": {
+        "read_cost": "0.25",
+        "eval_cost": "0.30",
+        "prefix_cost": "0.55",
+        "data_read_per_join": "264"
+      },
+      "used_columns": [
+        "id"
+      ]
+    },
+    "select_list_subqueries": [
+      {
+        "dependent": true,
+        "cacheable": false,
+        "query_block": {
+          "select_id": 2,
+          "cost_info": {
+            "query_cost": "0.38"
+          },
+          "table": {
+            "table_name": "o",
+            "access_type": "ref",
+            "possible_keys": [
+              "customer_id"
+            ],
+            "key": "customer_id",
+            "used_key_parts": [
+              "customer_id"
+            ],
+            "key_length": "5",
+            "ref": [
+              "d.c.id"
+            ],
+            "rows_examined_per_scan": 1,
+            "rows_produced_per_join": 1,
+            "filtered": "100.00",
+            "using_index": true,
+            "cost_info": {
+              "read_cost": "0.25",
+              "eval_cost": "0.13",
+              "prefix_cost": "0.38",
+              "data_read_per_join": "21"
+            },
+            "used_columns": [
+              "customer_id"
+            ]
+          }
+        }
+      }
+    ]
+  }
+}

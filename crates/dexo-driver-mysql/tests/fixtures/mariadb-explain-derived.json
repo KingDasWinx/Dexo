@@ -1,0 +1,58 @@
+{
+  "query_block": {
+    "select_id": 1,
+    "cost": 0.023517386,
+    "nested_loop": [
+      {
+        "table": {
+          "table_name": "c",
+          "access_type": "ALL",
+          "possible_keys": ["PRIMARY"],
+          "loops": 1,
+          "rows": 3,
+          "cost": 0.0113438,
+          "filtered": 100
+        }
+      },
+      {
+        "table": {
+          "table_name": "<derived2>",
+          "access_type": "ref",
+          "possible_keys": ["key0"],
+          "key": "key0",
+          "key_length": "5",
+          "used_key_parts": ["customer_id"],
+          "ref": ["d.c.id"],
+          "loops": 3,
+          "rows": 1,
+          "cost": 0.012173586,
+          "filtered": 100,
+          "materialized": {
+            "lateral": 1,
+            "query_block": {
+              "select_id": 2,
+              "cost": 0.004088747,
+              "nested_loop": [
+                {
+                  "table": {
+                    "table_name": "o",
+                    "access_type": "ref",
+                    "possible_keys": ["customer_id"],
+                    "key": "customer_id",
+                    "key_length": "5",
+                    "used_key_parts": ["customer_id"],
+                    "ref": ["d.c.id"],
+                    "loops": 1,
+                    "rows": 1,
+                    "cost": 0.00345856,
+                    "filtered": 100
+                  }
+                }
+              ]
+            }
+          }
+        }
+      }
+    ]
+  }
+}
