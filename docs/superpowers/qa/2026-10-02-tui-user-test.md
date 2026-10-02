@@ -12,7 +12,60 @@ Every command of the palette (161) was used as a user would — from the palette
 
 ## Summary
 
-_Filled in once every area is in._
+340 findings from eight testers. Nothing crashed. Ten findings are blockers: six let a write through a production guard or lose data, four leave a feature unusable.
+
+| Area | Blocker | Major | Minor | Cosmetic | Total |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Palette, documents, running SQL, recovery | 2 | 13 | 18 | 6 | 39 |
+| SQL editor | 0 | 10 | 16 | 6 | 32 |
+| Results grid and table data | 1 | 18 | 26 | 8 | 53 |
+| Explorer, schema tools, explain | 1 | 17 | 27 | 2 | 47 |
+| Connections and projects | 0 | 27 | 12 | 2 | 41 |
+| Transactions, sessions, import, export, backup | 6 | 17 | 31 | 4 | 58 |
+| MCP and agents | 0 | 8 | 31 | 3 | 42 |
+| Settings, layout, mouse | 0 | 5 | 13 | 10 | 28 |
+| **Total** | **10** | **115** | **174** | **41** | **340** |
+
+### Blockers
+
+Production guard bypassed:
+1. **Grid apply on production** is confirmed by one click on the label `confirm production to apply`, nothing typed; by keyboard it cannot be confirmed at all. *Verified in the code: the click calls `confirm_production()`, which sets `confirmed` without comparing any text.*
+2. **Schema form on production** (Preview DDL, Apply) creates a table without the connection's name. *Verified: `schema::security::evaluate` asks for typed confirmation only for destructive changes, while the editor asks for the name before any write on production.*
+3. **Import Data and Native Restore on production** ask no name.
+
+Data loss:
+4. **Save picker overwrites an existing file without asking.** *Verified: `FilePicker::overwrite` exists and nothing reads it.*
+5. **Opening a binary file** fails with a raw UTF-8 error yet leaves a document bound to it; saving it replaces the file.
+
+Unusable:
+6. **Import Data writes into a table named `tbl`** when no table is open: there is no way to choose the target. *Verified: the import target defaults to `tbl`.*
+7. **Dexo cannot import its own TSV export** (the tab delimiter is not applied).
+8. **Dexo's own Postgres backup cannot be restored by its restore** (plain SQL dump, restored with `pg_restore`).
+9. **Native backup and restore freeze the UI** for the whole run; Cancel and Esc do nothing.
+10. **Sessions on a blocked connection freezes the UI** for up to a minute, then shows nothing.
+
+### Themes across areas
+
+- **Production guard differs by path.** The editor asks for the name before any write; the grid, the schema form, import, restore and Explain Analyze do not, or can be clicked through.
+- **Documents bound to the wrong connection.** A table opened from one connection's tree, Ctrl+N, Alt+Left/Right and Preview DDL after a restart act on the active connection, not the one the user picked, so the wrong guards apply. Once, a Postgres query ran against SQLite.
+- **Raw internal text shown to users.** `key=value` dumps (MCP Profiles, Transfer, Recovery, project delete, Compare Schema), Rust `Debug` values (`I64(7)`, `Decimal("1.5")`, `Rename(...)`), `ddl Committed`, `(ConfirmDirty)`, internal ids such as `settings.mouse`.
+- **Files and work dropped without asking.** Save picker, export and config export overwrite files. Closing a table tab drops pending edits. Picking a history entry replaces the document. Restored drafts lose their `*`, so Ctrl+W discards them.
+- **Small terminals rewrite the saved layout.** Below 80x24 (an 80x24 tmux pane is 23 rows), compact mode hides the explorer and results, and they stay hidden at full size and after a restart. Four testers hit this.
+- **Long operations block the UI.** Restore, and Sessions on a blocked connection.
+- **The palette misses commands.** Settings toggles, focus, layout, next/previous document, recovery. Search ranks partial words oddly and finds nothing for typos.
+- **The mouse is uneven.** Agent Activity ignores it, a Settings click cycles instead of choosing, the connection form's driver cannot be clicked, any click closes Help.
+- **MySQL writes show no feedback.** No rows-affected message after UPDATE, INSERT or DELETE.
+- **The connection form is unfinished.** It saves before connecting, has no Test button, hides errors when scrolled, loses the password on Edit and Duplicate, and `tls_mode` is free text.
+
+### Checked by the main session
+
+- **MCP on `pg-prod`** was reported as failing with "verified TLS is required". Not reproduced: a read through MCP on `pg-prod` works, a write grant on production is refused (`writes to production connections are not available over MCP`), and the write tool is hidden. The tester's failure came from a connection without the TLS exception.
+
+### Caveats
+
+- Early on, two testers' helper scripts in a shared folder were overwritten by another tester. For about two minutes some keys landed in the wrong session. The testers say they reproduced every entry afterwards on a clean start.
+- The system clipboard was disabled on purpose (copies went through OSC 52). The paste error with X11 is partly due to that, though the fallback should still be graceful.
+- `mysqldump` was not installed, so the MySQL backup findings show how Dexo behaves without it.
 
 ## Findings by area
 
@@ -1981,3 +2034,353 @@ l=live left  r=live right  enter=compare
 - Try an index with hypopg installed: the extension is not installed on the test server.
 - Create-table with foreign key / indexes / defaults: the form ignores those fields, so a foreign key could not be created from it.
 - DuckDB `n` note and Create Table on SQLite / DuckDB: no schema editor for those drivers.
+
+### Transactions, sessions, import, export, backup (admin-tx-transfer)
+
+
+
+Tester notes: `qa.sh type` loses a trailing `;` (tmux treats it as a command separator) — tooling quirk, not a Dexo bug. I always typed a space before the `;`.
+
+#### Transactions
+
+##### [MINOR] Transaction commands succeed silently: no toast, no Messages entry
+- **Where:** transaction.begin / savepoint / rollback_savepoint / release_savepoint / commit / rollback (palette)
+- **Steps:** pg-dev document focused; Ctrl+P, "Begin Transaction", Enter; repeat for Create Savepoint (name `sp1`), Rollback Savepoint, Release Savepoint, Commit Transaction.
+- **Expected:** (7) success says what changed: "Transaction started", "Savepoint sp1 created", "Rolled back to sp1", "Committed".
+- **Actual:** nothing on screen except the status bar gaining/losing a bare `tx:active` token; no toast, nothing in the Messages tab (Messages stays at the connect lines). Savepoint create/rollback/release leave no trace at all, so you cannot see which savepoints exist.
+
+##### [MINOR] Status bar shows a raw `tx:active` and never changes for savepoints or an aborted transaction
+- **Where:** status bar, row 36
+- **Steps:** Begin Transaction; Create Savepoint `sp1`; run `update orders set note='b' where id=2`; Rollback Savepoint `nope` (nonexistent) -> error; run any SELECT.
+- **Expected:** (7) an indicator a person reads at a glance: "Transaction", "Transaction (failed - roll back)", savepoint depth/name. After a failure Postgres refuses everything until ROLLBACK/ROLLBACK TO.
+- **Actual:** `○DEV pg-dev  tx:active  Ctrl+J run ...` the whole time: same text before and after the savepoint, and after the transaction became aborted (`current transaction is aborted, commands ignored until end of transaction block`, SQLSTATE 25P02). `tx:active` is lowercase key:value style while the rest of the bar is words.
+
+##### [MINOR] Error in an open transaction does not say what to do
+- **Where:** error toast / Messages
+- **Steps:** Begin; Rollback Savepoint `nope`; then run a SELECT.
+- **Expected:** (7) says what happened and what to do: "The transaction failed; use Rollback Transaction or Rollback Savepoint".
+- **Actual:** raw server text only: `savepoint "nope" does not exist` then `current transaction is aborted, commands ignored until end of transaction block` + `SQLSTATE 25P02`. Nothing mentions the Rollback commands.
+
+##### [MINOR] Transaction commands with no transaction: warning toast, but the palette stays open (and the editor loses focus)
+- **Where:** transaction.commit / rollback / savepoint / release / rollback_savepoint without a transaction
+- **Steps:** pg-dev doc, no transaction. Ctrl+P, "Commit Transaction", Enter.
+- **Expected:** (9/1) the palette closes after running a command (it does on success); the toast explains.
+- **Actual:** toast `warn: no active transaction` appears and the palette also prints it inline; the palette stays open with the typed text, the SQL pane lost its `▸` focus mark and the status bar hints (`Ctrl+J run ...`) disappear. A second C-p is ignored while it stays open; text typed afterwards accumulates in the palette field (`Commit TransRollback TransRelease Savex`). Esc closes it. Same for Rollback Transaction and Create Savepoint. The message gives no hint ("Begin Transaction first").
+
+##### [COSMETIC] Savepoint dialog: one title for three actions, lowercase action line, a lot of empty space
+- **Where:** transaction.savepoint / rollback_savepoint / release_savepoint dialogs
+- **Steps:** Ctrl+P, "Create Savepoint", Enter.
+- **Actual:** title `Savepoint`, first line `create savepoint` / `rollback savepoint` / `release savepoint` (lowercase, reads like a debug label), then `name:` and `[Submit]   [Cancel]`; the box has 3 empty rows under the buttons. The name input shows no drawn caret (the "New document" dialog draws one with a block), only the terminal cursor. Title could be "Create savepoint" etc.
+
+##### [MINOR] "Begin Transaction" twice says "session is not idle"
+- **Where:** transaction.begin
+- **Steps:** pg-dev doc; Begin Transaction (ok, `tx:active`); Begin Transaction again.
+- **Expected:** (7) "A transaction is already open; Commit or Roll it back first".
+- **Actual:** warn toast `session is not idle` (internal wording); palette stays open (as above).
+
+##### [MAJOR] Transaction commands on an offline connection refuse instead of connecting
+- **Where:** transaction.begin / savepoint / commit / rollback (palette), restored document of an offline connection
+- **Steps:** quit and restart Dexo (documents restore, status bar `offline:pg-dev`); focus a pg-dev document; Ctrl+P, "Begin Transaction", Enter.
+- **Expected:** (5) actions on an offline connection connect by themselves (Ctrl+J does: `Connected to pg-dev`).
+- **Actual:** warn toast `connect a session first`, palette stays open, nothing connects. Same for Create Savepoint, Commit Transaction, Rollback Transaction.
+
+##### [MINOR] Header and status bar keep the previous connection after Alt+Left / Alt+Right switch the document
+- **Where:** document tab switching (Alt+Left/Alt+Right = "Previous/Next Document Tab Focus")
+- **Steps:** documents `pg-dev·query-3.sql`, `mysql-d…·query-4.sql`; focus on the mysql doc (header `mysql-dev`); press Alt+Left.
+- **Expected:** (5) switching tabs switches the session: header `pg-dev`, status `○DEV pg-dev tx:active`.
+- **Actual:** the editor shows `SQL · query-3.sql` (a pg-dev document) but header stays `Default  mysql-dev` and status `○DEV mysql-dev`. Ctrl+Tab and clicking the tab do switch header/status correctly, so the three ways to change tab disagree.
+
+##### [MINOR] Sidebar connect while a document of another connection is on screen: header/status name the new connection but `tx:active` belongs to the document's
+- **Where:** status bar / header
+- **Steps:** pg-dev document with a transaction open on screen; click `mysql-dev` in the sidebar (connects).
+- **Expected:** (5) a connection name and its transaction flag agree.
+- **Actual:** header `Default  mysql-dev`, status `○DEV mysql-dev  tx:active` while the open document is `pg-dev·query-3.sql` and mysql-dev has no transaction (checked in innodb_trx). Same with duck-sales: `duck-sales  tx:active`. Running a statement in that document flips the header back to pg-dev.
+
+##### [MAJOR] MySQL UPDATE/DELETE gives no feedback (Results pane stays empty), while Postgres says "1 row affected"
+- **Where:** Results pane after Ctrl+J on mysql-dev
+- **Steps:** mysql-dev document; `update orders set note='m1x' where id=1` ; Ctrl+J; wait 2 s.
+- **Expected:** (7) success says what changed (`1 row affected`, as on pg-dev).
+- **Actual:** Results title stays `Results`, grid empty, Messages count unchanged. The row was updated (checked with the mysql client). Same inside a transaction.
+
+##### [MINOR] Document tab truncates the connection name to 7 characters
+- **Where:** tab strip
+- **Steps:** open documents on mysql-dev next to pg-dev ones.
+- **Actual:** `mysql-d…·query-4.sql` — ambiguous when two connections share a prefix (`mysql-dev` / `mysql-docs`). Cosmetic.
+
+##### [MINOR] Error toasts never go away on their own and survive later successful actions
+- **Where:** toasts
+- **Steps:** run `select * from nonexistent` on mysql-dev, then do other things (open the palette, switch tabs) for 40 s.
+- **Expected:** (7/9) the error is in Messages; the toast times out or clears on the next successful action.
+- **Actual:** `error: Table 'qa6.nonexistent' doesn't exist` toast covers the top-right of the tab strip and editor header until Esc. In the earlier transaction test a stale `current transaction is aborted` toast stayed up through a successful Rollback Savepoint, so it looked as if the action had failed.
+
+#### Safety guards in the editor
+
+##### [COSMETIC] Long refusal toasts are cut off mid-word without an ellipsis
+- **Where:** error toast for blocked statements on pg-readonly
+- **Steps:** pg-readonly doc: `with d as (delete from no_pk where a = 99 returning *) select * from d` ; Ctrl+J.
+- **Actual:** `Not run: pg-readonly is read-only, and statement 1 is not a read: WITH d AS (DELETE FROM no_pk WHERE a = 99 RETURNI│` — the toast box ends in `RETURNI` with no `…`; the full text is only in Messages.
+
+##### [MINOR] Nothing on screen says a connection is read-only until a write is refused
+- **Where:** status bar / header / sidebar for pg-readonly
+- **Steps:** connect pg-readonly, open a document.
+- **Expected:** (8/3) a visible read-only marker (the status bar has `●PROD` for production).
+- **Actual:** status bar `○DEV pg-readonly` — same as an ordinary dev connection; the sidebar row and header carry no marker either.
+
+##### [MINOR] Destructive-statement guard is bypassed by a tautological WHERE
+- **Where:** editor, pg-dev "Run destructive statements" guard
+- **Steps:** pg-dev document; `delete from no_pk where 1=1` ; Ctrl+J.
+- **Expected:** (8) a delete that touches every row is confirmed, like `delete from no_pk` is.
+- **Actual:** runs at once, `3 rows affected`, no dialog (the table is empty). Without the WHERE the dialog appears (`DELETE without WHERE removes every row`). Same hole expected for `update ... where true`.
+
+#### Sessions (admin) on Postgres
+
+##### [MAJOR] After a session is terminated from the Sessions dialog, the document's connection stays broken: every run says "connection closed" and nothing reconnects it
+- **Where:** admin.sessions on pg-dev, terminate (`t`), then the terminated connection's document
+- **Steps:** pg-prod document runs `select 1`; on pg-dev open Inspect Sessions, pick the `dexo qa6 idle SELECT 1` row (pid 467, the pg-prod session), `t`, type `467`, Enter. Switch to the pg-prod document, `select 2 as x`, Ctrl+J (three times).
+- **Expected:** (5/9) the connection is marked offline and the next action connects by itself (as after a restart), or the error says "Session was terminated; reconnecting".
+- **Actual:** `error: connection closed` every time; the status bar keeps `●PROD pg-prod` as if healthy, the sidebar shows `pg-prod▾  [error]`; Enter on the node only expands it. The only way out is the sidebar action `Disconnect Connection` (Shift+D) and then running again.
+
+##### [MINOR] Terminate success message is "signal sent"
+- **Where:** Sessions dialog / terminate
+- **Steps:** terminate session 467 with the right id.
+- **Expected:** (7) `Session 467 terminated` (and which database user it was).
+- **Actual:** Messages: `[12:37:29] info  signal sent`; the toast also disappears within about a second. After terminating, the list reloads and the selection jumps to the next row (a session of another database, 539 on qa8), so a second `t` Enter targets someone else's session.
+
+##### [MINOR] Sessions list ignores Home/End/PageUp/PageDown and the mouse wheel; ids sort as text
+- **Where:** admin.sessions dialog
+- **Steps:** Inspect Sessions on pg-dev (14 rows). Press Home / End / PageUp / PageDown; wheel over the list.
+- **Expected:** (6) long lists scroll by keyboard and wheel; End goes to the last row.
+- **Actual:** only Up/Down and clicking a row move the selection; the rest do nothing (selection stays on the clicked row). The ID column is sorted as text: `239 241 267 279 419 420 467 539 56 57 59 60 61 633`.
+
+##### [MINOR] Sessions list shows every database on the server and does not mark the user's own sessions
+- **Where:** admin.sessions on pg-dev
+- **Actual:** rows for `qa2 qa3 qa4 qa5 qa8` (other databases) mixed with `qa6`; background processes show `-` / `unknown`; Dexo's own session (the `active ... SELECT pid::text, usename::text, datname...` row) is not marked, so one can terminate the session the dialog itself runs on. The dialog does not say it is server-wide.
+
+##### [MAJOR] Sessions list is a stale snapshot while the connection has an open transaction; `r` refresh changes nothing
+- **Where:** admin.sessions on pg-dev while a transaction is open on pg-dev
+- **Steps:** pg-dev doc: Begin Transaction, `update orders set note='a' where id=1`. A pg-prod doc runs the same update (it blocks). On the pg-dev document open Inspect Sessions: it shows `419 blocks 764`. Wait 30 s, press `r` twice: every TIME value stays identical (`279 ... 8m37s`, `764 active 0.0s`), the blocker line disappears when the update times out but 764 still shows `active  UPDATE ... note='b'`, while the server says it is `idle`. Roll back the transaction, reopen Sessions: values are current (`764 idle 55.0s`).
+- **Expected:** (7) the admin view shows the live state; `r` refreshes it.
+- **Actual:** the list is read inside the user's own transaction, so Postgres serves its cached `pg_stat_activity` snapshot until the transaction ends. The tool is wrong exactly in the case it exists for (a stuck transaction). Opening it from a connection without a transaction (pg-readonly) shows correct data (`419 idle in transaction 12.4s`, `764 active 6.8s`).
+
+##### [MINOR] Blocking line is cryptic: `419 blocks 764 · ShareLock on -`
+- **Where:** admin.sessions blocking graph
+- **Steps:** create the block as above; open Sessions (from pg-readonly, which has no transaction).
+- **Expected:** (7) which object and what to do: `session 419 (idle in transaction 12s) blocks 764: waiting for a row lock on orders. Terminate 419 to release it.`
+- **Actual:** `419 blocks 764 · ShareLock on -` (the `-` is an unfilled object name; "ShareLock" is a lock-mode name that means nothing to most users). The line sits two rows under the list with blank rows around it; the blocked/blocking rows themselves are not marked in the list.
+
+##### [MAJOR] A running (or blocked) query shows nothing: no "running" state, no elapsed time, no hint that Ctrl+F2 cancels
+- **Where:** Results pane / status bar while a statement runs
+- **Steps:** pg-dev doc: Begin, update row 1. pg-prod doc: update row 1 (blocks), type `pg-prod`. Watch the screen for 30 s.
+- **Expected:** (9) the person can tell the statement is waiting and how to stop it. (The palette lists `Cancel Query  Ctrl+F2`.)
+- **Actual:** Results title `Results`, empty grid; status bar `●PROD pg-prod  Ctrl+J run ...` identical to idle. (Test environment runs with DEXO_NO_ANIMATION=1; a text indicator such as `running 12s - Ctrl+F2 cancels` is still needed.) After ~60 s: two lines `error query timed out` and `error query cancelled` (same event reported twice, no hint of the cause: a lock held by another session).
+
+##### [MINOR] Sessions: `t` on a read-only connection is refused only after the dialog is already open; fine message, but the dialog is a full admin view
+- **Where:** admin.sessions on pg-readonly
+- **Steps:** Inspect Sessions on pg-readonly; Down x3 to 419; `t`.
+- **Actual (ok):** inline message `Not terminated: pg-readonly is read-only.` (no terminate dialog opens). The hint line still advertises `t terminate` on a connection where it can never work.
+
+##### [MAJOR] A statement's result is thrown away if it finishes while another document tab is active
+- **Where:** document tabs / Results pane
+- **Steps:** pg-dev document: `select pg_sleep(3), 'again' as d` ; Ctrl+J; at once click the `pg-read…` tab; wait 6 s; click the pg-dev tab back.
+- **Expected:** (5/9) the result is kept with its document (or a message says it finished), as it is when you stay on the tab.
+- **Actual:** Results title `Results`, empty grid, no message in Messages (count unchanged). The same statement run while staying on the tab shows `Results (1 row)` after 3 s. A user starting a slow query and looking at another tab loses the answer silently. (Same thing happened to a blocked UPDATE on pg-prod whose lock was released while I was on the pg-dev tab: the row was updated, the Results pane stayed empty, no `1 row affected`.)
+
+##### [MINOR] User-pressed Cancel Query (Ctrl+F2) is reported as an error toast
+- **Where:** Cancel Query
+- **Steps:** `select pg_sleep(30)` ; Ctrl+J; after 2 s Ctrl+F2.
+- **Actual:** red `error: query cancelled` toast and an `error` line in Messages. Expected an info line (`Query cancelled`); the person asked for it.
+
+##### [COSMETIC] `pg_sleep()` (void) shows as `\x` in the grid
+- **Steps:** `select pg_sleep(1), 'x' as d`. **Actual:** column `pg_sleep` cell `\x`. Expected empty or `(void)`.
+
+##### [MINOR] `select pg_sleep(...)` on production asks for the name ("not a read-only statement"), `select now()` does not
+- **Where:** pg-prod guard
+- **Actual:** the dialog is the right behaviour for unknown functions, but the reason says `not a read-only statement` for a plain SELECT, which confuses; say `calls a function that may write (pg_sleep)`. Low priority.
+
+##### [BLOCKER] Inspect Sessions on a connection whose session is busy/blocked freezes the whole UI for up to a minute and then shows nothing
+- **Where:** admin.sessions (palette), pg-prod document with a blocked UPDATE
+- **Steps:** pg-dev document: Begin Transaction, `update orders set note='a' where id=1`. pg-prod document: `update orders set note='b' where id=1`, Ctrl+J, type `pg-prod`, Enter (it now waits on the lock). Ctrl+P, type `Inspect Sess`, Enter. Then press Esc, Enter, resize the terminal, Ctrl+P for ~60 s.
+- **Expected:** (9) every action returns control; Esc always works; the session list opens (it is the tool for diagnosing exactly this lock) or says the session is busy.
+- **Actual:** the palette stays on screen with its text; Esc, Enter, resize and mouse are ignored for the whole wait (12:45:05 - 12:46:05, the statement timeout); the terminal resize is not redrawn. When the statement times out the UI comes back, but no Sessions dialog opens and nothing is written to Messages; after the resize the bottom rows were left drawn without the sidebar border until another resize. Plain blocked statements (without Inspect Sessions) leave the UI responsive, so the Sessions fetch runs synchronously on the busy session.
+
+##### [MINOR] Ctrl+A in a brand-new empty document, then typing, drops the first character
+- **Where:** editor, new empty document (found while typing statements for the transaction tests)
+- **Steps:** Ctrl+N, Enter (document `query-11.sql`, empty); Ctrl+A; type `select 1`.
+- **Expected:** (3/4) typing replaces the selection; the buffer reads `select 1` (or `SELECT 1`).
+- **Actual:** the buffer reads `elect 1`. The second time (document no longer empty) Ctrl+A + typing works. With `update ...` this produced `pdate customers ...`, which opened `Run destructive statements` with `Dexo could not read this statement` (an odd reason text, but fine) and swallowed my next keys.
+
+##### [MINOR] Statements Dexo cannot parse are listed as "Dexo could not read this statement"
+- **Where:** `Run destructive statements` dialog
+- **Steps:** a doc containing `pdate customers SET city='TX1' WHERE id=1` (SQLite); Ctrl+J.
+- **Expected:** (7) either run it (the database will report the syntax error) or say what is wrong; a typo should not trigger a "destructive" confirmation.
+- **Actual:** `Run destructive statements` + `1. pdate customers SET ...` + `Dexo could not read this statement`; `[Run] [Cancel]`.
+
+#### Export (results to a file)
+
+Files written during the tests are in `$QA/work/` (export1.csv ... export8.tsv, my_orders.sql, rt.tsv).
+
+##### [MAJOR] Export overwrites an existing file without asking
+- **Where:** transfer.export, file picker (Ctrl+O) and Submit
+- **Steps:** create `work/precious.txt` with a line of text. `select * from events`, Ctrl+P "Export Data", Ctrl+O, Tab, type `precious.txt`, Enter. Also: highlight an existing file in the picker list (`export3.json`) and press Enter; also: Tab to `[Submit]` + Enter again after a first export.
+- **Expected:** (8) an existing file is never overwritten silently: `precious.txt exists - Replace / Cancel`.
+- **Actual:** the picker's Enter/Choose starts the export at once and the file is replaced (`precious.txt` now holds the TSV). A hand-edited `export1.csv` was rewritten by a second Submit. Nothing was asked and nothing says "replaced".
+
+##### [MAJOR] Choosing a file in the picker starts the export; Submit re-runs it onto the same file
+- **Where:** transfer.export dialog flow
+- **Steps:** Export Data (dialog shows no file). Ctrl+O, pick/enter a name, Enter.
+- **Expected:** (1) the picker only fills a "file" field; Submit runs the export. The dialog should show where it will write.
+- **Actual:** there is no file field at all; Enter in the picker exports immediately (`exported 1 rows`). Reopening the dialog keeps the old path, and Submit exports again to it (silently overwriting it). `[Submit]` without any path was not tested after a first export because the path is remembered.
+
+##### [MAJOR] Dialog shows raw debug text instead of labelled fields
+- **Where:** transfer.export / transfer.import (title `Transfer`)
+- **Actual:**
+```
+export /tmp/claude-1000/-home-winx-Documents-github-Dexo/c604136e-4aad
+format=csv (Ctrl+F to cycle) strategy=Stop
+progress rows=1 bytes=1 running=false
+exported 1 rows
+```
+  (7) `key=value` dump (`running=false`), the path is cut at the right edge, the title is `Transfer` for both directions with a lowercase `export`/`import` first line, `strategy=Stop` is meaningless for an export, `exported 1 rows` (no plural), and `bytes=` is wrong: it equals the row count (`rows=4 bytes=4`, `rows=10000 bytes=10000`; the 1-row CSV is 132 bytes; on import `bytes=0`). The previous run's `progress` and `exported N rows` lines survive when the dialog is reopened.
+
+##### [MAJOR] SQL export names the INSERT target after the FILE name, not the table
+- **Where:** transfer.export, format sql
+- **Steps:** `select * from customers order by id limit 4`; Export Data, Ctrl+F until `sql`, Ctrl+O, name `export7.sql`.
+- **Expected:** `INSERT INTO "customers" ...` (or a prompt for the table name).
+- **Actual:** `INSERT INTO "export7" ("id", "name", ...) VALUES (...)` — a file called dump.sql inserts into "dump". Same on MySQL: `INSERT INTO \`my_orders\`` for a result from `orders` (quoting itself is right: backticks on MySQL, double quotes on Postgres; `'it''s'` escaped correctly; NULL, TRUE, numbers unquoted).
+
+##### [MAJOR] Export silently stops at the 10,000 loaded rows
+- **Where:** transfer.export after `select * from events` (20 000 rows)
+- **Steps:** run it (title `Results (10,000+ rows, limit reached)`), Export Data, TSV, `export8.tsv`.
+- **Expected:** (7) either the whole result is exported or the dialog says `exported 10,000 of 20,000+ rows (limit reached)`.
+- **Actual:** `exported 10000 rows`; file has 10 001 lines. No hint that half the table is missing.
+
+##### [MINOR] File extension and format are independent: `.sql` file with JSONL inside, `.csv` re-exported as another format
+- **Steps:** format `jsonl`, Ctrl+O, name `export6.sql`. **Actual:** file `export6.sql` contains JSON lines. The format is not guessed from the extension (also not on import: choosing `imp_good.csv` while format is `json` gives `error: expected value at line 1 column 1`), and the format chosen last (`sql`) is reused as the default.
+
+##### [MINOR] Exporting into a directory that does not exist shows a raw OS error and keeps the previous success line
+- **Steps:** Ctrl+O, Tab, name `nodir/sub/x.tsv`, Enter.
+- **Expected:** (7) `Folder nodir/sub does not exist` (or create it).
+- **Actual:** `error: No such file or directory (os error 2) at path "/tmp/claude-100...` (cut at the dialog edge) and, under it, the stale `exported 10000 rows`.
+
+##### [MINOR] JSON/JSONL export loses column order, writes jsonb/numeric as strings
+- **Steps:** `select 1 as id, 'a,b' as txt, ... , '{"a": 1}'::jsonb as j, 1.50::numeric(5,2) as num` exported as json.
+- **Actual:** `[{"b":true,"d":"2024-01-31","empty":"","id":1,"j":"{\"a\": 1}","ml":"line1\nline2","n":null,"num":"1.50",...}]` — keys sorted alphabetically (`id` is not first), the jsonb value is an escaped string instead of a nested object, numeric is a string, JSON is one line without a trailing newline. CSV/TSV/JSONL are otherwise right: quotes doubled, commas and newlines quoted, UTF-8 kept, empty string stays empty, NULL is written as `\N` (not `NULL` or empty: Excel shows `\N`).
+
+##### [MINOR] The Results hint line does not list `e` (Export) although `e` opens it
+- **Steps:** focus the Results pane; status bar: `Enter actions  v view  n/p page  Ctrl+W close`. Pressing `e` does open Export Data (the palette shows `e`).
+
+##### [MINOR] Transfer keys are not in the keybindings help
+- F1 search for `import`: `no matches for 'import'`; Ctrl+F / Ctrl+O inside the dialog are only hinted in the dialog (`Ctrl+F to cycle`, Ctrl+O not at all).
+
+#### Import
+
+##### [BLOCKER] Import Data always writes into a table named `tbl`; there is no way to choose the target table
+- **Where:** transfer.import (palette), every connection
+- **Steps:** mysql-dev, select `qa_import` in the explorer, Ctrl+P "Import Data", Ctrl+O, Tab, `imp_good.csv`, Enter.
+- **Expected:** the table is selected in the dialog (or taken from the selected explorer node) and named in it.
+- **Actual:** `error: Table 'qa6.tbl' doesn't exist` (Postgres: `relation "tbl" does not exist`). Only after creating a table literally called `tbl` did imports run. The dialog never names a table.
+
+##### [BLOCKER] Dexo cannot import its own TSV export (tab delimiter is not applied)
+- **Steps:** export a result as TSV (`rt.tsv`: `id<TAB>name<TAB>qty...`), Import Data, format `tsv`, choose `rt.tsv`.
+- **Actual:** `error: column "idnameqtypricenote" of relation "tbl" does not exist` (MySQL: `Unknown column 'idnameqtypricenote' in 'field list'`): the whole header line is one column with the tabs removed. CSV, JSON and JSONL imports work (`imported 3 rows`, `imported 2 rows`).
+
+##### [MAJOR] SQL is offered as an import format (initial value) and the on-error strategy cannot be changed
+- **Where:** transfer.import
+- **Steps:** export as `sql`, then open Import Data.
+- **Expected:** import offers csv/tsv/json/jsonl only.
+- **Actual:** the dialog opens with `import <last exported file>` and `format=sql` (shared with export). Ctrl+F then cycles csv > tsv > json > jsonl > csv (sql is skipped), so SQL is not selectable on purpose, but it is shown and kept as the initial format. `strategy=Stop` is displayed on every transfer but no key changes it (tried Ctrl+S/E/G/T/L/B/Y/R/D/K/U, Alt+S/T, F2-F6, arrows, Home/End/PgDn); the palette has no strategy command. The brief's on-error strategies (skip/continue) are unreachable.
+
+##### [MAJOR] Import errors name no file line, row or column; empty cells cannot be NULL
+- **Steps:** `imp_bad.csv` (row 12 has `notanumber` in an int column, row `,NoId,...` has an empty id): MySQL: `error: Incorrect integer value: 'notanumber' for column 'qty' at row 1` (that is the position in the batch, the bad line is 3 of the file); Postgres: `invalid input syntax for type integer: "notanumber"`. `imp_missingcol.csv` (no `name` column): `Field 'name' doesn't have a default value`. `imp_good.csv` with a blank qty: `invalid input syntax for type integer: ""` (MySQL: `Incorrect integer value: ''`).
+- **Expected:** (7) `Line 3: qty "notanumber" is not a number`; `Column name is missing from the file (required by tbl)`; blank cell into a nullable numeric column becomes NULL.
+- **Actual:** raw driver errors without a line. With strategy Stop nothing is inserted (good: all or nothing; checked in both databases). `\N` imports as NULL, an empty text cell as an empty string, and the text `NULL` as the text `NULL`.
+
+##### [MAJOR] Sessions list does not scroll: the selection moves onto rows that are not visible, and `t` then targets an invisible session
+- **Where:** admin.sessions on pg-dev at 60x20 (17 sessions on the server by then)
+- **Steps:** `resize 60 20`; Ctrl+P "Inspect Sessions"; press Down 17 times (rows 15+ are below the box); press `t`.
+- **Expected:** (6) the list scrolls and the selected row stays visible; terminate asks about a row you can see.
+- **Actual:** the box shows 15 rows (`1104 ... 764`) and stops; no row has the `>` marker any more, no scrollbar, no `more` hint. `t` opens `Terminate session - Session 912 · dexo@qa3 · idle` for a row that cannot be seen (a session of another tester's database). At 80x24 all 17 rows fit, but the hint line `up/down pick  t terminate ...` and the TIME column are cut off at 60x20 (QUERY column `…`, no footer).
+
+##### [MINOR] Import of a file that does not exist: `error: No such file or directory (os error 2)` without the file name
+- **Steps:** Import Data, Ctrl+O, Tab, name `nofile_here.csv`, Enter. **Expected:** (7) `File nofile_here.csv not found`.
+
+##### [COSMETIC] SQLite import errors are driver text: `UNIQUE constraint failed: tbl.id`, `datatype mismatch`
+- **Steps:** SQLite `tbl`, import `imp_nulls.csv` (ids 1-3 already present) and `imp_bad.csv`. **Actual:** `error: UNIQUE constraint failed: tbl.id`, and `error: datatype mismatch` (an empty id for INTEGER PRIMARY KEY; no line number). All-or-nothing holds (5 rows before and after).
+
+##### [MINOR] Rollback on a non-transactional table (MySQL MyISAM) says nothing and keeps the rows
+- **Where:** transaction.begin / rollback on mysql-dev
+- **Steps:** Begin Transaction; `insert into legacy_log values (900, 'qa tx')` (MyISAM); Rollback Transaction.
+- **Expected:** (7/8) a warning that `legacy_log` is MyISAM and cannot be rolled back.
+- **Actual:** status `tx:active` goes away, no message; the row 900 stays in the table (checked with the mysql client).
+
+##### [MINOR] Sessions on MySQL: rows in no clear order, different state vocabulary
+- **Where:** admin.sessions on mysql-dev
+- **Actual:** list order `42 43 29 30` (not sorted by id or time); STATE column shows `Sleep` / `Query` (MySQL command names) where Postgres shows `idle` / `active`. The dialog works (pick, `t`, `r`, Esc), shows other databases' sessions too (`qa1 qa2 qa4`), and the user without PROCESS privilege only sees own-user sessions.
+
+#### Backup / Restore
+
+##### [BLOCKER] Production guard is skipped by Import Data and Native Restore: no connection name is asked
+- **Where:** transfer.import, backup.restore on pg-prod (production)
+- **Steps:** click `pg-prod` (status bar `●PROD pg-prod`). Ctrl+P "Import Data", format jsonl, Ctrl+O, `imp_good.jsonl`, Enter. Then Ctrl+P "Native Restore", Submit twice (second click starts pg_restore).
+- **Expected:** (8) production asks for the connection's name before any write, as `Run on production` does for `DELETE FROM orders`.
+- **Actual:** `imported 2 rows` straight away (rows 51 and 52 now in qa6 `tbl`, checked with psql); Native Restore reaches its second Submit with only `confirm restore into current session` / `restore confirmed` and would restore a dump over the production database. The restore confirmation also never names the target database.
+
+##### [BLOCKER] Native Restore (and Backup) freeze the whole UI for the full duration; Cancel and Esc do nothing and the process is not stopped
+- **Where:** backup.restore on pg-restore-target (a new connection to the empty database `qa6restore`)
+- **Steps:** make a 170 MB custom dump of a 4 000 000-row table (`pg_dump -Fc`; pg_restore takes 12 s). Ctrl+P "Native Restore", Ctrl+O, Tab, `qa6big.dump`, Enter; click `[Submit]` (confirms), click `[Submit]` again (starts). After 2 s: click `[Cancel]`, press Esc, resize the terminal to 100x30, press Ctrl+P.
+- **Expected:** (9) progress, a working Cancel that stops pg_restore, Esc always returns control.
+- **Actual:** `ps` shows `pg_restore --no-password --host 127.0.0.1 --port 55601 --username dexo --dbname qa6restore <file>` for 12 s; the dialog stays at `progress rows=2 bytes=0 running=false`, Cancel/Esc/resize/Ctrl+P are ignored (the layout is not redrawn at 100x30 until the process ends), then the queued keys fire and the dialog closes. All 4 000 000 rows are restored. No progress, no elapsed time, `running=false` while running.
+
+##### [MAJOR] Native Restore reports `error: status=Failed pg_restore --no-password --host ...` even though the data was restored; the real error is hidden
+- **Steps:** restore a valid custom dump (`qa6_full.dump`, made with `pg_dump -Fc`) into the empty database `qa6restore` (dialog above).
+- **Actual:** after the run the dialog says `error: status=Failed pg_restore --no-password --host 127.0.0.1 --port ` (cut at the dialog edge, Rust Debug-style `status=Failed`, the command line) although all tables and rows are present (`select count(*) from orders` = 1000, `events` 20000, `big` 4 000 000). Running the same pg_restore by hand shows why: `pg_restore: error: could not execute query: ERROR: unrecognized configuration parameter "transaction_timeout"` / `errors ignored on restore: 1` (host pg_restore 18.6 against server 16.9, exit 1). Expected: show pg_restore's own message and say `Restored with 1 ignored error`. Nothing is written to Messages either. The error line from a previous run also stays in the dialog while the next restore is running.
+
+##### [BLOCKER] Dexo's own backup cannot be restored by Dexo's own restore
+- **Where:** backup.dump then backup.restore (Postgres)
+- **Steps:** pg-dev: Native Backup, Ctrl+O, name `pgdev_backup.sql`, Enter (`backup completed`, 1.1 MB file; it is a plain-SQL pg_dump script). On `pg-restore-target`: Native Restore, Ctrl+O `pgdev_backup.sql`, Submit twice.
+- **Expected:** the restore reads what the backup wrote.
+- **Actual:** `error: status=Failed pg_restore ...` and nothing restored: pg_restore only reads custom/tar/directory archives, the backup writes plain SQL (`psql` format). Only a dump the user makes with `pg_dump -Fc` can be restored.
+
+##### [MAJOR] MySQL Native Backup / Native Restore hang forever with `running=true` and say nothing about mysqldump
+- **Where:** backup.dump, backup.restore on mysql-dev (no `mysqldump` on this machine)
+- **Steps:** click mysql-dev; Ctrl+P "Native Backup"; Ctrl+O, Tab, `mysql_backup2.sql`, Enter. Watch 60 s. Same with "Native Restore" of `my_orders.sql`.
+- **Expected:** (7) `mysqldump was not found on this computer; install the MySQL client tools` within a second.
+- **Actual:** dialog stuck at `progress rows=2 bytes=0 running=true`; no message anywhere; an empty `mysql_backup2.sql.part` is left in the folder (still there after Cancel, which closes the dialog). Restore: `running=true` for 60 s+, no message.
+
+##### [MAJOR] Backup/Restore reuse the export dialog: irrelevant `format=` / `strategy=` / `rows=` fields, stale state, and a confirmation that carries over
+- **Where:** backup.dump, backup.restore (title `Transfer`)
+- **Actual:** the backup dialog shows `format=csv (Ctrl+F to cycle) strategy=Stop` and `progress rows=2 bytes=0 running=false` (values left over from the last export/import; Ctrl+F still cycles the format although pg_dump ignores it). `Native Backup` writes straight away on Enter in the file picker (no confirmation, overwrites an existing file like Export) and ends with only `backup completed` (no path, no size). The restore confirmation flag survives: after clicking Submit once on pg-prod and pressing Esc, the next Native Restore dialog (mysql-dev) opened already with `restore confirmed` and one click started it. On read-only: `error: The connection is read-only; import and restore write into it.` appears under the stale `confirm restore into current session` line (contradictory; the dialog is offered on a read-only connection and only refuses after two clicks).
+
+##### [MINOR] SQLite Native Restore shows the backup text: `a SQLite database is its file: copy the file to back it up`
+- **Where:** backup.restore on sqlite-shop (palette).
+- **Expected:** a restore message (`replace the file with your backup while Dexo is closed`). Native Backup shows the same message, which is right for backup and is a good message.
+
+##### [MINOR] Backup/Restore/Import/Export hotkeys: none
+- The palette shows no hotkey for Native Backup, Native Restore, Import Data (Export Data has `e`), nor for any of the six Transaction commands; the sidebar `a` actions menu offers Native Backup/Native Restore/Inspect Sessions without hotkeys too.
+
+##### [MINOR] After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves
+- **Steps:** at 120x36 open Inspect Sessions, `resize 60 20`, `resize 80 24`, open and close the palette, `resize 120 36`.
+- **Actual:** one full-width SQL pane, no sidebar, no Results pane, while the status bar still shows the sidebar hints (`Enter expand  a actions  n new  e edit`). Alt+1 (focus sidebar) redraws everything. Cosmetic/layout; may belong to the layout tester.
+
+#### Checked and fine
+
+- transaction.begin / commit / rollback on pg-dev, mysql-dev and SQLite: data changes are really kept/discarded (checked with psql, the mysql client and sqlite3); `tx:active` appears and disappears; Begin on an already open transaction warns.
+- transaction.savepoint / rollback_savepoint / release_savepoint: dialog works with Ctrl+A (reverse video), Tab/BTab/Left/Right/Up/Down walk field and buttons, Esc cancels, empty name says `savepoint name is required`, clicking `[Submit]` and `[Cancel]` works; rollback to a savepoint reverts only later statements (Postgres, MySQL, SQLite); a bad savepoint name gives the server error and Postgres recovers with `ROLLBACK TO`.
+- Ctrl+Q with a transaction open asks `Quit Dexo?  A transaction is open on pg-dev: it is rolled back.` with Cancel focused; arrows/Tab walk buttons; click works; after quitting the Postgres session is gone and documents are restored on restart (saved, not dirty).
+- Switching documents with a transaction open: Ctrl+Tab and clicking a tab switch the session and the `tx:active` flag correctly (the tx belongs to the connection, shared by all its documents).
+- Safety guards: pg-prod `DELETE FROM orders` and `UPDATE customers SET region = 'x'` and `DROP TABLE no_pk` open `Run on production` with the numbered statement and reason (`DELETE without WHERE removes every row`, `UPDATE without WHERE changes every row`, `DROP removes the object and what it holds`) and `Type pg-prod to run this on production.`; wrong name, wrong case and trailing space are refused (`The name does not match; nothing was run.`), empty name refused, right name runs (1,000 rows affected, restored afterwards from a dump), Esc cancels, Tab/arrows walk the field and buttons, mouse on field/Run/Cancel works, Ctrl+A shows reverse video; a multi-statement document lists statements 2-4 and asks once. SELECT on prod runs without asking.
+- pg-readonly: `delete from orders`, `set default_transaction_read_only = off; delete from orders`, CTE delete, `do $$ ... $$`, `select set_config(...)`, `explain analyze delete`, `select nextval(...)`, `select pg_sleep(1)` are all refused with `Not run: pg-readonly is read-only, and statement 1 is not a read: ...`; a user function that deletes is stopped by the server (`cannot execute ... in a read-only transaction`). Import and Restore are refused (`The connection is read-only; ...`), Sessions `t` is refused inline.
+- pg-dev: `delete from no_pk`, `update orders set note=...` (no WHERE), `drop table`, `truncate`, `alter table ... drop column` open `Run destructive statements` with Cancel focused; Esc, Left/Right, Enter and mouse on Run/Cancel work.
+- admin.sessions on pg-dev / mysql-dev: opens from the palette and from the sidebar `a` menu; arrows and mouse click pick rows; `r` refreshes (when no transaction is open); `t` opens `Terminate session` with the typed id (wrong id: `The id does not match; nothing was done.`; right id terminates; Esc returns to the list; Tab/BTab/Left/Right walk the fields); the blocking line appears (`419 blocks 764`); SQLite and DuckDB: warn `SQLite has no users, grants, server sessions or locks to administer` / `DuckDB has ...`.
+- Export formats csv, tsv, json, jsonl, sql: Ctrl+F cycles and wraps; CSV/TSV quoting of commas, quotes and newlines, UTF-8, empty string vs NULL (`\N`), jsonl lines; SQL quoting per driver (backticks on MySQL, double quotes on Postgres), `''` escaping, NULL/TRUE/numbers unquoted; file picker lists the folder, remembers the last folder, `[Cancel]` and Esc close it, a nested Esc returns to the dialog; `e` in the Results pane opens Export Data; file permissions of exports are 0600.
+- Import: CSV (quotes, commas, embedded newline, `\N`), JSON array and JSONL (missing key = NULL) import into Postgres, MySQL and SQLite once a table named `tbl` exists; failing imports leave the table unchanged (all or nothing) in all three databases; wrong format for the file gives a parse error; read-only connection refused.
+- Native Backup of pg-dev (plain SQL via pg_dump, 11 tables, COPY data) completes in 1 s; restoring a `pg_dump -Fc` archive into a fresh database restores every table and row (data correct, message wrong, see above); SQLite Native Backup says why it is not needed.
+
+#### Not testable
+
+- On-error strategies (skip / continue): `strategy=Stop` is shown but no key or command changes it (see Import findings), so only Stop was exercised.
+- Import into a table of my choice: the target is always `tbl`; I created `tbl` in each database to test the rest.
+- Cancel of a Postgres backup mid-run: the dump of this small database takes ~1 s (the restore, which takes 12 s on the big dump, ignores Cancel).
+- Sessions list scrolling with more rows than the box on a normal-size terminal (needs more sessions than the server has); only the 60x20 case was reproduced.
+- DuckDB transactions, savepoints, import/export were not run (brief names Postgres, MySQL, SQLite); `pg_dump`-based backup on MySQL needs `mysqldump` (absent), so only the hang was observed.
+- The Quit dialog with a transaction on MySQL/SQLite, and Ctrl+Q while a restore runs (UI frozen), were not tried.
