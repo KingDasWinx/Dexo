@@ -256,12 +256,16 @@ impl AdministrationProvider for PostgresSession {
     }
 
     async fn variables(&self) -> Result<AdminList<VariableInfo>, DriverError> {
+        // boot_val is the compiled-in default, not what the server runs with. reset_val is
+        // what a session here starts from -- the configuration file, ALTER SYSTEM, and the
+        // database's and role's settings -- as MySQL's global value is. Both are counts of
+        // the unit pg_settings names, so the unit goes with them.
         let rows = match self
             .client
             .query(
-                "SELECT name, setting, 'session' FROM pg_settings
+                "SELECT name, setting || COALESCE(' ' || unit, ''), 'session' FROM pg_settings
                  UNION ALL
-                 SELECT name, COALESCE(boot_val, setting), 'server' FROM pg_settings
+                 SELECT name, reset_val || COALESCE(' ' || unit, ''), 'server' FROM pg_settings
                  ORDER BY 1, 3",
                 &[],
             )

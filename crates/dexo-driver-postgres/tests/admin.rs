@@ -175,6 +175,42 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
     );
 }
 
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn variables_show_the_values_in_force_with_their_units() {
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write("set work_mem = '7MB'"))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let vars = session.admin().unwrap().variables().await.unwrap();
+    let value = |name: &str, scope: dexo_driver_api::VariableScope| {
+        vars.items
+            .iter()
+            .find(|item| item.name == name && item.scope == scope)
+            .and_then(|item| item.value.clone())
+    };
+    use dexo_driver_api::VariableScope::{Server, Session};
+    assert_eq!(value("work_mem", Session).as_deref(), Some("7168 kB"));
+    assert_eq!(value("work_mem", Server).as_deref(), Some("4096 kB"));
+    // The image's configuration file listens everywhere; the compiled-in default is
+    // localhost, which the server is not running with.
+    assert_eq!(value("listen_addresses", Server).as_deref(), Some("*"));
+}
+
 async fn drain(mut stream: dexo_driver_api::QueryStream) {
     use futures_util::StreamExt;
     while stream.next().await.is_some() {}
