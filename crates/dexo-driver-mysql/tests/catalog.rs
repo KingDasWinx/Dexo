@@ -278,3 +278,67 @@ async fn mysql_catalog_contract() {
         "least-privilege user must get a restriction or permission error, not empty success"
     );
 }
+
+/// Foreign keys from and to a table, a composite one's columns in order.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn foreign_keys_are_listed_from_and_to_a_table() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE fk_customers (id INT PRIMARY KEY) ENGINE=InnoDB",
+        "CREATE TABLE fk_orders (id INT, region VARCHAR(8), customer_id INT,
+             PRIMARY KEY (id, region),
+             FOREIGN KEY (customer_id) REFERENCES fk_customers (id)) ENGINE=InnoDB",
+        "CREATE TABLE fk_lines (n INT, order_id INT, order_region VARCHAR(8),
+             FOREIGN KEY (order_id, order_region) REFERENCES fk_orders (id, region)) ENGINE=InnoDB",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let orders = dexo_driver_api::QualifiedName::new(Some("dexo"), None::<String>, "fk_orders");
+    let keys = session
+        .catalog()
+        .unwrap()
+        .foreign_keys(&orders)
+        .await
+        .unwrap();
+    let ends: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key.from.object().to_string(),
+                key.from_columns.join(","),
+                key.to.object().to_string(),
+                key.to_columns.join(","),
+            )
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert!(ends.contains(&(
+        "fk_orders".into(),
+        "customer_id".into(),
+        "fk_customers".into(),
+        "id".into()
+    )));
+    assert!(ends.contains(&(
+        "fk_lines".into(),
+        "order_id,order_region".into(),
+        "fk_orders".into(),
+        "id,region".into()
+    )));
+}

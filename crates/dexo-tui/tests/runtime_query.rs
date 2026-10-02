@@ -162,6 +162,13 @@ impl CatalogReader for FakeSession {
     async fn dependents(&self, _id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
         Ok(Vec::new())
     }
+
+    async fn foreign_keys(
+        &self,
+        _table: &dexo_driver_api::QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
+        Ok(Vec::new())
+    }
 }
 
 #[async_trait::async_trait]

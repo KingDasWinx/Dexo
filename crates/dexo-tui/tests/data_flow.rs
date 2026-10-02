@@ -851,3 +851,147 @@ fn row_counts_say_whether_they_are_exact_estimated_or_open() {
         .append_rows((1..=3).map(|id| vec![DbValue::I64(id)]).collect());
     assert_eq!(title(&model), "Results (3+ rows, limit reached)");
 }
+
+/// `f` on a row lists the keys from and to its table; the chosen one opens the other
+/// table filtered to the row's key -- every column of a composite one -- and `b` comes
+/// back to the row it left. A NULL key opens nothing.
+#[test]
+fn related_rows_open_both_ways_and_back_returns_to_the_row() {
+    use dexo_driver_api::{ColumnId, Filter, ForeignKeyRef, QualifiedName};
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        active_session: Some(dexo_tui::runtime::SessionId(Uuid::from_u128(5))),
+        session_generation: 2,
+        ..Model::default()
+    };
+    let named = |name: &str| QualifiedName::new(Some("shop"), Some("public"), name);
+    model
+        .documents
+        .push(dexo_tui::model::EditorDocument::new_table(
+            named("orders"),
+            None,
+        ));
+    let orders_doc = model.documents.len() - 1;
+    model.set_active_document(orders_doc);
+    model.data.target = named("orders");
+    model.results.set_columns(
+        ["id", "region", "customer_id"]
+            .into_iter()
+            .map(|name| dexo_driver_api::ColumnMeta {
+                name: name.into(),
+                type_name: "text".into(),
+                nullable: true,
+            })
+            .collect(),
+    );
+    model.results.append_rows(vec![
+        vec![DbValue::I64(1), DbValue::Text("eu".into()), DbValue::Null],
+        vec![DbValue::I64(2), DbValue::Text("us".into()), DbValue::I64(9)],
+    ]);
+    model.results.select_cell(1, 0);
+    let keys = vec![
+        ForeignKeyRef {
+            name: "orders_customer".into(),
+            from: named("orders"),
+            from_columns: vec!["customer_id".into()],
+            to: named("customers"),
+            to_columns: vec!["id".into()],
+        },
+        ForeignKeyRef {
+            name: "lines_order".into(),
+            from: named("lines"),
+            from_columns: vec!["order_id".into(), "order_region".into()],
+            to: named("orders"),
+            to_columns: vec!["id".into(), "region".into()],
+        },
+    ];
+    let pick = |model: &mut Model, keys: &[ForeignKeyRef]| {
+        let effects = update(model, Action::OpenRelatedPicker);
+        let table = effects
+            .iter()
+            .find_map(|effect| match effect {
+                dexo_tui::Effect::LoadForeignKeys { table, .. } => Some(table.clone()),
+                _ => None,
+            })
+            .expect("the keys were asked for");
+        update(
+            model,
+            Action::ForeignKeysLoaded {
+                generation: 2,
+                table,
+                result: Ok(keys.to_vec()),
+            },
+        );
+    };
+    let filter_of = |effects: &[dexo_tui::Effect]| {
+        effects.iter().find_map(|effect| match effect {
+            dexo_tui::Effect::LoadTableData { request, .. } => {
+                Some((request.object.object().to_string(), request.filter.clone()))
+            }
+            _ => None,
+        })
+    };
+    let key = |code| {
+        Action::Key(crossterm::event::KeyEvent::new(
+            code,
+            crossterm::event::KeyModifiers::NONE,
+        ))
+    };
+
+    pick(&mut model, &keys);
+    let labels: Vec<String> = model
+        .data
+        .related_picker
+        .as_ref()
+        .and_then(|picker| picker.links.as_ref())
+        .unwrap()
+        .iter()
+        .map(|link| link.label.clone())
+        .collect();
+    assert_eq!(
+        labels,
+        [
+            "→ customers (customer_id)",
+            "← lines (order_id, order_region)"
+        ]
+    );
+    let effects = update(&mut model, key(crossterm::event::KeyCode::Enter));
+    assert_eq!(
+        filter_of(&effects),
+        Some((
+            "customers".into(),
+            Some(Filter::Eq(ColumnId("id".into()), DbValue::I64(9)))
+        ))
+    );
+    assert!(model.data.related_picker.is_none());
+
+    update(&mut model, Action::DataNavBack);
+    assert_eq!(model.active_document, orders_doc);
+    assert_eq!(
+        model.results.selection(),
+        Some((1, 0)),
+        "back is the row it left"
+    );
+
+    pick(&mut model, &keys);
+    update(&mut model, key(crossterm::event::KeyCode::Down));
+    let effects = update(&mut model, key(crossterm::event::KeyCode::Enter));
+    assert_eq!(
+        filter_of(&effects),
+        Some((
+            "lines".into(),
+            Some(Filter::And(vec![
+                Filter::Eq(ColumnId("order_id".into()), DbValue::I64(2)),
+                Filter::Eq(ColumnId("order_region".into()), DbValue::Text("us".into())),
+            ]))
+        ))
+    );
+    update(&mut model, Action::DataNavBack);
+
+    // The first row's customer is NULL: nothing to open.
+    model.results.select_cell(0, 0);
+    pick(&mut model, &keys);
+    let effects = update(&mut model, key(crossterm::event::KeyCode::Enter));
+    assert_eq!(filter_of(&effects), None);
+    assert_eq!(model.active_document, orders_doc);
+}

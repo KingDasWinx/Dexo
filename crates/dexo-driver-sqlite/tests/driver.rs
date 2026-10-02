@@ -732,3 +732,57 @@ async fn a_result_cut_at_the_row_limit_says_so() {
         assert_eq!(rows(&events).len(), expected, "limit {limit}");
     }
 }
+
+/// A table's foreign keys, both ways: the ones it holds and the ones that point at it,
+/// a composite key's columns in order, and a key to its own table once each way.
+#[tokio::test]
+async fn foreign_keys_are_listed_from_and_to_a_table() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("keys.db");
+    seed(
+        &path,
+        "CREATE TABLE customers (id INTEGER PRIMARY KEY);
+         CREATE TABLE orders (id INTEGER, region TEXT, customer_id INTEGER REFERENCES customers,
+                              PRIMARY KEY (id, region));
+         CREATE TABLE lines (n INTEGER, order_id INTEGER, order_region TEXT,
+                             FOREIGN KEY (order_id, order_region) REFERENCES orders (id, region));
+         CREATE TABLE staff (id INTEGER PRIMARY KEY, boss INTEGER REFERENCES staff (id));",
+    )
+    .await;
+    let session = open(&path, false).await;
+    let catalog = session.catalog().unwrap();
+    let keys = catalog.foreign_keys(&table("orders")).await.unwrap();
+    let ends: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key.from.object().to_string(),
+                key.from_columns.clone(),
+                key.to.object().to_string(),
+                key.to_columns.clone(),
+            )
+        })
+        .collect();
+    let strings = |items: &[&str]| {
+        items
+            .iter()
+            .map(|item| item.to_string())
+            .collect::<Vec<_>>()
+    };
+    assert!(ends.contains(&(
+        "orders".into(),
+        strings(&["customer_id"]),
+        "customers".into(),
+        strings(&["id"])
+    )));
+    assert!(ends.contains(&(
+        "lines".into(),
+        strings(&["order_id", "order_region"]),
+        "orders".into(),
+        strings(&["id", "region"])
+    )));
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    let own = catalog.foreign_keys(&table("staff")).await.unwrap();
+    assert_eq!(own.len(), 1, "{own:?}");
+    assert_eq!(own[0].from_columns, ["boss"]);
+}

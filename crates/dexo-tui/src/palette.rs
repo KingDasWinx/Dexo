@@ -171,8 +171,8 @@ pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
         ("data.copy.markdown", "Copy as Markdown"),
         ("data.copy.sql", "Copy as SQL"),
         ("data.inspect", "Inspect value"),
-        ("data.filter", "Apply remote filter"),
-        ("data.related", "Open related"),
+        ("data.filter", "Filter rows (WHERE)"),
+        ("data.related", "Related rows…"),
         ("data.refresh", "Refresh table data"),
     ]
 }

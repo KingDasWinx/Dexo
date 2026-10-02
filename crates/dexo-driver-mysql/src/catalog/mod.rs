@@ -201,6 +201,52 @@ impl CatalogReader for MysqlSession {
         self.relation_graph(id, false).await
     }
 
+    async fn foreign_keys(
+        &self,
+        table: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
+        let schema = table
+            .schema()
+            .or(table.catalog())
+            .unwrap_or_default()
+            .to_string();
+        let name = table.object().to_string();
+        let rows: Vec<(String, String, String, String, String, String, String)> = self
+            .exec_rows(
+                "SELECT k.CONSTRAINT_NAME, k.TABLE_SCHEMA, k.TABLE_NAME, k.COLUMN_NAME,
+                        k.REFERENCED_TABLE_SCHEMA, k.REFERENCED_TABLE_NAME, k.REFERENCED_COLUMN_NAME
+                 FROM information_schema.KEY_COLUMN_USAGE k
+                 WHERE k.REFERENCED_TABLE_NAME IS NOT NULL
+                   AND ((k.TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE()) AND k.TABLE_NAME = ?)
+                        OR (k.REFERENCED_TABLE_SCHEMA = COALESCE(NULLIF(?, ''), DATABASE())
+                            AND k.REFERENCED_TABLE_NAME = ?))
+                 ORDER BY k.TABLE_SCHEMA, k.TABLE_NAME, k.CONSTRAINT_NAME, k.ORDINAL_POSITION",
+                (schema.clone(), name.clone(), schema, name),
+            )
+            .await?;
+        // One row per column: a key's rows are consecutive, its columns in order.
+        let mut keys: Vec<dexo_driver_api::ForeignKeyRef> = Vec::new();
+        for (constraint, from_schema, from_table, from_column, to_schema, to_table, to_column) in
+            rows
+        {
+            let from = QualifiedName::new(Some(from_schema), None::<String>, from_table);
+            match keys.last_mut() {
+                Some(key) if key.name == constraint && key.from == from => {
+                    key.from_columns.push(from_column);
+                    key.to_columns.push(to_column);
+                }
+                _ => keys.push(dexo_driver_api::ForeignKeyRef {
+                    name: constraint,
+                    from,
+                    from_columns: vec![from_column],
+                    to: QualifiedName::new(Some(to_schema), None::<String>, to_table),
+                    to_columns: vec![to_column],
+                }),
+            }
+        }
+        Ok(keys)
+    }
+
     async fn databases(&self) -> Result<Vec<String>, DriverError> {
         self.exec_rows(
             "SELECT SCHEMA_NAME FROM information_schema.SCHEMATA ORDER BY 1",

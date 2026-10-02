@@ -290,3 +290,66 @@ async fn postgres_catalog_contract() {
         "denied schema must not look like an empty catalog"
     );
 }
+
+/// Foreign keys from and to a table, a composite one's columns in order.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn foreign_keys_are_listed_from_and_to_a_table() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE TABLE customers (id int PRIMARY KEY)",
+        "CREATE TABLE orders (id int, region text, customer_id int REFERENCES customers,
+                              PRIMARY KEY (id, region))",
+        "CREATE TABLE lines (n int, order_id int, order_region text,
+                             FOREIGN KEY (order_id, order_region) REFERENCES orders (id, region))",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let orders = dexo_driver_api::QualifiedName::new(Some("dexo"), Some("public"), "orders");
+    let keys = session
+        .catalog()
+        .unwrap()
+        .foreign_keys(&orders)
+        .await
+        .unwrap();
+    let ends: Vec<_> = keys
+        .iter()
+        .map(|key| {
+            (
+                key.from.object().to_string(),
+                key.from_columns.join(","),
+                key.to.object().to_string(),
+                key.to_columns.join(","),
+            )
+        })
+        .collect();
+    assert_eq!(ends.len(), 2, "{ends:?}");
+    assert!(ends.contains(&(
+        "orders".into(),
+        "customer_id".into(),
+        "customers".into(),
+        "id".into()
+    )));
+    assert!(ends.contains(&(
+        "lines".into(),
+        "order_id,order_region".into(),
+        "orders".into(),
+        "id,region".into()
+    )));
+}

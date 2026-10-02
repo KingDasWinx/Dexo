@@ -171,6 +171,21 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.editor.snippet_open {
         render_snippets(frame, model, hits);
     }
+    if let Some(picker) = &model.data.related_picker {
+        let labels: Vec<String> = match &picker.links {
+            Some(links) => links.iter().map(|link| link.label.clone()).collect(),
+            None => vec!["Looking for foreign keys…".into()],
+        };
+        render_list_overlay(
+            frame,
+            model,
+            "Related rows",
+            &labels,
+            picker.selected,
+            0,
+            hits,
+        );
+    }
     if model.connections.delete_target.is_some() {
         render_delete_connection(frame, model, hits);
     }

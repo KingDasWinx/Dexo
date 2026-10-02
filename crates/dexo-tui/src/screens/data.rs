@@ -102,6 +102,24 @@ pub enum ClauseBar {
     Order,
 }
 
+/// `f` on a row: the foreign keys from and to its table, to open the rows on the
+/// other end.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelatedPicker {
+    pub table: QualifiedName,
+    /// `None` while the keys are asked for.
+    pub links: Option<Vec<RelatedLink>>,
+    pub selected: usize,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RelatedLink {
+    /// `→ customers (customer_id)`, `← order_items (order_id)`.
+    pub label: String,
+    /// Read from the row's side: `local` are this table's columns.
+    pub key: ForeignKey,
+}
+
 /// The exact row count `t` asked for, and the statement it counts: shown only while the
 /// grid still pages through that statement.
 #[derive(Clone, Debug, PartialEq)]
@@ -187,6 +205,7 @@ pub struct DataScreen {
     pub environment: Environment,
     pub related_open: Vec<String>,
     pub related_fk: Option<ForeignKey>,
+    pub related_picker: Option<RelatedPicker>,
     pub related_row: Vec<(String, Option<DbValue>)>,
     /// The documents a foreign-key walk came from, most recent last. Each kept its own
     /// table state, so the way back is the document, not a copy of where it was.
@@ -225,6 +244,7 @@ impl Default for DataScreen {
             environment: Environment::Local,
             related_open: Vec::new(),
             related_fk: None,
+            related_picker: None,
             related_row: Vec::new(),
             crumbs: Vec::new(),
             page_offset: 0,

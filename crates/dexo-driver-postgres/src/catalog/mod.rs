@@ -893,6 +893,58 @@ impl CatalogReader for PostgresSession {
         self.depend_ids(oid, false).await
     }
 
+    async fn foreign_keys(
+        &self,
+        table: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
+        let schema = table.schema().unwrap_or("public").to_string();
+        let name = table.object().to_string();
+        let rows = self
+            .client
+            .query(
+                "SELECT c.conname::text,
+                        fn.nspname::text, ft.relname::text,
+                        ARRAY(SELECT a.attname::text FROM unnest(c.conkey) WITH ORDINALITY k(n, o)
+                              JOIN pg_attribute a ON a.attrelid = c.conrelid AND a.attnum = k.n
+                              ORDER BY k.o),
+                        tn.nspname::text, tt.relname::text,
+                        ARRAY(SELECT a.attname::text FROM unnest(c.confkey) WITH ORDINALITY k(n, o)
+                              JOIN pg_attribute a ON a.attrelid = c.confrelid AND a.attnum = k.n
+                              ORDER BY k.o)
+                 FROM pg_constraint c
+                 JOIN pg_class ft ON ft.oid = c.conrelid
+                 JOIN pg_namespace fn ON fn.oid = ft.relnamespace
+                 JOIN pg_class tt ON tt.oid = c.confrelid
+                 JOIN pg_namespace tn ON tn.oid = tt.relnamespace
+                 WHERE c.contype = 'f'
+                   AND ((fn.nspname = $1 AND ft.relname = $2)
+                        OR (tn.nspname = $1 AND tt.relname = $2))
+                 ORDER BY c.conname",
+                &[&schema, &name],
+            )
+            .await
+            .map_err(map_error)?;
+        let catalog = table.catalog().map(str::to_string);
+        Ok(rows
+            .into_iter()
+            .map(|row| dexo_driver_api::ForeignKeyRef {
+                name: row.get(0),
+                from: QualifiedName::new(
+                    catalog.clone(),
+                    Some(row.get::<_, String>(1)),
+                    row.get::<_, String>(2),
+                ),
+                from_columns: row.get(3),
+                to: QualifiedName::new(
+                    catalog.clone(),
+                    Some(row.get::<_, String>(4)),
+                    row.get::<_, String>(5),
+                ),
+                to_columns: row.get(6),
+            })
+            .collect())
+    }
+
     async fn databases(&self) -> Result<Vec<String>, DriverError> {
         let rows = self
             .client

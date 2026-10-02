@@ -382,11 +382,17 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "data.related",
-            title: "Open Related",
-            keywords: &["foreign", "key"],
-            shortcut: None,
+            title: "Related Rows…",
+            keywords: &[
+                "foreign",
+                "key",
+                "references",
+                "referenced by",
+                "open related",
+            ],
+            shortcut: Some("f"),
             requirements: &[],
-            invocation: PaletteInvocation::Dispatch(Action::OpenRelated),
+            invocation: PaletteInvocation::Dispatch(Action::OpenRelatedPicker),
         },
         CommandSpec {
             id: "data.inspect",

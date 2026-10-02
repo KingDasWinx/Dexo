@@ -116,6 +116,17 @@ pub struct CatalogList {
     pub restrictions: Vec<CatalogRestriction>,
 }
 
+/// A foreign key, both ends named: `from` holds `from_columns`, which point at
+/// `to_columns` of `to`.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ForeignKeyRef {
+    pub name: String,
+    pub from: QualifiedName,
+    pub from_columns: Vec<String>,
+    pub to: QualifiedName,
+    pub to_columns: Vec<String>,
+}
+
 #[async_trait::async_trait]
 pub trait CatalogReader: Send + Sync {
     async fn list_children(
@@ -131,6 +142,9 @@ pub trait CatalogReader: Send + Sync {
     async fn dependencies(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError>;
 
     async fn dependents(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError>;
+
+    /// Every foreign key from `table` or to it, columns in key order.
+    async fn foreign_keys(&self, table: &QualifiedName) -> Result<Vec<ForeignKeyRef>, DriverError>;
 
     /// Every database the server holds, not only the one connected to. By default the
     /// names of the catalogs at the top of the tree.

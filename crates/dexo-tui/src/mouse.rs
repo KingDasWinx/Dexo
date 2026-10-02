@@ -116,6 +116,7 @@ pub enum OverlayKind {
     Parameters,
     History,
     Snippets,
+    Related,
 }
 
 #[derive(Clone, Debug)]
@@ -214,6 +215,7 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
             OverlayKind::DeleteConnection,
         ),
         (model.editor.snippet_open, OverlayKind::Snippets),
+        (model.data.related_picker.is_some(), OverlayKind::Related),
         (model.editor.history_open, OverlayKind::History),
         (model.editor.parameter_prompt, OverlayKind::Parameters),
         (model.schema_editor.open, OverlayKind::SchemaForm),

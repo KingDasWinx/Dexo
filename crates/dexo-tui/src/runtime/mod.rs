@@ -341,6 +341,33 @@ impl WorkbenchRuntime {
                 sql,
                 parameters,
             } => self.count_rows(session, operation, sql, parameters).await,
+            crate::Effect::LoadForeignKeys {
+                session,
+                generation,
+                table,
+            } => {
+                let Some(active) = self.sessions.get(session) else {
+                    return;
+                };
+                let session = Arc::clone(&active.session);
+                let action_tx = self.action_tx.clone();
+                tokio::spawn(async move {
+                    let result = match session.catalog() {
+                        Some(catalog) => catalog
+                            .foreign_keys(&table)
+                            .await
+                            .map_err(|error| error.to_string()),
+                        None => Err("this connection has no catalog to ask".into()),
+                    };
+                    let _ = action_tx
+                        .send(Action::ForeignKeysLoaded {
+                            generation,
+                            table,
+                            result,
+                        })
+                        .await;
+                });
+            }
             crate::Effect::CancelCount { operation } => {
                 let task = self
                     .counts

@@ -1187,6 +1187,42 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SubmitInsertRow => submit_insert_row(model),
         Action::InspectValue => inspect_selected(model),
         Action::OpenRelated => open_related(model),
+        Action::OpenRelatedPicker => open_related_picker(model),
+        Action::ForeignKeysLoaded {
+            generation,
+            table,
+            result,
+        } => {
+            let current = model
+                .data
+                .related_picker
+                .as_ref()
+                .is_some_and(|picker| picker.table == table && picker.links.is_none());
+            if !current || generation != model.session_generation {
+                return Vec::new();
+            }
+            match result {
+                Ok(keys) => {
+                    let links = related_links(&table, &keys);
+                    if links.is_empty() {
+                        model.data.related_picker = None;
+                        model.messages.info(format!(
+                            "No foreign key leads from or to {}.",
+                            table.display_unquoted()
+                        ));
+                    } else if let Some(picker) = &mut model.data.related_picker {
+                        picker.links = Some(links);
+                    }
+                }
+                Err(message) => {
+                    model.data.related_picker = None;
+                    model
+                        .messages
+                        .error(format!("Could not list the foreign keys: {message}"));
+                }
+            }
+            Vec::new()
+        }
         Action::DataNavBack => data_nav_back(model),
         Action::OpenDdlPreview => open_ddl_preview(model),
         Action::ConfirmDdl => {
@@ -2242,6 +2278,15 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
         Some(OverlayKind::History) => mouse_history(model, hit),
         Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
+        Some(OverlayKind::Related) => match hit {
+            Some(HitTarget::ListRow(index)) => {
+                if let Some(picker) = &mut model.data.related_picker {
+                    picker.selected = index;
+                }
+                open_related_link(model)
+            }
+            _ => Vec::new(),
+        },
         None => mouse_workbench(model, mouse, hit, doubled),
     }
 }
@@ -3061,6 +3106,17 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
+    if overlay == Some(OverlayKind::Related) {
+        if let Some(picker) = &mut model.data.related_picker {
+            let last = picker.links.as_ref().map_or(0, Vec::len).saturating_sub(1);
+            picker.selected = if delta < 0 {
+                picker.selected.saturating_sub(1)
+            } else {
+                (picker.selected + 1).min(last)
+            };
+        }
+        return Vec::new();
+    }
     if overlay == Some(OverlayKind::Snippets) {
         if delta < 0 {
             model.editor.snippet_selected = model.editor.snippet_selected.saturating_sub(1);
@@ -3318,6 +3374,17 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.editor.snippet_open {
         crate::screens::editor::handle_snippet_key(model, key);
+        return Vec::new();
+    }
+    if let Some(picker) = &mut model.data.related_picker {
+        let count = picker.links.as_ref().map_or(0, Vec::len);
+        match key.code {
+            KeyCode::Esc => model.data.related_picker = None,
+            KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
+            KeyCode::Down if picker.selected + 1 < count => picker.selected += 1,
+            KeyCode::Enter => return open_related_link(model),
+            _ => {}
+        }
         return Vec::new();
     }
     if model.editor.parameter_prompt {
@@ -6383,6 +6450,117 @@ fn promote_remote_cells(model: &mut Model, columns: &[dexo_driver_api::ColumnMet
             );
         }
     }
+}
+
+/// `f`: the rows the row under the cursor points at, or that point at it. The row is
+/// read now, the keys are asked of the catalog, and the picker opens on them.
+fn open_related_picker(model: &mut Model) -> Vec<Effect> {
+    if !model.active_document().kind.is_table() {
+        model
+            .messages
+            .warn("Related rows are a table's; open a table's rows first.".into());
+        return Vec::new();
+    }
+    let Some(session) = model.active_session else {
+        model
+            .messages
+            .warn("Connect a session to follow foreign keys.".into());
+        return Vec::new();
+    };
+    let Some((row, _)) = model.results.selection() else {
+        model.messages.warn("Pick a row first.".into());
+        return Vec::new();
+    };
+    let Some(values) = model.results.rows().get(row) else {
+        return Vec::new();
+    };
+    model.data.related_row = model
+        .results
+        .columns()
+        .iter()
+        .zip(values)
+        .map(|(column, value)| {
+            let value = (!matches!(value, DbValue::Null)).then(|| value.clone());
+            (column.name.clone(), value)
+        })
+        .collect();
+    let table = model.data.target.clone();
+    model.data.related_picker = Some(crate::screens::data::RelatedPicker {
+        table: table.clone(),
+        links: None,
+        selected: 0,
+    });
+    vec![Effect::LoadForeignKeys {
+        session,
+        generation: model.session_generation,
+        table,
+    }]
+}
+
+/// Each key as a way out of `table`: `→` to the table a key of its own points at, `←`
+/// from a table whose key points at it. A key of a table to itself goes both ways.
+fn related_links(
+    table: &dexo_driver_api::QualifiedName,
+    keys: &[dexo_driver_api::ForeignKeyRef],
+) -> Vec<crate::screens::data::RelatedLink> {
+    let same = |other: &dexo_driver_api::QualifiedName| {
+        other.object() == table.object()
+            && match (
+                other.schema().or(other.catalog()),
+                table.schema().or(table.catalog()),
+            ) {
+                (Some(a), Some(b)) => a == b,
+                _ => true,
+            }
+    };
+    let named = |other: &dexo_driver_api::QualifiedName| {
+        let schema = other.schema().or(other.catalog());
+        if schema == table.schema().or(table.catalog()) {
+            other.object().to_string()
+        } else {
+            other.display_unquoted()
+        }
+    };
+    let mut links = Vec::new();
+    for key in keys {
+        if same(&key.from) {
+            links.push(crate::screens::data::RelatedLink {
+                label: format!("→ {} ({})", named(&key.to), key.from_columns.join(", ")),
+                key: dexo_app::data::ForeignKey {
+                    local: key.from_columns.clone(),
+                    referenced_table: key.to.clone(),
+                    referenced: key.to_columns.clone(),
+                },
+            });
+        }
+        if same(&key.to) {
+            links.push(crate::screens::data::RelatedLink {
+                label: format!("← {} ({})", named(&key.from), key.from_columns.join(", ")),
+                key: dexo_app::data::ForeignKey {
+                    local: key.to_columns.clone(),
+                    referenced_table: key.from.clone(),
+                    referenced: key.from_columns.clone(),
+                },
+            });
+        }
+    }
+    links
+}
+
+/// Enter in the picker: the chosen table opens, filtered to the rows on the key's other
+/// end; `b` comes back.
+fn open_related_link(model: &mut Model) -> Vec<Effect> {
+    let Some(picker) = model.data.related_picker.take() else {
+        return Vec::new();
+    };
+    let Some(link) = picker
+        .links
+        .and_then(|links| links.into_iter().nth(picker.selected))
+    else {
+        return Vec::new();
+    };
+    model.data.related_fk = Some(link.key);
+    open_related(model)
 }
 
 fn open_related(model: &mut Model) -> Vec<Effect> {

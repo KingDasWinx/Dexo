@@ -183,6 +183,49 @@ impl CatalogReader for SqliteSession {
     async fn dependents(&self, id: &ObjectId) -> Result<Vec<ObjectId>, DriverError> {
         self.relation_graph(id, false).await
     }
+
+    /// Its own keys, and every other table's that names it as the parent. SQLite keeps
+    /// no list the other way round, so each table of the schema is asked.
+    async fn foreign_keys(
+        &self,
+        table: &QualifiedName,
+    ) -> Result<Vec<dexo_driver_api::ForeignKeyRef>, DriverError> {
+        let schema = table
+            .schema()
+            .or(table.catalog())
+            .unwrap_or("main")
+            .to_string();
+        let target = table.object().to_string();
+        self.with_conn(move |conn| {
+            let tables: Vec<String> = rows(
+                conn,
+                &format!(
+                    "SELECT name FROM {}.sqlite_master WHERE type = 'table' ORDER BY name",
+                    quote(&schema)
+                ),
+                [],
+                |row| row.get(0),
+            )?;
+            let mut found = Vec::new();
+            for from in tables {
+                for (index, key) in foreign_keys(conn, &schema, &from)?.into_iter().enumerate() {
+                    let outgoing = from.eq_ignore_ascii_case(&target);
+                    if !outgoing && !key.table.eq_ignore_ascii_case(&target) {
+                        continue;
+                    }
+                    found.push(dexo_driver_api::ForeignKeyRef {
+                        name: format!("{from}_fk{}", index + 1),
+                        from: named(&schema, from.clone()),
+                        from_columns: key.local,
+                        to: named(&schema, key.table),
+                        to_columns: key.referenced,
+                    });
+                }
+            }
+            Ok(found)
+        })
+        .await
+    }
 }
 
 impl SqliteSession {

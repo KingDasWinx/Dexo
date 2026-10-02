@@ -360,6 +360,13 @@ pub enum Action {
     CancelInsertRow,
     InspectValue,
     OpenRelated,
+    /// `f` on a row: list the foreign keys from and to its table.
+    OpenRelatedPicker,
+    ForeignKeysLoaded {
+        generation: u64,
+        table: dexo_driver_api::QualifiedName,
+        result: Result<Vec<dexo_driver_api::ForeignKeyRef>, String>,
+    },
     DataNavBack,
     OpenDdlPreview,
     ConfirmDdl,
@@ -723,6 +730,11 @@ pub enum Effect {
     },
     CancelCount {
         operation: OperationId,
+    },
+    LoadForeignKeys {
+        session: SessionId,
+        generation: u64,
+        table: dexo_driver_api::QualifiedName,
     },
     PersistLayout {
         project_id: String,

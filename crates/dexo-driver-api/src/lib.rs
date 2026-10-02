@@ -21,8 +21,8 @@ pub use admin::{
 };
 pub use capability::{Capability, CapabilityState};
 pub use catalog::{
-    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction, ObjectId,
-    ObjectKind,
+    CatalogList, CatalogListOptions, CatalogObject, CatalogReader, CatalogRestriction,
+    ForeignKeyRef, ObjectId, ObjectKind,
 };
 pub use connection::{
     ConnectRequest, ConnectionFactory, ConnectionOptions, DriverDescriptor, Session,
