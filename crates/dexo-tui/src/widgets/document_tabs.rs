@@ -80,7 +80,25 @@ fn connection_prefix(model: &Model, document: &crate::model::EditorDocument) -> 
     if name == document.title {
         return String::new();
     }
-    format!("{}\u{b7}", truncate_cell(name, CONNECTION_PREFIX_WIDTH))
+    format!("{}\u{b7}", cut_middle(name, CONNECTION_PREFIX_WIDTH))
+}
+
+/// `name` in at most `width` cells, the middle left out: `mysql-dev` and `mysql-docs` share
+/// their first letters and part in their last, and a name cut at the end told them apart
+/// by neither.
+fn cut_middle(name: &str, width: usize) -> String {
+    let chars: Vec<char> = name.chars().collect();
+    if UnicodeWidthStr::width(name) <= width || width < 3 {
+        return truncate_cell(name, width);
+    }
+    let keep = width - 1;
+    let head = keep.div_ceil(2);
+    let tail = keep / 2;
+    format!(
+        "{}\u{2026}{}",
+        chars[..head].iter().collect::<String>(),
+        chars[chars.len() - tail..].iter().collect::<String>()
+    )
 }
 
 /// Swaps the label's outer spaces for brackets, keeping its width. Every label here is
@@ -403,6 +421,14 @@ mod tests {
     use crate::model::{DocumentTabFocus, EditorDocument, Model};
     use crate::mouse::{HitMap, HitTarget};
     use crate::render::render_to_string;
+
+    /// `mysql-dev` and `mysql-docs` were both `mysql-d…` in the tab.
+    #[test]
+    fn two_connections_that_start_alike_stay_apart_in_the_tab() {
+        assert_eq!(super::cut_middle("mysql-dev", 8), "mysq…dev");
+        assert_eq!(super::cut_middle("mysql-docs", 8), "mysq…ocs");
+        assert_eq!(super::cut_middle("pg-dev", 8), "pg-dev");
+    }
 
     fn many_documents(count: usize) -> Model {
         let mut model = Model::default();

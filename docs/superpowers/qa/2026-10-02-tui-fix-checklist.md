@@ -274,7 +274,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-06** `MINOR` "Begin Transaction" twice says "session is not idle"
 - [ ] **AT-08** `MINOR` Header and status bar keep the previous connection after Alt+Left / Alt+Right switch the document
 - [ ] **AT-09** `MINOR` Sidebar connect while a document of another connection is on screen: header/status name the new connection but `tx:active` belongs to the document's
-- [ ] **AT-11** `MINOR` Document tab truncates the connection name to 7 characters
+- [x] **AT-11** `MINOR` Document tab truncates the connection name to 7 characters
 - [ ] **AT-12** `MINOR` Error toasts never go away on their own and survive later successful actions
 - [ ] **AT-14** `MINOR` Nothing on screen says a connection is read-only until a write is refused
 - [x] **AT-15** `MINOR` Destructive-statement guard is bypassed by a tautological WHERE
