@@ -93,9 +93,19 @@ fn filtered(
         return Err("locking queries are local-only".into());
     }
     let mut wrapped = format!("SELECT {select} FROM ({body}) AS _dexo_derived");
+    // The dialect's own placeholders, numbered here: rewriting `?` afterwards also
+    // rewrote the user's `'%?%'` and jsonb's `?` operator.
+    let mut bound = 0;
+    let mut placeholder = || {
+        bound += 1;
+        match dialect {
+            Dialect::Postgres => format!("${bound}"),
+            Dialect::Mysql | Dialect::Sqlite => "?".to_string(),
+        }
+    };
     let typed = filter
         .as_ref()
-        .map(|filter| render_filter(filter, &quote))
+        .map(|filter| render_filter(filter, &quote, &mut placeholder))
         .transpose()?;
     if let Some(condition) = clauses.condition(typed) {
         wrapped.push_str(" WHERE ");
@@ -126,21 +136,29 @@ fn quote(ident: &str, dialect: Dialect) -> String {
     }
 }
 
-fn render_filter(filter: &Filter, quote: &dyn Fn(&str) -> String) -> Result<String, String> {
+fn render_filter(
+    filter: &Filter,
+    quote: &dyn Fn(&str) -> String,
+    placeholder: &mut dyn FnMut() -> String,
+) -> Result<String, String> {
+    let mut compare =
+        |column: &dexo_driver_api::ColumnId, operator: &str| -> Result<String, String> {
+            Ok(format!("{} {operator} {}", quote(&column.0), placeholder()))
+        };
     match filter {
-        Filter::Eq(column, _) => Ok(format!("{} = ?", quote(&column.0))),
-        Filter::Ne(column, _) => Ok(format!("{} <> ?", quote(&column.0))),
-        Filter::Gt(column, _) => Ok(format!("{} > ?", quote(&column.0))),
-        Filter::Gte(column, _) => Ok(format!("{} >= ?", quote(&column.0))),
-        Filter::Lt(column, _) => Ok(format!("{} < ?", quote(&column.0))),
-        Filter::Lte(column, _) => Ok(format!("{} <= ?", quote(&column.0))),
+        Filter::Eq(column, _) => compare(column, "="),
+        Filter::Ne(column, _) => compare(column, "<>"),
+        Filter::Gt(column, _) => compare(column, ">"),
+        Filter::Gte(column, _) => compare(column, ">="),
+        Filter::Lt(column, _) => compare(column, "<"),
+        Filter::Lte(column, _) => compare(column, "<="),
         Filter::IsNull(column) => Ok(format!("{} IS NULL", quote(&column.0))),
         Filter::IsNotNull(column) => Ok(format!("{} IS NOT NULL", quote(&column.0))),
         Filter::And(parts) => Ok(format!(
             "({})",
             parts
                 .iter()
-                .map(|part| render_filter(part, quote))
+                .map(|part| render_filter(part, quote, placeholder))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(" AND ")
         )),
@@ -148,11 +166,14 @@ fn render_filter(filter: &Filter, quote: &dyn Fn(&str) -> String) -> Result<Stri
             "({})",
             parts
                 .iter()
-                .map(|part| render_filter(part, quote))
+                .map(|part| render_filter(part, quote, placeholder))
                 .collect::<Result<Vec<_>, _>>()?
                 .join(" OR ")
         )),
-        Filter::Not(inner) => Ok(format!("NOT ({})", render_filter(inner, quote)?)),
+        Filter::Not(inner) => Ok(format!(
+            "NOT ({})",
+            render_filter(inner, quote, placeholder)?
+        )),
     }
 }
 
@@ -173,6 +194,7 @@ pub fn filter_values(filter: &Filter) -> Vec<dexo_driver_api::DbValue> {
 #[cfg(test)]
 mod tests {
     use super::derive_page;
+    use crate::Dialect;
     use dexo_driver_api::DbValue;
     use dexo_driver_api::{ColumnId, Filter, Page, Sort};
 
@@ -201,7 +223,6 @@ mod tests {
     /// The count wraps what the page wraps, filters and all, and nothing that writes.
     #[test]
     fn a_count_covers_what_the_pages_do() {
-        use crate::Dialect;
         let clauses = dexo_driver_api::RawClauses {
             where_sql: Some("total > 5".into()),
             order_by: Some("id".into()),
@@ -212,7 +233,26 @@ mod tests {
         assert_eq!(
             super::derive_count_in(&sql, &filter(), &clauses, Dialect::Postgres).unwrap(),
             "SELECT COUNT(*) FROM (SELECT * FROM \"public\".\"orders\") AS _dexo_derived \
-             WHERE (total > 5) AND (\"id\" = ?)"
+             WHERE (total > 5) AND (\"id\" = $1)"
+        );
+        // The user's own `?` -- in a literal, jsonb's operator -- is left as written.
+        let clauses = dexo_driver_api::RawClauses {
+            where_sql: Some("note LIKE '%?%' AND tags ? 'x'".into()),
+            order_by: None,
+        };
+        let both = Some(Filter::And(vec![
+            Filter::Eq(ColumnId("a".into()), DbValue::I64(1)),
+            Filter::Gt(ColumnId("b".into()), DbValue::I64(2)),
+        ]));
+        assert_eq!(
+            super::derive_count_in(&sql, &both, &clauses, Dialect::Postgres).unwrap(),
+            "SELECT COUNT(*) FROM (SELECT * FROM \"public\".\"orders\") AS _dexo_derived \
+             WHERE (note LIKE '%?%' AND tags ? 'x') AND ((\"a\" = $1 AND \"b\" > $2))"
+        );
+        assert!(
+            super::derive_count_in(&sql, &both, &clauses, Dialect::Mysql)
+                .unwrap()
+                .ends_with("((`a` = ? AND `b` > ?))")
         );
         let mysql = dexo_driver_api::QualifiedName::new(Some("shop"), None::<String>, "orders");
         assert_eq!(

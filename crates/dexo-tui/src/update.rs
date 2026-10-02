@@ -6304,17 +6304,13 @@ pub(crate) fn count_sql(model: &Model) -> Option<String> {
         }
         sql
     };
-    let sql = dexo_sql::derive_count_in(
+    dexo_sql::derive_count_in(
         &source,
         &model.data.filter,
         &model.data.bars.applied,
         dialect,
     )
-    .ok()?;
-    Some(match dialect {
-        dexo_sql::Dialect::Postgres => postgres_placeholders(&sql),
-        dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite => sql,
-    })
+    .ok()
 }
 
 /// A header click, or `s`: the ORDER BY bar's text is the sort, so the click rewrites
@@ -6410,10 +6406,6 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
             if let Some(filter) = &model.data.filter {
                 parameters = dexo_sql::filter_values(filter);
             }
-            let derived = match dialect {
-                dexo_sql::Dialect::Postgres => postgres_placeholders(&derived),
-                dexo_sql::Dialect::Mysql | dexo_sql::Dialect::Sqlite => derived,
-            };
             start_derived_script(model, derived, parameters)
         }
         Err(reason) => {
@@ -6424,21 +6416,6 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
             Vec::new()
         }
     }
-}
-
-fn postgres_placeholders(sql: &str) -> String {
-    // ponytail: rewrite `?` left-to-right; ceiling: `?` inside string literals.
-    let mut n = 0;
-    let mut out = String::with_capacity(sql.len());
-    for ch in sql.chars() {
-        if ch == '?' {
-            n += 1;
-            out.push_str(&format!("${n}"));
-        } else {
-            out.push(ch);
-        }
-    }
-    out
 }
 
 fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>) -> Vec<Effect> {
