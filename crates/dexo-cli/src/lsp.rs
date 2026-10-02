@@ -295,8 +295,17 @@ impl Server {
             return Ok(json!([]));
         };
         let dialect = self.dialect_of(&text);
-        let formatted =
-            dexo_sql::format_sql(&text, dialect).map_err(|error| (-32603, error.to_string()))?;
+        let options = &params["options"];
+        let indent = if options["insertSpaces"].as_bool() == Some(false) {
+            dexo_sql::Indent::Tab
+        } else {
+            let width = options["tabSize"]
+                .as_u64()
+                .map_or(2, |width| width.clamp(1, 16));
+            dexo_sql::Indent::Spaces(width as u8)
+        };
+        let formatted = dexo_sql::format_sql_with(&text, dialect, indent)
+            .map_err(|error| (-32603, error.to_string()))?;
         if formatted == text {
             return Ok(json!([]));
         }
@@ -580,6 +589,38 @@ mod tests {
             .is_err()
         );
         assert_eq!(replies(&output)[0]["error"]["code"], -32700);
+    }
+
+    /// Formatting indents the way the editor asks: its tab size in spaces, or tabs.
+    #[test]
+    fn formatting_follows_the_editor_options() {
+        let mut server = Server::new(None, None);
+        let uri = "file:///f.sql";
+        server.handle(
+            &json!({"jsonrpc": "2.0", "method": "textDocument/didOpen", "params": {
+                "textDocument": {"uri": uri, "languageId": "sql", "version": 1, "text": "select a from t"}
+            }}),
+        );
+        let mut formatted = |options: Value| {
+            server
+                .handle(
+                    &json!({"jsonrpc": "2.0", "id": 1, "method": "textDocument/formatting", "params": {
+                        "textDocument": {"uri": uri}, "options": options
+                    }}),
+                )
+                .unwrap()[0]["result"][0]["newText"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        };
+        assert_eq!(
+            formatted(json!({"tabSize": 4, "insertSpaces": true})),
+            "SELECT\n    a\nFROM\n    t"
+        );
+        assert_eq!(
+            formatted(json!({"tabSize": 8, "insertSpaces": false})),
+            "SELECT\n\ta\nFROM\n\tt"
+        );
     }
 
     /// The first line names the document's connection over the server's.

@@ -34,7 +34,7 @@ pub use diagnostic::{Diagnostic, DiagnosticSource};
 pub use dialect::Dialect;
 pub use document::{SqlDocument, SqlError};
 pub use dropped::dropped_tables;
-pub use format::format_sql;
+pub use format::{Indent, format_sql, format_sql_with};
 pub use lex::{Token, TokenKind, is_reserved, suppressed_at, tokenize};
 pub use navigation::definition_at;
 pub use order::{OrderKey, cycle_order, order_keys, order_text};
