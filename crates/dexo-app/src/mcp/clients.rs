@@ -157,20 +157,37 @@ impl McpClient {
 /// The file `command` runs, found the way a client starting it would: a path as it is,
 /// a bare name on PATH.
 pub fn resolve_command(command: &str) -> Option<PathBuf> {
-    let runnable = |path: &Path| {
-        #[cfg(unix)]
-        {
-            use std::os::unix::fs::PermissionsExt;
-            path.metadata()
-                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
-        }
-        #[cfg(not(unix))]
-        path.is_file()
-    };
     let path = Path::new(command);
     if path.components().count() > 1 {
         return runnable(path).then(|| path.to_path_buf());
     }
+    find_on_path(command, &std::env::var_os("PATH")?)
+}
+
+/// What a client's config should run to start this Dexo. The running binary's own path is
+/// resolved, and under Homebrew or Linuxbrew it names a versioned Cellar folder that the
+/// next upgrade removes; the `dexo` on PATH -- the stable link -- is used instead when it
+/// is the same file.
+pub fn dexo_command() -> std::io::Result<String> {
+    let exe = std::env::current_exe()?;
+    let path = std::env::var_os("PATH").unwrap_or_default();
+    Ok(stable_path(&exe, &path).display().to_string())
+}
+
+fn stable_path(exe: &Path, path: &std::ffi::OsStr) -> PathBuf {
+    let name = if cfg!(windows) {
+        exe.file_stem()
+    } else {
+        exe.file_name()
+    };
+    let real = std::fs::canonicalize(exe).ok();
+    name.and_then(std::ffi::OsStr::to_str)
+        .and_then(|name| find_on_path(name, path))
+        .filter(|found| real.is_some() && std::fs::canonicalize(found).ok() == real)
+        .unwrap_or_else(|| exe.to_path_buf())
+}
+
+fn find_on_path(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     let extensions: Vec<String> = if cfg!(windows) {
         std::iter::once(String::new())
             .chain(
@@ -183,13 +200,24 @@ pub fn resolve_command(command: &str) -> Option<PathBuf> {
     } else {
         vec![String::new()]
     };
-    std::env::split_paths(&std::env::var_os("PATH")?)
+    std::env::split_paths(path)
         .flat_map(|dir| {
             extensions
                 .iter()
-                .map(move |extension| dir.join(format!("{command}{extension}")))
+                .map(move |extension| dir.join(format!("{name}{extension}")))
         })
         .find(|candidate| runnable(candidate))
+}
+
+fn runnable(path: &Path) -> bool {
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        path.metadata()
+            .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+    }
+    #[cfg(not(unix))]
+    path.is_file()
 }
 
 /// A JSON value whose objects keep their keys in the file's order. serde_json's own map
@@ -733,5 +761,30 @@ mod tests {
             text.contains("the wait the person set on the grant"),
             "{text}"
         );
+    }
+
+    /// A config names the `dexo` on PATH when it is the running binary through a link, as
+    /// Homebrew's is, and the binary's own path when PATH has another one or none.
+    #[cfg(unix)]
+    #[test]
+    fn the_command_is_the_stable_link_on_path() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let cellar = dir.path().join("Cellar/dexo/1.4.1/bin");
+        let bin = dir.path().join("bin");
+        let other = dir.path().join("other");
+        for folder in [&cellar, &bin, &other] {
+            std::fs::create_dir_all(folder).unwrap();
+        }
+        let exe = cellar.join("dexo");
+        for file in [&exe, &other.join("dexo")] {
+            std::fs::write(file, "").unwrap();
+            std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o755)).unwrap();
+        }
+        std::os::unix::fs::symlink(&exe, bin.join("dexo")).unwrap();
+        let path = |dirs: &[&std::path::Path]| std::env::join_paths(dirs).unwrap();
+        assert_eq!(super::stable_path(&exe, &path(&[&bin])), bin.join("dexo"));
+        assert_eq!(super::stable_path(&exe, &path(&[&other, &bin])), exe);
+        assert_eq!(super::stable_path(&exe, &path(&[])), exe);
     }
 }

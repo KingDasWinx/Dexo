@@ -1602,14 +1602,16 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
 /// `dexo mcp setup`: Dexo's server merged into the client's config file, the old file
 /// backed up first; with `--skill`, the skill file beside it.
 fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Result<()> {
-    use dexo_app::mcp::clients::{McpClient, Places, read_config, skill_text, write_with_backup};
+    use dexo_app::mcp::clients::{
+        McpClient, Places, dexo_command, read_config, skill_text, write_with_backup,
+    };
     let client =
         McpClient::parse(client).ok_or_else(|| anyhow::anyhow!("unknown client {client}"))?;
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
     let places = Places::discover()?;
-    let exe = std::env::current_exe()?.display().to_string();
+    let exe = dexo_command()?;
     let args: Vec<String> = ["mcp", "serve", "--profile", name]
         .map(String::from)
         .to_vec();
@@ -1860,7 +1862,7 @@ fn mcp_config_print(name: &str, client: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     load_profile(&McpProfileRepository::new(db.connection()), name)?;
-    let exe = std::env::current_exe()?.display().to_string();
+    let exe = dexo_app::mcp::clients::dexo_command()?;
     match client.unwrap_or("json") {
         "claude-code" => println!("claude mcp add dexo -- {exe} mcp serve --profile {name}"),
         _ => println!(
