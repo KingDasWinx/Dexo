@@ -12,6 +12,7 @@ anyhow.workspace = true
 async-trait.workspace = true
 clap.workspace = true
 dexo-app = { path = "../dexo-app" }
+dexo-sql = { path = "../dexo-sql" }
 dexo-driver-api = { path = "../dexo-driver-api" }
 dexo-runtime = { path = "../dexo-runtime" }
 dexo-secrets = { path = "../dexo-secrets" }

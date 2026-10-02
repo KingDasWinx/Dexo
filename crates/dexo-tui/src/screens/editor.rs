@@ -328,32 +328,9 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
     } else if model.editor.known.as_ref().map(|(built, _)| *built)
         != Some((model.catalog_revision, session_tables_key(model)))
     {
-        let mut known = dexo_sql::KnownObjects::default();
+        let mut known = dexo_app::catalog_service::known_objects(&model.catalog_objects);
         for table in session_tables(model) {
             known.add_table("", table);
-        }
-        for object in &model.catalog_objects {
-            let name = &object.qualified_name;
-            // MySQL names its databases as catalogs, the others as schemas.
-            let schema = name.schema().or(name.catalog()).unwrap_or("");
-            match &object.kind {
-                // Whatever a FROM can name: sequences and partitions read like tables.
-                dexo_driver_api::ObjectKind::Table
-                | dexo_driver_api::ObjectKind::View
-                | dexo_driver_api::ObjectKind::MaterializedView
-                | dexo_driver_api::ObjectKind::Sequence => {
-                    known.add_table(schema, name.object());
-                }
-                dexo_driver_api::ObjectKind::DriverSpecific(kind) if kind == "partition" => {
-                    known.add_table(schema, name.object());
-                }
-                dexo_driver_api::ObjectKind::Column => {
-                    if let Some((table, column)) = name.object().rsplit_once('.') {
-                        known.add_column(schema, table, column);
-                    }
-                }
-                _ => {}
-            }
         }
         model.editor.known = Some(((model.catalog_revision, session_tables_key(model)), known));
     }

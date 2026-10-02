@@ -223,6 +223,16 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
         )?,
         Command::Sessions { command } => run_sessions(registry, command)?,
         Command::Mcp { command } => run_mcp(registry, command)?,
+        Command::Lsp { connection } => {
+            let database = AppPaths::discover().ok().map(|paths| paths.database);
+            let mut server = crate::lsp::Server::new(connection, database);
+            let stdin = std::io::stdin();
+            crate::lsp::serve(
+                &mut server,
+                &mut stdin.lock(),
+                &mut std::io::stdout().lock(),
+            )?;
+        }
     }
     Ok(())
 }

@@ -29,6 +29,7 @@ fn public_commands_are_documented() {
         "config",
         "completion",
         "mcp",
+        "lsp",
         "doctor",
     ] {
         assert!(help.contains(name), "missing {name}");

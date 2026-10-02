@@ -108,6 +108,34 @@ fn matches_restricted(
     })
 }
 
+/// What the diagnostics know of a catalog: whatever a FROM can name, and the columns,
+/// by the schema they are in -- MySQL names its databases as catalogs, the others as
+/// schemas.
+pub fn known_objects(objects: &[CatalogObject]) -> dexo_sql::KnownObjects {
+    let mut known = dexo_sql::KnownObjects::default();
+    for object in objects {
+        let name = &object.qualified_name;
+        let schema = name.schema().or(name.catalog()).unwrap_or("");
+        match &object.kind {
+            // Sequences and partitions read like tables.
+            ObjectKind::Table
+            | ObjectKind::View
+            | ObjectKind::MaterializedView
+            | ObjectKind::Sequence => known.add_table(schema, name.object()),
+            ObjectKind::DriverSpecific(kind) if kind == "partition" => {
+                known.add_table(schema, name.object())
+            }
+            ObjectKind::Column => {
+                if let Some((table, column)) = name.object().rsplit_once('.') {
+                    known.add_column(schema, table, column);
+                }
+            }
+            _ => {}
+        }
+    }
+    known
+}
+
 pub struct SnapshotCatalog {
     objects: Vec<CatalogObject>,
     /// Columns grouped by the table that owns them, built once. Matching them with a

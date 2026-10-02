@@ -183,6 +183,13 @@ pub enum Command {
         #[command(subcommand)]
         command: McpCommand,
     },
+    /// Language server for editors: completion, diagnostics and formatting over stdio.
+    Lsp {
+        /// The connection whose cached catalog completes and checks documents; a file's
+        /// first line `-- dexo: connection=name` names its own.
+        #[arg(long)]
+        connection: Option<String>,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq, ValueEnum)]

@@ -20,3 +20,25 @@ dexo doctor --json
 ```
 
 `--non-interactive` never prompts. Destructive actions need an explicit confirm flag.
+
+## Language server
+
+`dexo lsp` brings Dexo's completion, diagnostics and formatting to any editor that speaks the Language Server Protocol, on stdin and stdout. It completes and checks against the catalog Dexo cached for a connection -- `--connection name`, or a file's first line `-- dexo: connection=name` -- and never dials the database itself, so open the connection once in Dexo (or run `dexo inspect`) to cache its catalog.
+
+Neovim:
+
+```lua
+vim.lsp.start({ name = "dexo", cmd = { "dexo", "lsp", "--connection", "shop" }, filetypes = { "sql" } })
+```
+
+Helix (`languages.toml`):
+
+```toml
+[language-server.dexo]
+command = "dexo"
+args = ["lsp", "--connection", "shop"]
+
+[[language]]
+name = "sql"
+language-servers = ["dexo"]
+```
