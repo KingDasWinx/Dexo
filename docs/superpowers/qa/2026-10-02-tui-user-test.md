@@ -1126,3 +1126,298 @@ Binary: dexo 1.4.2 dev build. Terminal 120x36 unless noted.
 - Copy via the real system clipboard (disabled): checked through OSC 52 and `qa.sh clipboard` only.
 - Typing the production connection's name in the review dialog by keyboard: no input is shown or focused, so it could not be completed that way (see blocker).
 - Behaviour of Delete/Insert on MySQL views and of MySQL/SQLite `WHERE` syntax errors beyond one FK error.
+
+### Palette, documents, running SQL, recovery (palette-core)
+
+
+
+Tester note: all keys sent through `qa.sh ... palette-core`. Binary 1.4.1 (`dexo --version`; the QA brief says 1.4.2). Terminal: tmux xterm-256color (no kitty keyboard protocol, so Ctrl+Enter is sent as CSI-u). Harness caveats: a trailing `;` in `qa.sh type` is eaten by tmux (use `\;`), and text starting with `--` is parsed as a flag. Between 12:22 and 12:24 my scratch wrapper `scratchpad/q` was overwritten by another tester, so a few of my `stop`/`start`/`screen` calls went to the `connections-projects` session by mistake (it was restarted once or twice around 12:24); nothing else of theirs was touched.
+
+#### Findings
+
+##### [MAJOR] Palette search ranks loose subsequence matches above the obvious prefix/word match
+- **Where:** palette.open (Ctrl+P), search ranking
+- **Steps:** Ctrl+P, type `exec`. Then clear and type `stat`. Then `exec st`.
+- **Expected:** the command whose title starts with / contains the typed word ranks first (`Execute Statement`, `Execute Document`, `Execute Selection` for `exec`; `Execute Statement` for `stat`/`exec st`). Enter on the first row should do what the user typed.
+- **Actual:** `exec` lists `Explain Analyze`, `Copy Object Name`, `Copy Simple Name`, `Toggle System Objects` (they match because the letters appear scattered in title + category column, e.g. the category "Explorer") BEFORE `Execute Document` / `Execute Selection` / `Execute Statement` (which are rows 5-7). `stat` puts `Reset layout` (r-e-s-e-t l-a-y-o-u-t) first and `Execute Statement` second. `exec st` puts `Execute Selection` above `Execute Statement`. Pressing Enter right after typing `exec` would run `Explain Analyze`. (`qui` -> `Quit` first, then `Execute Selection`, which is fine only for the first row.)
+  ```
+  > exec
+  > Explain Analyze        Explain                                  Shift+F7
+    Copy Object Name       Explorer                                        c
+    Copy Simple Name       Explorer
+    Toggle System Objects  Explorer
+    Execute Document       Query                              Ctrl+Shift+F10
+    Execute Selection      Query
+    Execute Statement      Query                                      Ctrl+J
+  ```
+
+##### [MAJOR] PageUp / PageDown do nothing in the palette list
+- **Where:** palette.open
+- **Steps:** Ctrl+P, Down a few rows, press PageDown / PageUp / (tmux NPage/PPage), also Tab / BTab, Home / End.
+- **Expected:** PageUp/PageDown move the selection by a page (the list has ~160 entries and shows 11 rows); Home/End in a list jump to first/last, or at least are documented.
+- **Actual:** PageUp, PageDown, Tab, Shift+Tab, Ctrl+N, Ctrl+P, Home and End (the last two only move the input cursor) do not move the list selection at all. Only Up/Down, Ctrl+Down and the mouse wheel (1 row per tick) scroll it, so reaching the end of 160 entries takes ~160 key presses. Up on the first row does not wrap.
+
+##### [MINOR] Palette with no match shows an empty box and no message
+- **Where:** palette.open
+- **Steps:** Ctrl+P, type `zzzqq`.
+- **Expected:** a line such as "No matching command".
+- **Actual:** the box shrinks to the input line plus empty rows; nothing says that there is no match.
+
+##### [COSMETIC] "Reset layout" is not Title Case
+- **Where:** palette entry layout.reset
+- **Steps:** Ctrl+P, type `reset layout`.
+- **Expected:** `Reset Layout` like `Cycle Layout`, `Hide Explorer`, `Reset Settings`.
+- **Actual:** `Reset layout`.
+
+##### [MAJOR] Most commands of the registry are missing from the palette (not searchable, not listed)
+- **Where:** palette.open; commands focus.explorer, focus.editor, focus.tabs, focus.results, document.next, document.prev, document.prev_focus, document.next_focus, document.tab_prev, document.tab_next, document.activate_tab, recovery.restore, recovery.discard
+- **Steps:** Ctrl+P, type `focus`; `next document`; `previous document`; `recover session`; `discard recovery`; `tab`; `theme`; `hide explorer`; `grow results`.
+- **Expected:** every command (at least those with a global hotkey: Alt+0/1/2/3, Ctrl+Tab, Ctrl+Shift+Tab, Alt+Left/Right, layout and theme toggles) can be found and run from the palette, and the palette is the place where users learn their hotkey (standard 2). The task description for this QA says each command can be run "from the palette".
+- **Actual:** the empty-query list has only ~108 entries and `focus` shows an empty list; none of the above exist in the palette. Missing set (compared to the command table): Focus Explorer/Editor/Document Tabs/Results, Next/Previous Document, Previous/Next Document Tab Focus, Previous/Next Tab In Strip, Activate Document Tab, Recover Session, Discard Recovery, Hide Explorer/Results, Grow/Shrink Results/Explorer Pane, Cycle Theme/Accent/Keymap, Toggle Light/Dark Mode, Toggle Mouse/Animation/Unicode Glyphs, Reset Settings, Cycle Output View, Next/Previous Result Tab, Next/Previous Data Page, Select Grid Row/Column, Toggle Row Delete, Accept Completion, Connect or Expand, Object Actions. (`theme` only finds `Open Settings` through its category.) Only the keyboard (or the Settings modal) can run them.
+
+##### [MINOR] The empty palette lists commands that cannot work in the current context, unordered, with repeated group names
+- **Where:** palette.open with an empty query, no document open
+- **Steps:** Ctrl+P on a fresh start, scroll the whole list.
+- **Expected:** the list starts with what the user can do now (or the most used commands); group headings appear once.
+- **Actual:** it starts with `Data  Back from Related Rows`, `Results  Toggle Record View`, `Explain  Explain Plan`..., all inapplicable with no table open; groups are repeated (`Explorer` appears twice, `Editor` twice, `Workbench` twice, `Results` twice), and the very common ones (`Quit`, `Show Keybindings`, `Execute Statement`, `New Document`) are 30-60 rows down. Running an inapplicable row only gives a toast (e.g. `These rows were not opened from a related row; there is no way back.`), some give no feedback (see Undo below).
+
+##### [MINOR] Hotkeys shown in the palette differ from the command table (or from the help)
+- **Where:** palette.open hotkey column
+- **Steps:** compare each row with F1 and with the command table
+- **Expected:** one spelling and one key per action (standard 2).
+- **Actual:**
+  - `Execute Statement`: palette `Ctrl+J`, table/help `Ctrl+Enter` (and help lists both). Terminal-dependent; acceptable only if explained. Welcome says "Ctrl+J runs the SQL under the cursor".
+  - `Save Query As…` shows `Alt+S`, `Open Saved Query…` shows `Alt+O`, `Agent Activity` shows `Ctrl+Alt+A` (table has no key); in F1 `alt+s` is listed under [Editor] and `alt+o` under [Workbench].
+  - `Insert Row` shows `i` (table `Ctrl+N`), `Add Column to Sort` shows `Shift+S` (table `S`).
+  - F1 spells keys in lower case (`ctrl+shift+f10`, `alt+left`) while the palette and the status bar use `Ctrl+Shift+F10`. Palette has `Ctrl+Shift+D` for Duplicate Line, help lists `ctrl+d`, `ctrl+shift+d` and `alt+shift+down`.
+  - Palette shows no key at all for `Grow/Shrink Results Pane` (help: `alt+up/alt+down` under [Editor] and `alt+=`, `alt+-` under [Workbench]).
+
+##### [MINOR] F1 help: sections are sorted by key, not by purpose; layout keys appear under [Editor]
+- **Where:** help.open
+- **Steps:** F1, read the [Editor] section.
+- **Expected:** [Editor] holds editor keys; related keys are grouped.
+- **Actual:** [Editor] starts with `alt+down  Shrink Results Pane`, `alt+up  Grow Results Pane` and `alt+s  Save Query As…`; keys are ordered alphabetically (`ctrl+7`, `ctrl+_`, `ctrl+/` all three listed for the same action; `alt++`), so e.g. `Ctrl+W Close Document` appears only in [Tabs] although the status bar advertises `Ctrl+W close` for the editor.
+
+##### [MINOR] F1 search is a loose subsequence match and shows unrelated rows
+- **Where:** help.open
+- **Steps:** F1, type `exec`.
+- **Expected:** rows containing "exec".
+- **Actual:** besides the three Execute rows it lists `Extend Results Selection Down/Up`, `Object Actions`, `Copy Object Name`, `Inspect Object`, `Next Document Tab Focus`.
+
+##### [COSMETIC] Welcome: the last hint is cut off at 60x20
+- **Where:** first-run welcome
+- **Steps:** `qa.sh start NAME 60 20`.
+- **Expected:** text wraps or the dialog fits.
+- **Actual:** `n in the explorer adds a connection (New Connection in Ctr` (cut at the border). Also the `[Get started]` button has no focus highlight (plain text with brackets, same style as unfocused) so it is not obvious that Enter activates it (standard 3), and a click anywhere inside the welcome body (not only on the button) dismisses it.
+
+##### [MAJOR] Alt+Left / Alt+Right switch the document but not the session: header and status bar keep the old connection, no reconnect
+- **Where:** document.prev_focus / document.next_focus (Alt+Left / Alt+Right), standard 5
+- **Steps:** open three documents on pg-dev, mysql-dev and sqlite-shop (all connected). Press Alt+2, then Alt+Right twice. Then Disconnect pg-dev from the explorer (`D`), press Alt+Left until `pg-dev·query-1.sql` is active.
+- **Expected:** exactly what Ctrl+Tab does: the header/status bar show the active document's connection, and an offline connection is reconnected by itself ("Connected to pg-dev" toast).
+- **Actual:** the editor title and tab highlight move to `query-2.sql` (mysql) / `query-3.sql` (sqlite) but the header stays `Default  pg-dev  —` and the status bar stays `○DEV pg-dev`; with pg-dev offline, Alt+Left to its document leaves `○ pg-dev` offline and the header on `duck-sales`. Ctrl+Tab on the same documents switches header, explorer cursor and reconnects ("Connected to pg-dev"). The mismatch is only fixed once something runs in the document.
+
+##### [MAJOR] Ctrl+Shift+Tab (Previous Document) does nothing
+- **Where:** document.prev, standard 2 (listed in F1 as `ctrl+shift+tab  Previous Document`)
+- **Steps:** with 3 documents open and the last one active: `qa.sh chord NAME ctrl+shift+tab` (CSI-u `ESC[9;6u`); also tried `ESC[1;6Z`, `ESC[1;5Z`, tmux `C-S-Tab`, `BTab`.
+- **Expected:** previous document becomes active (Ctrl+Tab works in the opposite direction from the same state).
+- **Actual:** nothing changes with any of the encodings. (Could be terminal-encoding dependent; Ctrl+Tab via `ESC[9;5u` works, so the 9;6 variant is most likely not handled.) The palette has no "Previous Document" entry as a fallback (see missing commands above).
+
+##### [MINOR] Query running: no sign anywhere that something is running; a second Ctrl+Enter is silently queued
+- **Where:** query.execute_statement / query.cancel
+- **Steps:** pg-dev document `select pg_sleep(20);`, Ctrl+Enter, take screens for 20 s (idle vs busy screens are byte-identical, `DEXO_NO_ANIMATION=1` is set, so a spinner may be hidden by it, but no text either). Press Ctrl+Enter again while it runs.
+- **Expected:** a visible "running..." state (status bar / results title / elapsed time) and the hint for Ctrl+F2; a second run says "already running" or is visibly queued.
+- **Actual:** nothing on screen changes; `pg_stat_activity` shows the query active. The second Ctrl+Enter is queued silently and starts as soon as the first one ends (no message at all), so the user sees a second result appear 20 s later.
+
+##### [MINOR] Cancelling a query is reported as an error, and a timeout hits after 30 s with no hint
+- **Where:** query.cancel (Ctrl+F2 and palette `Cancel Query`)
+- **Steps:** run `select pg_sleep(20);`, press Ctrl+F2 (or Ctrl+P, `cancel`, Enter).
+- **Expected:** info toast such as "Query cancelled"; for a timeout, "Query timed out after 30 s (change it in the connection settings)".
+- **Actual:** red `error` toast `query cancelled` and Messages line `[12:41:33] error query cancelled`. `select pg_sleep(45);` ends after exactly 30 s with the red toast `query timed out` (default timeout, the connection has no timeout configured; the message does not name the limit or where to change it). One cancel that I pressed 13 s into a run also printed `query timed out` instead of `query cancelled`.
+
+##### [MINOR] Error toast never goes away by itself
+- **Where:** toasts after a failed statement
+- **Steps:** run `selec 4;` with Ctrl+Shift+F10 (confirm Run), wait.
+- **Expected:** toast fades after a few seconds like the "Connected to pg-dev" info toast, or says how to dismiss it.
+- **Actual:** the red toast `syntax error at or near "selec"` stayed on screen for more than 2 minutes, covering the top-right of the editor, until I pressed Esc. No hint "Esc to dismiss".
+
+##### [MINOR] Confirmation for an unparsable statement is titled "Run destructive statements"
+- **Where:** query.execute_document
+- **Steps:** document containing `selec 4;`, Ctrl+Shift+F10.
+- **Expected:** a title that matches the reason ("Run statements Dexo cannot read?").
+- **Actual:** dialog `Run destructive statements` with `4. selec 4` / `Dexo could not read this statement`; nothing is destructive. Cancel (Esc or [Cancel]) closes silently, and statements 1-3 are not run either (not said).
+
+##### [COSMETIC] Error underline covers the semicolon; void value shown as `\x`
+- **Where:** editor error marker; results grid
+- **Steps:** `select * from nonexistent_table;` Ctrl+Shift+F10. Then `select pg_sleep(1);`.
+- **Expected:** underline on `nonexistent_table` only; a `void` value shown as empty.
+- **Actual:** the underline (`ESC[4m`, red) starts at `nonexistent_table` and includes the `;`. `pg_sleep` result shows `\x` in the cell.
+
+##### [BLOCKER] Save picker overwrites an existing file without asking (data loss)
+- **Where:** document.save (Ctrl+S on an unsaved document, "Save file" picker)
+- **Steps:** create `victim.txt` containing `precious data do not overwrite` in the folder the picker opens in. Ctrl+N, Enter, type `select 42 as answer`, Ctrl+S. EITHER (a) press Down until `victim.txt` is the highlighted row and press Enter, OR (b) Tab to the name field, Ctrl+A, type `victim.txt`, Enter.
+- **Expected:** "victim.txt already exists. Overwrite?" with Overwrite / Cancel (safety, standard 9). Enter on a highlighted *file* in a Save picker should at most fill the name field.
+- **Actual:** both paths write straight over the file: `cat victim.txt` -> `SELECT 42 AS answer`. In my run the same click+Enter on `base.db` (a 233 KB SQLite database that was in the folder) replaced it with 62 bytes of SQL text. No dialog, no toast. The document tab simply becomes `victim.txt`. (Two documents can then be bound to the same file.)
+
+##### [BLOCKER] Opening a binary file fails with a raw error and still creates a document bound to that file; saving it destroys the file
+- **Where:** document.open (Ctrl+O) then document.save
+- **Steps:** Ctrl+O, navigate into a folder with a compiled file (`helpdump.cpython-314.pyc`, 2450 bytes), select it, Enter. Then in the empty document that appears type `x` and press Ctrl+S.
+- **Expected:** a clear refusal ("helpdump.cpython-314.pyc is not a text file (not valid UTF-8); not opened") and no document; never a writable document bound to a file Dexo could not read (standard 7, 9).
+- **Actual:** red toast `stream did not contain valid UTF-8` (raw Rust io error, no file name), and an empty tab `SQL · helpdump.cpython-314.pyc` is opened. After typing `x` and Ctrl+S the file on disk is 1 byte (`x`), the 2450-byte original is gone, with no overwrite warning.
+
+##### [MAJOR] Save/Open pickers show the start of the path, so the current folder is never visible
+- **Where:** document.save / document.open pickers
+- **Steps:** Ctrl+S (or Ctrl+O) in a folder with a deep path; Enter on `/ ..` or on a subfolder.
+- **Expected:** the path line shows the current folder (truncate from the left: `…/scratchpad/pcore/__pycache__`).
+- **Actual:** the first line is clipped on the right: `/tmp/claude-1000/-home-winx-Documents-github-Dexo/c604136e-4aad-4277-8` for every folder (same text inside `__pycache__` and outside), so the user cannot tell where the file will be saved/opened. The picker also reopens in the last folder used without saying so.
+
+##### [MAJOR] Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
+- **Where:** document.open
+- **Steps:** Ctrl+O in a folder with more than ~15 entries.
+- **Expected:** list scrolls inside the dialog; name field and buttons always visible and clickable (standard 1, 6).
+- **Actual:** the dialog is filled by Recent files + Browse list; `name:` and `[Open]  [Cancel]` are not drawn at all (the box ends with the last visible list row). They only appear once the selection is moved past the last entry with Down, and in a short folder (`__pycache__`) they sit right under the list with 8 empty rows below, so they are not at a fixed place. The mouse cannot reach the buttons in the long-list case.
+
+##### [MINOR] Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
+- **Where:** document.save / document.open pickers
+- **Steps:** in the picker press PageDown, End, Home.
+- **Expected:** list jumps like in any list (standard 6).
+- **Actual:** nothing moves. (Down at the end of the list moves focus on to name -> buttons, which is ok, but there is no scrollbar or "more" indicator, 40+ entries scroll silently.) A single click only highlights a row; Enter then enters a folder or (Save picker) picks/overwrites a file.
+
+##### [MINOR] Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
+- **Where:** document.rename (F2), document.new (Ctrl+N)
+- **Steps:** F2, Ctrl+A, Backspace, Enter. Then F2, type a 63-char name, End, type `ZZ`.
+- **Expected:** inline message ("name cannot be empty") like `a/b` gets (`name cannot contain path separators`, which is good); the input scrolls to keep the caret and typed text visible (standard 4).
+- **Actual:** with an empty name the dialog just closes and nothing is renamed, no message. In the 54-column field a long name is cut at the border (`name: monthly_revenue_report_for_the_whole_company_202│`); after End and typing `ZZ` nothing changes on screen and the caret is not visible. Both dialogs also have four empty rows below the buttons (7 rows tall for 2 lines of content).
+
+##### [MINOR] Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
+- **Where:** query.execute_selection, query.cancel
+- **Steps:** (a) editor focus, no selection, Ctrl+P `execute selection` Enter. (b) nothing running, press Ctrl+F2.
+- **Expected:** a message ("Select some SQL first", "No query is running").
+- **Actual:** (a) nothing at all, (b) nothing; the same Cancel Query chosen from the palette shows `warn no query is running`, so the hotkey and the palette disagree.
+
+##### [MAJOR] After a crash (kill) the recovered documents lose their connection and the "unsaved" marker
+- **Where:** recovery (startup after `tmux kill-server`), standard 5, product rule "documents are bound to connections"
+- **Steps:** connect pg-dev, Ctrl+N Enter, type `select 'from pg' as src`; connect mysql-dev, Ctrl+N Enter, type `select 'from mysql' as src` (tabs read `pg-dev·query-10.sql*` and `mysql-d…·query-11.s…*`). `tmux -L qa-palette-core kill-server`, start again.
+- **Expected:** the documents come back with their connection (`pg-dev·query-10.sql`) and still unsaved (`*`); closing one asks Save / Don't save / Cancel.
+- **Actual:** no recovery prompt (see next entry); tabs come back as `query-10.sql`, `query-11.sql` with no connection prefix and no `*`, the header says `sqlite-shop` (the last active connection). `recovery_documents` only stores title+content (no connection_id). Running such a document runs it on whatever connection is active in the header (a document written for pg-prod would silently run on another connection and then adopt it). Ctrl+W on a recovered document closes it at once without the "Unsaved changes" dialog, so the SQL that was only in the recovery store is thrown away (the same document asked before the crash). After a clean Ctrl+Q the connection binding does survive (`sqlite-…·query-2.sql`), so only the crash path loses it.
+
+##### [MAJOR] Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
+- **Where:** recovery.open, recovery.restore, recovery.discard
+- **Steps:** (1) kill the app with unsaved documents and start it again. (2) Ctrl+P, `session recovery`, Enter. (3) Ctrl+P, `recover session` and `discard recovery`; F1.
+- **Expected:** on start after an unclean exit: "Dexo closed unexpectedly. Restore 10 unsaved documents? [Restore] [Discard]"; the Session Recovery dialog explains the state in words and has Restore / Discard buttons (standard 1, 7); both commands are in the palette.
+- **Actual:** (1) the documents silently reappear; no question, nothing says they were recovered, and nothing can be refused. (2) the modal is three raw lines, no buttons, no focus target, Tab/Down do nothing, only Esc/Enter close it:
+  ```
+  ┌Session recovery────────────────────────────────────────┐
+  │recovery open=true                                      │
+  │transaction=idle                                        │
+  │confirm_discard=false                                   │
+  ```
+  It also sits on the sidebar/editor border (left edge at column 27) instead of being centred. (3) `Recover Session` and `Discard Recovery` are not in the palette and not in F1, so "open / restore / discard" cannot be tried at all; with `recovery open=true` shown, there is no way to act on it. (The state stays `clean_shutdown=0` in the database until a clean quit.)
+
+##### [MINOR] Tab strip / tab focus details
+- **Where:** document tab strip, Alt+0, Alt+Left/Right, tab labels
+- **Steps:** open 10 documents; Alt+0; Left/Right/End; resize to 80x24.
+- **Expected:** consistent labels, indicators for hidden tabs on both sides.
+- **Actual:** works (`‹` / `›` markers, `[tab]×` focus brackets, `+` reachable with Right, Enter on `+` opens the New document dialog, Esc returns to the editor, click on a tab activates it, click on `×` asks about unsaved changes). Small issues: End/Home do nothing in the strip; Left/Right activate the document immediately, so "Activate Document Tab (Enter)" in the command table only moves focus to the editor; at 80x24 only the active tab is visible (`‹ sqlite-…·query-10.s…* ×  +`); long names are cut with the extension removed (`pg-dev·monthly_reve…*`) and a connection name longer than 7 characters is cut (`mysql-d…`, `pg-read…`), still distinguishable for the seeded connections.
+
+##### [MAJOR] Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
+- **Where:** layout on resize (any screen), standard 6
+- **Steps:** start at 120x36, open a document (Ctrl+N, Enter), `qa.sh resize NAME 60 20` (the explorer is shown alone, full width), `qa.sh resize NAME 120 36`.
+- **Expected:** at 120x36 the normal three-pane layout returns (explorer, editor, results), focus visible.
+- **Actual:** only the editor is drawn (full width and height, no sidebar, no Results pane). The status bar reads `disconnected  Enter connect  a actions  n new  e edit`, i.e. the focused pane is the explorer, which is not on screen. Same at 80x24 (`┌  SQL · query-1.sql*────┐` full width). Alt+1 brings the sidebar back.
+
+##### [MAJOR] A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
+- **Where:** workbench.quit (Ctrl+Q), transaction state
+- **Steps:** pg-dev document `begin;`, Ctrl+Enter. Then Ctrl+Q.
+- **Expected:** the status bar shows the open transaction and Ctrl+Q asks, like it does after Palette > `Begin Transaction`.
+- **Actual:** results say `Results (0 rows affected)` / `0 rows affected` for BEGIN (no "transaction started"); status bar and header (`Default  pg-dev  —`) show nothing, `pg_stat_activity` says `idle in transaction`. Ctrl+Q exits at once (exit status 0) and the server rolls the transaction back, no question. With the palette command `Begin Transaction` the status bar shows `tx:active` and Ctrl+Q shows `Quit Dexo? / A transaction is open on pg-dev: it is rolled back. [Quit] [Cancel]` (default Cancel, Esc/click/arrows work), which is good. (Ctrl+Q with unsaved text and no transaction also quits without asking; the text is persisted and comes back on the next start, so I count that as fine.)
+
+##### [MINOR] Running a document that has no connection says "session is closed"
+- **Where:** query.execute_statement on a document without a connection (fresh start, Ctrl+N, Enter, `select 1 as one`, Ctrl+Enter)
+- **Expected:** "This document has no connection. Pick one in the explorer (Alt+1, Enter) or press ..."; standard 5 ("every document belongs to a connection; the tab shows which").
+- **Actual:** the document is created without a connection (tab `query-1.sql*`, header `no connection`) and running gives the red toast `session is closed`. The palette hint for the same command is `connect a session first`, and Alt+S gives a good message (`A saved query belongs to a connection; connect this document first`), so wording differs between the three.
+
+##### [COSMETIC] Single-line inputs never scroll horizontally (palette query, New document, Rename, Save, name field)
+- **Where:** palette.open and document dialogs, standard 4
+- **Steps:** Ctrl+P and type 100 characters; or F2 and a 63-character name, End.
+- **Expected:** the input scrolls so the caret and the last typed characters stay visible.
+- **Actual:** the text is clipped at the right border and the caret is not visible; extra typing cannot be seen (same behaviour in the palette `> this is a very long palette query that goes far beyond the width of the │`).
+
+##### [COSMETIC] Narrow status bar shows lower-case `ctrl+p  F1` before `Alt+1 connections  Ctrl+P commands`
+- **Where:** status bar at 60x20
+- **Steps:** resize to 60x20, press F1 or Ctrl+P.
+- **Actual:** `disconnected  ctrl+p  F1  Alt+1 connections  Ctrl+P commands` (key names in two spellings, Ctrl+P listed twice).
+
+##### [MAJOR] Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command
+- **Where:** palette.open search
+- **Steps:** Ctrl+P and type `save`; `svae`; `clsoe doc`; `reanme`; for comparison `qit`, `excute`, `statment`, `qui`.
+- **Expected:** `save` -> `Save Document` first (exact word at the start of the title); `svae`/`clsoe doc`/`reanme` -> `Save Document`/`Close Document`/`Rename Document` (a one-letter-swap typo is the most common kind).
+- **Actual:** `save` lists `> Open Saved Query…`, `Save Connection…`, `Save Document`, `Save Query As…`; Enter right after typing `save` opens the Open Saved Query dialog. `svae` shows `> Inspect Value` (s-v-a-e is a subsequence of "Inspect Value") and nothing else; `clsoe doc` and `reanme` show an empty list. Missing-letter and wrong-letter typos (`qit`, `excute`, `statment`) do work, so the search is a subsequence matcher plus nothing else. Good: `help` -> Show Keybindings, `run` -> Execute *, `close`, `rename`, `open`, `diag`, `cancel` rank right (aliases exist).
+
+##### [MINOR] Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
+- **Where:** query.execute_document with an error in statement 2 of 3
+- **Steps:** document `select 1; / select * from nope_table; / select 3;` with the cursor on line 3, Ctrl+Shift+F10, on mysql-dev and on sqlite-shop (and on pg-dev for comparison).
+- **Expected:** the cursor moves to the failing statement and its identifier is underlined, as on PostgreSQL.
+- **Actual:** on PostgreSQL the cursor goes to line 2 and `nonexistent_table;` is underlined. On MySQL and SQLite the underline is placed correctly on `nope_table` but the cursor stays on line 3 (▸ on `3 SELECT 3;`). SQLite's message line reads `SQLSTATE 1 · statement 2 of 3` (a SQLite result code printed as an SQLSTATE). MySQL: `SQLSTATE 1146 (42S02) · statement 2 of 3` fine.
+
+##### [MAJOR] Ctrl+N creates the document on the "active" connection, not on the connection under the explorer cursor; the status bar names a third one
+- **Where:** document.new (Ctrl+N) from the explorer, standard 5
+- **Steps:** connect pg-dev and sqlite-shop (Enter on each), run something on sqlite-shop so it is active (header `Default  sqlite-shop  —`). Alt+1, Down until the cursor is on `● pg-dev`, Ctrl+N, Enter, type `select pg_sleep(8);`, Ctrl+Enter. (Using only arrow keys; Enter on the row would first make it active.)
+- **Expected:** the new document belongs to the connection that is highlighted (or the dialog says which connection it will use).
+- **Actual:** the tab reads `sqlite-…·query-7.sql`, the run fails with `no such function: pg_sleep` (it ran on SQLite), and the New document dialog never mentions the connection. With the cursor on `pg-dev` the status bar says `sqlite-shop  Enter expand  a actions ...`. Only Enter on the row makes pg-dev active (header and status change, then Ctrl+N is on pg-dev).
+
+##### [MINOR] Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
+- **Where:** document.save (Ctrl+S) vs data.review (also Ctrl+S), standard 2/7
+- **Steps:** run any SELECT, Alt+3, Ctrl+S.
+- **Expected:** save the document (or a message that nothing is pending); not two palette rows with the same key and different meaning without context.
+- **Actual:** dialog `Review changes` containing `target: tbl`, `ops: 0`, `status: Pending`, `ready` (placeholder-looking, raw state dump) for a result set that is not editable. The palette lists both `Review Changes  Ctrl+S` and `Save Document  Ctrl+S`. (Ctrl+O and Ctrl+N work from every pane; Ctrl+N from the explorer, results, tab strip and editor all open the New document dialog.)
+
+##### [MINOR] Ctrl+Q while a query is running quits at once and leaves the statement running on the server
+- **Where:** workbench.quit
+- **Steps:** pg-dev document `select pg_sleep(20);`, Ctrl+Enter, one second later Ctrl+Q.
+- **Expected:** "A query is running. Quit anyway?" (like the open-transaction question) or at least cancel it.
+- **Actual:** exit status 0 within a second, no question; `pg_stat_activity` still showed `SELECT pg_sleep(20)` active 7 s later (it ends by itself after 20 s).
+
+##### [MINOR] Header and status bar stay on the old connection after closing a document too
+- **Where:** document.close (Ctrl+W), standard 5
+- **Steps:** documents on pg-dev and sqlite-shop, sqlite-shop active; Ctrl+W it.
+- **Actual:** the pg-dev document becomes active but the header/status bar still read `sqlite-shop` (same defect as Alt+Left/Right above; Ctrl+Tab and clicking a tab do switch it).
+
+##### [COSMETIC] Diagnostics export: file name field starts empty, bundle is a ZIP whatever the name, log tail is empty, key=value text
+- **Where:** diagnostics.export
+- **Steps:** Ctrl+P, `export diag`, Enter (preview), Enter or Tab to [Export] (opens a "Save diagnostics" picker), type `diag.txt`, Save.
+- **Expected:** a suggested name such as `dexo-diagnostics.zip`; a preview in words; a toast "Saved to <path>"; useful content (logs).
+- **Actual:** the preview shows `versions: 1.4.1`, `capabilities: TerminalCapabilities { color_depth: TrueColor, unicode: true, mouse: t…` (Rust Debug, clipped at the border), `config: mode=dark accent=cyan mouse=true`, empty `logs:`. Export with an empty name keeps the dialog open and replaces the `[Save] [Cancel]` row with `choose a file or type a name` (buttons disappear). The saved file is a ZIP (`diag.txt: Zip archive data`) with entries versions.txt, capabilities.txt, config.redacted.toml (`mode=dark accent=cyan mouse=true`: not valid TOML), logs.tail.txt (0 bytes although `logs/dexo.log` has 7 lines), PREVIEW.txt, all dated `1980-00-00`. No toast or message after saving; the picker opened in a different folder than the last time, so the location is unknown to the user (see path issue above). Password check passed: the connection secret (`cat .../pw`, the password text) does not occur anywhere in the bundle.
+
+#### Checked and fine
+
+- First run: welcome text and `[Get started]`: Enter, click on the button, Esc each dismiss it; the flag (`onboarding-v1.complete`) is written and the welcome does not return on the next start; Ctrl+P while it is open dismisses it and opens the palette; fits at 80x24 (60x20: one clipped line, see findings).
+- Palette (Ctrl+P): opens, Esc closes, click outside closes, Up/Down and the mouse wheel scroll with the selection staying visible, click on a row runs it, Ctrl+A shows reverse video and typing replaces it, Ctrl+W, Ctrl+Backspace and Ctrl+Left/Right edit by word, Home/End move the caret, `qit`/`excute`/`statment`/`help`/`run` find the right commands, `Cancel Query` with nothing running warns, a disabled command shows its reason (`connect a session first`), fits at 80x24 and 60x20.
+- F1 help: search keeps the first line, PageUp/PageDown/Home/End/Up/Down/wheel scroll, Esc, F1 again and a click on "Esc to close" close it, fits at 80x24 and 60x20.
+- query.execute_statement: Ctrl+Enter (CSI-u) and Ctrl+J both run the statement under the cursor (single and multi-line) on PostgreSQL, MySQL and SQLite; hotkey shown in the palette is `Ctrl+J` on this terminal.
+- query.execute_selection (palette): runs the selected text; three statements give `result 1/2/3` tabs.
+- query.execute_document (Ctrl+Shift+F10): runs all statements, stops at the first error with `statement N of M`, SQLSTATE, line/column and the `^` marker (PostgreSQL), red underline in the editor.
+- query.cancel: Ctrl+F2 and the palette cancel `select pg_sleep(20)` (backend really stops); `Cancel Query` with nothing running warns in the palette.
+- Production guard: `Run on production` asks to type the connection name before a non-read-only statement.
+- document.new (Ctrl+N): dialog with preselected name, Tab/BackTab/Down/Up/Left/Right walk name -> Create -> Cancel, Esc cancels, click on [Create] creates, name `a/b` rejected inline; works from explorer, editor, results, tab strip; the tab shows `connection·name`.
+- document.rename (F2): same dialog, rename works, path separators rejected inline.
+- document.save (Ctrl+S): a saved document is rewritten in place without a dialog; the picker opens for an unsaved one; Tab walks list -> name -> Save -> Cancel; Esc cancels (also when it was opened from the close dialog and leaves the document open).
+- document.open (Ctrl+O): Recent files + Browse, Enter opens a file or enters a folder, `/ ..` goes up, Esc cancels, opening an already open file switches to its tab.
+- document.close (Ctrl+W): unsaved document -> `Unsaved changes` with Save / Don't save / Cancel, default Save, Left/Right/Tab/BackTab walk and wrap, Esc cancels, mouse on each button works, [Save] opens the picker for a new document; closing the last document shows the empty state.
+- document.next (Ctrl+Tab): switches document, header, explorer cursor and reconnects an offline connection ("Connected to pg-dev"); running a statement in a document whose connection is offline connects by itself.
+- focus.tabs / tab_prev / tab_next / activate_tab (Alt+0, Left, Right, Enter, Esc, click on tab and on `×`, `+`): work; many tabs scroll with `‹` `›`.
+- focus.explorer / focus.editor / focus.results (Alt+1 / Alt+2 / Alt+3): work and the focused pane shows `▸`.
+- document.prev_focus / next_focus (Alt+Left / Alt+Right): move the active tab (but see the session finding).
+- Alt+O (Open saved query) and Alt+S (Save query as) open their dialogs; without a connection Alt+S explains why.
+- diagnostics.export: preview opens, Esc closes, Export opens a picker, writes a ZIP where the user chooses; no password inside.
+- workbench.quit (Ctrl+Q): quits at once with nothing to lose (exit 0); asks `Quit Dexo? A transaction is open on pg-dev: it is rolled back. [Quit] [Cancel]` after the palette `Begin Transaction` (default Cancel, Left/Right/Tab/Esc/click work); unsaved text is kept for the next start.
+- Clean restart restores documents with their connection and text (after Ctrl+Q).
+
+#### Not testable
+
+- Real Ctrl+Enter / Ctrl+Shift+Tab encodings from a terminal with the kitty keyboard protocol: tmux only sends CSI-u from `qa.sh chord`, and the app prints `Ctrl+J` as its hotkey on this terminal, so what a kitty terminal shows in the palette was not seen.
+- `recovery.restore` and `recovery.discard`: not in the palette or F1, no key found; only `Session Recovery` (read-only text) can be opened. The dialog could not be exercised beyond Esc/Enter.
+- Persistent timeout/limits: the 30 s default query timeout was observed, but the connection settings dialog (to change it) belongs to another tester.
+- Spinner/animation while a query runs: `DEXO_NO_ANIMATION=1` is set by the harness, so a hidden spinner cannot be ruled out (no text indicator exists either way).
+- Mouse drag/double-click in the pickers: the harness only sends single clicks and drags; double-click on a file was not tried.
+- Clipboard-related palette entries (Copy, Cut, Paste) belong to the editor tester.
+
