@@ -255,6 +255,20 @@ impl PostgresSession {
                 "trying an index needs the hypopg extension: install its package on the server, then run CREATE EXTENSION hypopg",
             ));
         }
+        // Inside the user's transaction a failure would abort it, and the reset after it
+        // would fail too while hypopg's indexes, which no rollback touches, stayed for
+        // every later plan. A savepoint fences them: rolled back to, the transaction can
+        // run the reset again.
+        let fenced = match self.client.batch_execute("SAVEPOINT dexo_hypopg").await {
+            Ok(()) => true,
+            Err(error)
+                if error.code()
+                    == Some(&tokio_postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+            {
+                false
+            }
+            Err(error) => return Err(map_error(error)),
+        };
         let mut made = Ok(());
         for index in indexes {
             if let Err(error) = self
@@ -270,8 +284,22 @@ impl PostgresSession {
             Ok(()) => self.explain_estimated(sql).await,
             Err(error) => Err(error),
         };
-        // Whatever happened, the session keeps no hypothetical index for a later plan.
-        let _ = self.client.batch_execute("SELECT hypopg_reset()").await;
+        let close = if fenced {
+            "ROLLBACK TO SAVEPOINT dexo_hypopg; RELEASE SAVEPOINT dexo_hypopg; SELECT hypopg_reset()"
+        } else {
+            "SELECT hypopg_reset()"
+        };
+        // Whatever happened, the session keeps no hypothetical index for a later plan, or
+        // says it could not get rid of them.
+        if let Err(error) = self.client.batch_execute(close).await {
+            return Err(DriverError::new(
+                DriverErrorCategory::Internal,
+                format!(
+                    "the hypothetical indexes could not be dropped, and this session's plans may still use them until it reconnects: {}",
+                    map_error(error)
+                ),
+            ));
+        }
         plan
     }
 }

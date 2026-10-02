@@ -350,16 +350,11 @@ async fn a_hypothetical_index_needs_hypopg_and_an_estimated_plan() {
     );
 }
 
-/// With hypopg the plan uses the index as if it were built, and the next plan on the
-/// session does not: it never outlives its EXPLAIN. Runs against a server with hypopg
-/// installed, named by DEXO_HYPOPG_ENDPOINT (user and database `dexo`, password in
-/// DEXO_HYPOPG_PASSWORD).
-#[tokio::test]
-#[ignore = "requires a Postgres with hypopg"]
-async fn a_hypothetical_index_is_planned_with_and_then_gone() {
-    let Ok(endpoint) = std::env::var("DEXO_HYPOPG_ENDPOINT") else {
-        return;
-    };
+/// A session on a server with hypopg installed, named by DEXO_HYPOPG_ENDPOINT (user and
+/// database `dexo`, password in DEXO_HYPOPG_PASSWORD), with `table` made afresh: a
+/// hundred thousand rows in its one column `a`. `None` when no such server is named.
+async fn hypopg_session(table: &str) -> Option<Box<dyn Session>> {
+    let endpoint = std::env::var("DEXO_HYPOPG_ENDPOINT").ok()?;
     let password = std::env::var("DEXO_HYPOPG_PASSWORD").unwrap_or_default();
     let session = PostgresFactory
         .connect(ConnectRequest::new(
@@ -372,13 +367,24 @@ async fn a_hypothetical_index_is_planned_with_and_then_gone() {
         .await
         .unwrap();
     for sql in [
-        "CREATE EXTENSION IF NOT EXISTS hypopg",
-        "DROP TABLE IF EXISTS hypo_probe",
-        "CREATE TABLE hypo_probe AS SELECT g AS a FROM generate_series(1, 100000) g",
-        "ANALYZE hypo_probe",
+        "CREATE EXTENSION IF NOT EXISTS hypopg".to_string(),
+        format!("DROP TABLE IF EXISTS {table}"),
+        format!("CREATE TABLE {table} AS SELECT g AS a FROM generate_series(1, 100000) g"),
+        format!("ANALYZE {table}"),
     ] {
         collect(session.execute(QueryRequest::write(sql)).await.unwrap()).await;
     }
+    Some(session)
+}
+
+/// With hypopg the plan uses the index as if it were built, and the next plan on the
+/// session does not: it never outlives its EXPLAIN.
+#[tokio::test]
+#[ignore = "requires a Postgres with hypopg"]
+async fn a_hypothetical_index_is_planned_with_and_then_gone() {
+    let Some(session) = hypopg_session("hypo_probe").await else {
+        return;
+    };
     let explain = session.explain().unwrap();
     let sql = "select * from hypo_probe where a = 42";
     let with = explain
@@ -394,4 +400,46 @@ async fn a_hypothetical_index_is_planned_with_and_then_gone() {
         .await
         .unwrap();
     assert!(!without.raw.contains("Index"), "{}", without.raw);
+}
+
+/// Inside the user's transaction, an index that fails after another was made leaves
+/// neither behind: the transaction is not aborted by it, and once it is rolled back the
+/// next plain plan uses no index.
+#[tokio::test]
+#[ignore = "requires a Postgres with hypopg"]
+async fn a_failed_hypothetical_index_in_a_transaction_leaves_none_behind() {
+    let Some(session) = hypopg_session("hypo_in_tx").await else {
+        return;
+    };
+    let tx = session.transactions().unwrap();
+    tx.begin(dexo_driver_api::TransactionMode::ReadWrite)
+        .await
+        .unwrap();
+    let explain = session.explain().unwrap();
+    let sql = "select * from hypo_in_tx where a = 42";
+    assert!(
+        explain
+            .explain(dexo_driver_api::ExplainRequest::with_indexes(
+                sql,
+                vec![
+                    "CREATE INDEX ON hypo_in_tx (a)".into(),
+                    "CREATE INDEX ON hypo_in_tx (no_such_column)".into(),
+                ],
+            ))
+            .await
+            .is_err()
+    );
+    collect(
+        session
+            .execute(QueryRequest::read("select 1", 1))
+            .await
+            .unwrap(),
+    )
+    .await;
+    tx.rollback().await.unwrap();
+    let plain = explain
+        .explain(dexo_driver_api::ExplainRequest::estimated(sql))
+        .await
+        .unwrap();
+    assert!(!plain.raw.contains("Index"), "{}", plain.raw);
 }
