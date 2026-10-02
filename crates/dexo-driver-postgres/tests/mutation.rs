@@ -130,6 +130,71 @@ async fn a_row_with_transaction_ids_is_deleted_from_the_grid() {
     delete_as_the_grid_does(session, "ids").await;
 }
 
+/// The delete compares every column with what it read, and many types have no `=`:
+/// it failed with "operator does not exist" on any table holding one. Each type is
+/// checked on a table of its own, and the common ones all together.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_row_with_columns_that_have_no_equality_is_deleted_from_the_grid() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    run(session, "create extension if not exists ltree").await;
+    for (ty, value) in [
+        ("lquery", "'*.b.*'"),
+        ("jsonpath", "'$.a[*] ? (@ > 1)'"),
+        ("polygon", "'((0,0),(1,1),(1,0))'"),
+        ("refcursor", "'cur'"),
+        ("pg_snapshot", "'10:20:12,15'"),
+        ("txid_snapshot", "'10:20:'"),
+        ("point", "'(1e300,1e-7)'"),
+        ("path", "'[(0,0),(1,1)]'"),
+        ("line", "'{1,-1,0}'"),
+        ("json", "'{\"a\": [1, 2.50]}'"),
+        ("xml", "'<a b=\"1\">text</a>'"),
+        ("point[]", "array['(1,2)']::point[]"),
+    ] {
+        let table = format!("no_eq_{}", ty.trim_end_matches("[]"));
+        let table = if ty.ends_with("[]") {
+            format!("{table}_array")
+        } else {
+            table
+        };
+        run(
+            session,
+            &format!("create table {table} (id int primary key, v {ty})"),
+        )
+        .await;
+        run(
+            session,
+            &format!("insert into {table} values (1, {value}), (2, null)"),
+        )
+        .await;
+        delete_as_the_grid_does(session, &table).await;
+    }
+    for sql in [
+        "create extension if not exists citext",
+        "create type mood as enum ('ok', 'sad')",
+        "create type pair as (a int, b text)",
+        "create table common (id int primary key, i2 int2, i8 int8, num numeric(6,2),
+             f4 float4, f8 float8, t text, c char(5), vc varchar(9), b bool, by bytea,
+             d date, ts timestamp, tz timestamptz, iv interval, u uuid, jb jsonb, ip inet,
+             a int4[], tv tsvector, tq tsquery, m money, o oid, bx box, e mood, p pair,
+             r int4range, ci citext, lt ltree)",
+    ] {
+        run(session, sql).await;
+    }
+    run(
+        session,
+        "insert into common values (1, 2, 9000000000, 1.50, 0.1, 1e300, 'text', 'ab',
+             'varchar', true, '\\x00ff', '2020-02-29', '2020-01-01 10:00:00.5',
+             '2020-01-01 10:00:00+03', '1 day 2 hours', gen_random_uuid(), '{\"k\": 1}',
+             '10.0.0.1/8', '{1,NULL,3}', 'fat cats', 'fat & !cat', 12.34, 7,
+             '(3,4),(1,2)', 'sad', row(1, 'x y'), '[1,5)', 'MiXed', 'a.b')",
+    )
+    .await;
+    delete_as_the_grid_does(session, "common").await;
+}
+
 /// A name without a schema is the table the search_path finds, for the estimate and
 /// the key columns alike; a partitioned table's estimate is its partitions'.
 #[tokio::test]

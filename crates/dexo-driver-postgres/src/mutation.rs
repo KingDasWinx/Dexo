@@ -54,6 +54,12 @@ impl Binder {
         format!("${}{cast}", self.values.len())
     }
 
+    /// A placeholder whose type the statement around it decides.
+    fn push_untyped(&mut self, value: DbValue) -> String {
+        self.values.push(value);
+        format!("${}", self.values.len())
+    }
+
     fn boxed(&self) -> Vec<Box<dyn ToSql + Sync + Send>> {
         self.values.iter().map(to_box).collect()
     }
@@ -241,20 +247,35 @@ fn cap_value(value: DbValue) -> DbValue {
     }
 }
 
+/// The row's key, compared with `=` -- a key column has it, and its index serves -- and
+/// the values the row was read with, compared as the server writes them. Many types
+/// have no `=`: json, xml, point, polygon, jsonpath, lquery, refcursor, pg_snapshot. A
+/// delete compares every column, and failed on every table with one: "operator does not
+/// exist". `COALESCE` gives the value the column's own type, so both sides are that
+/// type's text.
 fn predicate(
     identity: &[(ColumnId, DbValue)],
     original: &[(ColumnId, DbValue)],
     binder: &mut Binder,
 ) -> String {
-    identity
+    let mut parts: Vec<String> = identity
         .iter()
-        .chain(original.iter())
         .map(|(column, value)| match value {
             DbValue::Null => format!("{} IS NULL", quote(&column.0)),
             _ => format!("{} = {}", quote(&column.0), binder.push(value.clone())),
         })
-        .collect::<Vec<_>>()
-        .join(" AND ")
+        .collect();
+    parts.extend(original.iter().map(|(column, value)| {
+        let column = quote(&column.0);
+        match value {
+            DbValue::Null => format!("{column} IS NULL"),
+            _ => format!(
+                "{column}::text = COALESCE({}, {column})::text",
+                binder.push_untyped(value.clone())
+            ),
+        }
+    }));
+    parts.join(" AND ")
 }
 
 #[async_trait::async_trait]
@@ -475,6 +496,24 @@ async fn apply_inner(session: &PostgresSession, mutations: &[Mutation]) -> Resul
 #[cfg(test)]
 mod tests {
     use super::quote;
+
+    #[test]
+    fn the_key_is_compared_with_equals_and_the_read_values_as_text() {
+        use dexo_driver_api::{ColumnId, DbValue};
+        let mut binder = super::Binder::new();
+        let sql = super::predicate(
+            &[(ColumnId("id".into()), DbValue::I64(1))],
+            &[
+                (ColumnId("p".into()), DbValue::Text("(1,2)".into())),
+                (ColumnId("n".into()), DbValue::Null),
+            ],
+            &mut binder,
+        );
+        assert_eq!(
+            sql,
+            "\"id\" = $1::bigint AND \"p\"::text = COALESCE($2, \"p\")::text AND \"n\" IS NULL"
+        );
+    }
 
     #[test]
     fn postgres_quote_wraps_and_escapes() {
