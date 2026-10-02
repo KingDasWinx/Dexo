@@ -218,6 +218,7 @@ async fn inspector_loads_properties_ddl_dependencies_and_privileges() {
             ddl: Some("CREATE TABLE orders (id int)".into()),
             dependencies: vec![ObjectId::new("table:customers")],
             dependents: vec![ObjectId::new("view:orders_v")],
+            names: Default::default(),
             effective_privileges: vec!["SELECT".into()],
             restrictions: vec![],
         },

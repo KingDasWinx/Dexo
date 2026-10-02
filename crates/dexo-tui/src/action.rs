@@ -337,6 +337,8 @@ pub enum Action {
         ddl: Option<String>,
         dependencies: Vec<dexo_driver_api::ObjectId>,
         dependents: Vec<dexo_driver_api::ObjectId>,
+        /// What each of them is called and what it is, for the lists above.
+        names: std::collections::HashMap<dexo_driver_api::ObjectId, String>,
         effective_privileges: Vec<String>,
         restrictions: Vec<String>,
     },

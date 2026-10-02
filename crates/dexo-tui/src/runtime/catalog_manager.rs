@@ -110,6 +110,16 @@ pub async fn load_inspector(
         Ok(ids) => (ids, None),
         Err(error) => (Vec::new(), Some(error.to_string())),
     };
+    // Ids are the catalog's own (`pg:table:16750`): said as what they are.
+    let mut names = std::collections::HashMap::new();
+    for related in dependencies.iter().chain(&dependents) {
+        if let Ok(Some(found)) = CatalogService::object(reader, related).await {
+            names.insert(
+                related.clone(),
+                format!("{} {}", found.kind.as_str(), found.display_name()),
+            );
+        }
+    }
     let mut privileges = Vec::new();
     let mut restrictions = Vec::new();
     if let Some(message) = dep_err {
@@ -136,6 +146,7 @@ pub async fn load_inspector(
             ddl,
             dependencies,
             dependents,
+            names,
             effective_privileges: privileges,
             restrictions,
         })

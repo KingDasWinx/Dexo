@@ -19,6 +19,8 @@ pub struct ObjectInspector {
     pub ddl: Option<String>,
     pub dependencies: Vec<ObjectId>,
     pub dependents: Vec<ObjectId>,
+    /// What each of them is, as `table orders`, where the catalog could say.
+    pub names: std::collections::HashMap<ObjectId, String>,
     pub effective_privileges: Vec<String>,
     pub restrictions: Vec<String>,
     pub error: Option<String>,

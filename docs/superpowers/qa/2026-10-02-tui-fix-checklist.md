@@ -152,9 +152,9 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 - [x] **ES-31** `BLOCKER` Production: the Schema form (Preview DDL > Apply) creates the table without asking for the connection's name
 - [x] **ES-04** `MAJOR` Postgres table DDL (Open Object DDL / Copy DDL) leaves out PK, NOT NULL, DEFAULT, UNIQUE, FKs, CHECK, indexes and comments
-- [ ] **ES-09** `MAJOR` Inspect Object offers itself on constraints, functions, types, sequences and group nodes and answers "Select an object in Explorer."
+- [x] **ES-09** `MAJOR` Inspect Object offers itself on constraints, functions, types, sequences and group nodes and answers "Select an object in Explorer."
 - [x] **ES-10** `MAJOR` Copy Object Name on a schema / database returns a doubled name
-- [ ] **ES-11** `MAJOR` "Show Dependencies" is just the Inspect dialog with raw catalog ids
+- [x] **ES-11** `MAJOR` "Show Dependencies" is just the Inspect dialog with raw catalog ids
 - [x] **ES-15** `MAJOR` Manage Grants (Security panel): the "DDL preview" opens underneath the panel and cannot be read; Apply answers "ddl RolledBack"
 - [ ] **ES-16** `MAJOR` Security panel is a 40-column box that truncates every grant and has no hints
 - [x] **ES-17** `MAJOR` Refresh Catalog (all) and `r` on a connection / group node do not refresh anything; no feedback either way

@@ -1248,15 +1248,36 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             ddl,
             dependencies,
             dependents,
+            names,
             effective_privileges,
             restrictions,
         } => {
             if catalog_generation_matches(model, &session, generation) {
-                model.inspector.qualified_name = qualified_name;
+                // A constraint, a function, a type or a group is not one the catalog hands
+                // back by id: it is described by the node it was picked on, rather than
+                // answered with "Select an object in Explorer.".
+                let object = object.or_else(|| {
+                    model.explorer.selected_node().map(|node| {
+                        dexo_driver_api::CatalogObject::new(
+                            node.id.clone(),
+                            node.kind.clone(),
+                            dexo_driver_api::QualifiedName::new(
+                                None::<String>,
+                                node.schema.clone(),
+                                node.label.clone(),
+                            ),
+                            None,
+                        )
+                    })
+                });
+                if !qualified_name.is_empty() {
+                    model.inspector.qualified_name = qualified_name;
+                }
                 model.inspector.object = object;
                 model.inspector.ddl = ddl;
                 model.inspector.dependencies = dependencies;
                 model.inspector.dependents = dependents;
+                model.inspector.names = names;
                 model.inspector.effective_privileges = effective_privileges;
                 model.inspector.restrictions = restrictions;
                 model.inspector.error = None;
@@ -12759,6 +12780,7 @@ mod tests {
                 ddl: None,
                 dependencies: Vec::new(),
                 dependents: Vec::new(),
+                names: Default::default(),
                 effective_privileges: Vec::new(),
                 restrictions: Vec::new(),
             },
@@ -14635,6 +14657,7 @@ mod tests {
                 ddl: Some("create table orders ()".into()),
                 dependencies: Vec::new(),
                 dependents: Vec::new(),
+                names: Default::default(),
                 effective_privileges: Vec::new(),
                 restrictions: Vec::new(),
             },
