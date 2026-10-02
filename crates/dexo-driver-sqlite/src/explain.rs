@@ -26,12 +26,12 @@ impl ExplainProvider for SqliteSession {
         let rows = self
             .with_conn(move |conn| {
                 let mut statement = conn.prepare(&sql).map_err(map_error)?;
-                // SQLite plans a statement before it sees any value, so a parameter's
-                // plan is the same whatever it is bound to.
-                for index in 1..=statement.parameter_count() {
-                    statement
-                        .raw_bind_parameter(index, rusqlite::types::Null)
-                        .map_err(map_error)?;
+                // The plan depends on the values: SQLite plans a statement again once
+                // they are bound, so a LIKE or GLOB uses an index only for a pattern it
+                // can read, and STAT4 picks an index by the value. Planned without them,
+                // `name LIKE ?` showed a full scan its real values never take.
+                if statement.parameter_count() > 0 {
+                    return Err(dexo_driver_api::parameters_unsupported());
                 }
                 let mut rows = statement.raw_query();
                 let mut found: Vec<(i64, i64, String)> = Vec::new();

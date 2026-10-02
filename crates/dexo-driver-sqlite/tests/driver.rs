@@ -499,14 +499,35 @@ async fn explain_draws_the_query_plan_and_refuses_analyze() {
             .any(|node| node.kind == "USE TEMP B-TREE")
     );
 
-    // A parameter has no value to plan with, and SQLite needs none.
-    let parameterised = explain
+    // SQLite plans with the values bound, so a statement with parameters has no plan to
+    // show: `name LIKE ?` came out as a full scan its real values never take.
+    run(
+        &*session,
+        QueryRequest::write(
+            "create table people (name text collate nocase); \
+             create index people_name on people (name)",
+        ),
+    )
+    .await
+    .unwrap();
+    let valued = explain
         .explain(ExplainRequest::estimated(
-            "select * from orders where customer_id = ?1 and total > :min",
+            "select * from people where name like 'ab%'",
         ))
         .await
         .unwrap();
-    assert_eq!(parameterised.root.children[0].kind, "SEARCH");
+    assert!(valued.raw.contains("people_name"), "{}", valued.raw);
+    for sql in [
+        "select * from people where name like ?",
+        "select * from orders where customer_id = ?1 and total > :min",
+    ] {
+        let refused = explain
+            .explain(ExplainRequest::estimated(sql))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.category(), DriverErrorCategory::Capability);
+        assert!(refused.to_string().contains("parameters"), "{refused}");
+    }
 
     let analyze = explain
         .explain(ExplainRequest::analyzed("select * from orders"))
