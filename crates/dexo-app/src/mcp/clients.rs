@@ -102,21 +102,28 @@ impl McpClient {
     }
 
     /// `existing` with Dexo's server entry in it, every other key left as it was. A file
-    /// that does not parse is an error, and is not rewritten.
+    /// that does not parse is an error, and is not rewritten. A byte order mark, which
+    /// some Windows editors write, is read past and kept.
     pub fn merged(
         self,
         existing: Option<&str>,
         command: &str,
         args: &[String],
     ) -> Result<String, AppError> {
-        match self {
-            Self::Codex => merged_toml(existing.unwrap_or(""), command, args),
-            _ => merged_json(existing, command, args),
-        }
+        let (bom, existing) = match existing.and_then(|text| text.strip_prefix(BOM)) {
+            Some(text) => (BOM, Some(text)),
+            None => ("", existing),
+        };
+        let merged = match self {
+            Self::Codex => merged_toml(existing.unwrap_or(""), command, args)?,
+            _ => merged_json(existing, command, args)?,
+        };
+        Ok(format!("{bom}{merged}"))
     }
 
     /// Whether the file has a `dexo` entry, and the command it runs.
     pub fn configured_command(self, contents: &str) -> Option<String> {
+        let contents = contents.strip_prefix(BOM).unwrap_or(contents);
         match self {
             Self::Codex => {
                 let table: toml::Table = contents.parse().ok()?;
@@ -159,6 +166,21 @@ impl Json {
             Self::Object(object) => Some(object),
             _ => None,
         }
+    }
+}
+
+const BOM: &str = "\u{feff}";
+
+/// The client's file as text, or `None` when it has none yet. One that is there but
+/// cannot be read, or is not UTF-8, is an error: it is left as it is, not replaced.
+pub fn read_config(path: &Path) -> Result<Option<String>, AppError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(AppError::new(
+            ErrorCategory::Configuration,
+            format!("it cannot be read ({error}), so it was left as it is"),
+        )),
     }
 }
 
@@ -604,5 +626,29 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&again).unwrap(), "second");
         assert_eq!(super::write_with_backup(&path, "third").unwrap(), None);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "third");
+    }
+
+    /// A file with a byte order mark is merged and keeps it; one that exists but is not
+    /// UTF-8 is an error, not a missing file to start afresh.
+    #[test]
+    fn a_bom_is_kept_and_an_unreadable_file_is_refused() {
+        for client in [McpClient::ClaudeDesktop, McpClient::Codex] {
+            let existing = match client {
+                McpClient::Codex => "\u{feff}model = \"o3\"\n",
+                _ => "\u{feff}{\"theme\": \"dark\"}",
+            };
+            let merged = client.merged(Some(existing), "/bin/dexo", &args()).unwrap();
+            assert!(merged.starts_with('\u{feff}'), "{merged}");
+            assert!(!merged[3..].contains('\u{feff}'), "{merged}");
+            assert_eq!(
+                client.configured_command(&merged).as_deref(),
+                Some("/bin/dexo")
+            );
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("mcp.json");
+        assert!(super::read_config(&path).unwrap().is_none());
+        std::fs::write(&path, b"{\"a\": \"\xff\"}").unwrap();
+        assert!(super::read_config(&path).is_err());
     }
 }

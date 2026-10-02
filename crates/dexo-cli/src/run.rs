@@ -1572,7 +1572,7 @@ fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
 /// `dexo mcp setup`: Dexo's server merged into the client's config file, the old file
 /// backed up first; with `--skill`, the skill file beside it.
 fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Result<()> {
-    use dexo_app::mcp::clients::{McpClient, Places, skill_text, write_with_backup};
+    use dexo_app::mcp::clients::{McpClient, Places, read_config, skill_text, write_with_backup};
     let client =
         McpClient::parse(client).ok_or_else(|| anyhow::anyhow!("unknown client {client}"))?;
     let paths = AppPaths::discover()?;
@@ -1584,10 +1584,11 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
         .map(String::from)
         .to_vec();
     let path = client.config_path(&places);
-    let existing = std::fs::read_to_string(&path).ok();
+    let in_file = |error| anyhow::anyhow!("{}: {error}", path.display());
+    let existing = read_config(&path).map_err(in_file)?;
     let merged = client
         .merged(existing.as_deref(), &exe, &args)
-        .map_err(|error| anyhow::anyhow!("{}: {error}", path.display()))?;
+        .map_err(in_file)?;
     let skill_file = skill.then(|| client.skill_path(&places)).flatten();
     if dry_run {
         println!(
