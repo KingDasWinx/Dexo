@@ -243,9 +243,27 @@ impl ConnectionsScreen {
                 .map(|(index, line)| (Some(index), line))
                 .collect()
         };
-        if self.unsaved_docker().next().is_some() {
+        // A container that already has a saved connection is not offered again; without
+        // a word, a user looking for theirs thought Dexo could not see it.
+        let hidden: Vec<&str> = self
+            .docker
+            .iter()
+            .filter(|database| {
+                !self
+                    .unsaved_docker()
+                    .any(|shown| std::ptr::eq(shown, *database))
+            })
+            .map(|database| database.container.as_str())
+            .collect();
+        if self.unsaved_docker().next().is_some() || !hidden.is_empty() {
             rows.push((None, String::new()));
             rows.push((None, "  Running in Docker".into()));
+            if !hidden.is_empty() {
+                rows.push((
+                    None,
+                    format!("  already saved as connections: {}", hidden.join(", ")),
+                ));
+            }
             for (offset, database) in self.unsaved_docker().enumerate() {
                 let index = self.profiles.len() + offset;
                 let marker = if index == self.selected_profile {

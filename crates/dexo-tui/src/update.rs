@@ -13399,7 +13399,11 @@ mod tests {
             )]);
         let screen = crate::render::render_to_string(&model, 100, 30);
         assert!(screen.contains("open-my [mysql]"), "{screen}");
-        assert!(!screen.contains("shop-pg"), "{screen}");
+        assert!(!screen.contains("shop-pg [postgres]"), "{screen}");
+        assert!(
+            screen.contains("already saved as connections: shop-pg"),
+            "{screen}"
+        );
         assert_eq!(model.connections.row_count(), 2);
         model.connections.selected_profile = 1;
         update(

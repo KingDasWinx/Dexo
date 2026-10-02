@@ -99,3 +99,26 @@ fn the_delete_dialog_counts_the_documents_that_lose_the_connection() {
         "the dialog is silent about the open document:\n{screen}"
     );
 }
+
+/// A container with a saved connection is said to be saved, not silently left out.
+#[test]
+fn a_container_that_is_already_saved_is_said_so() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    let mut saved = profile("my-pg", 7);
+    saved.config =
+        serde_json::json!({"host": "127.0.0.1", "port": 5433, "username": "u", "database": "d"});
+    model.connections.load_profiles(vec![saved]);
+    let found = dexo_app::docker::from_inspect(
+        r#"[{"Name": "/shop-pg", "Config": {"Image": "postgres:16",
+             "Env": ["POSTGRES_USER=ana", "POSTGRES_PASSWORD=s3cret", "POSTGRES_DB=shop"]},
+           "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5433"}]}}}]"#,
+    );
+    model.connections.open = true;
+    dexo_tui::update(&mut model, dexo_tui::Action::DockerDiscovered(found));
+    let screen = render_to_string(&model, 100, 30);
+    assert!(
+        screen.contains("already saved as connections: shop-pg"),
+        "{screen}"
+    );
+}

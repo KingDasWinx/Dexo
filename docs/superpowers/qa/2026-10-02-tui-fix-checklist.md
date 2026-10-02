@@ -235,7 +235,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **CP-31** `MINOR` After a restart the header and status bar show another connection than the visible document's
 - [x] **CP-33** `MINOR` Proxy failures name neither the proxy nor the cause
 - [x] **CP-34** `MINOR` Connection groups are never shown in the sidebar
-- [ ] **CP-36** `MINOR` Find Databases in Docker hides containers that already have a saved connection, without saying so
+- [x] **CP-36** `MINOR` Find Databases in Docker hides containers that already have a saved connection, without saying so
 - [x] **CP-38** `MINOR` Deleting a connection leaves its documents open and unbound; running one silently rebinds it to whatever connection is active
 - [x] **CP-39** `MINOR` Startup: focus is in the editor, so the first `n` typed (as the Welcome text says) creates a document instead of opening New Connection
 - [ ] **CP-40** `MINOR` URL / CLI temporary connections
