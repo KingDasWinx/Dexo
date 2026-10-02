@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
-default  no connection  —                                   
+default  no connection  —    1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
 ┌Settings──────────────────────────────────────────────────┐
 │> Theme      [1/6  Dexo]                                  │

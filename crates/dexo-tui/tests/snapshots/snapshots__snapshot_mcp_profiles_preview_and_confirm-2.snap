@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
-demo  local  public      1 Explorer  [2 Editor]  3 Results  
+demo  local  public          1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
 ┌MCP profiles──────────────────────────────────────────────┐
 │mcp profile=assistant enabled=true confirm=false          │
