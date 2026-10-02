@@ -216,7 +216,7 @@ fn statement_problems(
                 for statement in &statements {
                     let _ = statement.visit(&mut refs);
                 }
-                check(&refs, known, created, body, &mut found);
+                check(&refs, known, created, body, dialect, &mut found);
             }
         }
     }
@@ -347,6 +347,7 @@ fn check(
     known: &KnownObjects,
     created: &HashSet<String>,
     body: &str,
+    dialect: Dialect,
     found: &mut Vec<(String, Range<usize>)>,
 ) {
     // One map for the whole statement, scopes and all: a name that stands for two
@@ -424,7 +425,7 @@ fn check(
         };
         let name = column.value.to_lowercase();
         if !columns.contains(&name)
-            && !SYSTEM_COLUMNS.contains(&name.as_str())
+            && !system_column(&name, dialect)
             && let Some(range) = span_of(body, column, column)
         {
             found.push((format!("unknown column {} in {table}", column.value), range));
@@ -443,11 +444,18 @@ const TABLE_MODIFIERS: &[&str] = &[
     "lateral",
 ];
 
-/// Columns every row has without the table declaring them: SQLite's rowid and its
-/// aliases, Postgres's system columns.
-const SYSTEM_COLUMNS: &[&str] = &[
-    "rowid", "oid", "_rowid_", "ctid", "xmin", "xmax", "cmin", "cmax", "tableoid",
-];
+/// Whether every row of `dialect` has the column `name` without the table declaring
+/// it: SQLite's rowid and its aliases, Postgres's system columns (`oid` left Postgres
+/// 12's tables), MySQL's `_rowid` for a one-column integer key. One list for all let
+/// `o.rowid` pass on MySQL and `o.oid` on Postgres.
+fn system_column(name: &str, dialect: Dialect) -> bool {
+    let names: &[&str] = match dialect {
+        Dialect::Postgres => &["ctid", "xmin", "xmax", "cmin", "cmax", "tableoid"],
+        Dialect::Sqlite => &["rowid", "oid", "_rowid_"],
+        Dialect::Mysql => &["_rowid"],
+    };
+    names.contains(&name)
+}
 
 /// Names a database answers for without listing them as the user's tables.
 fn system_name(table: &str) -> bool {
@@ -772,7 +780,7 @@ mod tests {
             "select * from other_schema.anything",
             "create table fresh (id int); select * from fresh",
             "select c.whatever from customers c",
-            "select o.rowid, o.oid, o._rowid_, o.ctid, o.xmin, o.tableoid from orders o",
+            "select o.ctid, o.xmin, o.xmax, o.cmin, o.cmax, o.tableoid from orders o",
             "select o.total from orders o where exists (select 1 from customers o where o.id = 1)",
             "with orders as (select id, 1 as extra from orders) select orders.extra from orders",
             "with orders as (select id, 1 as extra from orders) select o.extra from orders o",
@@ -785,6 +793,35 @@ mod tests {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
         assert!(messages("select * from ghosts", None).is_empty());
+        // Each dialect's columns every row has, and no other dialect's.
+        let columns = |sql: &str, dialect| {
+            diagnose(sql, dialect, Some(&known), usize::MAX)
+                .into_iter()
+                .map(|found| found.message)
+                .collect::<Vec<_>>()
+        };
+        assert!(
+            columns(
+                "select o.rowid, o.oid, o._rowid_ from orders o",
+                Dialect::Sqlite
+            )
+            .is_empty()
+        );
+        assert!(columns("select o._rowid from orders o", Dialect::Mysql).is_empty());
+        assert_eq!(
+            columns("select o.oid, o.rowid from orders o", Dialect::Postgres),
+            [
+                "unknown column oid in orders",
+                "unknown column rowid in orders"
+            ]
+        );
+        assert_eq!(
+            columns("select o.rowid, o.ctid from orders o", Dialect::Mysql),
+            [
+                "unknown column rowid in orders",
+                "unknown column ctid in orders"
+            ]
+        );
         // A missing table named like a keyword is missing too.
         for word in ["status", "data", "name", "session"] {
             let sql = format!("select * from {word}");
