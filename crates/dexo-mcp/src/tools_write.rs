@@ -223,6 +223,11 @@ impl DexoMcpServer {
                     }
                     format!("no one approved this write within {waits}s")
                 }
+                // Revoking the grant denies its waiting requests; that is not a person
+                // saying no, and the agent is told which it was.
+                ApprovalDecision::Denied if ledger.is_revoked(grant.id) => {
+                    "the grant for this write was revoked while it waited".to_string()
+                }
                 ApprovalDecision::Denied => "a person denied this write".to_string(),
                 ApprovalDecision::Expired => {
                     format!("no one approved this write within {waits}s")

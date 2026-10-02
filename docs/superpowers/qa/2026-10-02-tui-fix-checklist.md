@@ -309,7 +309,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-05** `MAJOR` MCP Profiles shows raw debug lines (`profile NAME enabled=false`, `mcp profile=... enabled=false confirm=true`)
 - [x] **MA-11** `MAJOR` MCP Profiles popup is fixed-height: with a few grants the status line and the hint line are cut off, so a pending confirmation is invisible
 - [x] **MA-22** `MAJOR` New MCP Grant from the palette silently targets the first profile; the form cannot choose a profile
-- [ ] **MA-25** `MAJOR` Revoking grants denies the waiting request with the reason "a person denied this write"
+- [x] **MA-25** `MAJOR` Revoking grants denies the waiting request with the reason "a person denied this write"
 - [ ] **MA-26** `MAJOR` Agent Activity: with nothing waiting, PgDn scrolls for half a second and snaps back; only the newest 20 events can ever be seen
 - [x] **MA-34** `MAJOR` MCP Profiles: with more than 11 profiles the selection scrolls out of sight, and `e`/`r` act on rows you cannot see
 - [ ] **MA-41** `MAJOR` (layout, found while testing popups) After the terminal is made 20 rows high and back to 120x36, the Sidebar and the Results pane stay hidden

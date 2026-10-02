@@ -916,3 +916,30 @@ async fn notes_tell_agents_what_the_schema_means() {
         .await;
     assert!(!text(&hidden).contains("secrets"), "{}", text(&hidden));
 }
+
+/// Revoking the grant denies its waiting write, and the agent is told that, not that "a
+/// person denied" it.
+#[tokio::test]
+async fn a_revoked_grant_is_not_reported_as_a_persons_no() {
+    use dexo_app::mcp::GrantLedger;
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let waiting = client
+        .send_request(
+            "tools/call",
+            json!({"name": "data_insert", "arguments":
+                {"operation_id": "op-revoke", "target": "users", "values": {"id": 5}}}),
+        )
+        .await;
+    first_pending(&ledger).await;
+    ledger.revoke_profile(&profile().name).unwrap();
+    let answer = client.response(waiting).await["result"].clone();
+    let message = text(&answer);
+    assert!(message.contains("revoked"), "{message}");
+    assert!(!message.contains("a person denied"), "{message}");
+}
