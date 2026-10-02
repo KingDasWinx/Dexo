@@ -139,8 +139,9 @@ fn render_fetch(request: &DataRequest) -> Result<(String, Binder), DriverError> 
                 .join(", "),
         );
     }
+    // On a line of its own: a comment ending the ORDER BY text would take it otherwise.
     sql.push_str(&format!(
-        " LIMIT {} OFFSET {}",
+        "\nLIMIT {} OFFSET {}",
         binder.push(DbValue::I64(i64::from(request.page.limit) + 1)),
         binder.push(DbValue::I64(request.page.offset as i64))
     ));

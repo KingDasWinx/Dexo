@@ -51,7 +51,8 @@ pub fn derive_page_in(
                 .join(", "),
         );
     }
-    wrapped.push_str(&format!(" LIMIT {} OFFSET {}", page.limit, page.offset));
+    // On a line of its own: a comment ending the ORDER BY text would take it otherwise.
+    wrapped.push_str(&format!("\nLIMIT {} OFFSET {}", page.limit, page.offset));
     Ok(wrapped)
 }
 
@@ -92,7 +93,14 @@ fn filtered(
     if lower.contains(" for update") || lower.contains(" for share") {
         return Err("locking queries are local-only".into());
     }
-    let mut wrapped = format!("SELECT {select} FROM ({body}) AS _dexo_derived");
+    // A line comment ending the statement (`--`, or MySQL's `#`) took the `)` and the
+    // rest of the line with it: the `)` goes on a line of its own then.
+    let close = if body.contains("--") || body.contains('#') {
+        "\n)"
+    } else {
+        ")"
+    };
+    let mut wrapped = format!("SELECT {select} FROM ({body}{close} AS _dexo_derived");
     // The dialect's own placeholders, numbered here: rewriting `?` afterwards also
     // rewrote the user's `'%?%'` and jsonb's `?` operator.
     let mut bound = 0;
@@ -253,6 +261,25 @@ mod tests {
             super::derive_count_in(&sql, &both, &clauses, Dialect::Mysql)
                 .unwrap()
                 .ends_with("((`a` = ? AND `b` > ?))")
+        );
+        // A comment ending the statement or a bar ends on its own line, before the
+        // text that follows it.
+        let commented = dexo_driver_api::RawClauses {
+            where_sql: Some("total > 5 -- big".into()),
+            order_by: Some("id # newest".into()),
+        };
+        assert_eq!(
+            super::derive_page_in(
+                "select * from orders -- all of them",
+                &[],
+                &None,
+                &commented,
+                page(),
+                Dialect::Mysql
+            )
+            .unwrap(),
+            "SELECT * FROM (select * from orders -- all of them\n) AS _dexo_derived \
+             WHERE (total > 5 -- big\n) ORDER BY id # newest\nLIMIT 50 OFFSET 0"
         );
         let mysql = dexo_driver_api::QualifiedName::new(Some("shop"), None::<String>, "orders");
         assert_eq!(

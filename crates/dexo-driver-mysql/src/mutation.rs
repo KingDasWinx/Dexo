@@ -122,8 +122,9 @@ fn render_fetch(request: &DataRequest) -> (String, Binder) {
                 .join(", "),
         );
     }
+    // On a line of its own: a comment ending the ORDER BY text would take it otherwise.
     sql.push_str(&format!(
-        " LIMIT {} OFFSET {}",
+        "\nLIMIT {} OFFSET {}",
         request.page.limit.saturating_add(1),
         request.page.offset
     ));

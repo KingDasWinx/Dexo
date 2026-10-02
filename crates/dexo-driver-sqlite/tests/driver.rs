@@ -289,6 +289,33 @@ async fn the_catalog_lists_tables_columns_indexes_keys_and_triggers() {
     );
 }
 
+/// A comment ending the WHERE or ORDER BY bar is only a comment: the typed filter, the
+/// page size and the probe for more rows still apply.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_comment_ending_a_bar_takes_nothing_after_it() {
+    let (_dir, path) = seeded().await;
+    let session = open(&path, false).await;
+    let page = session
+        .data()
+        .unwrap()
+        .fetch(DataRequest {
+            clauses: dexo_driver_api::RawClauses {
+                where_sql: Some("id > 1 -- not Ada".into()),
+                order_by: Some("name desc -- last first".into()),
+            },
+            object: table("customers"),
+            columns: vec![ColumnId("id".into())],
+            filter: Some(Filter::Lt(ColumnId("id".into()), DbValue::I64(9))),
+            sort: vec![],
+            page: Page::new(1, 1).unwrap(),
+        })
+        .await
+        .unwrap();
+    // Linus, then Grace: the second page holds Grace alone.
+    assert_eq!(page.rows, [vec![DbValue::I64(2)]]);
+    assert!(!page.has_more);
+}
+
 #[tokio::test(flavor = "multi_thread")]
 async fn rows_are_paged_filtered_and_edited_by_their_key() {
     let (_dir, path) = seeded().await;

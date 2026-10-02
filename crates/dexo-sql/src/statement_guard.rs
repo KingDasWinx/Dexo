@@ -258,17 +258,54 @@ pub fn clauses_read(clauses: &dexo_driver_api::RawClauses, dialect: Dialect) -> 
     {
         return Err("a clause cannot hold an executable comment (`/*! … */`, `/*M! … */`)".into());
     }
-    let mut probe = "SELECT * FROM _dexo_clauses".to_string();
+    // Each bar holds its clause and nothing more. `1=1) OR (1=1` read well inside the
+    // probe's parentheses, and then closed the `(raw) AND (typed)` a page wraps it in,
+    // so the filter of a foreign key's rows stopped applying.
     if !where_sql.is_empty() {
-        probe.push_str(&format!(" WHERE ({where_sql})"));
+        whole(where_sql, dialect, |parser| parser.parse_expr().map(drop))
+            .map_err(|reason| format!("the WHERE text is not one condition: {reason}"))?;
     }
     if !order.is_empty() {
-        probe.push_str(&format!(" ORDER BY {order}"));
+        whole(order, dialect, |parser| {
+            parser
+                .parse_comma_separated(Parser::parse_order_by_expr)
+                .map(drop)
+        })
+        .map_err(|reason| format!("the ORDER BY text is not a list of sort keys: {reason}"))?;
+    }
+    // On lines of their own, so a comment at the end of the text ends there.
+    let mut probe = "SELECT * FROM _dexo_clauses".to_string();
+    if !where_sql.is_empty() {
+        probe.push_str(&format!(" WHERE ({where_sql}\n)"));
+    }
+    if !order.is_empty() {
+        probe.push_str(&format!(" ORDER BY {order}\n"));
     }
     match inspect_read(&probe, dialect) {
         Ok(_) => Ok(()),
         Err(GuardRejection::Unparsed(reason)) => Err(format!("not valid SQL: {reason}")),
         Err(rejection) => Err(format!("not a read: {rejection}")),
+    }
+}
+
+/// Whether `read` takes all of `text`, nothing left over after it.
+fn whole(
+    text: &str,
+    dialect: Dialect,
+    read: impl FnOnce(&mut Parser) -> Result<(), sqlparser::parser::ParserError>,
+) -> Result<(), String> {
+    let grammar: &dyn sqlparser::dialect::Dialect = match dialect {
+        Dialect::Postgres => &PostgreSqlDialect {},
+        Dialect::Mysql => &MySqlDialect {},
+        Dialect::Sqlite => &SQLiteDialect {},
+    };
+    let mut parser = Parser::new(grammar)
+        .try_with_sql(text)
+        .map_err(|error| error.to_string())?;
+    read(&mut parser).map_err(|error| error.to_string())?;
+    match parser.peek_token().token {
+        sqlparser::tokenizer::Token::EOF => Ok(()),
+        token => Err(format!("`{token}` follows it")),
     }
 }
 
@@ -557,6 +594,14 @@ mod tests {
         assert!(check("", "id; drop table t").is_err());
         assert!(check("pg_terminate_backend(42)", "").is_err());
         assert!(check("id = (", "").is_err());
+        // A bar holds its clause and no more: a parenthesis cannot close the wrapper a
+        // page puts it in, and a sort list cannot run on into LIMIT.
+        assert!(check("1=1) OR (1=1", "").is_err());
+        assert!(check("(1=1)) OR ((1=1", "").is_err());
+        assert!(check("", "id) x").is_err());
+        assert!(check("", "id limit 1").is_err());
+        // A comment at the end is only a comment.
+        assert!(check("total > 10 -- big ones", "id desc -- newest").is_ok());
         // The refusal reads as a sentence, not as Rust's debug form.
         assert_eq!(
             check("pg_sleep(1) is null", "").unwrap_err(),

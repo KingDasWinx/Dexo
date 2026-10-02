@@ -69,10 +69,19 @@ impl RawClauses {
             .where_sql
             .as_deref()
             .map(str::trim)
-            .filter(|text| !text.is_empty());
+            .filter(|text| !text.is_empty())
+            .map(|raw| {
+                // A line comment at its end (`--`, or MySQL's `#`) ran on over the `)`
+                // and everything after it on the line.
+                if raw.contains("--") || raw.contains('#') {
+                    format!("({raw}\n)")
+                } else {
+                    format!("({raw})")
+                }
+            });
         match (raw, typed) {
-            (Some(raw), Some(typed)) => Some(format!("({raw}) AND ({typed})")),
-            (Some(raw), None) => Some(format!("({raw})")),
+            (Some(raw), Some(typed)) => Some(format!("{raw} AND ({typed})")),
+            (raw, None) => raw,
             (None, typed) => typed,
         }
     }
@@ -231,5 +240,28 @@ mod tests {
         }
         let value = "O'Reilly";
         assert_eq!(value.replace('\'', "''"), "O''Reilly");
+    }
+
+    /// A comment ending the WHERE text ends on its own line, before the `)` and the
+    /// typed filter that follow it.
+    #[test]
+    fn a_trailing_comment_cannot_take_the_typed_filter() {
+        let clauses = |text: &str| super::RawClauses {
+            where_sql: Some(text.into()),
+            order_by: None,
+        };
+        assert_eq!(
+            clauses("total > 1").condition(Some("id = ?".into())),
+            Some("(total > 1) AND (id = ?)".into())
+        );
+        assert_eq!(
+            clauses("total > 1 -- big").condition(Some("id = ?".into())),
+            Some("(total > 1 -- big\n) AND (id = ?)".into())
+        );
+        assert_eq!(
+            clauses("total > 1 # big").condition(None),
+            Some("(total > 1 # big\n)".into())
+        );
+        assert_eq!(clauses("  ").condition(None), None);
     }
 }
