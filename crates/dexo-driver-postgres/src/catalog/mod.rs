@@ -49,6 +49,30 @@ fn relkind_key(relkind: &str) -> &'static str {
     }
 }
 
+/// A table, view or sequence with what the explorer shows of it: built the same way
+/// when its schema lists it and when it is found by id, so the inspector sees its
+/// comment either way.
+fn relation_object(
+    id: ObjectId,
+    name: QualifiedName,
+    schema: ObjectId,
+    oid: i64,
+    relkind: &str,
+    partkey: Option<String>,
+    comment: Option<String>,
+) -> CatalogObject {
+    let mut object = CatalogObject::new(id, relkind_to_kind(relkind), name, Some(schema))
+        .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+        .with_attribute("driver.postgres.relkind", serde_json::json!(relkind));
+    if let Some(partkey) = partkey.filter(|value| !value.is_empty()) {
+        object = object.with_attribute("driver.postgres.partition_key", serde_json::json!(partkey));
+    }
+    if let Some(comment) = comment.filter(|value| !value.trim().is_empty()) {
+        object = object.with_attribute("comment", serde_json::json!(comment));
+    }
+    object
+}
+
 impl PostgresSession {
     async fn current_catalog(&self) -> Result<CatalogObject, DriverError> {
         let row = self
@@ -246,24 +270,15 @@ impl PostgresSession {
             let oid: i64 = row.get(0);
             let name: String = row.get(1);
             let relkind: String = row.get(2);
-            let partkey: Option<String> = row.get(3);
-            let comment: Option<String> = row.get(4);
-            let mut object = CatalogObject::new(
+            objects.push(relation_object(
                 pg_id(relkind_key(&relkind), oid),
-                relkind_to_kind(&relkind),
                 QualifiedName::new(Some(catalog), Some(schema), name),
-                Some(parent.clone()),
-            )
-            .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
-            .with_attribute("driver.postgres.relkind", serde_json::json!(relkind));
-            if let Some(partkey) = partkey.filter(|value| !value.is_empty()) {
-                object = object
-                    .with_attribute("driver.postgres.partition_key", serde_json::json!(partkey));
-            }
-            if let Some(comment) = comment.filter(|value| !value.trim().is_empty()) {
-                object = object.with_attribute("comment", serde_json::json!(comment));
-            }
-            objects.push(object);
+                parent.clone(),
+                oid,
+                &relkind,
+                row.get(3),
+                row.get(4),
+            ));
         }
 
         let routines = self
@@ -771,20 +786,48 @@ impl CatalogReader for PostgresSession {
                     .with_attribute(oid_attr(oid).0, oid_attr(oid).1),
                 ))
             }
-            "table" | "view" | "materialized_view" | "sequence" | "index" | "partition" => {
-                let (catalog, schema, name) = self.relation_name(oid).await?;
-                Ok(Some(CatalogObject::new(
+            "table" | "view" | "materialized_view" | "sequence" => {
+                let Some(row) = self
+                    .client
+                    .query_opt(
+                        "SELECT current_database()::text, n.nspname::text, c.relname::text,
+                                n.oid::bigint, c.relkind::text, pg_get_partkeydef(c.oid),
+                                obj_description(c.oid, 'pg_class')
+                         FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+                         WHERE c.oid = $1::bigint::oid",
+                        &[&oid],
+                    )
+                    .await
+                    .map_err(map_error)?
+                else {
+                    return Ok(None);
+                };
+                let relkind: String = row.get(4);
+                Ok(Some(relation_object(
                     id.clone(),
-                    relkind_to_kind(match kind {
-                        "view" => "v",
-                        "materialized_view" => "m",
-                        "sequence" => "S",
-                        "index" => "i",
-                        _ => "r",
-                    }),
-                    QualifiedName::new(Some(catalog), Some(schema), name),
-                    None,
+                    QualifiedName::new(
+                        Some(row.get::<_, String>(0)),
+                        Some(row.get::<_, String>(1)),
+                        row.get::<_, String>(2),
+                    ),
+                    pg_id("schema", row.get::<_, i64>(3)),
+                    oid,
+                    &relkind,
+                    row.get(5),
+                    row.get(6),
                 )))
+            }
+            "index" | "partition" => {
+                let (catalog, schema, name) = self.relation_name(oid).await?;
+                Ok(Some(
+                    CatalogObject::new(
+                        id.clone(),
+                        relkind_to_kind(if kind == "index" { "i" } else { "r" }),
+                        QualifiedName::new(Some(catalog), Some(schema), name),
+                        None,
+                    )
+                    .with_attribute(oid_attr(oid).0, oid_attr(oid).1),
+                ))
             }
             _ => Ok(None),
         }

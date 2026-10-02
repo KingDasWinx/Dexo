@@ -454,6 +454,15 @@ async fn comments_come_with_tables_and_columns() {
         Some(serde_json::json!("Gross, in cents"))
     );
     assert_eq!(comment("noted.id"), None);
+    // Found by its id, as the inspector finds it, the table is what the list gave.
+    let listed = found
+        .iter()
+        .find(|object| object.qualified_name.object() == "noted")
+        .unwrap();
+    let by_id = catalog.object(&listed.id).await.unwrap().unwrap();
+    assert_eq!(by_id.attributes, listed.attributes);
+    assert_eq!(by_id.parent, listed.parent);
+    assert_eq!(by_id.kind, listed.kind);
 }
 
 /// A foreign table is said to be one: its DDL names its server and options, `\dt`
