@@ -213,7 +213,6 @@ pub struct DataScreen {
     pub count: Option<RowCount>,
     pub loading: bool,
     pub filter: Option<dexo_driver_api::Filter>,
-    pub sort: Vec<dexo_driver_api::Sort>,
     pub last_error: Option<String>,
     /// The WHERE and ORDER BY bars over the grid.
     pub bars: ClauseBars,
@@ -250,7 +249,6 @@ impl Default for DataScreen {
             count: None,
             loading: false,
             filter: None,
-            sort: Vec::new(),
             last_error: None,
             bars: ClauseBars::default(),
             target_document: None,
@@ -279,7 +277,6 @@ impl DataScreen {
         swap(&mut self.count, &mut parked.count);
         swap(&mut self.loading, &mut parked.loading);
         swap(&mut self.filter, &mut parked.filter);
-        swap(&mut self.sort, &mut parked.sort);
         swap(&mut self.last_error, &mut parked.last_error);
         swap(&mut self.target_document, &mut parked.target_document);
         swap(&mut self.page_ticket, &mut parked.page_ticket);

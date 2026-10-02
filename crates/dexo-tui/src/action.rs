@@ -276,12 +276,10 @@ pub enum Action {
     ChangeDataPage {
         offset: u64,
     },
-    ApplyRemoteSort,
     /// `w` and `o`: the WHERE or the ORDER BY bar takes the keys.
     FocusClauseBar {
         bar: crate::screens::data::ClauseBar,
     },
-    ApplyRemoteFilter,
     DataPageLoaded {
         generation: u64,
         session: String,

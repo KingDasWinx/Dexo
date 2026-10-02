@@ -344,11 +344,9 @@ fn saved_queries_save_search_open_rename_and_delete() {
     ));
     let saved = |id: &str, name: &str, connection: &str, sql: &str| dexo_storage::SavedQuery {
         id: id.into(),
-        project_id: "project-1".into(),
         connection_id: connection.into(),
         name: name.into(),
         sql: sql.into(),
-        updated_at: String::new(),
     };
     update(
         &mut model,

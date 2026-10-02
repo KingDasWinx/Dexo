@@ -4,11 +4,9 @@ use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SavedQuery {
     pub id: String,
-    pub project_id: String,
     pub connection_id: String,
     pub name: String,
     pub sql: String,
-    pub updated_at: String,
 }
 
 pub struct SavedQueryRepository<'a> {
@@ -32,7 +30,7 @@ impl<'a> SavedQueryRepository<'a> {
         let find = || {
             self.conn
                 .query_row(
-                    "SELECT id, project_id, connection_id, name, sql, updated_at FROM saved_queries
+                    "SELECT id, connection_id, name, sql FROM saved_queries
                      WHERE project_id = ?1 AND connection_id = ?2 AND name = ?3",
                     params![project_id, connection_id, name],
                     row_to_query,
@@ -55,7 +53,7 @@ impl<'a> SavedQueryRepository<'a> {
     /// The project's queries, for every connection, by name.
     pub fn list_for_project(&self, project_id: &str) -> anyhow::Result<Vec<SavedQuery>> {
         let mut stmt = self.conn.prepare(
-            "SELECT id, project_id, connection_id, name, sql, updated_at FROM saved_queries
+            "SELECT id, connection_id, name, sql FROM saved_queries
              WHERE project_id = ?1 ORDER BY name COLLATE NOCASE, connection_id",
         )?;
         let rows = stmt.query_map(params![project_id], row_to_query)?;
@@ -99,11 +97,9 @@ impl<'a> SavedQueryRepository<'a> {
 fn row_to_query(row: &rusqlite::Row<'_>) -> rusqlite::Result<SavedQuery> {
     Ok(SavedQuery {
         id: row.get(0)?,
-        project_id: row.get(1)?,
-        connection_id: row.get(2)?,
-        name: row.get(3)?,
-        sql: row.get(4)?,
-        updated_at: row.get(5)?,
+        connection_id: row.get(1)?,
+        name: row.get(2)?,
+        sql: row.get(3)?,
     })
 }
 

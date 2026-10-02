@@ -97,11 +97,9 @@ mod tests {
     fn query(name: &str, sql: &str) -> dexo_storage::SavedQuery {
         dexo_storage::SavedQuery {
             id: name.into(),
-            project_id: "p".into(),
             connection_id: "c".into(),
             name: name.into(),
             sql: sql.into(),
-            updated_at: String::new(),
         }
     }
 

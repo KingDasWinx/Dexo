@@ -1023,7 +1023,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::ApplyRemoteSort | Action::ApplyRemoteFilter => apply_remote_query(model),
         Action::DataPageLoaded {
             generation,
             session,
@@ -6329,7 +6328,7 @@ fn load_table_document(model: &mut Model, index: usize) -> Vec<Effect> {
         target.clone(),
         Vec::new(),
         model.data.filter.clone(),
-        model.data.sort.clone(),
+        Vec::new(),
         model.data.page_offset,
         model.data.page_limit,
         model.data.bars.applied.clone(),
@@ -6692,7 +6691,7 @@ fn rerun_derived(model: &mut Model, sql: String) -> Vec<Effect> {
     let dialect = crate::screens::editor::editor_dialect(model);
     match dexo_sql::derive_page_in(
         &sql,
-        &model.data.sort,
+        &[],
         &model.data.filter,
         &model.data.bars.applied,
         page,
@@ -6774,7 +6773,7 @@ fn reload_object_data(model: &mut Model) -> Vec<Effect> {
         model.data.target.clone(),
         Vec::new(),
         model.data.filter.clone(),
-        model.data.sort.clone(),
+        Vec::new(),
         model.data.page_offset,
         model.data.page_limit,
         model.data.bars.applied.clone(),
@@ -10082,11 +10081,9 @@ mod tests {
     fn saved(name: &str, sql: &str) -> dexo_storage::SavedQuery {
         dexo_storage::SavedQuery {
             id: name.into(),
-            project_id: "p".into(),
             connection_id: "c".into(),
             name: name.into(),
             sql: sql.into(),
-            updated_at: String::new(),
         }
     }
 

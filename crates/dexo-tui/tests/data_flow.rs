@@ -259,7 +259,7 @@ fn arbitrary_select_marks_unsupported_tabs_local_only() {
     let mut tab = ResultTab::new(result_key(0), "r0");
     tab.source_sql = Some("update users set name='x'".into());
     model.results.tabs = vec![tab];
-    let effects = update(&mut model, Action::ApplyRemoteSort);
+    let effects = apply_bars(&mut model);
     assert!(effects.is_empty());
     assert!(
         model.results.tabs[0]
@@ -281,7 +281,7 @@ fn sorting_never_runs_a_statement_that_is_not_a_read_again() {
         let mut tab = ResultTab::new(result_key(0), "r0");
         tab.source_sql = Some(sql.into());
         model.results.tabs = vec![tab];
-        let effects = update(&mut model, Action::ApplyRemoteSort);
+        let effects = apply_bars(&mut model);
         assert!(
             !effects
                 .iter()
@@ -298,7 +298,7 @@ fn arbitrary_select_emits_derived_script() {
     let mut tab = ResultTab::new(result_key(0), "r0");
     tab.source_sql = Some("select id,name from users".into());
     model.results.tabs = vec![tab];
-    let effects = update(&mut model, Action::ApplyRemoteSort);
+    let effects = apply_bars(&mut model);
     assert!(effects.iter().any(|effect| matches!(
         effect,
         dexo_tui::Effect::StartScript(request) if request.statements[0].contains("_dexo_derived")
@@ -522,7 +522,7 @@ fn a_mysql_filter_rerun_uses_mysql_placeholders() {
         dexo_driver_api::ColumnId("name".into()),
         dexo_driver_api::DbValue::Text("ana".into()),
     ));
-    let effects = update(&mut model, Action::ApplyRemoteSort);
+    let effects = apply_bars(&mut model);
     let sql = effects
         .iter()
         .find_map(|effect| match effect {
@@ -1262,4 +1262,21 @@ fn alt_click_and_right_click_add_a_column_to_the_sort() {
             "{button:?} {modifiers:?}"
         );
     }
+}
+
+/// Runs the grid again with the bars, as Enter in the WHERE bar does.
+fn apply_bars(model: &mut Model) -> Vec<dexo_tui::Effect> {
+    update(
+        model,
+        Action::FocusClauseBar {
+            bar: dexo_tui::screens::data::ClauseBar::Where,
+        },
+    );
+    update(
+        model,
+        Action::Key(crossterm::event::KeyEvent::new(
+            crossterm::event::KeyCode::Enter,
+            crossterm::event::KeyModifiers::NONE,
+        )),
+    )
 }
