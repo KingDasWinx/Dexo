@@ -28,7 +28,11 @@ pub fn copy_via_terminal(text: &str) -> std::io::Result<()> {
 
 fn os_adapter(text: String) -> Result<(), String> {
     let slot = shared_clipboard();
-    let mut guard = slot.lock().map_err(|e| e.to_string())?;
+    // A panic while copying leaves the handle as usable as it was; refusing every later
+    // copy for it would be worse.
+    let mut guard = slot
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     set_text_reusing(
         &mut guard,
         || {
@@ -138,14 +142,24 @@ mod tests {
         copy_text("dexo-clipboard-smoke-1".into()).expect("first copy");
         copy_text("dexo-clipboard-smoke-2".into()).expect("second copy");
         // Read back through the still-alive shared handle (process-exit Drop is separate).
+        // On Wayland the compositor hands the selection over a moment later, and a
+        // clipboard manager watching it can briefly answer with the one before.
         let slot = super::shared_clipboard();
-        let mut guard = slot.lock().unwrap();
-        let text = guard
-            .as_mut()
-            .expect("shared clipboard")
-            .0
-            .get_text()
-            .expect("read back");
+        let mut text = String::new();
+        for _ in 0..40 {
+            let mut guard = slot.lock().unwrap();
+            text = guard
+                .as_mut()
+                .expect("shared clipboard")
+                .0
+                .get_text()
+                .expect("read back");
+            if text == "dexo-clipboard-smoke-2" {
+                break;
+            }
+            drop(guard);
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
         assert_eq!(text, "dexo-clipboard-smoke-2");
     }
 
