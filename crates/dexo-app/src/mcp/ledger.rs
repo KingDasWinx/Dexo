@@ -4,6 +4,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::error::{AppError, ErrorCategory};
+use crate::mcp::approval::{Approval, ApprovalDecision};
 use crate::mcp::audit::AuditEvent;
 use crate::mcp::grant::Grant;
 use crate::mcp::operation::{
@@ -35,8 +36,28 @@ pub trait GrantLedger: Send + Sync {
     ) -> Result<(), AppError>;
     fn record_audit(&self, event: AuditEvent);
     fn audits(&self) -> Vec<AuditEvent>;
+    /// The `limit` latest events, newest first.
+    fn recent_audits(&self, limit: usize) -> Vec<AuditEvent> {
+        let mut events = self.audits();
+        events.reverse();
+        events.truncate(limit);
+        events
+    }
     fn prune_audits(&self, older_than: i64);
     fn is_revoked(&self, id: Uuid) -> bool;
+    /// A write waiting for a person, as the server records it.
+    fn request_approval(&self, approval: &Approval) -> Result<(), AppError>;
+    fn approval(&self, id: Uuid) -> Option<Approval>;
+    /// Decides a request that is still pending, its statement blanked; false when it was
+    /// decided already. Approval is refused once the deadline has passed.
+    fn settle_approval(
+        &self,
+        id: Uuid,
+        decision: ApprovalDecision,
+        now: i64,
+    ) -> Result<bool, AppError>;
+    /// The requests still waiting at `now`, oldest first.
+    fn pending_approvals(&self, now: i64) -> Vec<Approval>;
 }
 
 #[derive(Default)]
@@ -49,6 +70,7 @@ struct Inner {
     grants: Vec<Grant>,
     operations: HashMap<String, OperationRecord>,
     audits: Vec<AuditEvent>,
+    approvals: Vec<Approval>,
     revision: u64,
 }
 
@@ -193,6 +215,62 @@ impl GrantLedger for MemoryGrantLedger {
             .grants
             .iter()
             .any(|grant| grant.id == id && grant.revoked)
+    }
+
+    fn request_approval(&self, approval: &Approval) -> Result<(), AppError> {
+        self.inner
+            .lock()
+            .expect("ledger")
+            .approvals
+            .push(approval.clone());
+        Ok(())
+    }
+
+    fn approval(&self, id: Uuid) -> Option<Approval> {
+        self.inner
+            .lock()
+            .expect("ledger")
+            .approvals
+            .iter()
+            .find(|approval| approval.id == id)
+            .cloned()
+    }
+
+    fn settle_approval(
+        &self,
+        id: Uuid,
+        decision: ApprovalDecision,
+        now: i64,
+    ) -> Result<bool, AppError> {
+        let mut inner = self.inner.lock().expect("ledger");
+        let Some(approval) = inner
+            .approvals
+            .iter_mut()
+            .find(|approval| approval.id == id)
+        else {
+            return Ok(false);
+        };
+        if approval.decision != ApprovalDecision::Pending
+            || (decision == ApprovalDecision::Approved && now >= approval.deadline)
+        {
+            return Ok(false);
+        }
+        approval.decision = decision;
+        approval.statement.clear();
+        Ok(true)
+    }
+
+    fn pending_approvals(&self, now: i64) -> Vec<Approval> {
+        self.inner
+            .lock()
+            .expect("ledger")
+            .approvals
+            .iter()
+            .filter(|approval| {
+                approval.decision == ApprovalDecision::Pending && approval.deadline > now
+            })
+            .cloned()
+            .collect()
     }
 }
 

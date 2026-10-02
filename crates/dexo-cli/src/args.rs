@@ -447,6 +447,13 @@ pub enum McpGrantCommand {
         expires: String,
         #[arg(long = "confirm-target")]
         confirm_target: Option<String>,
+        /// Every write the grant covers waits for a person to approve it in Dexo's Agent
+        /// Activity screen; the grant lasts until it expires.
+        #[arg(long)]
+        ask: bool,
+        /// Seconds a write waits for approval before it is refused.
+        #[arg(long, default_value_t = 120, requires = "ask")]
+        approval_timeout: u32,
     },
     List {
         #[arg(long)]

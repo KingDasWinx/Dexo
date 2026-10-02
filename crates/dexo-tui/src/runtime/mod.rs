@@ -176,6 +176,13 @@ impl Password {
     }
 }
 
+fn unix_now() -> i64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs() as i64)
+        .unwrap_or(0)
+}
+
 /// `COUNT(*)`'s answer, however the driver types it.
 fn count_of(value: &dexo_driver_api::DbValue) -> Option<u64> {
     match value {
@@ -612,6 +619,10 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::LoadMcpAudit => self.load_mcp_audit().await,
+            crate::Effect::SettleApproval { id, approve } => {
+                self.settle_approval(id, approve).await
+            }
+            crate::Effect::CheckApprovals => self.check_approvals().await,
             crate::Effect::SetMcpProfileEnabled { name, enabled } => {
                 self.set_mcp_profile_enabled(name, enabled).await
             }
@@ -1994,12 +2005,71 @@ impl WorkbenchRuntime {
             return;
         };
         use dexo_app::mcp::GrantLedger;
+        let now = unix_now();
         let events = ledger
-            .audits()
+            .recent_audits(50)
             .into_iter()
-            .map(|event| format!("{} {} {}", event.profile, event.decision, event.target))
+            .map(|event| {
+                format!(
+                    "{} {} {} {} {}",
+                    event.profile, event.request, event.decision, event.target, event.status
+                )
+                .trim_end()
+                .to_string()
+            })
             .collect();
-        self.emit(Action::McpAuditLoaded { events }).await;
+        let pending = ledger.pending_approvals(now);
+        self.emit(Action::McpAuditLoaded {
+            events,
+            pending,
+            now,
+        })
+        .await;
+    }
+
+    async fn settle_approval(&self, id: uuid::Uuid, approve: bool) {
+        use dexo_app::mcp::{ApprovalDecision, GrantLedger};
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            return;
+        };
+        let decision = if approve {
+            ApprovalDecision::Approved
+        } else {
+            ApprovalDecision::Denied
+        };
+        match ledger.settle_approval(id, decision, unix_now()) {
+            Ok(true) => {
+                self.emit(Action::Notice(if approve {
+                    "Approved: the agent's write runs now.".into()
+                } else {
+                    "Denied: the agent is told no.".into()
+                }))
+                .await
+            }
+            Ok(false) => {
+                self.emit(Action::Notice(
+                    "That request was already decided, or its time ran out.".into(),
+                ))
+                .await
+            }
+            Err(error) => self.emit(Action::Notice(error.to_string())).await,
+        }
+        self.load_mcp_audit().await;
+    }
+
+    async fn check_approvals(&self) {
+        use dexo_app::mcp::GrantLedger;
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+            return;
+        };
+        let pending = ledger.pending_approvals(unix_now());
+        self.emit(Action::ApprovalsWaiting(pending)).await;
     }
 
     async fn set_mcp_profile_enabled(&self, name: String, enabled: bool) {

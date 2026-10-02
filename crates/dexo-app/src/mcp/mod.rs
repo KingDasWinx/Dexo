@@ -1,3 +1,4 @@
+pub mod approval;
 pub mod audit;
 pub mod clients;
 pub mod connection;
@@ -9,6 +10,7 @@ pub mod profile;
 pub mod selector;
 pub mod service;
 
+pub use approval::{Approval, ApprovalDecision};
 pub use audit::{AuditEvent, SqlAuditMode};
 pub use connection::McpConnection;
 pub use grant::{Grant, GrantCapability, WRITE_TOOLS, parse_ttl};

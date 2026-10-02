@@ -539,7 +539,13 @@ pub enum Action {
     },
     McpAuditLoaded {
         events: Vec<String>,
+        pending: Vec<dexo_app::mcp::Approval>,
+        now: i64,
     },
+    /// Agent Activity reads the database again while it is open.
+    AgentActivityTick,
+    /// The writes waiting for approval, looked at while Agent Activity is closed.
+    ApprovalsWaiting(Vec<dexo_app::mcp::Approval>),
     DocumentLoaded {
         document: String,
         path: std::path::PathBuf,
@@ -741,6 +747,13 @@ pub enum Effect {
     },
     /// Look for databases running in Docker.
     DiscoverDocker,
+    /// A person's answer to a write waiting under an asking grant.
+    SettleApproval {
+        id: uuid::Uuid,
+        approve: bool,
+    },
+    /// Whether any agent's write waits for approval, for a toast.
+    CheckApprovals,
     SaveQuery {
         project_id: String,
         connection_id: String,

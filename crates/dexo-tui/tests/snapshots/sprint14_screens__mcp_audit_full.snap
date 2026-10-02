@@ -14,18 +14,18 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││               ┌MCP audit─────────────────────────────────────────────────────────────┐                                           │
-│                          ││               │mcp audit confirm_revoke=false                                        │                                           │
-│                          ││               │audit allow catalog_search db.public.items                            │                                           │
+│                          ││               ┌MCP profiles──────────────────────────────────────────────────────────┐                                           │
+│                          ││               │mcp profile=assistant enabled=false confirm=false                     │                                           │
+│                          ││ ┌Agent activity────────────────────────────────────────────────────────────────────────────────────┐                             │
+│                          ││ │No agent's write is waiting for approval.                                                         │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │Recent activity                                                                                   │                             │
+│                          ││ │  assistant tools/call catalog_search allow db.public.items                                       │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │a approve  d deny  up/down pick  r revoke all grants  esc close                                   │                             │
+│                          ││ └──────────────────────────────────────────────────────────────────────────────────────────────────┘                             │
+│                          ││               │e enable/disable  r revoke profile  R revoke all  up/down select  esc │                                           │
 │                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
 │                          ││               │                                                                      │                                           │
 │                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
 │                          ││                                                                                                                                  │

@@ -116,6 +116,7 @@ async fn postgres_and_mysql_keep_mcp_capabilities_isolated() {
             .cloned()
             .unwrap(),
             0,
+            None,
         )
         .await
         .unwrap_err();

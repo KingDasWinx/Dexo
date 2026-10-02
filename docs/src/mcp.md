@@ -76,10 +76,11 @@ dexo mcp grant create --profile assistant --connection local --capability data_w
 - Production connections, and connections whose own policy is read-only, never accept an MCP write, grant or not. An unknown environment label counts as production.
 - Destructive DDL needs `confirm_target` equal to `target`, typed by the client. MySQL commits DDL implicitly, and the result says so.
 - Each write carries an `operation_id`: retrying with the same id and payload returns the first result instead of writing twice.
+- `--ask` makes a grant that asks: it lasts until it expires, and every write it covers waits for a person. The server records the request -- the SQL or DDL, or the call's arguments, and the tables -- and waits, without holding the connection, until it is approved or denied in the TUI's Agent Activity screen (`Ctrl+Alt+A`), or until `--approval-timeout` seconds (120 by default) pass, which refuses it. A write is approved with `a` and a second, deliberate confirmation; `d` denies. Once decided, the request keeps no SQL. A grant that does not ask is used first when both cover a write. The TUI says when a request arrives while Agent Activity is closed.
 
 ## Audit
 
-Every tool call writes one event: the tool, decision, status code, duration, rows, bytes, connection and object. SQL is stored only as a hash. Grant decisions inside write tools have their own events, tagged `grant <tool>` and correlated by operation id. `mcp serve` deletes events older than the profile's `audit_retention_days` when it starts; `dexo mcp audit` prints them and deletes nothing.
+Every tool call writes one event: the tool, decision, status code, duration, rows, bytes, connection and object; Agent Activity shows the latest as they arrive. SQL is stored only as a hash. Grant decisions inside write tools have their own events, tagged `grant <tool>` and correlated by operation id. `mcp serve` deletes events older than the profile's `audit_retention_days` when it starts; `dexo mcp audit` prints them and deletes nothing.
 
 ## Limits of the allowlist
 

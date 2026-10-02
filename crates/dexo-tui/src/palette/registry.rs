@@ -1090,8 +1090,10 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "mcp.audit",
-            title: "MCP Audit Log",
-            keywords: &["mcp", "grant", "revoke"],
+            title: "Agent Activity",
+            keywords: &[
+                "mcp", "agent", "approve", "approval", "audit", "grant", "revoke",
+            ],
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::OpenMcpAudit),

@@ -1,3 +1,4 @@
+mod approval_repo;
 mod audit_repo;
 mod grant_repo;
 mod operation_repo;
@@ -6,6 +7,7 @@ use std::path::Path;
 use std::sync::Mutex;
 
 use dexo_app::error::{AppError, ErrorCategory};
+use dexo_app::mcp::approval::{Approval, ApprovalDecision};
 use dexo_app::mcp::audit::AuditEvent;
 use dexo_app::mcp::grant::Grant;
 use dexo_app::mcp::ledger::GrantLedger;
@@ -121,6 +123,11 @@ impl GrantLedger for SqliteGrantLedger {
         audit_repo::list(&conn).unwrap_or_default()
     }
 
+    fn recent_audits(&self, limit: usize) -> Vec<AuditEvent> {
+        let conn = self.conn.lock().expect("sqlite");
+        audit_repo::recent(&conn, limit).unwrap_or_default()
+    }
+
     fn prune_audits(&self, older_than: i64) {
         let conn = self.conn.lock().expect("sqlite");
         let _ = audit_repo::prune(&conn, older_than);
@@ -129,6 +136,32 @@ impl GrantLedger for SqliteGrantLedger {
     fn is_revoked(&self, id: Uuid) -> bool {
         let conn = self.conn.lock().expect("sqlite");
         grant_repo::is_revoked(&conn, id).unwrap_or(false)
+    }
+
+    fn request_approval(&self, approval: &Approval) -> Result<(), AppError> {
+        let conn = self.conn.lock().expect("sqlite");
+        approval_repo::insert(&conn, approval).map_err(sql_err)
+    }
+
+    fn approval(&self, id: Uuid) -> Option<Approval> {
+        let conn = self.conn.lock().expect("sqlite");
+        approval_repo::get(&conn, id).ok().flatten()
+    }
+
+    fn settle_approval(
+        &self,
+        id: Uuid,
+        decision: ApprovalDecision,
+        now: i64,
+    ) -> Result<bool, AppError> {
+        let conn = self.conn.lock().expect("sqlite");
+        approval_repo::settle(&conn, id, decision, now).map_err(sql_err)
+    }
+
+    fn pending_approvals(&self, now: i64) -> Vec<Approval> {
+        let conn = self.conn.lock().expect("sqlite");
+        let _ = approval_repo::expire_stale(&conn, now);
+        approval_repo::pending(&conn, now).unwrap_or_default()
     }
 }
 

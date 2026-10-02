@@ -618,3 +618,89 @@ async fn missing_required_arguments_are_rejected() {
         );
     }
 }
+
+/// E1: under an asking grant a write waits for a person -- runs once approved, is
+/// refused when denied or when no one answers in time -- and the request keeps no SQL
+/// once it is decided.
+#[tokio::test]
+async fn an_asking_grant_waits_for_a_person() {
+    use dexo_app::mcp::{ApprovalDecision, GrantLedger};
+    let (mut client, _, ledger) = client_with(FakeBackend::with_session("local", users())).await;
+    ledger
+        .insert_grant(
+            Grant::new(
+                &profile(),
+                "local",
+                GrantCapability::DataWrite,
+                vec!["data_insert".into()],
+                vec![SelectorRule::parse(Effect::Allow, "db.public.users").unwrap()],
+                dexo_mcp::tools_write::now_secs(),
+                DEFAULT_TTL_SECS,
+            )
+            .unwrap()
+            .asking(2),
+        )
+        .unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    // A person: answers the first request with `answer`, after looking at it.
+    let decide = |ledger: Arc<MemoryGrantLedger>, answer: ApprovalDecision| {
+        tokio::spawn(async move {
+            loop {
+                let now = dexo_mcp::tools_write::now_secs();
+                if let Some(request) = ledger.pending_approvals(now).into_iter().next() {
+                    assert_eq!(request.tool, "data_insert");
+                    assert!(request.statement.contains("users"), "{request:?}");
+                    assert_eq!(request.targets, ["db.public.users"]);
+                    ledger.settle_approval(request.id, answer, now).unwrap();
+                    return request.id;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+    };
+    let approving = decide(Arc::clone(&ledger), ApprovalDecision::Approved);
+    let approved = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-ask-1", "target": "users", "values": {"id": 2}}),
+        )
+        .await;
+    let id = approving.await.unwrap();
+    assert!(!text(&approved).contains("approval"), "{approved}");
+    assert!(
+        !text(&approved).starts_with("Error [POLICY_DENIED]"),
+        "{approved}"
+    );
+    assert!(ledger.approval(id).unwrap().statement.is_empty());
+
+    let denying = decide(Arc::clone(&ledger), ApprovalDecision::Denied);
+    let denied = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-ask-2", "target": "users", "values": {"id": 3}}),
+        )
+        .await;
+    denying.await.unwrap();
+    assert!(
+        text(&denied).starts_with("Error [POLICY_DENIED]"),
+        "{denied}"
+    );
+    assert!(text(&denied).contains("denied"), "{denied}");
+
+    let unanswered = client
+        .call(
+            "data_insert",
+            json!({"operation_id": "op-ask-3", "target": "users", "values": {"id": 4}}),
+        )
+        .await;
+    assert!(
+        text(&unanswered).contains("no one approved"),
+        "{unanswered}"
+    );
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(ledger.pending_approvals(now).is_empty());
+}

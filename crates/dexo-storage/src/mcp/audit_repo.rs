@@ -26,6 +26,19 @@ pub fn list(conn: &Connection) -> anyhow::Result<Vec<AuditEvent>> {
     Ok(events)
 }
 
+pub fn recent(conn: &Connection, limit: usize) -> anyhow::Result<Vec<AuditEvent>> {
+    let mut stmt =
+        conn.prepare("SELECT json FROM mcp_audit ORDER BY timestamp DESC, rowid DESC LIMIT ?1")?;
+    let rows = stmt.query_map(params![limit as i64], |row| row.get::<_, String>(0))?;
+    let mut events = Vec::new();
+    for row in rows {
+        if let Ok(event) = serde_json::from_str(&row?) {
+            events.push(event);
+        }
+    }
+    Ok(events)
+}
+
 pub fn prune(conn: &Connection, older_than: i64) -> anyhow::Result<()> {
     conn.execute(
         "DELETE FROM mcp_audit WHERE timestamp < ?1",

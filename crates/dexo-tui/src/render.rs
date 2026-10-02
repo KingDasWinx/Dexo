@@ -2147,19 +2147,38 @@ fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 72, 12);
+    let area = frame.area();
     let lines = model.mcp_audit.lines();
+    let popup = centered(
+        area,
+        100,
+        (lines.len() as u16 + 2).min(area.height.saturating_sub(2)),
+    );
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("MCP audit"),
+        overlay_block(model, "Agent activity"),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    let deciding = model.mcp_audit.deciding.as_ref();
     for_popup_lines(popup, &lines, |_, line, rect| {
-        if line.contains("revoke") {
-            hits.register(HitTarget::Button(HitButton::Revoke), rect);
+        if line.contains("[Cancel]") {
+            let label = if deciding.is_some_and(|deciding| deciding.approve) {
+                "Approve"
+            } else {
+                "Deny"
+            };
+            crate::widgets::form::register_footer(hits, rect, line, label);
+        } else if line.contains("revoke all grants") {
+            register_label(
+                hits,
+                rect,
+                line,
+                "r revoke all grants",
+                HitTarget::Button(HitButton::Revoke),
+            );
         }
     });
 }

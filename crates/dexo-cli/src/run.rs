@@ -1817,6 +1817,8 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             selector,
             expires,
             confirm_target,
+            ask,
+            approval_timeout,
         } => {
             if confirm_target.as_deref() != Some(connection.as_str())
                 && confirm_target.as_deref() != Some(selector.as_str())
@@ -1843,17 +1845,33 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 now,
                 ttl,
             )?;
-            println!("grant {} expires_at={} uses=1", grant.id, grant.expires_at);
+            let grant = if ask {
+                grant.asking(approval_timeout)
+            } else {
+                grant
+            };
+            if grant.asks() {
+                println!(
+                    "grant {} expires_at={} asks: each write waits up to {}s for approval",
+                    grant.id, grant.expires_at, grant.ask_secs
+                );
+            } else {
+                println!("grant {} expires_at={} uses=1", grant.id, grant.expires_at);
+            }
             ledger.insert_grant(grant)?;
         }
         McpGrantCommand::List { profile } => {
             for grant in ledger.active_grants(&profile, now) {
+                let uses = if grant.asks() {
+                    format!("asks={}s", grant.ask_secs)
+                } else {
+                    format!("uses={}", grant.remaining_uses)
+                };
                 println!(
-                    "{} {} {} uses={} expires={}",
+                    "{} {} {} {uses} expires={}",
                     grant.id,
                     capability_label(grant.capability),
                     grant.tools.join(","),
-                    grant.remaining_uses,
                     grant.expires_at - now
                 );
             }

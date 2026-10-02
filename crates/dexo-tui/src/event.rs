@@ -129,6 +129,9 @@ async fn run_loop(
     let mut toast_tick = tokio::time::interval(Duration::from_secs(1));
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    // Agent Activity is live: the requests and the calls are read again every second.
+    let mut agent_tick = tokio::time::interval(Duration::from_secs(1));
+    agent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     loop {
         let mut hits = crate::mouse::HitMap::default();
         let mut drawn = ratatui::layout::Rect::default();
@@ -171,6 +174,12 @@ async fn run_loop(
             }
             _ = toast_tick.tick(), if model.messages.expires() => {
                 let _ = crate::update::update(&mut model, Action::ToastTick);
+            }
+            _ = agent_tick.tick(), if model.mcp_audit.open => {
+                let effects = crate::update::update(&mut model, Action::AgentActivityTick);
+                if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
+                    return Ok(());
+                }
             }
             _ = checkpoint.tick() => {
                 let effects = crate::update::update(&mut model, Action::CheckpointTick);

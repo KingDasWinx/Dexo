@@ -8,8 +8,8 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<()> {
     conn.execute(
         "INSERT INTO mcp_grants (
             id, profile_name, connection_name, capability, tools_json, selectors_json,
-            expires_at, remaining_uses, revision, revoked
-         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+            expires_at, remaining_uses, revision, revoked, ask_secs
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
         params![
             grant.id.to_string(),
             grant.profile,
@@ -21,6 +21,7 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<()> {
             grant.remaining_uses as i64,
             grant.revision as i64,
             if grant.revoked { 1 } else { 0 },
+            grant.ask_secs,
         ],
     )?;
     Ok(())
@@ -29,7 +30,7 @@ pub fn insert(conn: &Connection, grant: &Grant) -> anyhow::Result<()> {
 pub fn list_active(conn: &Connection, profile: &str, now: i64) -> anyhow::Result<Vec<Grant>> {
     let mut stmt = conn.prepare(
         "SELECT id, profile_name, connection_name, capability, tools_json, selectors_json,
-                expires_at, remaining_uses, revision, revoked
+                expires_at, remaining_uses, revision, revoked, ask_secs
          FROM mcp_grants
          WHERE profile_name = ?1 AND remaining_uses > 0 AND expires_at > ?2 AND revoked = 0",
     )?;
@@ -49,7 +50,7 @@ pub fn consume(conn: &Connection, id: Uuid, now: i64) -> Result<Grant, AppError>
     let mut grant = conn
         .query_row(
             "SELECT id, profile_name, connection_name, capability, tools_json, selectors_json,
-                    expires_at, remaining_uses, revision, revoked
+                    expires_at, remaining_uses, revision, revoked, ask_secs
              FROM mcp_grants WHERE id = ?1",
             params![id.to_string()],
             row_to_grant,
@@ -128,5 +129,6 @@ fn row_to_grant(row: &rusqlite::Row<'_>) -> rusqlite::Result<Grant> {
         remaining_uses: row.get::<_, i64>(7)? as u32,
         revision: row.get::<_, i64>(8)? as u64,
         revoked: row.get::<_, i64>(9)? != 0,
+        ask_secs: row.get(10)?,
     })
 }

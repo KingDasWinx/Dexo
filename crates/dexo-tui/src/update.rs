@@ -288,7 +288,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             finish_schema_run(model, key.operation, Some(index))
         }
-        Action::CheckpointTick => checkpoint_session(model),
+        Action::CheckpointTick => {
+            let mut effects = checkpoint_session(model);
+            // An agent's write waiting for approval is said even with Agent Activity
+            // closed; open, the screen reads the database on its own clock.
+            if !model.mcp_audit.open {
+                effects.push(Effect::CheckApprovals);
+            }
+            effects
+        }
         Action::OnboardingTick => {
             if model.onboarding.open && model.onboarding.logo_frames.len() > 1 {
                 model.onboarding.logo_frame =
@@ -1832,8 +1840,49 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.mcp_profiles.load_profiles(profiles);
             Vec::new()
         }
-        Action::McpAuditLoaded { events } => {
-            model.mcp_audit.events = events;
+        Action::McpAuditLoaded {
+            events,
+            pending,
+            now,
+        } => {
+            let screen = &mut model.mcp_audit;
+            screen.events = events;
+            screen.now = now;
+            // A request decided elsewhere, or out of time, takes its confirmation away.
+            if screen
+                .deciding
+                .as_ref()
+                .is_some_and(|deciding| pending.iter().all(|request| request.id != deciding.id))
+            {
+                screen.deciding = None;
+            }
+            screen.announced = pending.iter().map(|request| request.id).collect();
+            screen.pending = pending;
+            screen.selected = screen.selected.min(screen.pending.len().saturating_sub(1));
+            Vec::new()
+        }
+        Action::AgentActivityTick => {
+            if model.mcp_audit.open {
+                vec![Effect::LoadMcpAudit]
+            } else {
+                Vec::new()
+            }
+        }
+        Action::ApprovalsWaiting(pending) => {
+            // Said once per request, and not while the screen that lists them is open.
+            let new = pending
+                .iter()
+                .filter(|request| !model.mcp_audit.announced.contains(&request.id))
+                .count();
+            if new > 0 && !model.mcp_audit.open {
+                let key = crate::palette::shortcut_for(model, "mcp.audit", None)
+                    .map(|key| format!(" ({key})"))
+                    .unwrap_or_default();
+                model.messages.warn(format!(
+                    "An agent's write is waiting for your approval in Agent Activity{key}."
+                ));
+            }
+            model.mcp_audit.announced = pending.iter().map(|request| request.id).collect();
             Vec::new()
         }
         Action::DocumentLoaded {
@@ -2841,6 +2890,17 @@ fn mouse_recovery(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
         Some(HitTarget::Button(HitButton::Revoke)) => update(model, Action::RevokeAllMcpGrants),
+        Some(HitTarget::FooterSubmit) => match model.mcp_audit.deciding.take() {
+            Some(deciding) => vec![Effect::SettleApproval {
+                id: deciding.id,
+                approve: deciding.approve,
+            }],
+            None => Vec::new(),
+        },
+        Some(HitTarget::FooterCancel) => {
+            model.mcp_audit.deciding = None;
+            Vec::new()
+        }
         _ => Vec::new(),
     }
 }
@@ -3744,9 +3804,50 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.mcp_audit.open {
+        use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+        let screen = &mut model.mcp_audit;
+        if let Some(deciding) = screen.deciding.as_mut() {
+            return match footer_key(&mut deciding.focus, &key) {
+                FooterKey::Submit => {
+                    let (id, approve) = (deciding.id, deciding.approve);
+                    screen.deciding = None;
+                    vec![Effect::SettleApproval { id, approve }]
+                }
+                FooterKey::Cancel => {
+                    screen.deciding = None;
+                    Vec::new()
+                }
+                FooterKey::Moved | FooterKey::Pass => Vec::new(),
+            };
+        }
         return match key.code {
             KeyCode::Esc => {
-                model.mcp_audit.open = false;
+                screen.open = false;
+                Vec::new()
+            }
+            KeyCode::Up => {
+                screen.selected = screen.selected.saturating_sub(1);
+                Vec::new()
+            }
+            KeyCode::Down => {
+                screen.selected = (screen.selected + 1).min(screen.pending.len().saturating_sub(1));
+                Vec::new()
+            }
+            // Approving runs a write: Cancel holds the focus, so an Enter out of habit
+            // decides nothing. Denying is safe, and is one Enter away.
+            KeyCode::Char(answer @ ('a' | 'd')) => {
+                if let Some(request) = screen.current() {
+                    let approve = answer == 'a';
+                    screen.deciding = Some(crate::screens::mcp_audit::Deciding {
+                        id: request.id,
+                        approve,
+                        focus: if approve {
+                            FooterFocus::Cancel
+                        } else {
+                            FooterFocus::Submit
+                        },
+                    });
+                }
                 Vec::new()
             }
             KeyCode::Char('r') => update(model, Action::RevokeAllMcpGrants),
@@ -9171,6 +9272,74 @@ mod tests {
         assert_eq!(connected(&mut model, "prod", 1), "Connected to prod");
         assert_eq!(connected(&mut model, "demo", 2), "the URL's password shows");
         assert!(model.startup_warning.is_none());
+    }
+
+    /// Agent Activity lists a waiting write with its SQL; approving takes a deliberate
+    /// second step (Cancel holds the focus), denying one Enter; a request waiting while
+    /// the screen is closed is announced once.
+    #[test]
+    fn agent_activity_decides_waiting_writes() {
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let request = dexo_app::mcp::Approval::pending(
+            "assistant",
+            "local",
+            "data_execute_sql",
+            serde_json::json!({"sql": "DELETE FROM orders WHERE id = 7"})
+                .as_object()
+                .unwrap(),
+            vec!["db.public.orders".into()],
+            1000,
+            120,
+        );
+        let mut model = Model::default();
+        update(&mut model, Action::ApprovalsWaiting(vec![request.clone()]));
+        assert!(
+            model
+                .messages
+                .last()
+                .is_some_and(|message| message.message.contains("waiting for your approval"))
+        );
+        let shown = model.messages.len();
+        update(&mut model, Action::ApprovalsWaiting(vec![request.clone()]));
+        assert_eq!(model.messages.len(), shown, "said twice");
+
+        assert!(matches!(
+            update(&mut model, Action::OpenMcpAudit).as_slice(),
+            [Effect::LoadMcpAudit]
+        ));
+        update(
+            &mut model,
+            Action::McpAuditLoaded {
+                events: vec![
+                    "assistant grant data_execute_sql ask db.public.orders waiting".into(),
+                ],
+                pending: vec![request.clone()],
+                now: 1010,
+            },
+        );
+        let lines = model.mcp_audit.lines().join("\n");
+        assert!(lines.contains("DELETE FROM orders WHERE id = 7"), "{lines}");
+        assert!(lines.contains("110s left"), "{lines}");
+        update(&mut model, key(KeyCode::Char('a')));
+        assert!(
+            update(&mut model, key(KeyCode::Enter)).is_empty(),
+            "Enter alone approved"
+        );
+        update(&mut model, key(KeyCode::Char('a')));
+        update(&mut model, key(KeyCode::Left));
+        assert!(matches!(
+            update(&mut model, key(KeyCode::Enter)).as_slice(),
+            [Effect::SettleApproval { id, approve: true }] if *id == request.id
+        ));
+        update(&mut model, key(KeyCode::Char('d')));
+        assert!(matches!(
+            update(&mut model, key(KeyCode::Enter)).as_slice(),
+            [Effect::SettleApproval { approve: false, .. }]
+        ));
+        assert!(matches!(
+            update(&mut model, Action::AgentActivityTick).as_slice(),
+            [Effect::LoadMcpAudit]
+        ));
     }
 
     /// A database running in Docker is listed under the saved connections, and Enter on

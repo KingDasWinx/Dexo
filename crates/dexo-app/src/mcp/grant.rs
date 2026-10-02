@@ -78,9 +78,25 @@ pub struct Grant {
     pub remaining_uses: u32,
     pub revision: u64,
     pub revoked: bool,
+    /// Above zero, the grant asks: each write it covers waits up to this many seconds
+    /// for a person to approve it, and the grant is not spent by one.
+    #[serde(default)]
+    pub ask_secs: u32,
 }
 
 impl Grant {
+    /// The grant made to ask, every write it covers waiting up to `timeout_secs` for a
+    /// person's decision. An asking grant lasts until it expires.
+    pub fn asking(mut self, timeout_secs: u32) -> Self {
+        self.ask_secs = timeout_secs.max(1);
+        self.remaining_uses = u32::MAX;
+        self
+    }
+
+    pub fn asks(&self) -> bool {
+        self.ask_secs > 0
+    }
+
     pub fn new(
         profile: &McpProfile,
         connection: impl Into<String>,
@@ -142,6 +158,7 @@ impl Grant {
             remaining_uses: 1,
             revision: 1,
             revoked: false,
+            ask_secs: 0,
         })
     }
 
