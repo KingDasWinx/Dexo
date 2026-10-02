@@ -104,6 +104,25 @@ impl McpService {
         }
     }
 
+    /// Whether `object` may be shown, given the relation its `parent` id names. An index,
+    /// a constraint or a trigger has a name of its own (`secrets_pkey` is not `secrets`),
+    /// so its name alone would show what a hidden table has: these, and columns, are
+    /// visible only when their relation is.
+    pub fn visible_under(&self, object: &CatalogObject, parent: Option<&CatalogObject>) -> bool {
+        if !self.visible(object) {
+            return false;
+        }
+        if !matches!(
+            object.kind,
+            ObjectKind::Column | ObjectKind::Index | ObjectKind::Constraint | ObjectKind::Trigger
+        ) {
+            return true;
+        }
+        parent.is_some_and(|parent| {
+            object.parent.as_ref() == Some(&parent.id) && self.visible(parent)
+        })
+    }
+
     pub fn policy(&self) -> ObjectPolicy {
         ObjectPolicy::new(self.profile.selectors.clone())
     }
@@ -448,6 +467,36 @@ mod tests {
             QualifiedName::new(Some("db"), Some("other"), "other"),
             None,
         )));
+    }
+
+    #[test]
+    fn a_denied_tables_index_and_constraint_stay_hidden() {
+        use dexo_driver_api::ObjectKind::{Constraint, Index, Table};
+        use dexo_driver_api::{CatalogObject, ObjectId, QualifiedName};
+        let service = raw_service(10, 1024);
+        let object = |kind, name: &str, parent: Option<&str>| {
+            CatalogObject::new(
+                ObjectId::new(name),
+                kind,
+                QualifiedName::new(Some("db"), Some("public"), name),
+                parent.map(ObjectId::new),
+            )
+        };
+        let secrets = object(Table, "secrets", None);
+        let users = object(Table, "users", None);
+        let hidden_index = object(Index, "secrets_pkey", Some("secrets"));
+        let hidden_constraint = object(Constraint, "secrets_owner_fk", Some("secrets"));
+        assert!(service.visible(&hidden_index), "its own name is allowed");
+        assert!(!service.visible_under(&hidden_index, Some(&secrets)));
+        assert!(!service.visible_under(&hidden_constraint, Some(&secrets)));
+        assert!(!service.visible_under(&hidden_index, None));
+        let shown = object(Index, "users_pkey", Some("users"));
+        assert!(service.visible_under(&shown, Some(&users)));
+        assert!(
+            !service.visible_under(&shown, Some(&secrets)),
+            "not its parent"
+        );
+        assert!(service.visible_under(&users, None));
     }
 
     #[test]

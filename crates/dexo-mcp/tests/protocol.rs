@@ -155,6 +155,24 @@ fn catalog() -> Vec<dexo_driver_api::CatalogObject> {
             Some("users"),
         )
         .with_attribute("type", json!("int4")),
+        node(
+            "secrets_pkey",
+            ObjectKind::Index,
+            public("secrets_pkey"),
+            Some("secrets"),
+        ),
+        node(
+            "secrets_owner_fk",
+            ObjectKind::Constraint,
+            public("secrets_owner_fk"),
+            Some("secrets"),
+        ),
+        node(
+            "users_pkey",
+            ObjectKind::Index,
+            public("users_pkey"),
+            Some("users"),
+        ),
     ]
 }
 
@@ -172,13 +190,30 @@ async fn a_denied_table_is_invisible_to_every_catalog_tool() {
         .call("catalog_list", json!({"parent_id": "secrets"}))
         .await;
     assert!(!text(&columns).contains("email"));
+    assert!(
+        !text(&columns).contains("secrets_pkey"),
+        "{}",
+        text(&columns)
+    );
     let search = client
         .call("catalog_search", json!({"query": "secr"}))
         .await;
     assert!(!text(&search).contains("secrets"));
-    for tool in ["object_describe", "object_get_ddl", "object_relationships"] {
-        let hidden = client.call(tool, json!({"name": "secrets"})).await;
-        assert_eq!(text(&hidden), "Error [NOT_FOUND]: not found", "{tool}");
+    // An index or a constraint is named on its own, and still belongs to its table.
+    let keys = client
+        .call("catalog_search", json!({"query": "pkey"}))
+        .await;
+    assert!(text(&keys).contains("users_pkey"), "{}", text(&keys));
+    assert!(!text(&keys).contains("secrets"), "{}", text(&keys));
+    for name in ["secrets", "secrets_pkey", "secrets_owner_fk"] {
+        for tool in ["object_describe", "object_get_ddl", "object_relationships"] {
+            let hidden = client.call(tool, json!({"name": name})).await;
+            assert_eq!(
+                text(&hidden),
+                "Error [NOT_FOUND]: not found",
+                "{tool} {name}"
+            );
+        }
     }
     let described = client
         .call("object_describe", json!({"name": "users"}))
