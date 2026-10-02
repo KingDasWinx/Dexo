@@ -157,8 +157,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ES-11** `MAJOR` "Show Dependencies" is just the Inspect dialog with raw catalog ids
 - [x] **ES-15** `MAJOR` Manage Grants (Security panel): the "DDL preview" opens underneath the panel and cannot be read; Apply answers "ddl RolledBack"
 - [ ] **ES-16** `MAJOR` Security panel is a 40-column box that truncates every grant and has no hints
-- [ ] **ES-17** `MAJOR` Refresh Catalog (all) and `r` on a connection / group node do not refresh anything; no feedback either way
-- [ ] **ES-20** `MAJOR` Hotkey `n` of "Edit Object Note…" does not work from the explorer: it opens "Add connection"
+- [x] **ES-17** `MAJOR` Refresh Catalog (all) and `r` on a connection / group node do not refresh anything; no feedback either way
+- [x] **ES-20** `MAJOR` Hotkey `n` of "Edit Object Note…" does not work from the explorer: it opens "Add connection"
 - [x] **ES-24** `MAJOR` Preview DDL form: `defaults`, `indexes`, `constraints` and `foreign_keys` fields are ignored by the preview and by Apply
 - [x] **ES-25** `MAJOR` Preview DDL form: the columns field is a hidden mini-language; commas inside `numeric(10,2)` break the DDL, and unknown words are dropped silently
 - [x] **ES-26** `MAJOR` Applying DDL answers `ddl Committed` / `ddl RolledBack` (Rust enum names); a failure never says why

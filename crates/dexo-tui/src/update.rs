@@ -6766,21 +6766,7 @@ fn finish_schema_run(
     if model.active_session.is_none() || model.connection.name.is_empty() {
         return Vec::new();
     }
-    // The connection's top level and every node open under it are read again, the tree
-    // left as it is -- open, and with the selection where it was.
-    let connection = crate::screens::explorer::connection_id(&model.connection.name);
-    let mut effects = Vec::new();
-    for parent in
-        std::iter::once(connection.clone()).chain(model.explorer.expanded_under(&connection))
-    {
-        effects.extend(catalog_load_effect(
-            model,
-            Some(parent),
-            crate::runtime::OperationId::new(),
-            false,
-        ));
-    }
-    effects
+    reload_connection_tree(model)
 }
 
 fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
@@ -7371,6 +7357,24 @@ fn open_selected_table(model: &mut Model) -> Vec<Effect> {
     effects
 }
 
+/// The connection's top level and every node open under it, read again: the tree stays
+/// as it is -- open, and with the selection where it was.
+fn reload_connection_tree(model: &mut Model) -> Vec<Effect> {
+    let connection = crate::screens::explorer::connection_id(&model.connection.name);
+    let mut effects = Vec::new();
+    for parent in
+        std::iter::once(connection.clone()).chain(model.explorer.expanded_under(&connection))
+    {
+        effects.extend(catalog_load_effect(
+            model,
+            Some(parent),
+            crate::runtime::OperationId::new(),
+            false,
+        ));
+    }
+    effects
+}
+
 fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
     if model.active_session.is_none() {
         model
@@ -7378,28 +7382,30 @@ fn refresh_catalog(model: &mut Model, all: bool) -> Vec<Effect> {
             .warn("connect a session to refresh the catalog".into());
         return Vec::new();
     }
-    let operation = crate::runtime::OperationId::new();
-    if all {
+    // The connection, a folder, or "all": a folder's id is not one the driver reads (it
+    // answered with an empty list and emptied the folder), so each of these reads the
+    // whole open tree of the connection again.
+    let whole = all
+        || model.explorer.selected_node().is_some_and(|node| {
+            crate::screens::explorer::is_folder_node(node)
+                || crate::screens::explorer::is_connection_node(node)
+        });
+    if whole {
         if model.connection.name.is_empty() {
             return Vec::new();
         }
-        let connection = crate::screens::explorer::connection_id(&model.connection.name);
-        model.explorer.expand_with(&connection, operation);
-        return catalog_load_effect(model, Some(connection), operation, false);
+        model.messages.info(format!(
+            "Refreshing the catalog of {}.",
+            model.connection.name
+        ));
+        return reload_connection_tree(model);
     }
-    // Refreshing a folder sends `folder:...` to the driver, which cannot parse it
-    // and answers with an empty list -- emptying the folder for good.
-    if model
-        .explorer
-        .selected_node()
-        .is_some_and(crate::screens::explorer::is_folder_node)
-    {
-        return Vec::new();
-    }
+    let operation = crate::runtime::OperationId::new();
     let Some(id) = model.explorer.selected.clone() else {
         return Vec::new();
     };
     model.explorer.expand_with(&id, operation);
+    model.messages.info("Refreshing the selected node.".into());
     catalog_load_effect(model, Some(id), operation, false)
 }
 
@@ -12762,7 +12768,7 @@ mod tests {
             .into_iter()
             .find(|entry| entry.id == "explorer.note")
             .expect("in the palette");
-        assert_eq!(entry.shortcut.as_deref(), Some("n"));
+        assert_eq!(entry.shortcut.as_deref(), Some("Shift+N"));
     }
 
     /// Under a DDL taller than the inspector, `n` opens the note editor in view, not
