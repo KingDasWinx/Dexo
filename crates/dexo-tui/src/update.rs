@@ -6759,9 +6759,12 @@ fn clause_bar_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         model.data.bars.focus = None;
         return None;
     };
+    // Ctrl+A, Ctrl+W and the word keys are the bar's: the keymap had them first, so
+    // Ctrl+A selected nothing and Ctrl+W closed the table's tab.
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        && !crate::widgets::text_input::TextInput::owns(&key)
     {
         return None;
     }

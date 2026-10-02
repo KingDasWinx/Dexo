@@ -1341,3 +1341,50 @@ fn a_re_run_with_the_bars_only_reads() {
         dexo_tui::Effect::StartScript(request) if request.read_only
     )));
 }
+
+/// The keymap had every Ctrl key before the bar: Ctrl+A selected nothing, so typing
+/// after it appended (`customer_id = 1Z`), Ctrl+Left and Ctrl+Right moved the grid, and
+/// Ctrl+W closed the table's tab. They edit the bar now, and the selection shows.
+#[test]
+fn the_bars_take_their_own_editing_keys() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    use dexo_tui::screens::data::ClauseBar;
+    let ctrl = |code| Action::Key(KeyEvent::new(code, KeyModifiers::CONTROL));
+    let mut model = result_with_bars();
+    let documents = model.documents.len();
+    update(
+        &mut model,
+        Action::FocusClauseBar {
+            bar: ClauseBar::Where,
+        },
+    );
+    model.data.bars.where_input.set_text("customer_id = 1");
+    update(&mut model, ctrl(KeyCode::Char('a')));
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+    let mut hits = dexo_tui::mouse::HitMap::default();
+    let frame = terminal
+        .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+        .unwrap();
+    let reversed: String = frame
+        .buffer
+        .content()
+        .iter()
+        .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::REVERSED))
+        .map(|cell| cell.symbol())
+        .collect();
+    assert!(reversed.contains("customer_id = 1"), "{reversed:?}");
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('Z'), KeyModifiers::SHIFT)),
+    );
+    assert_eq!(model.data.bars.where_input.as_str(), "Z");
+
+    model.data.bars.where_input.set_text("status = 'pending'");
+    update(&mut model, ctrl(KeyCode::Left));
+    assert_eq!(model.data.bars.where_input.cursor(), "status = '".len());
+    update(&mut model, ctrl(KeyCode::Right));
+    update(&mut model, ctrl(KeyCode::Char('w')));
+    assert_eq!(model.data.bars.where_input.as_str(), "status = '");
+    assert_eq!(model.documents.len(), documents, "Ctrl+W closed a tab");
+    assert_eq!(model.data.bars.focus, Some(ClauseBar::Where));
+}
