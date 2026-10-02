@@ -1,13 +1,14 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 170
 expression: "render_to_string(&model, 100, 30)"
 ---
 demo  local  public                                                                                 
 ┌  Sidebar─────────────────┐ scratch.sql ×  local·users* ×  +                                       
 │[n]ew [e]dit [a]ctions    │┌▸ Results WHERE id = 1 · 1 pending────────────────────────────────────┐
-│  ● local▾  [offline]     ││[Grid] Explain  Messages                                              │
+│  ● local▾                ││[Grid] Explain  Messages                                              │
 │>   ▸ public              ││WHERE w to filter                  ORDER BY o to sort                 │
-│      mysql.users [restric││                                                                      │
+│      mysql.… [restricted]││                                                                      │
 │                          ││                                                                      │
 │ ┌Review changes────────────────────────────────────────────────────────────────────────────────┐ │
 │ │1 change to demo.public.users                                                                 │ │

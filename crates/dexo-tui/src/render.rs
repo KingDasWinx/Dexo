@@ -2842,7 +2842,7 @@ fn render_toast(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     // A long sentence wraps onto a few lines inside the screen, and ends in an ellipsis
     // when even that is not enough: it ran off the right edge mid-word before.
     let room = usize::from(area.width.saturating_sub(6)).min(72);
-    let lines = wrap_toast(&toast.message, room, 3);
+    let lines = wrap_toast(&toast.message, room, 4);
     let text_width = lines
         .iter()
         .map(|line| line.chars().count())

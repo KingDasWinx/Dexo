@@ -94,7 +94,11 @@ fn an_export_over_an_existing_file_asks_before_it_replaces_it() {
     let effects = update(&mut model, Action::ExportConfig { path: path.clone() });
     assert!(effects.is_empty(), "nothing is written yet: {effects:?}");
     let asking = screen(&model);
-    assert!(asking.contains("already exists"), "{asking}");
+    // The path is as long as the temporary folder's, so the sentence may wrap anywhere.
+    assert!(
+        asking.contains("already") && asking.contains("exists."),
+        "{asking}"
+    );
     assert!(
         asking.contains("[Overwrite]") && asking.contains("[Cancel]"),
         "{asking}"
