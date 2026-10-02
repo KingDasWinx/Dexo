@@ -1421,3 +1421,230 @@ Tester note: all keys sent through `qa.sh ... palette-core`. Binary 1.4.1 (`dexo
 - Mouse drag/double-click in the pickers: the harness only sends single clicks and drags; double-click on a file was not tried.
 - Clipboard-related palette entries (Copy, Cut, Paste) belong to the editor tester.
 
+
+### SQL editor (editor-docs)
+
+
+
+Setup note (not a Dexo bug): a tester wrapper script in the shared scratchpad was overwritten by another tester, so some early keystrokes landed in another tester's session. Everything below was reproduced afterwards on a clean restart with a private wrapper.
+
+##### [MAJOR] Table completion inserts a bare name for a table outside the search path, so the accepted query fails
+- **Where:** editor.complete / editor.accept_completion, Postgres pg-dev
+- **Steps:** new doc on pg-dev; type `select * from dail`; popup lists `daily  qa2.reporting.daily`; Enter; Ctrl+Enter
+- **Expected:** completing a table in schema `reporting` inserts `reporting.daily` (or the popup warns), so the query runs
+- **Actual:** text becomes `SELECT * FROM daily`; run gives `relation "daily" does not exist` (SQLSTATE 42P01). Same after `join ` where `daily` is listed first in the popup.
+
+##### [MINOR] `join ` table list ranks a table from another schema first and unrelated tables ahead of the FK target
+- **Where:** editor.complete after `select * from orders o join `
+- **Steps:** type `select * from orders o join ` on pg-dev
+- **Expected:** tables related by foreign key (customers, order_items) first, or at least the default schema first
+- **Actual:** list order is `daily (reporting), MixedCase, customers, events, no_pk, order_items, orders, paid_orders ...` (alphabetical, schema ignored)
+
+##### [MINOR] No live diagnostic for a mistyped keyword or other syntax error
+- **Where:** live diagnostics
+- **Steps:** type `selec 1`, wait 3 s; also `select * form customers where (id = 1 and name = 'abc`
+- **Expected:** an underline and a status line message (the brief names `selec 1` as a diagnostic case); an unterminated string/unclosed paren at least highlighted
+- **Actual:** no underline, no status message, the text is plain; only unknown table (`unknown table nosuch`) and unknown `alias.column` (`unknown column nope in customers`) are flagged. Bare unknown column `nosuchcol` is not flagged either.
+
+##### [MINOR] Enter right after typing a complete table name only accepts the completion, the newline is swallowed
+- **Where:** editor.accept_completion
+- **Steps:** type `select id from customers` (popup shows `customers  qa2.public.customers`), press Enter
+- **Expected:** the popup closes when the typed word already equals the only candidate, or Enter inserts the newline
+- **Actual:** Enter "accepts" the identical item, no new line; a second Enter is needed. Typing a script line by line glues lines together (`...customerswhere name...`) when the user hits Enter quickly after the last word.
+
+##### [MAJOR] Ctrl+H (Find and Replace) does not open Replace; it deletes text
+- **Where:** editor.replace, hotkey Ctrl+H (palette and F1 both list `ctrl+h Find and Replace`)
+- **Steps:** focus the editor with text, press Ctrl+H (tmux sends 0x08; also tried the kitty encoding `ESC[104;5u`)
+- **Expected:** the find/replace bar opens
+- **Actual:** 0x08 acts as Backspace (one character removed: `'%ann%'` became `'%ann'`); the CSI-u Ctrl+H deleted a whole word (`cafe`). The Replace bar never opens. In every terminal that sends 0x08 for Ctrl+H (tmux, most legacy terminals) the advertised hotkey silently destroys text. The palette entry works.
+
+##### [MINOR] "Find and Replace" opens with the Replace field focused and nothing shows which field has focus
+- **Where:** editor.replace from the palette
+- **Steps:** Ctrl+P, `replace`, Enter; type `name`; Tab; type `nome`
+- **Expected:** Find field focused first (you type what to look for before the replacement); the active field visibly marked (3)
+- **Actual:** the first typed text went into the Replace field (`Replace name`), the second landed in Find (`Find \dnome`). Both labels are grey; only the hardware cursor tells which field is active.
+
+##### [MINOR] Reopening Find keeps the previous term but does not select it
+- **Where:** editor.find
+- **Steps:** Ctrl+F, type `om`, Esc, Ctrl+F, type `ne`
+- **Expected:** the old term is selected (reverse video) so typing replaces it (3)
+- **Actual:** the box shows `om` unselected; typing appends (`omne`). Needs Ctrl+A first.
+
+##### [COSMETIC] Find bar hint is cut off at the right edge
+- **Where:** Find bar (row 22 at 120 columns; replace bar row above it)
+- **Steps:** Ctrl+F
+- **Expected:** the whole hint, or a shortened hint that fits
+- **Actual:** `Find    name  1/4  Aa Word  Enter next · Shift+Enter prev · Alt+C case · Alt+W word · Alt+R repla` ends mid-word; at narrower widths more is lost, and the Replace hint (Alt+A) is only visible on the second bar.
+
+##### [MAJOR] Paste fails when the system clipboard is unavailable, with a raw backend error
+- **Where:** editor.paste (Ctrl+V and palette), after a Copy that did work through OSC 52
+- **Steps:** type `abc def`, Ctrl+A, Ctrl+C (Messages: `copied to clipboard`, `qa.sh clipboard` shows the text), move, Ctrl+V
+- **Expected:** paste the text Dexo just copied (internal yank register as fallback), or an actionable message
+- **Actual:** error toast `Unknown error while interacting with the clipboard: X11 server connection timed out because it was unreachable` and nothing is pasted. Copy and cut work (OSC 52), so over SSH/containers/Wayland-less sessions the editor can copy but never paste its own text. Bracketed terminal paste works (a 600-line script pasted instantly).
+
+##### [MINOR] Go To Definition says "no definition at cursor" unless the object is already loaded in the explorer
+- **Where:** editor.goto
+- **Steps:** connect pg-dev with the explorer collapsed; `select * from orders` cursor on `orders`; Ctrl+P, `definition`, Enter. Repeat with `paid_orders` and `reporting.daily`.
+- **Expected:** the explorer reveals the table (loading the schema if needed), or the message says why
+- **Actual:** warn toast `no definition at cursor` (nothing else). After manually expanding qa2 > Schemas > public > Tables the same command on `customers`/`orders` reveals and expands the node, silently (no message, focus stays in the editor). `reporting.daily` still fails while the `reporting` schema is collapsed. No hotkey is shown for the command.
+
+##### [COSMETIC] Ctrl+Home / Ctrl+End do not go to the start / end of the document
+- **Where:** editor navigation, 600-line document
+- **Steps:** paste a 600-line script, press Ctrl+Home (`ESC[1;5H`) and Ctrl+End (`ESC[1;5F`)
+- **Expected:** cursor jumps to line 1 / the last line
+- **Actual:** acts like Home / End (cursor stays on the same line, column 0 / end of line; the view does not move). PageUp/PageDown and the wheel work (wheel moves 1 line per notch). There is no Go To Line command anywhere in the palette (`line`/`go` find nothing relevant) and Ctrl+G does nothing in the default keymap, so a 500-line script has no way to jump to a line except Vim `:N`.
+
+##### [MINOR] Input sequence glued to a preceding Esc is typed into the document as text
+- **Where:** editor, any state (popup open or not)
+- **Steps:** `qa.sh keys NAME Escape Home` (sends `ESC ESC [ 1 ~` in one write); also `Escape Left`, `Escape Up`, `Escape F5`, `Escape C-Left`
+- **Expected:** Esc, then the key (or at worst Alt+key)
+- **Actual:** the document receives literal `[1~`, `[D`, `[A`, `[15~`, `[1;5D` (`SELECT 1 [D[A[15~[1;5D`). Also happens organically when the UI lags (a 600-character line typed in one go made the next Esc+Home arrive together and left `wide[1~` at the end of the line). Terminals that encode Alt+arrow as ESC ESC [ A hit the same path.
+
+##### [MAJOR] Picking an entry in History replaces the active document tab (no Save / Don't save prompt) and runs the statement
+- **Where:** editor.history (Search History), pick with Enter
+- **Steps:** Ctrl+N, Enter (document `query-1.sql`), type `select 42 as important_unsaved_work` (tab shows `query-1.sql*`), Ctrl+P `search hist` Enter, Enter on any entry
+- **Expected:** the entry is inserted into the document (or a new tab is opened) and nothing is lost; selecting should not execute SQL by itself
+- **Actual:** the tab `pg-dev·query-1.sql*` becomes `scratch.sql` holding the history statement; the unsaved document disappears from the tab strip without Save / Don't save / Cancel (its text only comes back after restarting Dexo, restored from the session, e.g. `mydoc.sql` holding `SELECT 8 AS eight_unsaved` was back after a restart; nothing in the UI says so). The statement is also executed immediately (Results show `203` for count(*)), and history gets a duplicate entry for it. Repeated picks leave several tabs all called `scratch.sql`. Picking an UPDATE from history re-ran it (`1 row affected`) with no confirmation.
+
+##### [MAJOR] "Search History" has no search
+- **Where:** editor.history dialog
+- **Steps:** Ctrl+P, `search hist`, Enter; type `count`; also `/` then `one`
+- **Expected:** the list filters as you type, a visible search field/hint line (Enter pick, Esc close)
+- **Actual:** the dialog is a bare list titled `History`; typed characters do nothing, no hint line, entries are cut at the box edge without an ellipsis (`...WHERE reg`), no time/connection per entry, identical statements are repeated. Failed statements are not recorded (`select * from nosuchtable` is missing) which may be intended but is not said.
+
+##### [MAJOR] Clear History: the confirmation is an empty box, and the command refuses when history was not loaded
+- **Where:** editor.history.clear
+- **Steps:** (a) Ctrl+P `clear hist` Enter right after running statements in a fresh session; (b) after opening Search History once, repeat
+- **Expected:** (a) clears or asks; (b) a confirm dialog that says what Enter/Esc do, with Clear/Cancel buttons
+- **Actual:** (a) palette answers `history is empty` although Search History lists entries (the list is only loaded once the History dialog was opened). (b) a dialog titled `clear history for pg-dev?` whose body is `(empty)` and a blank box: no text, no buttons, no key hint. Enter confirms, Esc cancels (works), but any mouse click inside the blank box also confirms and clears everything. After confirming, the History dialog opens showing the old entries (stale) and only a reopen shows `(empty)`; no `history cleared` message.
+
+##### [MAJOR] Parameters prompt starts pre-filled with the last value typed anywhere, so typing appends to stale text
+- **Where:** editor.parameters (Ctrl+Enter on a statement with `:name` parameters, and palette `Submit Parameters`)
+- **Steps:** pg-dev doc `select * from customers where id = :id and region = :region`, Ctrl+Enter; type `5`, Enter; the second prompt is `region = 5` (not empty); type `north` -> `5north`. Later runs, even in other documents and on other connections (MySQL, SQLite, DuckDB), open with the last typed value (`id = north`, `id = zzz`, `region = zzz`).
+- **Expected:** each prompt starts empty (or with that parameter's own previous value, selected so typing replaces it)
+- **Actual:** the text input is never cleared. Examples: `id = north` + typed `4` gave `north4` and Postgres answered `invalid input syntax for type integer: "north4"` (the message does not say which parameter). The user has to press Ctrl+A before every value.
+
+##### [MINOR] Parameter values are reused silently on the next run; the way to change them is a command called "Submit Parameters"
+- **Where:** editor.parameters
+- **Steps:** run the parametrised statement once (values entered), Ctrl+Enter again
+- **Expected:** a prompt (or a visible note such as `using id=5, region=north`), and a command named like "Edit Parameters"
+- **Actual:** the statement runs at once with the old values and no hint; the only way to be prompted again is Ctrl+P `Submit Parameters`, whose name suggests it submits something already typed. The prompt shows only `id =` / `region =`: no `1 of 2`, no statement. Esc cancels the run correctly; Tab/Shift+Tab/Down/Right walk field and buttons.
+
+##### [MINOR] A statement Dexo cannot read is called "destructive"
+- **Where:** run confirmation
+- **Steps:** document containing only `4`, Ctrl+Enter
+- **Expected:** a syntax error from the server, or a message that says what the guard is worried about
+- **Actual:** dialog `Run destructive statements` / `1. 4` / `Dexo could not read this statement` with [Run] [Cancel] (Cancel focused). The title says destructive, the body says unreadable.
+
+##### [MINOR] Insert Snippet is a dead end
+- **Where:** editor.snippet (palette only, no hotkey)
+- **Steps:** Ctrl+P `snippet` Enter
+- **Expected:** a list, or a message that says how to create a snippet
+- **Actual:** warn toast `no snippets available`. Nothing in the palette, the F1 list or the CLI creates a snippet, so the command can never show anything.
+
+##### [COSMETIC] SQLite errors are printed with `SQLSTATE 1`
+- **Where:** Messages tab after a failing SQLite statement
+- **Steps:** on sqlite-shop run `select * from customers where id = 1 and region = 'x'`
+- **Expected:** `no such column: region` and the position, no SQLSTATE (SQLite has none)
+- **Actual:** `SQLSTATE 1 · line 1, column 43` (an extended result code shown as a SQLSTATE).
+
+##### [MINOR] Ctrl+A in an empty document swallows the next typed character
+- **Where:** editor, empty document (e.g. just after Ctrl+N + name + Enter)
+- **Steps:** new empty document, Ctrl+A, type `abc`; also Ctrl+A, Backspace, type `abc` (Backspace on the empty selection)
+- **Expected:** `abc`
+- **Actual:** `bc` (the first character is lost). With `Ctrl+A, BSpace, BSpace` or `Home` instead, `abc` is typed correctly, so the empty select-all leaves a phantom selection that eats one key. Hit twice by accident while typing `\dt` (-> `dt`) and `select 1` (-> `elect 1`) into fresh documents.
+
+##### [COSMETIC] Wheel-scrolling the Messages tab past the last message leaves an almost empty pane
+- **Where:** Results > Messages
+- **Steps:** with ~12 messages, wheel down 10 notches over the Messages tab
+- **Expected:** the list stops when the last message is at the bottom of the pane
+- **Actual:** only the last two lines stay visible and the rest of the pane is blank. (`\?` is fine: `\d name   a table's or view's columns, keys and ind…` is cut with an ellipsis by the column width.)
+
+##### [MINOR] Completion in a join inserts an ambiguous bare column name
+- **Where:** editor.complete / accept, `where ` after a join
+- **Steps:** pg-dev: `select * from customers c join orders o on o.customer_id = c.id where `; the popup lists `id  c · qa2.public.customers`, `customer_id  o · ...`; accept `id`; type ` = 1`; Ctrl+Enter
+- **Expected:** `c.id` is inserted when more than one table in scope has the column
+- **Actual:** `WHERE id = 1` -> `column reference "id" is ambiguous` (SQLSTATE 42702)
+
+##### [MINOR] Clicking an item in the completion popup does not accept it
+- **Where:** completion popup
+- **Steps:** type `select * from o`; click the `order_items` row of the popup
+- **Expected:** the item is inserted (mouse parity with Enter/Tab)
+- **Actual:** the popup closes, the text stays `SELECT * FROM o`. (Mouse drag selection in the editor works; double/triple click do not select a word/line.)
+
+##### [MAJOR] Unbound Alt+letter combinations are typed into the document
+- **Where:** editor, Default keymap
+- **Steps:** focus an empty editor, press Alt+J, Alt+Z, Alt+F
+- **Expected:** nothing (4: letters typed with Ctrl/Alt never appear as text); Ctrl+B/G/K/L/R/T/U correctly do nothing
+- **Actual:** the document contains `jzf`. In Emacs mode Alt+F / Alt+B (the Emacs word motions) replaced the selected text with `f` and `b`.
+
+##### [MAJOR] Emacs keymap is only a partial overlay: Emacs motion keys do other things
+- **Where:** Settings > Keymap = Emacs
+- **Steps:** document `second line`; Ctrl+A, Ctrl+B, Ctrl+F, Ctrl+N, Ctrl+P, Ctrl+K, Ctrl+D, Alt+F; Ctrl+W with text selected
+- **Expected:** Ctrl+A/E line start/end, Ctrl+B/F char, Ctrl+N/P line, Ctrl+K kill line, Alt+F/B word, Ctrl+W kill region (palette says `Ctrl+W Close Document`, Cut has no key), Ctrl+Y yank
+- **Actual:** Ctrl+A = Select All (typing then replaces the whole document, lost `SELECT 11 AS eleven ab` this way), Ctrl+F = Find bar, Ctrl+B / Ctrl+N / Ctrl+P / Ctrl+K do nothing, Ctrl+D had no visible effect, Alt+F/B insert letters. What works: Ctrl+X Ctrl+E (external editor, shown in the palette), Ctrl+C Ctrl+C (runs the statement under the cursor), Alt+X (palette; the status line shows it), Alt+W (copy). Ctrl+J (still advertised as `run` in the status line) had no visible effect. The palette does adapt its hotkey column (Alt+X, C-x C-e, M-w, Undo/Select All blank under Vim), but Find / Find and Replace / Toggle Comment keep their default keys.
+
+##### [MINOR] History is not scoped to the connection, but "Clear History" is
+- **Where:** editor.history, editor.history.clear
+- **Steps:** run statements on mysql-dev and pg-dev, switch to a sqlite-shop document, Ctrl+P `search hist`: the list holds `\dt cust*`, `SELECT * FROM customers LIMIT 2` (run on MySQL) and pg-dev entries. Ctrl+P `clear hist` (title `clear history for sqlite-shop?`), Enter, reopen the history.
+- **Expected:** history lists (and Enter re-runs) only this connection's statements, or the title says it is global; clearing clears what is shown
+- **Actual:** the list mixes all connections; clearing "for sqlite-shop" leaves every other entry visible; picking a MySQL entry on the sqlite document executes it on SQLite (picking also replaces the tab, see above).
+
+##### [MINOR] After the window was shrunk to 60x20, explorer and results stay hidden when it grows again
+- **Where:** layout / resize (cross-cutting)
+- **Steps:** at 120x36 resize to 80x24, then 60x20 (editor only), then back to 80x24 and 120x36
+- **Expected:** the panes come back with the room (6: resizing redraws cleanly)
+- **Actual:** the editor stays full width with no explorer or results at 120x36 until Ctrl+P `reset layout` is run. At 60x20 the status line shows lowercase `ctrl+p  F1  Alt+1 connections  Ctrl+P commands` (mixed `ctrl+p` / `Ctrl+P`).
+
+##### [COSMETIC] Completion popup is not repositioned to fit narrow terminals
+- **Where:** completion popup at 80x24 and 60x20
+- **Steps:** resize to 80x24, type `select * from customers c where c.`
+- **Expected:** the popup stays inside the editor pane and the screen
+- **Actual:** at 80x24 it runs over the editor's bottom border into the Results header (`└─────────────────────└────`), the right side is cut at the screen edge (`created_at  main.custom`); at 60 columns the right border is missing. Save query, Find/Replace bar, History and Parameters dialogs fit at both sizes.
+
+##### [MAJOR] Writes on MySQL give no feedback at all (no "N rows affected", empty Results, nothing in Messages)
+- **Where:** editor execute on mysql-dev (seen while testing history/parameters)
+- **Steps:** mysql-dev document: `update customers set region = 'zz' where id = 3`, Ctrl+Enter; also `insert into customers (id, name, email) values (9, 'tmp', 'tmp@x.io')` and `delete from customers where id = 9`
+- **Expected:** `1 row affected` as on Postgres (`Results (1 row affected)`) and SQLite
+- **Actual:** the Results pane is blank (`Results`, empty grid), Messages count does not change, no toast. The statements did run (a later `select` shows `3  zz`, `count(*)` 4, then the delete) and are recorded in history, so the user cannot tell success from nothing happening (7: success says what changed).
+
+##### [COSMETIC] Welcome text names Ctrl+J, the palette and F1 name Ctrl+Enter for the same action
+- **Where:** first-run Welcome dialog vs palette
+- **Steps:** read `Ctrl+J runs the SQL under the cursor.`; Ctrl+P `execute statement` shows `Ctrl+Enter`; status line shows `Ctrl+J run`
+- **Expected:** one primary key name everywhere (or both listed)
+- **Actual:** status line and welcome say Ctrl+J, palette says Ctrl+Enter (F1 lists both).
+
+##### [MINOR] Tabs of documents on an offline connection do not say which connection they belong to
+- **Where:** document tab strip after restarting Dexo
+- **Steps:** use documents on several connections, quit, `qa.sh start`; read the tab strip, then press Ctrl+Enter on a restored document
+- **Expected:** every tab shows its connection (5), e.g. `sqlite-shop·sl.sql`
+- **Actual:** restored tabs read `prod.sql`, `query-1.sql`, `sl.sql` with no prefix; the prefix (`sqlite-…·sl.sql`) only appears after the connection is opened. Auto-connect on Ctrl+Enter works (`Connected to sqlite-shop`, `1 row affected`) and the status line names the active document's connection. Several restored tabs are all called `query-1.sql` / `scratch.sql`, so they cannot be told apart.
+
+#### Checked and fine
+- editor.complete / Ctrl+Space (CSI-u chord): works at the cursor after `from`, `join`, `where`, `alias.`, schema prefix `reporting.`; Down/Up move the selection, Enter and Tab accept, Esc closes without side effects; mixed-case names are quoted (`"MixedCase"`); the same on MySQL, SQLite and DuckDB (tables, columns, built-ins)
+- Live diagnostics: red underline plus status line text for unknown table (`unknown table nosuch`) and unknown `alias.column` (`unknown column nope in customers`); `no such column` on SQLite shown in the status line
+- editor.find (Ctrl+F and palette): incremental match count, Enter/Shift+Enter next/prev with wrap, Alt+C case, Alt+W whole word, accents (`café`/`CAFÉ`, `ação`), regex-looking text is literal, no-match shown, Esc closes
+- editor.replace (palette): Enter replaces one, Alt+A replaces all in one undo step and reports `Replaced N matches.` in Messages
+- editor.toggle_comment (chord and palette): single line, multi-line selection (selection ending at column 0 excluded), toggles back
+- editor.duplicate_line (chord and palette): line and multi-line selection; editor.move_line_up/down (chords and palette): swap, stop at the ends
+- editor.undo / editor.redo (Ctrl+Z, Ctrl+Y, palette); replace-all and format undo in one step
+- editor.copy / editor.cut (Ctrl+C, Ctrl+X, palette): selection and no-selection (copies the line) copy through OSC 52 correctly; editor.select_all (Ctrl+A, palette) shows reverse video and typing replaces it
+- Word motions with accents (Ctrl+Left/Right over `ação café_x São-Paulo naïve`), Ctrl+Backspace, Home/End, horizontal scroll on a 600-character line, 600-line bracketed paste (instant), PageUp/PageDown and wheel scrolling
+- editor.format (Alt+Shift+F and palette): whole document, selection only, several statements and comments, invalid SQL; one undo step
+- editor.external (Ctrl+E, Ctrl+X Ctrl+E in Emacs, palette): fake editor result comes back into the document, undoable, TUI redraws cleanly
+- editor.parameters: Esc cancels, Tab/Shift+Tab/Down/Right walk field and buttons, runs on Postgres (`id = 5`), MySQL (`id = 1 and region = 'north'` returned the row), SQLite and DuckDB
+- editor.save_query (Alt+S, palette): default name from the document, empty name rejected (`A saved query needs a name.`), same name replaces (`Saved query X, replacing the one of that name.`), selection vs whole document noted in the dialog, Tab/Left/Right/Esc work; temporary demo connection refuses with a clear message (`A saved query belongs to a saved connection; save this one first (Save Connection…)`)
+- editor.open_saved_query (Alt+O, palette): search (name and body, case-insensitive), preview pane, F2 rename (Esc cancels), Delete asks `Delete X?` with Cancel focused, Esc closes, Enter opens in a new tab
+- psql commands `\dt`, `\d customers`, `\l`, `\dv`, `\dn`, `\?`, `\x` (expanded records, `\x off`, toggle messages), unknown `\foo` (`\foo is not a command Dexo knows; \? lists the ones it does`), `\d nosuchtable` error: Postgres, MySQL and SQLite
+- Vim keymap: NORMAL/INSERT/VISUAL/VISUAL LINE shown in the status line; i, Esc, 0, $, w, b, gg, dG, dd, x, yy/p, u, v/V, d, `:N`, `:w` (Save dialog), `:q` (Unsaved dialog), `:q!`, `:wq`, `:foo` (`Not an editor command: foo`), `/pat` Enter, n, N, `Pattern not found`
+- Emacs keymap: status line and palette show Alt+X, Ctrl+X Ctrl+E (works), Ctrl+C Ctrl+C (runs the statement), Alt+W (copy)
+- Unsaved changes dialog from Ctrl+W: Save / Don't save / Cancel with Left/Right and Esc
+- Safety: history pick on pg-readonly is refused (`Not run: pg-readonly is read-only ...`); on pg-prod it asks to type `pg-prod` before the DELETE
+- Dialog fit: Save query, Find/Replace bar, History, Parameters, Open saved query at 80x24 and 60x20
+
+#### Not testable
+- Real system clipboard paste (Ctrl+V / palette Paste): the QA clipboard is disabled, so paste only reported the X11 error; bracketed terminal paste was used instead and works.
+- Ctrl+H in a terminal that sends Ctrl+H as a distinct key: tmux sends 0x08; the CSI-u form `ESC[104;5u` was also tried and deleted a word.
+- Double-click / triple-click word and line selection, and the middle mouse button: not offered by the editor (nothing happened); no feature to compare with.
+- Snippet insertion: no snippet can be created from the UI or CLI, so the picker never had anything to show.
+- Early in the session a wrapper script in the shared scratchpad was overwritten by another tester, so some keystrokes went to the connections-projects session and (once) the MCP profiles dialog appeared in mine; everything reported above was reproduced after a clean restart with a private wrapper.
