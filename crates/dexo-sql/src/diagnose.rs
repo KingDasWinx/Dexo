@@ -249,7 +249,9 @@ fn check(
         let Some(columns) = known.columns_of(schema.as_deref(), table) else {
             continue;
         };
-        if !columns.contains(&column.value.to_lowercase())
+        let name = column.value.to_lowercase();
+        if !columns.contains(&name)
+            && !SYSTEM_COLUMNS.contains(&name.as_str())
             && let Some(range) = span_of(body, column, column)
         {
             found.push(Diagnostic::local(
@@ -259,6 +261,12 @@ fn check(
         }
     }
 }
+
+/// Columns every row has without the table declaring them: SQLite's rowid and its
+/// aliases, Postgres's system columns.
+const SYSTEM_COLUMNS: &[&str] = &[
+    "rowid", "oid", "_rowid_", "ctid", "xmin", "xmax", "cmin", "cmax", "tableoid",
+];
 
 /// Names a database answers for without listing them as the user's tables.
 fn system_name(table: &str) -> bool {
@@ -392,6 +400,7 @@ mod tests {
             "select * from other_schema.anything",
             "create table fresh (id int); select * from fresh",
             "select c.whatever from customers c",
+            "select o.rowid, o.oid, o._rowid_, o.ctid, o.xmin, o.tableoid from orders o",
         ] {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
