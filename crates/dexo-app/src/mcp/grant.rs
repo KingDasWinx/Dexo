@@ -44,9 +44,9 @@ impl GrantCapability {
                 ErrorCategory::McpPolicy,
                 "wildcard capabilities are not allowed",
             )),
-            _ => Err(AppError::new(
+            other => Err(AppError::new(
                 ErrorCategory::Configuration,
-                "unknown grant capability",
+                format!("'{other}' is not a capability: use data_write, ddl or admin"),
             )),
         }
     }
@@ -134,7 +134,7 @@ impl Grant {
         if ttl_secs <= 0 || ttl_secs > MAX_TTL_SECS {
             return Err(AppError::new(
                 ErrorCategory::Configuration,
-                "grant ttl must be 1s..=24h",
+                "a grant lasts from 1 second to 24 hours: write the time as 90s, 15m, 2h or 1h30m",
             ));
         }
         let policy = ObjectPolicy::new(profile.selectors.clone());
@@ -143,7 +143,10 @@ impl Grant {
             if policy.decide(&sample) != Decision::Allow {
                 return Err(AppError::new(
                     ErrorCategory::McpPolicy,
-                    "grant scope cannot be broader than the profile",
+                    format!(
+                        "{} is outside what the profile allows (or inside what it denies): a grant can only narrow the profile",
+                        rule.selector
+                    ),
                 ));
             }
         }
@@ -188,21 +191,38 @@ impl Grant {
     }
 }
 
+/// How long a grant lasts, as `90s`, `15m`, `2h`, `1d` or joined, `1h30m`. A number with
+/// no unit is refused: `15` read as seconds gave a grant that ended before it was used
+/// to someone who meant minutes.
 pub fn parse_ttl(spec: &str) -> Result<i64, AppError> {
-    if let Some(mins) = spec.strip_suffix('m') {
-        let mins: i64 = mins
-            .parse()
-            .map_err(|_| AppError::new(ErrorCategory::Configuration, "invalid ttl"))?;
-        return Ok(mins.saturating_mul(60));
+    let bad = || {
+        AppError::new(
+            ErrorCategory::Configuration,
+            format!("'{spec}' is not a time: write it as 90s, 15m, 2h or 1h30m"),
+        )
+    };
+    let mut total: i64 = 0;
+    let mut digits = String::new();
+    for ch in spec.trim().chars() {
+        let unit = match ch {
+            '0'..='9' => {
+                digits.push(ch);
+                continue;
+            }
+            's' => 1,
+            'm' => 60,
+            'h' => 3600,
+            'd' => 86_400,
+            _ => return Err(bad()),
+        };
+        let count: i64 = digits.parse().map_err(|_| bad())?;
+        digits.clear();
+        total = total.saturating_add(count.saturating_mul(unit));
     }
-    if let Some(hours) = spec.strip_suffix('h') {
-        let hours: i64 = hours
-            .parse()
-            .map_err(|_| AppError::new(ErrorCategory::Configuration, "invalid ttl"))?;
-        return Ok(hours.saturating_mul(3600));
+    if !digits.is_empty() || total == 0 {
+        return Err(bad());
     }
-    spec.parse::<i64>()
-        .map_err(|_| AppError::new(ErrorCategory::Configuration, "invalid ttl"))
+    Ok(total)
 }
 
 /// A grant as a person asks for one: `dexo mcp grant create` and the TUI's New MCP Grant
@@ -234,7 +254,16 @@ impl GrantRequest {
         if self.confirm_target != self.connection && self.confirm_target != self.selector {
             return Err(AppError::new(
                 ErrorCategory::Configuration,
-                "type the connection or the selector to confirm",
+                format!(
+                    "confirm: type {} or {} exactly as written above",
+                    self.connection, self.selector
+                ),
+            ));
+        }
+        if self.connection.trim().is_empty() {
+            return Err(AppError::new(
+                ErrorCategory::Configuration,
+                "name the connection the grant is for",
             ));
         }
         if !profile.connections.is_empty()
@@ -245,7 +274,12 @@ impl GrantRequest {
         {
             return Err(AppError::new(
                 ErrorCategory::McpPolicy,
-                "connection is not allowed for this profile",
+                format!(
+                    "the profile {} does not use the connection {} (it uses {})",
+                    profile.name,
+                    self.connection,
+                    profile.connections.join(", ")
+                ),
             ));
         }
         crate::mcp::McpConnection::from_profile(saved)?.accepts_writes()?;
@@ -299,6 +333,12 @@ mod tests {
         assert_eq!(DEFAULT_TTL_SECS, 15 * 60);
         assert_eq!(MAX_TTL_SECS, 24 * 60 * 60);
         assert_eq!(parse_ttl("15m").unwrap(), DEFAULT_TTL_SECS);
+        assert_eq!(parse_ttl("90s").unwrap(), 90);
+        assert_eq!(parse_ttl("1d").unwrap(), MAX_TTL_SECS);
+        assert_eq!(parse_ttl("1h30m").unwrap(), 5400);
+        for refused in ["15", "", "m", "1.5h", "15 min", "abc"] {
+            assert!(parse_ttl(refused).is_err(), "{refused:?}");
+        }
         assert!(
             Grant::new(
                 &profile(),

@@ -327,7 +327,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **MA-16** `MINOR` Enabling in MCP Profiles needs a second `e`, but the prompt does not say so; selection resets after actions
 - [ ] **MA-17** `MINOR` New MCP Grant: first focus is `tools:`, not `connection:`; the connection is not prefilled even when the profile has one connection
 - [ ] **MA-18** `MINOR` New MCP Grant: clicking the "ask before each write" checkbox only moves focus, it does not toggle it
-- [ ] **MA-19** `MINOR` New MCP Grant: validation messages are terse, stale or misleading
+- [x] **MA-19** `MINOR` New MCP Grant: validation messages are terse, stale or misleading
 - [ ] **MA-21** `MINOR` Form allows several tools in one grant, the TUI success message names only the tool and selector
 - [ ] **MA-23** `MINOR` Ctrl+P (palette) is swallowed inside MCP Profiles; typed text acts as hotkeys there
 - [ ] **MA-24** `MINOR` "Revoke All MCP Grants" (palette) only opens MCP Profiles with a pending confirmation, shows a stale snapshot, and says `1 grants`
@@ -339,7 +339,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **MA-32** `MINOR` Timeout while the confirm dialog is open: the dialog just disappears
 - [ ] **MA-35** `MINOR` The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing
 - [ ] **MA-36** `MINOR` Agent Activity: an admin request (`admin_terminate_session`) says nothing about what it would terminate
-- [ ] **MA-37** `MINOR` `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
+- [x] **MA-37** `MINOR` `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
 - [ ] **MA-38** `MINOR` CLI messages and output of `dexo mcp grant` are raw
 - [ ] **MA-39** `MINOR` Agent side: raw Rust/serde and Debug text in errors and results
 - [ ] **MA-40** `MINOR` `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
