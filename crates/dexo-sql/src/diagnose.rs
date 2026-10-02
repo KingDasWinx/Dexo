@@ -466,12 +466,48 @@ pub fn created_table(body: &str, dialect: Dialect) -> Option<String> {
     let (first, _) = word(&tokens.next()?)?;
     let names: Vec<(String, String)> = match first.as_str() {
         "CREATE" => tokens.map_while(|token| word(&token)).collect(),
-        // `SELECT .. INTO name`: the words after the first INTO.
-        "SELECT" => tokens
-            .skip_while(|token| word(token).is_none_or(|(upper, _)| upper != "INTO"))
-            .skip(1)
-            .map_while(|token| word(&token))
-            .collect(),
+        // `SELECT .. INTO name`, a CTE before it or not: the words after the INTO of the
+        // main SELECT. Only Postgres makes a table of it -- MySQL's INTO fills variables
+        // or a file, and the word after it was learned as a table -- and an INTO inside
+        // parentheses, or an INSERT's, is not that one.
+        "SELECT" | "WITH" if dialect == Dialect::Postgres => {
+            let mut depth = 0_usize;
+            let mut main = (first == "SELECT").then_some(first.clone());
+            let mut after_into = None;
+            while let Some(token) = tokens.next() {
+                match token {
+                    Token::LParen => depth += 1,
+                    Token::RParen => depth = depth.saturating_sub(1),
+                    _ if depth > 0 => {}
+                    _ => match word(&token) {
+                        Some((upper, _))
+                            if main.is_none()
+                                && matches!(
+                                    upper.as_str(),
+                                    "SELECT"
+                                        | "INSERT"
+                                        | "UPDATE"
+                                        | "DELETE"
+                                        | "MERGE"
+                                        | "VALUES"
+                                        | "TABLE"
+                                ) =>
+                        {
+                            main = Some(upper);
+                        }
+                        Some((upper, _))
+                            if upper == "INTO" && main.as_deref() == Some("SELECT") =>
+                        {
+                            after_into =
+                                Some(tokens.by_ref().map_while(|token| word(&token)).collect());
+                            break;
+                        }
+                        _ => {}
+                    },
+                }
+            }
+            after_into?
+        }
         _ => return None,
     };
     const MODIFIERS: &[&str] = &[
@@ -737,5 +773,38 @@ mod tests {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
         assert!(messages("select * from ghosts", None).is_empty());
+    }
+
+    /// Only Postgres makes a table of `SELECT … INTO`, at the top level, a CTE before
+    /// it or not; MySQL's INTO fills variables or a file.
+    #[test]
+    fn select_into_creates_a_table_only_where_it_does() {
+        use super::created_table;
+        let postgres = |sql: &str| created_table(sql, Dialect::Postgres);
+        assert_eq!(
+            postgres("select * into fresh from orders").as_deref(),
+            Some("fresh")
+        );
+        assert_eq!(
+            postgres("select * into unlogged table ul from orders").as_deref(),
+            Some("ul")
+        );
+        assert_eq!(
+            postgres("with recent as (select 1) select * into fresh from recent").as_deref(),
+            Some("fresh")
+        );
+        assert_eq!(
+            postgres("with recent as (select 1) insert into orders select * from recent"),
+            None
+        );
+        assert_eq!(postgres("select (select 1) from orders"), None);
+        for sql in [
+            "select * from orders into outfile '/tmp/x'",
+            "select total into @v from orders",
+            "select id into v_id from orders",
+        ] {
+            assert_eq!(created_table(sql, Dialect::Mysql), None, "{sql}");
+        }
+        assert_eq!(created_table("select 1 into x", Dialect::Sqlite), None);
     }
 }
