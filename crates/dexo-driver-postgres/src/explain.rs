@@ -1,6 +1,6 @@
 use dexo_driver_api::{
     DriverError, DriverErrorCategory, ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics,
-    PlanNode, TransactionControl, TransactionState,
+    PlanNode,
 };
 use tokio_postgres::SimpleQueryMessage;
 
@@ -153,8 +153,8 @@ fn number(value: &serde_json::Value, key: &str) -> Option<f64> {
 /// statement to time it, and an UPDATE or DELETE explained that way used to commit. Inside
 /// the user's own transaction a savepoint does it, so their work is left as it was;
 /// `BEGIN` there would only warn, and the `ROLLBACK` would take their transaction with it.
-fn analyze_fence(state: TransactionState) -> (&'static str, &'static str) {
-    if state == TransactionState::Idle {
+fn analyze_fence(in_transaction: bool) -> (&'static str, &'static str) {
+    if !in_transaction {
         ("BEGIN", "ROLLBACK")
     } else {
         (
@@ -226,8 +226,29 @@ impl PostgresSession {
         outcome
     }
 
+    /// Whether a transaction is open: one Dexo began, or one the user typed, which the
+    /// session's own state never hears of. Outside a transaction block -- the implicit
+    /// one two statements sent together make included -- a SAVEPOINT is refused, and
+    /// inside one this pair leaves nothing behind.
+    async fn in_transaction(&self) -> Result<bool, DriverError> {
+        match self
+            .client
+            .batch_execute("SAVEPOINT dexo_probe; RELEASE SAVEPOINT dexo_probe")
+            .await
+        {
+            Ok(()) => Ok(true),
+            Err(error)
+                if error.code()
+                    == Some(&tokio_postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+            {
+                Ok(false)
+            }
+            Err(error) => Err(map_error(error)),
+        }
+    }
+
     async fn explain_analyzed(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
-        let (open, close) = analyze_fence(self.state());
+        let (open, close) = analyze_fence(self.in_transaction().await?);
         // One simple query, so nothing else sent on this shared connection lands inside
         // the fence. Line breaks around the statement, because one ending in a `--`
         // comment would otherwise comment out the ROLLBACK and leave the change pending.

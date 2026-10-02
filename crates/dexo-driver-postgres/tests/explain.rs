@@ -192,6 +192,22 @@ async fn analyze_rolls_back_a_statement_that_ends_in_a_line_comment() {
     assert!(count.iter().any(|value| value.contains('5')), "{count:?}");
     let open = run(&*session, "select txid_current_if_assigned() is not null").await;
     assert!(open.iter().any(|value| value.contains("false")), "{open:?}");
+
+    // Inside a transaction the user typed, which the session's state never hears of,
+    // the fence's ROLLBACK used to end it and take the user's own work with it.
+    run(&*session, "begin").await;
+    run(&*session, "insert into fence_probe values (6)").await;
+    session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("delete from fence_probe"))
+        .await
+        .unwrap();
+    let count = run(&*session, "select count(*) from fence_probe").await;
+    assert_eq!(count, ["I64(6)"]);
+    let open = run(&*session, "select txid_current_if_assigned() is not null").await;
+    assert_eq!(open, ["Bool(true)"]);
+    run(&*session, "rollback").await;
 }
 
 /// A plan asked inside the user's transaction -- begun from Dexo or typed -- of a
