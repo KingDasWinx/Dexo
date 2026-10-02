@@ -88,7 +88,7 @@ Cells come from each project's README, documentation and changelog, and rainfrog
   </tr>
   <tr>
     <td><img src="assets/screenshots/workbench-light.webp" alt="Light theme"><br><sub><b>Light theme.</b> The same workbench in light mode with the violet accent.</sub></td>
-    <td><img src="assets/screenshots/settings-light.webp" alt="Settings"><br><sub><b>Settings.</b> Theme, accent, keymap (Default, Vim, Emacs), mouse, animation, and Unicode.</sub></td>
+    <td><img src="assets/screenshots/settings-light.webp" alt="Settings"><br><sub><b>Settings.</b> Theme, mode, accent, keymap (Default, Vim, Emacs), mouse, animation, Unicode, and the update check.</sub></td>
   </tr>
 </table>
 
