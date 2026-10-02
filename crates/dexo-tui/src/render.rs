@@ -561,7 +561,7 @@ fn render_onboarding(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         lines.push("Ctrl+P opens the command palette.".into());
         lines.push(format!("{run} runs the SQL under the cursor."));
         lines.push("F1 opens help.".into());
-        lines.push("n in the explorer adds a connection (New Connection in Ctrl+P).".into());
+        lines.push("n adds a connection (or Ctrl+P, New Connection).".into());
         lines.push(String::new());
         lines.push("[Get started]".into());
     }

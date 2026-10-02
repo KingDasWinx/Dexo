@@ -51,7 +51,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
 - [x] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
 - [x] **PC-04** `COSMETIC` "Reset layout" is not Title Case
-- [ ] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20
+- [x] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20
 - [x] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`
 - [x] **PC-31** `COSMETIC` Single-line inputs never scroll horizontally (palette query, New document, Rename, Save, name field)
 - [x] **PC-32** `COSMETIC` Narrow status bar shows lower-case `ctrl+p  F1` before `Alt+1 connections  Ctrl+P commands`
