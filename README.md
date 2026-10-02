@@ -40,7 +40,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 
 **Does it need Python?** No. Dexo is one binary: Homebrew, Scoop, the installer scripts, `.deb` and `.rpm`, or `cargo install`.
 
-**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid and the agents' tools, and the server refuses them too -- Postgres and MySQL sessions start read-only, SQLite and DuckDB files open read-only.
+**Can I try it without risking my data?** `dexo --demo` opens a sample database of its own. On your own databases, mark a connection read-only: Dexo refuses writes in the editor, the grid and the agents' tools, and the server refuses them too -- Postgres, MySQL and MariaDB sessions start read-only, SQLite and DuckDB files open read-only.
 
 ## How it compares
 
@@ -63,7 +63,7 @@ Cells come from each project's README, documentation and changelog, and rainfrog
 ## Features
 
 - **Workbench** — catalog explorer, SQL editor, results grid, inspector, and a command palette. Every document belongs to a connection, keeps its own results, and reconnects when you return to it. Layouts persist per project.
-- **Drivers** — official PostgreSQL, MySQL and SQLite drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies for the servers. A SQLite connection is just a file path. A build with the `duckdb` feature adds DuckDB, which also opens CSV, Parquet and JSON files as tables.
+- **Drivers** — official PostgreSQL, MySQL (which also speaks to MariaDB) and SQLite drivers compiled into the binary, with TLS, SSH tunnels, and SOCKS5/HTTP proxies for the servers. A SQLite connection is just a file path. A build with the `duckdb` feature adds DuckDB, which also opens CSV, Parquet and JSON files as tables.
 - **Query execution** — run a statement, a selection, or a whole script, with streamed pages, cancellation, and explicit transactions.
 - **Data and schema** — lazily loaded catalog, editable grids with a review step before any write, object forms, DDL preview, and schema diff across live databases, saved snapshots, and files.
 - **Data transfer** — streaming import and export, plus native backup and restore that never overwrite the source.
