@@ -760,3 +760,92 @@ async fn sessions_on_one_file_share_its_database() {
     .unwrap_err();
     assert_eq!(refused.category(), DriverErrorCategory::Permission);
 }
+
+/// DuckDB clears an interrupt as each statement begins: a cancel that came between two
+/// statements of a script was lost, and the script ran to its end.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_cancelled_script_runs_no_further_statement() {
+    let session = DuckdbFactory
+        .connect(request(":memory:", false))
+        .await
+        .unwrap();
+    run(&*session, QueryRequest::write("create table t (i int)"))
+        .await
+        .unwrap();
+    let script = (0..3000)
+        .map(|i| format!("insert into t values ({i});"))
+        .collect::<Vec<_>>()
+        .join("\n");
+    let query = QueryRequest::write(script);
+    let id = query.id;
+    let mut stream = session.execute(query).await.unwrap();
+    let mut seen = 0;
+    let mut cancelled = false;
+    while let Some(event) = stream.next().await {
+        match event {
+            Ok(_) => {
+                seen += 1;
+                if seen == 50 {
+                    session.cancel(id).await.unwrap();
+                }
+            }
+            Err(error) => cancelled = error.category() == DriverErrorCategory::Cancelled,
+        }
+    }
+    assert!(cancelled);
+    let events = run(&*session, QueryRequest::read("select count(*) from t", 0))
+        .await
+        .unwrap();
+    let count: u64 = texts(&events)[0][0].parse().unwrap();
+    assert!(count < 3000, "{count} rows: the script ran on");
+}
+
+/// A caller that stops waiting for an EXPLAIN ANALYZE stops it: the session is free for
+/// the next query at once.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_abandoned_analyze_is_interrupted() {
+    let session = DuckdbFactory
+        .connect(request(":memory:", false))
+        .await
+        .unwrap();
+    let slow = session.explain().unwrap().explain(ExplainRequest::analyzed(
+        "select count(*) from range(100000000000) a",
+    ));
+    assert!(
+        tokio::time::timeout(Duration::from_millis(300), slow)
+            .await
+            .is_err()
+    );
+    let started = Instant::now();
+    let events = run(&*session, QueryRequest::read("select 1", 0))
+        .await
+        .unwrap();
+    assert_eq!(texts(&events), [["1"]]);
+    assert!(started.elapsed() < Duration::from_secs(10));
+}
+
+/// Only a query or an INSERT, UPDATE or DELETE is analyzed: a COPY or a SET does what it
+/// does outside the transaction rolled back after it.
+#[tokio::test(flavor = "multi_thread")]
+async fn analyze_runs_only_queries_and_row_changes() {
+    let (dir, path) = seeded().await;
+    let session = open(&path, false).await;
+    let explain = session.explain().unwrap();
+    let leak = dir.path().join("leak.csv");
+    for sql in [
+        format!("copy notes to '{}'", leak.display()),
+        "set threads = 1".to_string(),
+        "checkpoint".to_string(),
+    ] {
+        let refused = explain
+            .explain(ExplainRequest::analyzed(sql.clone()))
+            .await
+            .unwrap_err();
+        assert_eq!(refused.category(), DriverErrorCategory::Capability, "{sql}");
+    }
+    assert!(!leak.exists());
+    explain
+        .explain(ExplainRequest::analyzed("update notes set body = 'x'"))
+        .await
+        .unwrap();
+}

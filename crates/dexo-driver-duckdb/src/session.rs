@@ -1,3 +1,4 @@
+use std::sync::atomic::{AtomicU8, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
@@ -62,16 +63,32 @@ impl DuckdbSession {
 
     /// Runs `work` on a blocking thread with the connection to itself. A panic in an
     /// earlier call leaves the connection as usable as DuckDB left it, so a poisoned lock
-    /// is taken anyway.
+    /// is taken anyway. A caller that stops waiting -- an EXPLAIN ANALYZE or a page of
+    /// rows cancelled -- stops the work too: before it starts, or by interrupting it.
     pub(crate) async fn with_conn<T, F>(&self, work: F) -> Result<T, DriverError>
     where
         F: FnOnce(&Connection) -> Result<T, DriverError> + Send + 'static,
         T: Send + 'static,
     {
         let conn = Arc::clone(&self.conn);
+        let state = Arc::new(AtomicU8::new(WAITING));
+        let _abandon = Abandon {
+            state: Arc::clone(&state),
+            interrupt: Arc::clone(&self.interrupt),
+        };
         tokio::task::spawn_blocking(move || {
             let conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
-            work(&conn)
+            if state
+                .compare_exchange(WAITING, RUNNING, Ordering::SeqCst, Ordering::SeqCst)
+                .is_err()
+            {
+                return Err(cancelled_error());
+            }
+            let result = work(&conn);
+            // Before the connection is let go, so an interrupt for this work can never
+            // reach the next.
+            let _ = state.compare_exchange(RUNNING, DONE, Ordering::SeqCst, Ordering::SeqCst);
+            result
         })
         .await
         .map_err(internal)?
@@ -97,21 +114,72 @@ impl DuckdbSession {
     }
 }
 
+const WAITING: u8 = 0;
+const RUNNING: u8 = 1;
+const DONE: u8 = 2;
+const ABANDONED: u8 = 3;
+
+/// Dropped with the future of a [`DuckdbSession::with_conn`] call: one dropped before
+/// its work finished was abandoned by its caller.
+struct Abandon {
+    state: Arc<AtomicU8>,
+    interrupt: Arc<InterruptHandle>,
+}
+
+impl Drop for Abandon {
+    fn drop(&mut self) {
+        let abandon = |from| {
+            self.state
+                .compare_exchange(from, ABANDONED, Ordering::SeqCst, Ordering::SeqCst)
+                .is_ok()
+        };
+        if !abandon(WAITING) && abandon(RUNNING) {
+            self.interrupt.interrupt();
+        }
+    }
+}
+
 #[derive(Default)]
 struct Live {
     running: Option<QueryId>,
-    cancelled: Option<QueryId>,
+    /// Queries asked to stop, newest last: one still waiting for the connection, and the
+    /// one running, whose next statement must not start. DuckDB clears an interrupt as
+    /// each statement begins, so one that landed between two was lost and the script ran
+    /// on.
+    cancelled: Vec<QueryId>,
 }
 
-/// Stops `query`: interrupts it if it is the statement running, or marks it so it
-/// never starts if it is still waiting for the connection.
+/// Cancels of queries that never ran are forgotten past this many.
+const CANCELS_KEPT: usize = 64;
+
+impl Live {
+    fn is_cancelled(&self, query: QueryId) -> bool {
+        self.cancelled.contains(&query)
+    }
+
+    fn forget(&mut self, query: QueryId) {
+        self.cancelled.retain(|cancelled| *cancelled != query);
+    }
+}
+
+/// Stops `query`: marks it, so it never starts if it is still waiting for the
+/// connection and runs no further statement if it is running, and interrupts the
+/// statement it is running.
 fn stop(live: &Mutex<Live>, interrupt: &InterruptHandle, query: QueryId) {
     let mut live = live.lock().unwrap_or_else(PoisonError::into_inner);
+    if !live.is_cancelled(query) {
+        live.cancelled.push(query);
+        if live.cancelled.len() > CANCELS_KEPT {
+            live.cancelled.remove(0);
+        }
+    }
     if live.running == Some(query) {
         interrupt.interrupt();
-    } else {
-        live.cancelled = Some(query);
     }
+}
+
+fn cancelled_error() -> DriverError {
+    DriverError::new(DriverErrorCategory::Cancelled, "query cancelled")
 }
 
 /// The statements of `sql`, split as the editor splits them: DuckDB's own prepare runs
@@ -183,17 +251,20 @@ impl Session for DuckdbSession {
                 let conn = conn.lock().unwrap_or_else(PoisonError::into_inner);
                 {
                     let mut live = running.lock().unwrap_or_else(PoisonError::into_inner);
-                    if live.cancelled == Some(id) {
-                        live.cancelled = None;
+                    if live.is_cancelled(id) {
+                        live.forget(id);
                         drop(live);
-                        let _ = events.blocking_send(Err(DriverError::new(
-                            DriverErrorCategory::Cancelled,
-                            "query cancelled",
-                        )));
+                        let _ = events.blocking_send(Err(cancelled_error()));
                         return;
                     }
                     live.running = Some(id);
                 }
+                let cancelled = || {
+                    running
+                        .lock()
+                        .unwrap_or_else(PoisonError::into_inner)
+                        .is_cancelled(id)
+                };
                 let outcome = run_script(
                     &conn,
                     &sql,
@@ -204,11 +275,13 @@ impl Session for DuckdbSession {
                         reads_only,
                     },
                     &events,
+                    &cancelled,
                 );
-                running
-                    .lock()
-                    .unwrap_or_else(PoisonError::into_inner)
-                    .running = None;
+                {
+                    let mut live = running.lock().unwrap_or_else(PoisonError::into_inner);
+                    live.running = None;
+                    live.forget(id);
+                }
                 if let Err(error) = outcome {
                     let _ = events.blocking_send(Err(error));
                 }
@@ -284,13 +357,14 @@ fn run_script(
     row_limit: u64,
     guard: Guard,
     events: &Events,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<(), DriverError> {
     if (guard.read_only || guard.reads_only) && !reads(conn, sql)? {
         return Err(writes_refused());
     }
     let statements = statements(sql);
     let fenced = guard.reads_only && begin_own(conn, "BEGIN TRANSACTION READ ONLY")?;
-    let outcome = run_statements(conn, &statements, parameters, row_limit, events);
+    let outcome = run_statements(conn, &statements, parameters, row_limit, events, cancelled);
     if fenced {
         let rolled_back = conn.execute_batch("ROLLBACK").map_err(map_error);
         outcome?;
@@ -307,6 +381,7 @@ fn run_statements(
     parameters: &[DbValue],
     row_limit: u64,
     events: &Events,
+    cancelled: &dyn Fn() -> bool,
 ) -> Result<(), DriverError> {
     let send = |event| events.blocking_send(Ok(event)).is_ok();
     let mut last_affected = None;
@@ -320,6 +395,10 @@ fn run_statements(
             Some(_) => return Err(split_differently(text)),
         }
         let mut statement = conn.prepare(text).map_err(map_error)?;
+        // A cancel that came between two statements stops the next one from starting.
+        if cancelled() {
+            return Err(cancelled_error());
+        }
         let expected = statement.parameter_count();
         if parameters.len() != expected {
             return Err(DriverError::new(
