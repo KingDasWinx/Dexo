@@ -83,7 +83,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ED-23** `MINOR` Completion in a join inserts an ambiguous bare column name
 - [ ] **ED-24** `MINOR` Clicking an item in the completion popup does not accept it
 - [x] **ED-27** `MINOR` History is not scoped to the connection, but "Clear History" is
-- [ ] **ED-28** `MINOR` After the window was shrunk to 60x20, explorer and results stay hidden when it grows again
+- [=] SL-16 **ED-28** `MINOR` After the window was shrunk to 60x20, explorer and results stay hidden when it grows again
 - [ ] **ED-32** `MINOR` Tabs of documents on an offline connection do not say which connection they belong to
 - [x] **ED-08** `COSMETIC` Find bar hint is cut off at the right edge
 - [x] **ED-11** `COSMETIC` Ctrl+Home / Ctrl+End do not go to the start / end of the document
@@ -187,10 +187,10 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-30** `MINOR` Esc / Cancel in the DDL preview closes the whole form, there is no way back to edit
 - [x] **ES-35** `MINOR` pg-readonly: Apply refuses only after the preview; the refusal leaves the preview open
 - [ ] **ES-36** `MINOR` There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
-- [ ] **ES-37** `MINOR` After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
+- [=] SL-16 **ES-37** `MINOR` After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
 - [ ] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
 - [ ] **ES-42** `MINOR` `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error
-- [ ] **ES-43** `MINOR` Explain error toasts are wider than the screen and are cut at the right edge
+- [=] PC-15 **ES-43** `MINOR` Explain error toasts are wider than the screen and are cut at the right edge
 - [ ] **ES-44** `MINOR` Explain: plan comparison says "now" without naming what it replaced; internal names leak into the node text
 - [ ] **ES-45** `MINOR` Try an index: the dialog is offered everywhere and only refuses after you type the index
 - [ ] **ES-46** `MINOR` Manage Grants panel is transparent and empty on MySQL; unsupported tools are offered in the menu of SQLite / DuckDB
