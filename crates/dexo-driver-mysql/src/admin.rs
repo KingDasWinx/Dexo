@@ -33,6 +33,41 @@ fn is_unknown_thread(error: &mysql_async::Error) -> bool {
             .contains("unknown thread")
 }
 
+// performance_schema names a lock's owner by its THREAD_ID; the session list and KILL
+// speak processlist ids, which `threads` maps that to.
+const MYSQL_LOCKS: &str = "SELECT l.LOCK_TYPE, l.OBJECT_SCHEMA, l.OBJECT_NAME, l.LOCK_MODE,
+            l.LOCK_STATUS, t.PROCESSLIST_ID
+     FROM performance_schema.data_locks l
+     LEFT JOIN performance_schema.threads t ON t.THREAD_ID = l.THREAD_ID";
+
+const MYSQL_LOCK_WAITS: &str =
+    "SELECT waiting_thread.PROCESSLIST_ID, blocking_thread.PROCESSLIST_ID,
+            waiting.LOCK_TYPE, CONCAT(waiting.OBJECT_SCHEMA, '.', waiting.OBJECT_NAME),
+            waiting.LOCK_MODE, waiting.LOCK_STATUS
+     FROM performance_schema.data_lock_waits w
+     JOIN performance_schema.data_locks waiting
+       ON waiting.ENGINE = w.ENGINE AND waiting.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
+     LEFT JOIN performance_schema.threads waiting_thread
+       ON waiting_thread.THREAD_ID = w.REQUESTING_THREAD_ID
+     LEFT JOIN performance_schema.threads blocking_thread
+       ON blocking_thread.THREAD_ID = w.BLOCKING_THREAD_ID";
+
+// MariaDB has no performance_schema.data_locks. Its InnoDB tables list only the locks a
+// wait involves, owned by transactions whose thread id is the processlist id.
+const MARIADB_LOCKS: &str = "SELECT l.lock_type, NULL, l.lock_table, l.lock_mode,
+            IF(t.trx_requested_lock_id <=> l.lock_id, 'WAITING', 'GRANTED'),
+            t.trx_mysql_thread_id
+     FROM information_schema.INNODB_LOCKS l
+     JOIN information_schema.INNODB_TRX t ON t.trx_id = l.lock_trx_id";
+
+const MARIADB_LOCK_WAITS: &str =
+    "SELECT requesting.trx_mysql_thread_id, blocking.trx_mysql_thread_id,
+            l.lock_type, l.lock_table, l.lock_mode, 'WAITING'
+     FROM information_schema.INNODB_LOCK_WAITS w
+     JOIN information_schema.INNODB_TRX requesting ON requesting.trx_id = w.requesting_trx_id
+     JOIN information_schema.INNODB_TRX blocking ON blocking.trx_id = w.blocking_trx_id
+     LEFT JOIN information_schema.INNODB_LOCKS l ON l.lock_id = w.requested_lock_id";
+
 impl MysqlSession {
     async fn process_restriction(&self) -> Result<Option<String>, DriverError> {
         let mut conn = self.conn.lock().await;
@@ -92,6 +127,11 @@ impl AdministrationProvider for MysqlSession {
     }
 
     async fn list_locks(&self) -> Result<AdminList<LockInfo>, DriverError> {
+        let (sql, source) = if self.is_mariadb() {
+            (MARIADB_LOCKS, "information_schema.INNODB_LOCKS")
+        } else {
+            (MYSQL_LOCKS, "performance_schema.data_locks")
+        };
         let mut conn = self.conn.lock().await;
         let rows: Vec<(
             Option<String>,
@@ -100,18 +140,12 @@ impl AdministrationProvider for MysqlSession {
             Option<String>,
             Option<String>,
             Option<u64>,
-        )> = match conn
-            .query(
-                "SELECT LOCK_TYPE, OBJECT_SCHEMA, OBJECT_NAME, LOCK_MODE, LOCK_STATUS, THREAD_ID
-                 FROM performance_schema.data_locks",
-            )
-            .await
-        {
+        )> = match conn.query(sql).await {
             Ok(rows) => rows,
             Err(error) if is_permission(&error) => {
                 return Ok(AdminList {
                     items: Vec::new(),
-                    restriction: Some("permission denied for performance_schema.data_locks".into()),
+                    restriction: Some(format!("permission denied for {source}")),
                     captured_at: captured_at(),
                 });
             }
@@ -140,6 +174,11 @@ impl AdministrationProvider for MysqlSession {
     }
 
     async fn blocking_graph(&self) -> Result<AdminList<BlockingEdge>, DriverError> {
+        let (sql, source) = if self.is_mariadb() {
+            (MARIADB_LOCK_WAITS, "information_schema.INNODB_LOCK_WAITS")
+        } else {
+            (MYSQL_LOCK_WAITS, "performance_schema.data_lock_waits")
+        };
         let mut conn = self.conn.lock().await;
         let rows: Vec<(
             Option<u64>,
@@ -148,24 +187,12 @@ impl AdministrationProvider for MysqlSession {
             Option<String>,
             Option<String>,
             Option<String>,
-        )> = match conn
-            .query(
-                "SELECT waiting.OWNER_THREAD_ID, blocking.OWNER_THREAD_ID, waiting.LOCK_TYPE,
-                        CONCAT(waiting.OBJECT_SCHEMA, '.', waiting.OBJECT_NAME), waiting.LOCK_MODE,
-                        waiting.LOCK_STATUS
-                 FROM performance_schema.data_lock_waits w
-                 JOIN performance_schema.data_locks waiting
-                   ON waiting.ENGINE_LOCK_ID = w.REQUESTING_ENGINE_LOCK_ID
-                 JOIN performance_schema.data_locks blocking
-                   ON blocking.ENGINE_LOCK_ID = w.BLOCKING_ENGINE_LOCK_ID",
-            )
-            .await
-        {
+        )> = match conn.query(sql).await {
             Ok(rows) => rows,
             Err(error) if is_permission(&error) => {
                 return Ok(AdminList {
                     items: Vec::new(),
-                    restriction: Some("permission denied for data_lock_waits".into()),
+                    restriction: Some(format!("permission denied for {source}")),
                     captured_at: captured_at(),
                 });
             }

@@ -124,6 +124,146 @@ async fn sessions_sizes_stats_variables_and_restricted_role() {
     );
 }
 
+fn connect_as(
+    pair: &dexo_test_support::DatabasePair,
+    user: &str,
+) -> impl std::future::Future<
+    Output = Result<Box<dyn dexo_driver_api::Session>, dexo_driver_api::DriverError>,
+> {
+    MysqlFactory.connect(ConnectRequest::new(
+        pair.mysql_endpoint().to_string(),
+        Some("dexo".into()),
+        user.into(),
+        SecretString::from("dexo_test_only"),
+        false,
+    ))
+}
+
+async fn connection_id(session: &dyn dexo_driver_api::Session) -> String {
+    use futures_util::StreamExt;
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::read(
+            "select connection_id()",
+            1,
+        ))
+        .await
+        .unwrap();
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            return match &batch.rows[0][0] {
+                dexo_driver_api::DbValue::U64(id) => id.to_string(),
+                dexo_driver_api::DbValue::I64(id) => id.to_string(),
+                other => panic!("connection id read as {other:?}"),
+            };
+        }
+    }
+    panic!("no connection id");
+}
+
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_lock_wait_names_the_processlist_ids_of_blocker_and_blocked() {
+    let pair = dexo_test_support::DatabasePair::start().await.unwrap();
+    let root = connect_as(&pair, "root").await.unwrap();
+    let blocker = connect_as(&pair, "dexo").await.unwrap();
+    let blocked = connect_as(&pair, "dexo").await.unwrap();
+    for sql in [
+        "create table if not exists lock_wait (id int primary key) engine = innodb",
+        "insert ignore into lock_wait values (1)",
+    ] {
+        drain(
+            blocker
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let blocker_id = connection_id(blocker.as_ref()).await;
+    let blocked_id = connection_id(blocked.as_ref()).await;
+    let lock_row = "select id from lock_wait where id = 1 for update";
+    blocker
+        .transactions()
+        .unwrap()
+        .begin(dexo_driver_api::TransactionMode::ReadWrite)
+        .await
+        .unwrap();
+    drain(
+        blocker
+            .execute(dexo_driver_api::QueryRequest::write(lock_row))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let waiter = tokio::spawn(async move {
+        blocked
+            .transactions()
+            .unwrap()
+            .begin(dexo_driver_api::TransactionMode::ReadWrite)
+            .await
+            .unwrap();
+        drain(
+            blocked
+                .execute(dexo_driver_api::QueryRequest::write(lock_row))
+                .await
+                .unwrap(),
+        )
+        .await;
+        blocked.transactions().unwrap().rollback().await.unwrap();
+    });
+
+    let admin = root.admin().unwrap();
+    let mut graph = admin.blocking_graph().await.unwrap();
+    for _ in 0..50 {
+        if !graph.items.is_empty() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        graph = admin.blocking_graph().await.unwrap();
+    }
+    assert!(
+        graph
+            .items
+            .iter()
+            .any(|edge| edge.blocker == blocker_id && edge.blocked == blocked_id),
+        "expected {blocker_id} blocking {blocked_id}, got {:?}",
+        graph.items
+    );
+    let locks = admin.list_locks().await.unwrap();
+    assert!(locks.restriction.is_none(), "{:?}", locks.restriction);
+    let held = |id: &str, granted: bool| {
+        locks.items.iter().any(|lock| {
+            lock.session_id == id
+                && lock.granted == granted
+                && lock
+                    .relation
+                    .as_deref()
+                    .is_some_and(|relation| relation.contains("lock_wait"))
+        })
+    };
+    assert!(
+        held(&blocker_id, true) && held(&blocked_id, false),
+        "expected {blocker_id} holding and {blocked_id} waiting, got {:?}",
+        locks.items
+    );
+
+    // An account that may not read the lock tables gets a reason, not an error.
+    let limited = connect_as(&pair, "dexo").await.unwrap();
+    let limited = limited.admin().unwrap();
+    assert!(limited.list_locks().await.unwrap().restriction.is_some());
+    assert!(
+        limited
+            .blocking_graph()
+            .await
+            .unwrap()
+            .restriction
+            .is_some()
+    );
+
+    blocker.transactions().unwrap().rollback().await.unwrap();
+    waiter.await.unwrap();
+}
+
 async fn drain(mut stream: dexo_driver_api::QueryStream) {
     use futures_util::StreamExt;
     while stream.next().await.is_some() {}
