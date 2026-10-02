@@ -271,13 +271,6 @@ fn beyond_doubt(body: &str, at: usize) -> bool {
         .is_none_or(|tree| tree.root_node().has_error())
 }
 
-fn is_keyword(word: &str) -> bool {
-    !word.is_empty()
-        && sqlparser::keywords::ALL_KEYWORDS
-            .binary_search(&word.to_ascii_uppercase().as_str())
-            .is_ok()
-}
-
 /// Where the last word of `body` starts.
 fn last_word_start(body: &str) -> usize {
     let trimmed = body.trim_end();
@@ -388,11 +381,14 @@ fn check(
         if let Some(alias) = alias {
             name(alias.clone(), target);
         }
-        // `FROM ONLY t`, `UPDATE IGNORE t`: the parser took a keyword it does not know
-        // there for the table.
-        let keyword = parts.len() == 1 && parts[0].quote_style.is_none() && is_keyword(&table);
+        // `FROM ONLY t`, `UPDATE IGNORE t`: the parser took a modifier it does not know
+        // there for the table. Any keyword passed here once, and a missing table named
+        // `status`, `data` or `session` was never reported.
+        let modifier = parts.len() == 1
+            && parts[0].quote_style.is_none()
+            && TABLE_MODIFIERS.contains(&table.as_str());
         let unknown = match &schema {
-            None if keyword => false,
+            None if modifier => false,
             None => {
                 !refs.ctes.contains(&table)
                     && !created.contains(&table)
@@ -435,6 +431,17 @@ fn check(
         }
     }
 }
+
+/// Words that may stand before a table's name, which sqlparser reads as the name.
+const TABLE_MODIFIERS: &[&str] = &[
+    "only",
+    "ignore",
+    "low_priority",
+    "high_priority",
+    "delayed",
+    "quick",
+    "lateral",
+];
 
 /// Columns every row has without the table declaring them: SQLite's rowid and its
 /// aliases, Postgres's system columns.
@@ -778,6 +785,15 @@ mod tests {
             assert!(messages(fine, Some(&known)).is_empty(), "{fine}");
         }
         assert!(messages("select * from ghosts", None).is_empty());
+        // A missing table named like a keyword is missing too.
+        for word in ["status", "data", "name", "session"] {
+            let sql = format!("select * from {word}");
+            assert_eq!(
+                messages(&sql, Some(&known)),
+                [(format!("unknown table {word}"), word.to_string())],
+                "{sql}"
+            );
+        }
     }
 
     /// Only Postgres makes a table of `SELECT … INTO`, at the top level, a CTE before
