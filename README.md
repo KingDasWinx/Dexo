@@ -28,7 +28,7 @@ Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, w
 ## Features
 
 - **Workbench**: catalog tree, SQL editor with Vim mode and live diagnostics, results grid and a command palette.
-- **Data**: edit rows in the grid with a review before anything is written, filter and sort, import, export, backup and restore.
+- **Data**: insert and delete rows in the grid with a review before anything is written, filter and sort, import, export, backup and restore.
 - **Schema**: object forms with a DDL preview, and schema diff between databases, snapshots and files.
 - **Query plans**: EXPLAIN drawn as a tree; on Postgres with hypopg, try an index before building it.
 - **Connections**: TLS, SSH tunnels, proxies, password managers, and databases found in Docker.
