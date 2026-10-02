@@ -193,3 +193,48 @@ fn accepting_a_function_puts_the_cursor_between_its_parentheses() {
     assert_eq!(model.active_document().text(), "SELECT count()");
     assert_eq!(model.active_document().cursor(), "select count(".len());
 }
+
+/// A table created by a run -- here, or in another document, or a temporary one no
+/// catalog lists -- was underlined as unknown until the catalog was refreshed by hand.
+#[test]
+fn a_table_a_run_creates_is_known_and_the_catalog_is_read_again() {
+    let mut model = connected();
+    update(
+        &mut model,
+        Action::CompletionCatalogLoaded {
+            generation: 3,
+            objects: vec![table("orders")],
+            complete: true,
+        },
+    );
+    let doc = model.active_document;
+    model.documents[doc].sql = dexo_sql::SqlDocument::new("create temp table scratch (id int)");
+    let effects = update(&mut model, Action::ExecuteDocument);
+    let key = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::StartScript(request) => Some(request.key.clone()),
+            _ => None,
+        })
+        .unwrap_or_else(|| panic!("nothing ran: {effects:?}"));
+    let effects = update(&mut model, Action::ScriptFinished { key });
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadCatalogChildren { .. })),
+        "the catalog was not read again: {effects:?}"
+    );
+    for (sql, unknown) in [
+        ("select * from scratch", false),
+        ("select * from ghost", true),
+    ] {
+        model.documents[doc].sql = dexo_sql::SqlDocument::new("");
+        type_text(&mut model, sql);
+        assert_eq!(
+            !model.editor.diagnostics.is_empty(),
+            unknown,
+            "{sql}: {:?}",
+            model.editor.diagnostics
+        );
+    }
+}

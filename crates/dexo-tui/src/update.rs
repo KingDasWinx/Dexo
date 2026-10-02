@@ -233,6 +233,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.active_task = None;
             model.active_query = None;
             model.active_operation = None;
+            let mut effects = finish_schema_run(model, key.operation, None);
             if model
                 .derived_backup
                 .as_ref()
@@ -246,7 +247,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if operation_matches(model, &key) {
                 model.results.view = crate::model::ResultsView::Grid;
             }
-            persist_history_effect(model)
+            effects.extend(persist_history_effect(model));
+            effects
         }
         Action::QueryFailed {
             key,
@@ -279,7 +281,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.results.messages_scroll =
                     u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
             }
-            Vec::new()
+            finish_schema_run(model, key.operation, Some(index))
         }
         Action::CheckpointTick => checkpoint_session(model),
         Action::OnboardingTick => {
@@ -5006,8 +5008,48 @@ fn point_at_failure(
     }
 }
 
+/// A run that changed the schema has ended, after its statements up to `failed_at`:
+/// the tables they created are known from now on, and the catalog -- explorer and
+/// diagnostics both -- is read again so the rest of the change shows too.
+fn finish_schema_run(
+    model: &mut Model,
+    operation: crate::runtime::OperationId,
+    failed_at: Option<usize>,
+) -> Vec<Effect> {
+    let Some(run) = model.schema_run.take_if(|run| run.operation == operation) else {
+        return Vec::new();
+    };
+    if model.session_tables.0 != model.session_generation {
+        model.session_tables = (model.session_generation, Default::default());
+    }
+    let ran = failed_at.unwrap_or(run.created.len());
+    model
+        .session_tables
+        .1
+        .extend(run.created.into_iter().take(ran).flatten());
+    let sql = model.active_document().text();
+    let cursor = model.active_document().byte_cursor();
+    crate::screens::editor::refresh_diagnostics(model, &sql, cursor);
+    if model.active_session.is_none() || model.connection.name.is_empty() {
+        return Vec::new();
+    }
+    refresh_catalog(model, true)
+}
+
 fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
     let operation = crate::runtime::OperationId::new();
+    let dialect = crate::screens::editor::editor_dialect(model);
+    let created: Vec<Option<String>> = statements
+        .iter()
+        .map(|sql| dexo_sql::created_table(sql, dialect))
+        .collect();
+    let changes_schema = statements.iter().any(|sql| {
+        dexo_sql::split_statements_in(sql, dialect)
+            .iter()
+            .any(|span| span.effect == dexo_sql::StatementEffect::SchemaWrite)
+    });
+    model.schema_run = (changes_schema || created.iter().any(Option::is_some))
+        .then_some(crate::model::SchemaRun { operation, created });
     let session = model
         .active_session
         .map(|id| id.0.to_string())

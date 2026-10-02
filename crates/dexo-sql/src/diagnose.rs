@@ -78,7 +78,7 @@ pub fn diagnose(
     // Tables the document creates itself are known before the catalog hears of them.
     let created: HashSet<String> = spans
         .iter()
-        .filter_map(|span| created_name(&sql[span.byte_range.clone()], dialect))
+        .filter_map(|span| created_table(&sql[span.byte_range.clone()], dialect))
         .collect();
     let mut found = Vec::new();
     let mut grammar = None;
@@ -362,7 +362,7 @@ fn system_name(table: &str) -> bool {
 /// The table, view or sequence `body` creates, read from its words rather than parsed:
 /// the parser misses `CREATE UNLOGGED TABLE`, `(LIKE ..)`, SQLite's virtual tables and
 /// `SELECT .. INTO new_table`, and each left the new name underlined further down.
-fn created_name(body: &str, dialect: Dialect) -> Option<String> {
+pub fn created_table(body: &str, dialect: Dialect) -> Option<String> {
     let tokens = match dialect {
         Dialect::Postgres => Tokenizer::new(&PostgreSqlDialect {}, body).tokenize(),
         Dialect::Mysql => Tokenizer::new(&MySqlDialect {}, body).tokenize(),

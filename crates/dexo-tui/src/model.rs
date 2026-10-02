@@ -1596,6 +1596,13 @@ impl EditorDocument {
     }
 }
 
+/// A run that changes the schema, and the table each of its statements creates.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SchemaRun {
+    pub operation: crate::runtime::OperationId,
+    pub created: Vec<Option<String>>,
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct DerivedBackup {
     pub operation: crate::runtime::OperationId,
@@ -1704,6 +1711,11 @@ pub struct Model {
     /// The completion catalog holds the whole database, so a table it does not list
     /// is one the database does not have.
     pub catalog_complete: bool,
+    /// The running script changes the schema: once it ends, the catalog is read again.
+    pub schema_run: Option<SchemaRun>,
+    /// Tables this session's runs created, temporary ones included, which no catalog
+    /// lists; with the session generation they belong to.
+    pub session_tables: (u64, std::collections::HashSet<String>),
     /// Vim mode's state, when the keymap profile is `vim`.
     pub vim: crate::screens::vim::VimState,
     /// Said once the startup connection is ready, where "Connected" would cover it.
@@ -1837,6 +1849,8 @@ impl Default for Model {
             editor: EditorState::default(),
             derived_backup: None,
             catalog_complete: false,
+            schema_run: None,
+            session_tables: Default::default(),
             vim: crate::screens::vim::VimState::default(),
             startup_warning: None,
             expanded_records: false,

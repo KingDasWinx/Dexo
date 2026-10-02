@@ -29,8 +29,9 @@ pub struct EditorState {
     pub diagnostics: Vec<dexo_sql::Diagnostic>,
     /// Where the server said the last run failed, in the document and revision it ran.
     pub server_diagnostic: Option<(String, u64, dexo_sql::Diagnostic)>,
-    /// The catalog as the diagnostics read it, and the catalog revision it was built at.
-    known: Option<(u64, dexo_sql::KnownObjects)>,
+    /// The catalog as the diagnostics read it, and the catalog revision and number of
+    /// session tables it was built with.
+    known: Option<((u64, usize), dexo_sql::KnownObjects)>,
     pub parameters: Vec<ParameterValue>,
     pub completions: Vec<CompletionItem>,
     pub completion_open: bool,
@@ -283,6 +284,15 @@ pub fn refresh_intelligence(model: &mut Model, with_completion: bool) {
     }
 }
 
+fn session_tables(model: &Model) -> Vec<&String> {
+    let (generation, tables) = &model.session_tables;
+    if *generation == model.session_generation {
+        tables.iter().collect()
+    } else {
+        Vec::new()
+    }
+}
+
 /// Underlines what the document has wrong: what does not parse always, and tables and
 /// columns the catalog does not list once it has the whole database. A script too large
 /// to check on every key is left alone.
@@ -295,10 +305,13 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
     let complete = model.catalog_complete && model.catalog_connection == model.connection.name;
     if !complete {
         model.editor.known = None;
-    } else if model.editor.known.as_ref().map(|(revision, _)| *revision)
-        != Some(model.catalog_revision)
+    } else if model.editor.known.as_ref().map(|(built, _)| *built)
+        != Some((model.catalog_revision, session_tables(model).len()))
     {
         let mut known = dexo_sql::KnownObjects::default();
+        for table in session_tables(model) {
+            known.add_table("", table);
+        }
         for object in &model.catalog_objects {
             let name = &object.qualified_name;
             // MySQL names its databases as catalogs, the others as schemas.
@@ -322,7 +335,7 @@ pub fn refresh_diagnostics(model: &mut Model, sql: &str, byte_cursor: usize) {
                 _ => {}
             }
         }
-        model.editor.known = Some((model.catalog_revision, known));
+        model.editor.known = Some(((model.catalog_revision, session_tables(model).len()), known));
     }
     let found = dexo_sql::diagnose(
         sql,
