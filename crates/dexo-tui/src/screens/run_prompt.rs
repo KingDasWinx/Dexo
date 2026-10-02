@@ -48,8 +48,18 @@ impl RunPrompt {
     }
 
     pub fn title(&self) -> &'static str {
+        // Nothing here is destructive when Dexo merely could not parse the statement:
+        // the title said so for `selec 4`.
+        let unreadable = dexo_sql::Destructive::Unrecognized.describe();
         if self.expected.is_some() {
             "Run on production"
+        } else if !self.flagged.is_empty()
+            && self
+                .flagged
+                .iter()
+                .all(|flagged| flagged.reason == unreadable)
+        {
+            "Run statements Dexo cannot read?"
         } else {
             "Run destructive statements"
         }

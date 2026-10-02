@@ -87,3 +87,34 @@ fn a_sqlite_result_code_is_not_called_a_sqlstate() {
     let lines = dexo_tui::model::describe_query_error("select 1", &error, (0, 1));
     assert!(lines.iter().all(|line| !line.contains("SQLSTATE 1 ")));
 }
+/// Ctrl+S in the grid with nothing pending opened a review of no changes.
+#[test]
+fn ctrl_s_in_the_results_pane_saves_the_document_when_nothing_is_pending() {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+    let mut model = connected();
+    model.focus = dexo_tui::Focus::Results;
+    model.set_sql("select 1");
+
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('s'), KeyModifiers::CONTROL)),
+    );
+
+    assert!(model.data.review.is_none(), "a review of nothing opened");
+    assert!(model.file_picker.open, "the unsaved document was not saved");
+}
+
+#[test]
+fn a_statement_dexo_cannot_read_is_not_called_destructive() {
+    let mut model = connected();
+    model.set_sql("selec 4;");
+    update(&mut model, Action::ExecuteDocument);
+
+    let frame = dexo_tui::render::render_to_string(&model, 100, 30);
+
+    assert!(
+        frame.contains("Run statements Dexo cannot read?"),
+        "{frame}"
+    );
+    assert!(!frame.contains("Run destructive statements"), "{frame}");
+}

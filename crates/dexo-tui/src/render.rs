@@ -325,12 +325,23 @@ fn render_run_prompt(
     let width = 72.min(frame.area().width);
     let lines = prompt.lines(width.saturating_sub(2) as usize);
     let popup = centered(frame.area(), width, lines.len() as u16 + 2);
-    paint_popup(
-        frame,
-        model,
+    // The reason each statement is flagged is the warning, in the warning colour, under a
+    // border like every other dialog's.
+    let warning = model.theme.style(Role::Warning, model.capabilities);
+    let body: Vec<Line> = lines
+        .iter()
+        .map(|line| {
+            if line.starts_with("   ") && !line.trim().is_empty() {
+                Line::styled(line.clone(), warning)
+            } else {
+                Line::raw(line.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, prompt.title())),
         popup,
-        Block::bordered().title(prompt.title()),
-        lines.join("\n"),
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |_, line, rect| {

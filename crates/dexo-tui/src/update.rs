@@ -4595,6 +4595,13 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match model.keymap.resolve(&chord, ctx) {
         Ok(Some(command)) => {
             model.pending_chord.keys.clear();
+            // Ctrl+S is the grid's review and the document's save. With nothing pending
+            // in the grid it is the save: it opened a review of no changes.
+            let command = if command == "data.review" && model.data.changes.pending().is_empty() {
+                "document.save"
+            } else {
+                command
+            };
             if let Some(invocation) = crate::palette::invocation_by_id(model, command) {
                 return invoke_palette(model, invocation);
             }

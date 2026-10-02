@@ -1573,9 +1573,16 @@ impl WorkbenchRuntime {
 
     pub async fn start_script(&mut self, request: ScriptRequest) -> anyhow::Result<()> {
         let Some(session) = self.session_for_key(&request.key) else {
+            // Said as what the user can do about it: `session is closed` named neither
+            // the cause nor the way out.
+            let message = if request.key.session.is_empty() {
+                "This document has no connection. Pick one in the explorer (Alt+1, then Enter) and run it again."
+            } else {
+                "The connection this document runs on is closed. Connect it from the explorer and run it again."
+            };
             self.emit(Action::OperationFailed {
                 key: request.key,
-                message: "session is closed".into(),
+                message: message.into(),
             })
             .await;
             anyhow::bail!("session is closed");

@@ -40,14 +40,14 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-13** `MINOR` Query running: no sign anywhere that something is running; a second Ctrl+Enter is silently queued
 - [x] **PC-14** `MINOR` Cancelling a query is reported as an error, and a timeout hits after 30 s with no hint
 - [x] **PC-15** `MINOR` Error toast never goes away by itself
-- [ ] **PC-16** `MINOR` Confirmation for an unparsable statement is titled "Run destructive statements"
+- [x] **PC-16** `MINOR` Confirmation for an unparsable statement is titled "Run destructive statements"
 - [x] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
 - [x] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
 - [x] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
 - [ ] **PC-27** `MINOR` Tab strip / tab focus details
-- [ ] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
+- [x] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
 - [x] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`
-- [ ] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
+- [x] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
 - [x] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
 - [x] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
 - [x] **PC-04** `COSMETIC` "Reset layout" is not Title Case
@@ -365,7 +365,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **SL-19** `MINOR` The terminal's colour depth (TERM / COLORTERM) is ignored; only NO_COLOR works
 - [x] **SL-20** `MINOR` Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
 - [ ] **SL-21** `MINOR` Help: any click closes the overlay, even a click on the Search field
-- [ ] **SL-22** `MINOR` "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling
+- [x] **SL-22** `MINOR` "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling
 - [ ] **SL-23** `MINOR` "Search History" is not searchable and shows duplicates
 - [ ] **SL-24** `MINOR` Key hints behind and inside modals are inconsistent
 - [ ] **SL-04** `COSMETIC` Modals sit at different heights and have different sizes
