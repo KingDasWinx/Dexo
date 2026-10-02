@@ -180,6 +180,11 @@ struct Scan {
     /// `BEGIN`/`CASE` blocks open inside a routine's body. While one is open, `;` ends
     /// a statement of the body, not the CREATE.
     block: u32,
+    /// The routine's BEGIN ... END body has closed: what follows on a new line may be
+    /// the next statement.
+    body_closed: bool,
+    /// The last END closed a counted block, so an `IF` after it gives the count back.
+    end_counted: bool,
 }
 
 impl Scan {
@@ -215,8 +220,15 @@ impl Scan {
             let after_end = self.last == Last::Word && self.last_word == "END";
             match upper.as_str() {
                 "BEGIN" | "CASE" if !after_end => self.block += 1,
-                "END" => self.block = self.block.saturating_sub(1),
-                "IF" | "LOOP" | "WHILE" | "REPEAT" if after_end => self.block += 1,
+                "END" => {
+                    self.end_counted = self.block > 0;
+                    self.block = self.block.saturating_sub(1);
+                    self.body_closed = self.end_counted && self.block == 0;
+                }
+                "IF" | "LOOP" | "WHILE" | "REPEAT" if after_end && self.end_counted => {
+                    self.block += 1;
+                    self.body_closed = false;
+                }
                 _ => {}
             }
         }
@@ -226,9 +238,12 @@ impl Scan {
 
     fn starts_new(&self, word: &str) -> bool {
         let upper = word.to_ascii_uppercase();
+        // A routine's body may be one statement without BEGIN -- `FOR EACH ROW UPDATE
+        // ...` -- and is the routine's, not a statement of its own.
         if self.first.is_none()
             || self.depth > 0
             || self.block > 0
+            || (self.routine && !self.body_closed)
             || !STARTERS.contains(&upper.as_str())
         {
             return false;
@@ -684,6 +699,19 @@ mod tests {
             2,
             "{mysql}"
         );
+
+        // A body of one statement, without BEGIN, is still the trigger's: run alone it
+        // was an UPDATE with no WHERE.
+        let bare = "CREATE TRIGGER t AFTER DELETE ON x FOR EACH ROW\nUPDATE stats SET n = n - 1;\nselect 6;";
+        let texts: Vec<&str> = split_statements_in(bare, crate::Dialect::Mysql)
+            .iter()
+            .map(|span| &bare[span.byte_range.clone()])
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].ends_with("n - 1"), "{texts:?}");
+        // After the body's END, a statement on its own line is the next one.
+        let closed = "CREATE TRIGGER t AFTER INSERT ON x BEGIN\n  DELETE FROM u;\nEND\nselect 7";
+        assert_eq!(split_statements(closed).len(), 2);
 
         // A table may have a column called begin; that is not a block.
         let table = "CREATE TABLE log (\"begin\" int, note text); select 4;";
