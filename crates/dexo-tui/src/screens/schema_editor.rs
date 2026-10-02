@@ -540,6 +540,59 @@ mod tests {
         assert!(model.schema_editor.preview.is_some());
     }
 
+    /// On a short terminal the focus walked into fields cut off under the buttons:
+    /// `QQ` typed there landed in `foreign_keys`, out of sight. The fields scroll to
+    /// keep the focused one in view, and only the rows drawn as fields take a click.
+    #[test]
+    fn a_short_terminal_scrolls_the_form_to_the_focused_field() {
+        use crate::mouse::HitTarget;
+        use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let mut model = Model {
+            schema_editor: SchemaEditor::table_form("public.t"),
+            ..Model::default()
+        };
+        model.apply_size(100, 10);
+        model.schema_editor.open = true;
+        for _ in 0..5 {
+            update(&mut model, key(KeyCode::Down));
+        }
+        assert_eq!(
+            model.schema_editor.fields[model.schema_editor.focus].label,
+            "foreign_keys"
+        );
+        update(&mut model, key(KeyCode::Char('Q')));
+        update(&mut model, key(KeyCode::Char('Q')));
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 10)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        let frame = terminal
+            .draw(|frame| crate::render::render(frame, &model, &mut hits))
+            .unwrap();
+        let rows: Vec<String> = frame
+            .buffer
+            .content()
+            .chunks(100)
+            .map(|row| row.iter().map(|cell| cell.symbol()).collect())
+            .collect();
+        let screen = rows.join("\n");
+        assert!(screen.contains("> foreign_keys: QQ"), "{screen}");
+        let (_, y) = hits.center(HitTarget::FormField(5));
+        assert!(rows[usize::from(y)].contains("foreign_keys"), "{screen}");
+        // The target scrolled out of view, and no field lies under the buttons.
+        assert_eq!(hits.center(HitTarget::FormField(0)), (0, 0));
+        for (y, row) in rows.iter().enumerate() {
+            if row.contains("[Cancel]") || row.contains("esc cancel") {
+                for x in 0..100 {
+                    assert!(
+                        !matches!(hits.at(x, y as u16), Some(HitTarget::FormField(_))),
+                        "a field under row {y}: {row}"
+                    );
+                }
+            }
+        }
+    }
+
     /// Apply Raw DDL showed the fields, took typing into them and marked them, and Run
     /// ignored all of it. Errors from an earlier form stayed on screen in either mode.
     #[test]

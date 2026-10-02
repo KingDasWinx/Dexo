@@ -844,20 +844,6 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
     }
 }
 
-fn register_form_fields(hits: &mut HitMap, area: Rect, lines: &[String]) {
-    if area.width < 2 || area.height < 2 {
-        return;
-    }
-    let inner = Block::bordered().inner(area);
-    let mut field = 0usize;
-    for (i, line) in lines.iter().enumerate() {
-        if line.contains(": ") && (line.starts_with('>') || line.starts_with(' ')) {
-            register_line(hits, inner, i, HitTarget::FormField(field));
-            field += 1;
-        }
-    }
-}
-
 /// `Clear` leaves the cells in the terminal's own colours, and the terminal's background
 /// is the theme's, so an unstyled popup draws the terminal's foreground on the theme's
 /// background: invisible when a dark theme meets a terminal with dark text.
@@ -2336,13 +2322,21 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let editor = &model.schema_editor;
     let fields = crate::widgets::form::render_lines(editor);
     // The buttons keep the bottom of the popup: raw SQL a page long would push them out.
-    let room = usize::from(popup_inner(popup).height.saturating_sub(2));
-    let mut lines: Vec<String> = fields
+    let inner = popup_inner(popup);
+    let room = usize::from(inner.height.saturating_sub(2));
+    let body: Vec<String> = fields
         .iter()
         .flat_map(|line| line.split('\n').map(str::to_string))
         .chain(std::iter::once(String::new()))
-        .take(room)
         .collect();
+    // The body scrolls to keep the focused field in view, one line per field under the
+    // heading. On a short screen the focus went to fields cut off below the buttons, and
+    // what was typed landed where nobody could see it.
+    let focus_line = (editor.footer == crate::widgets::form::FooterFocus::Input
+        && !editor.is_raw())
+    .then_some(editor.focus + 1);
+    let offset = focus_line.map_or(0, |line| scroll_to_selection(line, 0, body.len(), room));
+    let mut lines: Vec<String> = body.into_iter().skip(offset).take(room).collect();
     let submit = editor.submit_label();
     let footer = crate::widgets::form::footer_line(submit, editor.footer);
     let footer_index = lines.len();
@@ -2357,17 +2351,23 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         popup,
     );
     register_overlay(hits, popup);
-    // the form's fields were clickable as a tab; keep them clickable as an overlay
-    register_form_fields(hits, popup, &fields);
-    // The fields start on the second line.
-    if editor.footer == crate::widgets::form::FooterFocus::Input
-        && editor.focus + 1 < footer_index
+    // A click picks a field, on the rows the fields are drawn on and no others: the
+    // footer and the hint are not fields cut off underneath them.
+    let shown = offset..offset + footer_index;
+    if !editor.is_raw() {
+        for line in shown
+            .clone()
+            .filter(|line| (1..=editor.fields.len()).contains(line))
+        {
+            register_line(hits, inner, line - offset, HitTarget::FormField(line - 1));
+        }
+    }
+    if let Some(line) = focus_line.filter(|line| shown.contains(line))
         && let Some(field) = editor.fields.get(editor.focus)
     {
-        let line = crate::mouse::line_rect(popup_inner(popup), editor.focus + 1);
-        show_form_field(frame, line, field);
+        show_form_field(frame, crate::mouse::line_rect(inner, line - offset), field);
     }
-    let footer_row = crate::mouse::line_rect(popup_inner(popup), footer_index);
+    let footer_row = crate::mouse::line_rect(inner, footer_index);
     crate::widgets::form::register_footer(hits, footer_row, &footer, submit);
 }
 
