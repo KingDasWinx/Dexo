@@ -362,7 +362,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **SL-09** `MINOR` Panes can be shrunk until they are useless
 - [x] **SL-10** `MINOR` Only one of the two border cells of a divider is draggable
 - [x] **SL-18** `MINOR` "Toggle Light/Dark Mode" cycles through three modes
-- [ ] **SL-19** `MINOR` The terminal's colour depth (TERM / COLORTERM) is ignored; only NO_COLOR works
+- [x] **SL-19** `MINOR` The terminal's colour depth (TERM / COLORTERM) is ignored; only NO_COLOR works
 - [x] **SL-20** `MINOR` Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
 - [x] **SL-21** `MINOR` Help: any click closes the overlay, even a click on the Search field
 - [x] **SL-22** `MINOR` "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling

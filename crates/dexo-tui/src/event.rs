@@ -209,7 +209,12 @@ async fn run_loop(
     guard: &mut TerminalGuard<CrosstermTerminal>,
 ) -> Result<(), TuiError> {
     let mut terminal = Terminal::new(CrosstermBackend::new(std::io::stdout()))?;
-    let mut model = Model::default();
+    // What the terminal says it can show: the model started on 24-bit colour whatever
+    // TERM and COLORTERM said, and a 16-colour terminal was sent RGB.
+    let mut model = Model {
+        capabilities: crate::capabilities::TerminalCapabilities::detect(),
+        ..Model::default()
+    };
     let _ = crate::update::update(&mut model, Action::Bootstrapped(Box::new(bootstrap)));
     // The Windows console reports Ctrl+H and Ctrl+Backspace apart, protocol or not.
     model.keys_disambiguated = guard.keyboard_enhanced() || cfg!(windows);
