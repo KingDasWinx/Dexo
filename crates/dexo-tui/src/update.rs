@@ -595,6 +595,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if model.connection_form.open && model.connection_form.editing.is_none() {
                 model.connection_form.close();
             }
+            let was = previous_name.clone();
             if let Some(from) = previous_name.filter(|from| *from != profile.name) {
                 effects.extend(rename_sessions(model, &from, &profile.name));
             }
@@ -614,7 +615,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                         acc
                     }),
             );
+            // A rename keeps the sidebar's pick on the connection it renamed, where it
+            // jumped to the first row.
+            let renamed_pick = was
+                .as_deref()
+                .filter(|from| {
+                    *from != profile.name
+                        && model.explorer.selected_connection_name() == Some(*from)
+                })
+                .map(str::to_string);
             sync_explorer_connections(model);
+            if renamed_pick.is_some() {
+                model
+                    .explorer
+                    .select(crate::screens::explorer::connection_id(&profile.name));
+            }
             model.messages.info(format!("saved {}", profile.name));
             effects
         }

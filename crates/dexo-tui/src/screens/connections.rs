@@ -82,10 +82,17 @@ pub const HINTS: [&str; 8] = [
 impl ConnectionsScreen {
     pub fn load_profiles(&mut self, profiles: Vec<ConnectionProfile>) {
         // `ProfileSaved` hands the current rows back, temporary ones included.
-        let saved: Vec<ConnectionProfile> = profiles
+        let picked = self.selected().map(|profile| profile.id);
+        let mut saved: Vec<ConnectionProfile> = profiles
             .into_iter()
             .filter(|profile| self.temporary.iter().all(|other| other.id != profile.id))
             .collect();
+        // The order a restart gives, grouped and by name: a connection added or renamed
+        // went to the end of the list until then.
+        saved.sort_by(|a, b| {
+            (a.group_path.as_deref().unwrap_or(""), a.name.as_str())
+                .cmp(&(b.group_path.as_deref().unwrap_or(""), b.name.as_str()))
+        });
         let rows: Vec<(ConnectionProfile, bool)> = saved
             .into_iter()
             .map(|profile| (profile, false))
@@ -111,7 +118,12 @@ impl ConnectionsScreen {
                 }
             })
             .collect();
-        if self.selected_profile >= self.profiles.len() {
+        // The pick stays on its connection, wherever the new order put it.
+        if let Some(index) =
+            picked.and_then(|id| self.profiles.iter().position(|row| row.profile.id == id))
+        {
+            self.selected_profile = index;
+        } else if self.selected_profile >= self.profiles.len() {
             self.selected_profile = 0;
         }
     }
@@ -316,9 +328,14 @@ impl ConnectionsScreen {
                 Some(_) => "connected",
                 None => "offline",
             };
-            let tx = session
-                .map(|session| format!(" {:?}", session.transaction))
-                .unwrap_or_default();
+            // Idle is the null state, and `Idle` was a Rust name beside a status.
+            let tx = match session.map(|session| session.transaction) {
+                Some(TransactionState::Active) => " (transaction open)",
+                Some(TransactionState::Failed) => " (transaction failed)",
+                Some(TransactionState::Unknown) => " (transaction unknown)",
+                _ => "",
+            }
+            .to_string();
             lines.push(format!(
                 "{marker} {name} [{}] {status}{tx}{read_only}",
                 row.profile.environment

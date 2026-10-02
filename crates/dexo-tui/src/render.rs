@@ -120,13 +120,15 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.mcp_profiles.open {
         render_mcp_profiles(frame, model, hits);
     }
-    if model.connections.open {
+    // A dialog opened over another is drawn alone: the one under it, taller, showed its
+    // bottom border as a second box edge under the new one.
+    if model.connections.open && !model.connection_form.open && !model.secret_prompt.open {
         render_connections(frame, model, hits);
     }
     if model.projects.open {
         render_projects(frame, model, hits);
     }
-    if model.config_transfer.open {
+    if model.config_transfer.open && !model.file_picker.open {
         render_config_transfer(frame, model, hits);
     }
     if model.secret_prompt.open {

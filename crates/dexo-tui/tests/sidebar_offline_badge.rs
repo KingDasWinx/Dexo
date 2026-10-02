@@ -142,3 +142,65 @@ fn a_long_name_keeps_its_badge_whole() {
         "{rows:?}"
     );
 }
+
+/// A connection added or renamed in the session sits where a restart would put it, and the
+/// pick stays on it.
+#[test]
+fn the_list_keeps_a_restarts_order_and_the_pick_stays_on_its_connection() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    model
+        .connections
+        .load_profiles(vec![profile("alpha", 1), profile("gamma", 3)]);
+    model.connections.selected_profile = 1;
+    // `beta` is saved: the list is read back with it, and `gamma` is still the pick.
+    model.connections.load_profiles(vec![
+        profile("alpha", 1),
+        profile("gamma", 3),
+        profile("beta", 2),
+    ]);
+    let names: Vec<_> = model
+        .connections
+        .profiles
+        .iter()
+        .map(|row| row.profile.name.clone())
+        .collect();
+    assert_eq!(names, ["alpha", "beta", "gamma"]);
+    assert_eq!(model.connections.selected().unwrap().name, "gamma");
+}
+
+/// Browse Connections says `connected` or `active`, not the Rust name of an idle
+/// transaction beside it.
+#[test]
+fn browse_connections_does_not_print_a_rust_name_beside_the_status() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    model.connections.load_profiles(vec![profile("alpha", 1)]);
+    model.connections.upsert_session(SessionRow {
+        id: SessionId(uuid::Uuid::from_u128(30)),
+        connection: "alpha".into(),
+        transaction: dexo_driver_api::TransactionState::Idle,
+        generation: 1,
+        environment: "local".into(),
+        read_only: false,
+        driver: "postgres".into(),
+    });
+    model.connections.open = true;
+    let screen = render_to_string(&model, 100, 30);
+    assert!(screen.contains("connected"), "{screen}");
+    assert!(!screen.contains("Idle"), "{screen}");
+}
+
+/// A dialog opened over Browse Connections is drawn alone: the one under it showed its
+/// bottom border under the new one.
+#[test]
+fn a_form_over_browse_connections_leaves_no_second_border() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    model.connections.load_profiles(vec![profile("alpha", 1)]);
+    model.connections.open = true;
+    dexo_tui::update(&mut model, dexo_tui::Action::OpenConnectionForm);
+    let screen = render_to_string(&model, 100, 30);
+    assert!(!screen.contains("Running in Docker"), "{screen}");
+    assert!(!screen.contains("Enter connect"), "{screen}");
+}
