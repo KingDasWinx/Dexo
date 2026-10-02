@@ -4,19 +4,19 @@ Usage: dexo [OPTIONS] [URL]
        dexo <COMMAND>
 
 Commands:
-  doctor       
-  connections  
-  completion   
-  config       
-  query        
-  run          
-  inspect      
-  schema       
-  export       
-  import       
-  explain      
-  sessions     
-  mcp          
+  doctor       Say whether Dexo runs, for a script that checks; `dexo mcp doctor` checks agents' setup
+  connections  Add, list and test saved connections, and set their passwords
+  completion   Print completions of the subcommands for bash, zsh, fish or PowerShell
+  config       Print, export and import the projects and connections, without passwords
+  query        Run SQL on a connection and print the rows
+  run          Run a SQL file on a connection, statement by statement
+  inspect      Show a connection's catalog: an object, a search, the grants, or a cached snapshot
+  schema       Snapshot a schema, or diff two of them into a migration
+  export       Write a query's rows to a CSV, TSV, JSON, JSON Lines or SQL file
+  import       Load a CSV, TSV, JSON, JSON Lines or SQL file into a table
+  explain      Show a statement's plan, estimated or analyzed
+  sessions     List the server's sessions, and cancel or end one
+  mcp          Serve connections to AI agents over MCP, and manage what they may do
   lsp          Language server for editors: completion, diagnostics and formatting over stdio
   help         Print this message or the help of the given subcommand(s)
 

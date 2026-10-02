@@ -64,21 +64,24 @@ pub enum OutputFormat {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
+    /// Say whether Dexo runs, for a script that checks; `dexo mcp doctor` checks agents' setup
     Doctor {
         #[arg(long)]
         json: bool,
     },
+    /// Add, list and test saved connections, and set their passwords
     Connections {
         #[command(subcommand)]
         command: ConnectionsCommand,
     },
-    Completion {
-        shell: String,
-    },
+    /// Print completions of the subcommands for bash, zsh, fish or PowerShell
+    Completion { shell: String },
+    /// Print, export and import the projects and connections, without passwords
     Config {
         #[command(subcommand)]
         command: ConfigCommand,
     },
+    /// Run SQL on a connection and print the rows
     Query {
         #[arg(long)]
         connection: String,
@@ -95,6 +98,7 @@ pub enum Command {
         #[arg(long)]
         continue_on_error: bool,
     },
+    /// Run a SQL file on a connection, statement by statement
     Run {
         #[arg(long)]
         connection: String,
@@ -109,6 +113,7 @@ pub enum Command {
         #[arg(long)]
         continue_on_error: bool,
     },
+    /// Show a connection's catalog: an object, a search, the grants, or a cached snapshot
     Inspect {
         #[arg(long)]
         connection: String,
@@ -125,10 +130,12 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
     },
+    /// Snapshot a schema, or diff two of them into a migration
     Schema {
         #[command(subcommand)]
         command: SchemaCommand,
     },
+    /// Write a query's rows to a CSV, TSV, JSON, JSON Lines or SQL file
     Export {
         #[arg(long)]
         connection: String,
@@ -141,6 +148,7 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = TransferCliFormat::Csv)]
         format: TransferCliFormat,
     },
+    /// Load a CSV, TSV, JSON, JSON Lines or SQL file into a table
     Import {
         #[arg(long)]
         connection: String,
@@ -157,6 +165,7 @@ pub enum Command {
         #[arg(long)]
         non_interactive: bool,
     },
+    /// Show a statement's plan, estimated or analyzed
     Explain {
         #[arg(long)]
         connection: String,
@@ -175,10 +184,12 @@ pub enum Command {
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
     },
+    /// List the server's sessions, and cancel or end one
     Sessions {
         #[command(subcommand)]
         command: SessionsCommand,
     },
+    /// Serve connections to AI agents over MCP, and manage what they may do
     Mcp {
         #[command(subcommand)]
         command: McpCommand,
@@ -216,6 +227,7 @@ pub enum OnError {
 
 #[derive(Debug, Subcommand)]
 pub enum SchemaCommand {
+    /// Save a connection's schema as a snapshot to diff against later
     Snapshot {
         #[arg(long)]
         connection: String,
@@ -224,6 +236,7 @@ pub enum SchemaCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
+    /// Compare two schemas -- live connections or snapshots -- as JSON or SQL
     Diff {
         #[arg(long)]
         from: String,
@@ -244,12 +257,14 @@ pub enum SchemaCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum SessionsCommand {
+    /// List the server's sessions
     List {
         #[arg(long)]
         connection: String,
         #[arg(long, value_enum, default_value_t = OutputFormat::Json)]
         format: OutputFormat,
     },
+    /// Cancel the query a session is running
     Cancel {
         #[arg(long)]
         connection: String,
@@ -258,6 +273,7 @@ pub enum SessionsCommand {
         #[arg(long)]
         confirm: bool,
     },
+    /// End a session; its id has to be confirmed
     Terminate {
         #[arg(long)]
         connection: String,
@@ -270,7 +286,9 @@ pub enum SessionsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ConnectionsCommand {
+    /// List the saved connections
     List,
+    /// Save a connection; its password goes to the keychain
     Add {
         #[arg(long)]
         name: String,
@@ -307,6 +325,7 @@ pub enum ConnectionsCommand {
         #[arg(long)]
         no_test: bool,
     },
+    /// Replace a connection's password in the keychain
     SetSecret {
         #[arg(long)]
         name: String,
@@ -315,6 +334,7 @@ pub enum ConnectionsCommand {
         #[arg(long)]
         password_stdin: bool,
     },
+    /// Connect, and say whether it worked
     Test {
         #[arg(long)]
         name: String,
@@ -323,12 +343,16 @@ pub enum ConnectionsCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum ConfigCommand {
+    /// Print the projects and connections, as `config export` writes them
     Show,
+    /// Print the path of Dexo's config file
     Path,
+    /// Write the projects and connections to a TOML file, without passwords
     Export {
         #[arg(long)]
         output: PathBuf,
     },
+    /// Read projects and connections from a TOML file
     Import {
         #[arg(long)]
         input: PathBuf,
@@ -337,10 +361,12 @@ pub enum ConfigCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum McpCommand {
+    /// Create, list and change the profiles an agent connects through
     Profile {
         #[command(subcommand)]
         command: McpProfileCommand,
     },
+    /// Allow or deny objects to a profile, by selector
     Allow {
         #[arg(long)]
         profile: String,
@@ -351,6 +377,7 @@ pub enum McpCommand {
         #[arg(long)]
         remove: bool,
     },
+    /// Print a profile's limits and the objects it allows
     Policy {
         #[arg(long)]
         profile: String,
@@ -378,18 +405,22 @@ pub enum McpCommand {
         #[arg(long)]
         skill: bool,
     },
+    /// Print the config an MCP client needs to start Dexo's server
     Config {
         #[command(subcommand)]
         command: McpConfigCommand,
     },
+    /// Serve a profile to an agent over stdio
     Serve {
         #[arg(long)]
         profile: String,
     },
+    /// Let a profile write for a while, or take that back
     Grant {
         #[command(subcommand)]
         command: McpGrantCommand,
     },
+    /// Print what agents asked for and what they got
     Audit {
         #[arg(long)]
         profile: Option<String>,
@@ -398,25 +429,31 @@ pub enum McpCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum McpProfileCommand {
+    /// List the profiles
     List,
+    /// Create a profile, disabled and read-only
     Create {
         #[arg(long)]
         name: String,
     },
+    /// Print a profile
     Show {
         #[arg(long)]
         name: String,
     },
+    /// Let agents use a profile
     Enable {
         #[arg(long)]
         name: String,
         #[arg(long)]
         confirm: bool,
     },
+    /// Stop agents from using a profile
     Disable {
         #[arg(long)]
         name: String,
     },
+    /// Change a profile's connections, query mode and limits
     Set {
         #[arg(long)]
         name: String,
@@ -443,6 +480,7 @@ pub enum McpProfileCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum McpGrantCommand {
+    /// Let a profile write to a connection until the grant expires
     Create {
         #[arg(long)]
         profile: String,
@@ -471,14 +509,17 @@ pub enum McpGrantCommand {
         )]
         approval_timeout: u32,
     },
+    /// List a profile's grants
     List {
         #[arg(long)]
         profile: String,
     },
+    /// Take back one grant
     Revoke {
         #[arg(long)]
         id: String,
     },
+    /// Take back every grant of a profile
     RevokeAll {
         #[arg(long)]
         profile: String,
@@ -487,6 +528,7 @@ pub enum McpGrantCommand {
 
 #[derive(Debug, Subcommand)]
 pub enum McpConfigCommand {
+    /// Print a client's MCP config for a profile
     Print {
         #[arg(long)]
         profile: String,

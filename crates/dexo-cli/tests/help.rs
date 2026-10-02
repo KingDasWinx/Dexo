@@ -36,6 +36,24 @@ fn public_commands_are_documented() {
     }
 }
 
+/// Every subcommand, at every level, says in one line what it does.
+#[test]
+fn every_subcommand_has_a_one_line_description() {
+    fn walk(command: &clap::Command, path: &str, missing: &mut Vec<String>) {
+        for sub in command.get_subcommands() {
+            let path = format!("{path} {}", sub.get_name());
+            match sub.get_about().map(ToString::to_string) {
+                Some(about) if !about.trim().is_empty() && !about.contains('\n') => {}
+                _ => missing.push(path.clone()),
+            }
+            walk(sub, &path, missing);
+        }
+    }
+    let mut missing = Vec::new();
+    walk(&Args::command(), "dexo", &mut missing);
+    assert!(missing.is_empty(), "no description: {missing:?}");
+}
+
 #[test]
 fn connections_help_documents_add_and_set_secret() {
     let mut cmd = Args::command();
