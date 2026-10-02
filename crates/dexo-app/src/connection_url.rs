@@ -171,10 +171,15 @@ fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> 
             format!("not a connection URL: {reason}"),
         )
     };
-    // A `#` would end the path as a fragment and open another file, created empty.
-    if rest.contains('#') {
-        return Err(invalid("a # in a file's path is written %23"));
-    }
+    // A fragment is for the client that wrote the URL, as on the servers' URLs. But a
+    // `#` may be the file's own -- `sales#2.db` -- and ending the path there opened
+    // `sales`, created empty: it is taken for a fragment only when the path before it
+    // is a file already.
+    let rest = match rest.split_once('#') {
+        None => rest,
+        Some((before, _)) if names_a_file(before) => before,
+        Some(_) => return Err(invalid("a # in a file's path is written %23")),
+    };
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
     let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
     let path = decode(path).map_err(|_| invalid("the path is not valid percent-encoding"))?;
@@ -191,6 +196,13 @@ fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> 
         connection.profile.policy.read_only = Some(true);
     }
     Ok(connection)
+}
+
+/// Whether a file URL's text without its fragment -- path, then any `?parameters` --
+/// names a file that exists.
+fn names_a_file(text: &str) -> bool {
+    let path = text.split_once('?').map_or(text, |(path, _)| path);
+    decode(path).is_ok_and(|path| !path.is_empty() && std::path::Path::new(&path).is_file())
 }
 
 /// A temporary connection to the file at `path`, named after it.
@@ -442,6 +454,17 @@ mod tests {
             parse("sqlite:///data/sales%232.db").unwrap().profile.config["path"],
             "/data/sales#2.db"
         );
+        // A fragment after a file that exists is only a fragment, parameters and all.
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join("shop.db");
+        std::fs::write(&file, b"").unwrap();
+        let url = format!("sqlite://{}?mode=ro#notes", file.display());
+        let parsed = parse(&url).unwrap();
+        assert_eq!(parsed.profile.config["path"], file.display().to_string());
+        assert_eq!(parsed.profile.policy.read_only, Some(true));
+        // One after a path that names no file may be the name's own: refused.
+        let missing = dir.path().join("sales");
+        assert!(parse(&format!("sqlite://{}#2.db", missing.display())).is_err());
     }
 
     #[test]
