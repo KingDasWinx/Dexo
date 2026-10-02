@@ -624,8 +624,20 @@ pub async fn call_write_tool(
     }
 }
 
+/// What an agent reads of a write: whether it went through, what became of the database,
+/// and the detail -- in words, not the names of the types that hold them.
 fn format_outcome(state: OperationState, side_effect: SideEffect, text: &str) -> String {
-    format!("{state:?} {side_effect:?} {text}")
+    let state = match state {
+        OperationState::Succeeded => "done",
+        _ => "failed",
+    };
+    let side_effect = match side_effect {
+        SideEffect::Committed => "committed",
+        SideEffect::RolledBack => "rolled back",
+        SideEffect::PartiallyCommitted => "partly committed",
+        SideEffect::Unknown => "outcome unknown",
+    };
+    format!("{state}, {side_effect}: {}", text.replace('_', " "))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -683,7 +695,13 @@ async fn execute(
             }
             let sql = value.get("sql").and_then(Value::as_str).unwrap_or_default();
             let affected = service.execute_write(session, connection, sql).await?;
-            Ok((SideEffect::Committed, format!("{affected} rows affected")))
+            Ok((
+                SideEffect::Committed,
+                format!(
+                    "{affected} row{} affected",
+                    if affected == 1 { "" } else { "s" }
+                ),
+            ))
         }
         "schema_apply_ddl" => apply_ddl(value, session, connection, cancelled()).await,
         "admin_cancel_query" | "admin_terminate_session" => {
@@ -1075,7 +1093,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(first, replay);
-        assert!(first.contains("Committed"), "{first}");
+        assert!(first.contains("committed"), "{first}");
         assert_eq!(
             session
                 .log()
@@ -1344,7 +1362,7 @@ mod tests {
         .await
         .unwrap();
         assert!(
-            result.contains("Committed") && !result.contains("RolledBack"),
+            result.contains("committed") && !result.contains("rolled back"),
             "{result}"
         );
         assert!(session.log().contains(&"ddl DROP TABLE items".to_string()));

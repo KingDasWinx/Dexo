@@ -40,8 +40,9 @@ pub fn rows_result(page: &RowsPage) -> CallToolResult {
     }
     text.push_str(&markdown_table(&page.columns, &page.rows));
     text.push_str(&format!(
-        "\n({} rows, {} ms)",
+        "\n({} row{}, {} ms)",
         page.rows.len(),
+        if page.rows.len() == 1 { "" } else { "s" },
         page.elapsed.as_millis()
     ));
     if page.truncated {
