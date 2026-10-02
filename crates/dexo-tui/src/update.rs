@@ -5529,7 +5529,21 @@ fn finish_schema_run(
     if model.active_session.is_none() || model.connection.name.is_empty() {
         return Vec::new();
     }
-    refresh_catalog(model, true)
+    // The connection's top level and every node open under it are read again, the tree
+    // left as it is -- open, and with the selection where it was.
+    let connection = crate::screens::explorer::connection_id(&model.connection.name);
+    let mut effects = Vec::new();
+    for parent in
+        std::iter::once(connection.clone()).chain(model.explorer.expanded_under(&connection))
+    {
+        effects.extend(catalog_load_effect(
+            model,
+            Some(parent),
+            crate::runtime::OperationId::new(),
+            false,
+        ));
+    }
+    effects
 }
 
 fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {

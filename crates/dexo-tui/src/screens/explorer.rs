@@ -653,7 +653,11 @@ impl ExplorerState {
     fn apply_in(nodes: &mut [ExplorerNode], parent: &ObjectId, page: CatalogList) {
         for node in nodes {
             if node.id == *parent {
+                let before = std::mem::take(&mut node.children);
                 node.children = group_catalog_children(&node.id, &node.kind, page.objects);
+                // A reload keeps what was open under it: after a DDL run the tree used to
+                // fold up to the connection.
+                keep_expanded(&mut node.children, before);
                 for restriction in page.restrictions {
                     node.children.push(restriction_node(restriction));
                 }
@@ -675,6 +679,24 @@ impl ExplorerState {
             }
             Self::apply_in(&mut node.children, parent, page.clone());
         }
+    }
+
+    /// The open nodes under `root` that the catalog lists children of (not the folders
+    /// the tree groups them in), outermost first: what a reload reads again.
+    pub fn expanded_under(&self, root: &ObjectId) -> Vec<ObjectId> {
+        fn walk(nodes: &[ExplorerNode], out: &mut Vec<ObjectId>) {
+            for node in nodes.iter().filter(|node| node.expanded) {
+                if !is_folder_node(node) {
+                    out.push(node.id.clone());
+                }
+                walk(&node.children, out);
+            }
+        }
+        let mut out = Vec::new();
+        if let Some(root) = self.roots.iter().find(|node| node.id == *root) {
+            walk(&root.children, &mut out);
+        }
+        out
     }
 
     pub fn visible_ids(&self) -> Vec<ObjectId> {
@@ -913,6 +935,27 @@ impl ExplorerState {
 
     pub fn is_selected(&self, connection: Option<&str>, id: &ObjectId) -> bool {
         self.selected.as_ref() == Some(id) && self.selected_connection.as_deref() == connection
+    }
+}
+
+/// Each node of `fresh` that was open in `before` stays open, with what it held until
+/// its own reload replaces it.
+fn keep_expanded(fresh: &mut [ExplorerNode], mut before: Vec<ExplorerNode>) {
+    for node in fresh {
+        let Some(at) = before.iter().position(|old| old.id == node.id) else {
+            continue;
+        };
+        let old = before.swap_remove(at);
+        if !old.expanded {
+            continue;
+        }
+        node.expanded = true;
+        if node.children.is_empty() {
+            node.children = old.children;
+            node.state = old.state;
+        } else {
+            keep_expanded(&mut node.children, old.children);
+        }
     }
 }
 
@@ -1484,5 +1527,70 @@ mod tests {
             Some("staging.public")
         );
         assert_eq!(explorer.selected_index(), 3);
+    }
+
+    /// Reading a node's children again keeps what was open under it, and lists the
+    /// open nodes a reload reads again.
+    #[test]
+    fn a_reload_keeps_the_tree_open() {
+        let schema = |id: &str| {
+            CatalogObject::new(
+                ObjectId::new(id),
+                ObjectKind::Schema,
+                QualifiedName::new(Some("db"), Some(id), id),
+                None,
+            )
+        };
+        let table = || {
+            CatalogObject::new(
+                ObjectId::new("table:users"),
+                ObjectKind::Table,
+                QualifiedName::new(Some("db"), Some("public"), "users"),
+                Some(ObjectId::new("public")),
+            )
+        };
+        let mut explorer = ExplorerState::default();
+        explorer.replace_roots(CatalogList {
+            objects: vec![schema("public"), schema("sales")],
+            restrictions: vec![],
+        });
+        let root = ObjectId::new("public");
+        explorer.apply_children(
+            &root,
+            CatalogList {
+                objects: vec![table()],
+                restrictions: vec![],
+            },
+        );
+        let tables = explorer.roots[0].children[0].id.clone();
+        explorer.roots[0].children[0].expanded = true;
+        // The schema's children read again, now with a new table among them.
+        explorer.apply_children(
+            &root,
+            CatalogList {
+                objects: vec![
+                    table(),
+                    CatalogObject::new(
+                        ObjectId::new("table:orders"),
+                        ObjectKind::Table,
+                        QualifiedName::new(Some("db"), Some("public"), "orders"),
+                        Some(ObjectId::new("public")),
+                    ),
+                ],
+                restrictions: vec![],
+            },
+        );
+        let folder = &explorer.roots[0].children[0];
+        assert_eq!(folder.id, tables);
+        assert!(folder.expanded, "the Tables folder stayed open");
+        assert_eq!(folder.children.len(), 2);
+        let mut parent = ExplorerNode::from_object(schema("db"));
+        parent.expanded = true;
+        parent.children = explorer.roots.clone();
+        explorer.roots = vec![parent];
+        assert_eq!(
+            explorer.expanded_under(&ObjectId::new("db")),
+            [ObjectId::new("public")]
+        );
     }
 }
