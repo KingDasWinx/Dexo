@@ -1780,6 +1780,14 @@ fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 }
             }
             None if row == 0 && picker.items.is_none() => "  Reading the saved queries…".into(),
+            None if row == 0 && picker.items.as_ref().is_some_and(Vec::is_empty) => {
+                match crate::palette::shortcut_for(model, "editor.save_query", None) {
+                    Some(key) => {
+                        format!("  No saved queries yet; {key} saves one from the editor.")
+                    }
+                    None => "  No saved queries yet; Save Query As saves one.".into(),
+                }
+            }
             None if row == 0 && filtered.is_empty() => "  No saved query matches.".into(),
             None => String::new(),
         };

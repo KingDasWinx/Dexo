@@ -1369,7 +1369,11 @@ pub fn command_spec(id: &str) -> Option<CommandSpec> {
 /// The key a command has in the active keymap, written the way the palette shows keys
 /// (`Ctrl+Shift+D`); a command no built-in keymap binds keeps the label its spec gives.
 /// A fixed string said Ctrl+E in the Emacs keymap, where the key is `ctrl+x ctrl+e`.
-fn shortcut_for(model: &Model, id: &str, fallback: Option<&'static str>) -> Option<String> {
+pub(crate) fn shortcut_for(
+    model: &Model,
+    id: &str,
+    fallback: Option<&'static str>,
+) -> Option<String> {
     static BOUND: std::sync::OnceLock<std::collections::HashSet<String>> =
         std::sync::OnceLock::new();
     let bound = BOUND.get_or_init(|| {

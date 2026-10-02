@@ -2,6 +2,7 @@ use crate::action::Action;
 use crate::model::Model;
 
 mod registry;
+pub(crate) use registry::shortcut_for;
 pub use registry::{command_spec, command_specs, palette_entries};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
