@@ -3913,10 +3913,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         };
     }
     if model.mcp_audit.open {
-        use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+        use crate::widgets::form::{FooterFocus, FooterKey};
         let screen = &mut model.mcp_audit;
         if let Some(deciding) = screen.deciding.as_mut() {
-            return match footer_key(&mut deciding.focus, &key) {
+            return match crate::widgets::form::confirm_key(&mut deciding.focus, &key) {
                 FooterKey::Submit => {
                     let (id, approve) = (deciding.id, deciding.approve);
                     screen.deciding = None;
@@ -6927,11 +6927,11 @@ fn submit_save_query(model: &mut Model) -> Vec<Effect> {
 /// The picker's keys: typing searches, Up and Down pick, Enter opens, F2 renames and
 /// Delete asks before it deletes.
 fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::widgets::form::{FooterKey, footer_key};
+    use crate::widgets::form::{FooterKey, confirm_key};
     let project_id = model.project_id.clone();
     let picker = &mut model.saved_queries;
     if let Some(focus) = picker.deleting.as_mut() {
-        match footer_key(focus, &key) {
+        match confirm_key(focus, &key) {
             FooterKey::Submit => {
                 picker.deleting = None;
                 if let Some(query) = picker.current() {
@@ -7737,29 +7737,19 @@ fn submit_run_prompt(model: &mut Model) -> Vec<Effect> {
     launch_script(model, statements)
 }
 
-/// Run and Cancel, nothing to type: the footer walk skips the input stop it would land on.
+/// Run and Cancel, nothing to type.
 fn handle_explain_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    use crate::widgets::form::{FooterKey, confirm_key};
     let Some(focus) = model.explain_prompt.as_mut() else {
         return Vec::new();
     };
-    match footer_key(focus, &key) {
+    match confirm_key(focus, &key) {
         FooterKey::Submit => update(model, Action::RunExplainAnalyze),
         FooterKey::Cancel => {
             model.explain_prompt = None;
             Vec::new()
         }
-        FooterKey::Moved => {
-            if *focus == FooterFocus::Input {
-                *focus = if matches!(key.code, KeyCode::BackTab | KeyCode::Up) {
-                    FooterFocus::Cancel
-                } else {
-                    FooterFocus::Submit
-                };
-            }
-            Vec::new()
-        }
-        FooterKey::Pass => Vec::new(),
+        FooterKey::Moved | FooterKey::Pass => Vec::new(),
     }
 }
 

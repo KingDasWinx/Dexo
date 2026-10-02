@@ -73,6 +73,27 @@ pub fn footer_key(focus: &mut FooterFocus, key: &KeyEvent) -> FooterKey {
     }
 }
 
+/// [`footer_key`] for a question with nothing to type -- Delete or Cancel, Approve or
+/// Cancel: every move goes between the two buttons. The input stop the walk would land
+/// on is drawn nowhere, so Enter there submitted with nothing marked.
+pub fn confirm_key(focus: &mut FooterFocus, key: &KeyEvent) -> FooterKey {
+    let outcome = footer_key(focus, key);
+    if outcome == FooterKey::Moved && *focus == FooterFocus::Input {
+        *focus = if matches!(key.code, KeyCode::BackTab | KeyCode::Up) {
+            FooterFocus::Cancel
+        } else {
+            FooterFocus::Submit
+        };
+    }
+    if *focus == FooterFocus::Input {
+        *focus = FooterFocus::Cancel;
+        if outcome == FooterKey::Submit {
+            return FooterKey::Moved;
+        }
+    }
+    outcome
+}
+
 pub fn footer_line(submit: &str, focus: FooterFocus) -> String {
     format!(
         "{}[{submit}]  {}[Cancel]",
@@ -136,5 +157,40 @@ mod tests {
         );
         editor.focus_prev();
         assert_eq!(focused_field(&editor).unwrap().label, "target");
+    }
+}
+
+#[cfg(test)]
+mod confirm_tests {
+    use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+
+    use super::{FooterFocus, FooterKey, confirm_key};
+
+    /// Every move stays on the two buttons; Enter submits only on the marked one.
+    #[test]
+    fn a_question_never_lands_on_an_input_it_does_not_draw() {
+        let key = |code| KeyEvent::new(code, KeyModifiers::NONE);
+        let mut focus = FooterFocus::Cancel;
+        for code in [
+            KeyCode::Down,
+            KeyCode::Tab,
+            KeyCode::Up,
+            KeyCode::BackTab,
+            KeyCode::Right,
+        ] {
+            confirm_key(&mut focus, &key(code));
+            assert_ne!(focus, FooterFocus::Input, "{code:?}");
+        }
+        let mut focus = FooterFocus::Cancel;
+        assert_eq!(
+            confirm_key(&mut focus, &key(KeyCode::Down)),
+            FooterKey::Moved
+        );
+        assert_eq!(focus, FooterFocus::Submit);
+        let mut focus = FooterFocus::Cancel;
+        assert_eq!(
+            confirm_key(&mut focus, &key(KeyCode::Enter)),
+            FooterKey::Cancel
+        );
     }
 }
