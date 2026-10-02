@@ -130,9 +130,16 @@ const DENIED_FUNCTIONS: &[&str] = &[
     "load_file",
     "sys_exec",
     "sys_eval",
-    "setseed",
+];
+
+/// DuckDB's own: SQL run from text, a seed set for the session, a checkpoint forced. On
+/// any other server a function by one of these names is the user's, and reads.
+const DENIED_DUCKDB_FUNCTIONS: &[&str] = &[
     "query",
     "query_table",
+    "setseed",
+    "checkpoint",
+    "force_checkpoint",
 ];
 
 /// A single `SELECT`/`VALUES`/`TABLE`/`WITH … SELECT`, or a plain `EXPLAIN` of one.
@@ -251,9 +258,10 @@ pub fn is_read(sql: &str, dialect: Dialect) -> bool {
     if dialect == Dialect::Sqlite && keyword.as_deref() == Some("PRAGMA") {
         return pragma_reads(sql);
     }
-    // DuckDB's SUMMARIZE profiles a table or a query, which sqlparser does not parse.
-    let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"))
-        || dialect == Dialect::Duckdb && keyword.as_deref() == Some("SUMMARIZE");
+    if dialect == Dialect::Duckdb && keyword.as_deref() == Some("SUMMARIZE") {
+        return summarize_reads(sql);
+    }
+    let shows = matches!(keyword.as_deref(), Some("SHOW" | "DESCRIBE" | "DESC"));
     match inspect_read(sql, dialect) {
         Ok(_) => true,
         // Parsed as exactly one statement, and EXPLAIN ANALYZE was already refused.
@@ -267,6 +275,32 @@ pub fn is_read(sql: &str, dialect: Dialect) -> bool {
         }
         Err(_) => false,
     }
+}
+
+/// DuckDB's `SUMMARIZE t` or `SUMMARIZE <query>`, which sqlparser does not parse: what
+/// follows the word has to read like any other query -- a function that writes in it is
+/// refused as it is anywhere -- or be the name of what it profiles.
+fn summarize_reads(sql: &str) -> bool {
+    let text = crate::statement::line_ends(sql, Dialect::Duckdb);
+    let Some(word) = crate::lex::tokenize(&text, Dialect::Duckdb)
+        .into_iter()
+        .find(|token| token.kind != crate::lex::TokenKind::Comment)
+    else {
+        return false;
+    };
+    let rest = text[word.span.end..].trim().trim_end_matches(';');
+    let name: Vec<_> = crate::lex::tokenize(rest, Dialect::Duckdb)
+        .into_iter()
+        .filter(|token| token.kind != crate::lex::TokenKind::Comment)
+        .collect();
+    let plain_name = !name.is_empty()
+        && name.iter().all(|token| {
+            matches!(
+                token.kind,
+                crate::lex::TokenKind::Word | crate::lex::TokenKind::QuotedIdent
+            ) || &rest[token.span.clone()] == "."
+        });
+    plain_name || inspect_read(rest, Dialect::Duckdb).is_ok()
 }
 
 /// What makes one statement destructive, if anything does. A statement that neither
@@ -654,7 +688,10 @@ impl Guard {
             .last()
             .map(|name| name.to_lowercase())
             .unwrap_or_default();
-        if DENIED_FUNCTIONS.contains(&name.as_str()) {
+        let duckdb = self.dialect == Dialect::Duckdb;
+        if DENIED_FUNCTIONS.contains(&name.as_str())
+            || duckdb && DENIED_DUCKDB_FUNCTIONS.contains(&name.as_str())
+        {
             return self.reject(GuardRejection::Function(name));
         }
         ControlFlow::Continue(())
@@ -1236,6 +1273,8 @@ mod tests {
             "select * from 'sales.csv'",
             "select * from read_parquet('s.parquet')",
             "summarize orders",
+            "summarize main.\"Orders\"",
+            "summarize select * from orders where id > 1",
             "describe orders",
             "show tables",
             "explain select 1",
@@ -1243,6 +1282,11 @@ mod tests {
             assert!(duckdb(sql), "{sql}");
         }
         for sql in [
+            "summarize select nextval('s')",
+            "summarize select setseed(0.5)",
+            "summarize orders; drop table orders",
+            "from checkpoint()",
+            "select * from force_checkpoint()",
             "copy orders to 'out.csv'",
             "attach 'other.duckdb' as other",
             "insert into orders select * from 'sales.csv'",
@@ -1274,6 +1318,11 @@ mod tests {
             );
             assert!(bar.is_err(), "{dialect:?}");
         }
+        // DuckDB's side effects are DuckDB's: elsewhere a function by the name is the user's.
+        assert!(is_read(
+            "select query('x'), setseed(0.5), checkpoint()",
+            Dialect::Postgres
+        ));
         assert_eq!(
             inspect_read("select * from Shop.Main.Orders", Dialect::Duckdb)
                 .unwrap()
