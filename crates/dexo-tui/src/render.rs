@@ -3056,6 +3056,16 @@ fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let footer = Rect::new(inner.x, inner.y + body_rows, inner.width, footer_rows);
     frame.render_widget(Paragraph::new(view.footer.join("\n")).style(style), footer);
     register_overlay(hits, popup);
+    // Each waiting request answers a click, and the wheel reads the list.
+    let body_area = Rect::new(inner.x, inner.y, inner.width, body_rows);
+    for (line, index) in &view.rows {
+        if *line >= top && line - top < body_rows as usize {
+            hits.register(
+                HitTarget::ListRow(*index),
+                crate::mouse::line_rect(body_area, line - top),
+            );
+        }
+    }
     let deciding = screen.deciding.as_ref();
     for (index, line) in view.footer.iter().enumerate().take(footer_rows as usize) {
         let rect = crate::mouse::line_rect(footer, index);
@@ -3071,7 +3081,7 @@ fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 hits,
                 rect,
                 line,
-                "r revoke all grants",
+                "R revoke all grants",
                 HitTarget::Button(HitButton::Revoke),
             );
         }

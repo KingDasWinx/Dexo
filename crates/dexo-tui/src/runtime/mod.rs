@@ -2367,16 +2367,9 @@ impl WorkbenchRuntime {
         use dexo_app::mcp::GrantLedger;
         let now = unix_now();
         let events = ledger
-            .recent_audits(50)
+            .recent_audits(200)
             .into_iter()
-            .map(|event| {
-                format!(
-                    "{} {} {} {} {}",
-                    event.profile, event.request, event.decision, event.target, event.status
-                )
-                .trim_end()
-                .to_string()
-            })
+            .map(|event| describe_audit(&event))
             .collect();
         let pending = ledger.pending_approvals(now);
         self.emit(Action::McpAuditLoaded {
@@ -2527,6 +2520,46 @@ impl WorkbenchRuntime {
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {
         &self.action_tx
     }
+}
+
+/// One audit event as a line a person reads: when, which profile, what it tried, and how
+/// it ended in words -- not the columns of the table joined by spaces.
+pub fn describe_audit(event: &dexo_app::mcp::AuditEvent) -> String {
+    let when = chrono::DateTime::from_timestamp(event.timestamp, 0)
+        .map(|utc| {
+            utc.with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_default();
+    // `tools/call data_update` and `grant data_update` name the tool last.
+    let tool = event
+        .request
+        .rsplit(' ')
+        .next()
+        .unwrap_or(&event.request)
+        .to_string();
+    let on = if event.target.is_empty() {
+        String::new()
+    } else {
+        format!(" on {}", event.target)
+    };
+    // A status that is an error code (`POLICY_DENIED`) reads as the words it is.
+    let code = !event.status.is_empty()
+        && event
+            .status
+            .chars()
+            .all(|ch| ch.is_ascii_uppercase() || ch == '_');
+    let words = event.status.replace('_', " ").to_lowercase();
+    let outcome = match (event.decision.as_str(), code) {
+        ("ask", _) => "waiting for approval".to_string(),
+        ("approved", _) => "approved by a person".to_string(),
+        ("deny", _) => format!("refused: {}", event.status),
+        (_, true) => format!("refused: {words}"),
+        _ if event.status.is_empty() || event.status == "ok" => "ok".to_string(),
+        _ => event.status.clone(),
+    };
+    format!("{when} {}: {tool}{on} -- {outcome}", event.profile)
 }
 
 fn unix_seconds() -> i64 {
@@ -2759,5 +2792,55 @@ mod dial_tests {
             .to_string();
         assert!(message.contains("connect again"), "{message}");
         assert!(memory.get("held").unwrap().is_none());
+    }
+}
+
+#[cfg(test)]
+mod audit_tests {
+    use super::describe_audit;
+    use dexo_app::mcp::AuditEvent;
+
+    fn event(request: &str, decision: &str, target: &str, status: &str) -> AuditEvent {
+        AuditEvent {
+            timestamp: 0,
+            request: request.into(),
+            operation_id: None,
+            profile: "pg-dev".into(),
+            client: "test".into(),
+            target: target.into(),
+            decision: decision.into(),
+            grant_id: None,
+            duration_ms: 0,
+            rows: 0,
+            bytes: 0,
+            status: status.into(),
+            sql: None,
+        }
+    }
+
+    /// `allow ... POLICY_DENIED` contradicted itself; an event is a line of words with
+    /// its outcome, and no empty column left a double space.
+    #[test]
+    fn an_audit_event_reads_as_one_line_of_words() {
+        let refused = describe_audit(&event(
+            "tools/call data_update",
+            "allow",
+            "public.orders",
+            "POLICY_DENIED",
+        ));
+        assert!(
+            refused.ends_with("pg-dev: data_update on public.orders -- refused: policy denied"),
+            "{refused}"
+        );
+        let ok = describe_audit(&event("tools/call list_connections", "allow", "", "ok"));
+        assert!(ok.ends_with("pg-dev: list_connections -- ok"), "{ok}");
+        let asking = describe_audit(&event(
+            "grant data_update",
+            "ask",
+            "public.orders",
+            "waiting",
+        ));
+        assert!(asking.ends_with("waiting for approval"), "{asking}");
+        assert!(!refused.contains("  "), "{refused}");
     }
 }

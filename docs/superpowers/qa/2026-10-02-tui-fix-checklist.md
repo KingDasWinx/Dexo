@@ -310,13 +310,13 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-11** `MAJOR` MCP Profiles popup is fixed-height: with a few grants the status line and the hint line are cut off, so a pending confirmation is invisible
 - [x] **MA-22** `MAJOR` New MCP Grant from the palette silently targets the first profile; the form cannot choose a profile
 - [x] **MA-25** `MAJOR` Revoking grants denies the waiting request with the reason "a person denied this write"
-- [ ] **MA-26** `MAJOR` Agent Activity: with nothing waiting, PgDn scrolls for half a second and snaps back; only the newest 20 events can ever be seen
+- [x] **MA-26** `MAJOR` Agent Activity: with nothing waiting, PgDn scrolls for half a second and snaps back; only the newest 20 events can ever be seen
 - [x] **MA-34** `MAJOR` MCP Profiles: with more than 11 profiles the selection scrolls out of sight, and `e`/`r` act on rows you cannot see
 - [ ] **MA-41** `MAJOR` (layout, found while testing popups) After the terminal is made 20 rows high and back to 120x36, the Sidebar and the Results pane stay hidden
 - [x] **MA-01** `MINOR` MCP Profiles with no profile: empty state gives no way forward
 - [ ] **MA-03** `MINOR` Palette shows hotkey `g` for "New MCP Grant…" but it only works inside MCP Profiles; help does not list it
-- [ ] **MA-04** `MINOR` Agent Activity `r revoke all grants` closes Activity and opens the MCP Profiles screen with an unexplained pending "confirm revoke all grants"
-- [ ] **MA-07** `MINOR` Inconsistent revoke-all keys between screens
+- [x] **MA-04** `MINOR` Agent Activity `r revoke all grants` closes Activity and opens the MCP Profiles screen with an unexplained pending "confirm revoke all grants"
+- [x] **MA-07** `MINOR` Inconsistent revoke-all keys between screens
 - [ ] **MA-08** `MINOR` CLI: `dexo mcp profile create` accepts any name, including `bad name!`, and there is no way to delete a profile
 - [ ] **MA-09** `MINOR` CLI: creating a profile with an existing name shows the raw SQLite error
 - [ ] **MA-10** `MINOR` CLI: `profile show`/`policy` print Rust Debug names; empty answers are silent
@@ -331,14 +331,14 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **MA-21** `MINOR` Form allows several tools in one grant, the TUI success message names only the tool and selector
 - [x] **MA-23** `MINOR` Ctrl+P (palette) is swallowed inside MCP Profiles; typed text acts as hotkeys there
 - [x] **MA-24** `MINOR` "Revoke All MCP Grants" (palette) only opens MCP Profiles with a pending confirmation, shows a stale snapshot, and says `1 grants`
-- [ ] **MA-27** `MINOR` Agent Activity: mouse is not supported
-- [ ] **MA-28** `MINOR` Agent Activity rows are raw, contradictory and carry no time
-- [ ] **MA-29** `MINOR` Agent Activity: waiting requests - only the selected one shows its SQL, the confirm line does not repeat it
+- [x] **MA-27** `MINOR` Agent Activity: mouse is not supported
+- [x] **MA-28** `MINOR` Agent Activity rows are raw, contradictory and carry no time
+- [x] **MA-29** `MINOR` Agent Activity: waiting requests - only the selected one shows its SQL, the confirm line does not repeat it
 - [ ] **MA-30** `MINOR` The "waiting" notice is a short toast titled "warn"; nothing persistent shows pending requests
-- [ ] **MA-31** `MINOR` A killed agent: the request lingers as "waiting" and a late approval says "Approved: the agent's write runs now"
-- [ ] **MA-32** `MINOR` Timeout while the confirm dialog is open: the dialog just disappears
-- [ ] **MA-35** `MINOR` The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing
-- [ ] **MA-36** `MINOR` Agent Activity: an admin request (`admin_terminate_session`) says nothing about what it would terminate
+- [x] **MA-31** `MINOR` A killed agent: the request lingers as "waiting" and a late approval says "Approved: the agent's write runs now"
+- [-] **MA-32** `MINOR` Timeout while the confirm dialog is open: the dialog just disappears (not a defect: the vanished request is announced by a warning toast and the Recent list says it timed out)
+- [x] **MA-35** `MINOR` The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing
+- [x] **MA-36** `MINOR` Agent Activity: an admin request (`admin_terminate_session`) says nothing about what it would terminate
 - [x] **MA-37** `MINOR` `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
 - [ ] **MA-38** `MINOR` CLI messages and output of `dexo mcp grant` are raw
 - [ ] **MA-39** `MINOR` Agent side: raw Rust/serde and Debug text in errors and results
@@ -346,7 +346,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids
 - [x] **MA-06** `COSMETIC` MCP Profiles selected row has no highlight
 - [x] **MA-20** `COSMETIC` New MCP Grant: the checkbox label describes the unchecked state as a feature
-- [ ] **MA-33** `COSMETIC` Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`)
+- [-] **MA-33** `COSMETIC` Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`) (not a defect: a popup overlays the panes beneath it; it draws nothing of its own over their borders)
 
 ## SL: Settings, layout, mouse
 

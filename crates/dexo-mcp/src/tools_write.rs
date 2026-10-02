@@ -128,6 +128,24 @@ impl DexoMcpServer {
         if !grant.asks() {
             return Ok(None);
         }
+        // A destructive DDL without its confirm_target is refused where it runs; asking a
+        // person to approve it first only had them approve a write that then failed.
+        if name == "schema_apply_ddl" {
+            let target = arguments
+                .get("target")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let sql = arguments
+                .get("sql")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let risk = classify_raw_sql(sql);
+            if (risk.destructive || risk.data_loss)
+                && arguments.get("confirm_target").and_then(Value::as_str) != Some(target)
+            {
+                return Ok(None);
+            }
+        }
         let mut approval = Approval::pending(
             &service.profile.name,
             &connection.name,

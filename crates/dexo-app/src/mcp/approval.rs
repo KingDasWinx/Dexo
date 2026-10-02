@@ -106,6 +106,12 @@ impl Approval {
         (self.deadline - now).max(0)
     }
 
+    /// Whether the call that asked has been silent long enough to look gone: it says it is
+    /// there every second.
+    pub fn seems_gone(&self, now: i64) -> bool {
+        self.heartbeat < now.saturating_sub(2)
+    }
+
     /// Whether the call that asked still waits for the answer at `now`.
     pub fn waited_on(&self, now: i64) -> bool {
         self.heartbeat >= now.saturating_sub(HEARTBEAT_GRACE_SECS)

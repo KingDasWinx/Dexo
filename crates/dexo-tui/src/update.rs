@@ -3776,6 +3776,20 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
+        // A click on a waiting request picks it.
+        Some(HitTarget::ListRow(index)) => {
+            if let Some(id) = model
+                .mcp_audit
+                .pending
+                .get(index)
+                .map(|request| request.id)
+                .filter(|_| model.mcp_audit.deciding.is_none())
+            {
+                model.mcp_audit.selected = Some(id);
+                model.mcp_audit.scroll = 0;
+            }
+            Vec::new()
+        }
         Some(HitTarget::Button(HitButton::Revoke)) => update(model, Action::RevokeAllMcpGrants),
         Some(HitTarget::FooterSubmit) => match model.mcp_audit.deciding.take() {
             Some(deciding) => vec![Effect::SettleApproval {
@@ -4822,6 +4836,22 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 screen.open = false;
                 Vec::new()
             }
+            // With nothing waiting, the arrows read the recent calls instead.
+            KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End
+                if screen.pending.is_empty() =>
+            {
+                let delta = match key.code {
+                    KeyCode::Up => -1,
+                    KeyCode::Down => 1,
+                    KeyCode::Home => -100_000,
+                    _ => 100_000,
+                };
+                screen.scroll =
+                    model
+                        .hits
+                        .scroll(crate::mouse::ScrollArea::McpAudit, screen.scroll, delta);
+                Vec::new()
+            }
             KeyCode::Up => {
                 screen.select(-1);
                 Vec::new()
@@ -4847,7 +4877,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 }
                 Vec::new()
             }
-            KeyCode::Char('r') => update(model, Action::RevokeAllMcpGrants),
+            KeyCode::Char('R' | 'r') => update(model, Action::RevokeAllMcpGrants),
             _ => Vec::new(),
         };
     }
@@ -12563,7 +12593,7 @@ mod tests {
         );
         let lines = model.mcp_audit.lines().join("\n");
         assert!(lines.contains("DELETE FROM orders WHERE id = 7"), "{lines}");
-        assert!(lines.contains("110s left"), "{lines}");
+        assert!(lines.contains("2 min left"), "{lines}");
         update(&mut model, key(KeyCode::Char('a')));
         assert!(
             update(&mut model, key(KeyCode::Enter)).is_empty(),

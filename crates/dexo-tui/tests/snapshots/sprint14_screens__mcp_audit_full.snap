@@ -21,7 +21,7 @@ default  no connection  —
 │                          ││ │                                                                                                  │                             │
 │                          ││ │Recent activity                                                                                   │                             │
 │                          ││ │  assistant tools/call catalog_search allow db.public.items                                       │                             │
-│                          ││ │a approve  d deny  up/down pick  PgDn scroll  r revoke all grants  esc close                      │                             │
+│                          ││ │a approve  d deny  up/down pick  PgUp/PgDn scroll  R revoke all grants  esc close                 │                             │
 │                          ││ └──────────────────────────────────────────────────────────────────────────────────────────────────┘                             │
 │                          ││ │                                                                                                  │                             │
 │                          ││ │                                                                                                  │                             │

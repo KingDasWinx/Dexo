@@ -42,6 +42,8 @@ pub struct AuditView {
     pub footer: Vec<String>,
     /// The picked request's first and last lines in `body`.
     pub picked: Option<(usize, usize)>,
+    /// The first line of each waiting request in `body`, and which one it is.
+    pub rows: Vec<(usize, usize)>,
 }
 
 /// `text` wrapped to `width`, its first line after `first` and the rest after `rest`.
@@ -54,6 +56,36 @@ fn push_wrapped(lines: &mut Vec<String>, first: &str, rest: &str, text: &str, wi
         let prefix = if index == 0 { first } else { rest };
         lines.push(format!("{prefix}{part}"));
     }
+}
+
+/// What a request would do, for a person: its SQL as it is, a structured write as the
+/// fields it sets -- not the call's JSON.
+fn readable_statement(request: &Approval) -> String {
+    let Ok(serde_json::Value::Object(arguments)) =
+        serde_json::from_str::<serde_json::Value>(&request.statement)
+    else {
+        return request.statement.clone();
+    };
+    let mut lines = Vec::new();
+    let show = |value: &serde_json::Value| match value {
+        serde_json::Value::String(text) => text.clone(),
+        other => other.to_string(),
+    };
+    for (key, value) in &arguments {
+        if let serde_json::Value::Object(fields) = value {
+            let inner: Vec<String> = fields
+                .iter()
+                .map(|(name, field)| format!("{name} = {}", show(field)))
+                .collect();
+            lines.push(format!("{key}: {}", inner.join(", ")));
+        } else if key != "confirm_target" {
+            lines.push(format!("{key}: {}", show(value)));
+        }
+    }
+    if request.tool == "admin_terminate_session" {
+        lines.insert(0, "ends the server session below:".into());
+    }
+    lines.join("\n")
 }
 
 impl McpAuditScreen {
@@ -104,11 +136,17 @@ impl McpAuditScreen {
         self.announced = pending.iter().map(|request| request.id).collect();
         self.pending = pending;
         if self.current().is_none() {
-            self.scroll = 0;
+            let before = self.selected;
             self.selected = self
                 .pending
                 .get(was.unwrap_or(0).min(self.pending.len().saturating_sub(1)))
                 .map(|request| request.id);
+            // Only a different pick starts from the top: the list is read again every
+            // second, and a reading that left the pick where it was snapped a scrolled
+            // list back to its first line.
+            if self.selected != before {
+                self.scroll = 0;
+            }
         }
         let gone = self
             .deciding
@@ -134,17 +172,25 @@ impl McpAuditScreen {
     pub fn view(&self, width: usize) -> AuditView {
         let mut body = Vec::new();
         let mut picked = None;
+        let mut rows = Vec::new();
         if self.pending.is_empty() {
             body.push("No agent's write is waiting for approval.".into());
         } else {
             body.push(format!("Waiting for you ({})", self.pending.len()));
-            for request in &self.pending {
+            for (index, request) in self.pending.iter().enumerate() {
                 let is_picked = self.selected == Some(request.id);
                 let first = body.len();
+                rows.push((first, index));
                 let marker = if is_picked { "> " } else { "  " };
-                push_wrapped(&mut body, marker, "  ", &self.summary(request), width);
+                // Every request says what it would do, the picked one in full below it.
+                let mut line = self.summary(request);
+                if !is_picked && let Some(first_line) = readable_statement(request).lines().next() {
+                    line.push_str(" -- ");
+                    line.push_str(&crate::model::truncate_cell(first_line, 48));
+                }
+                push_wrapped(&mut body, marker, "  ", &line, width);
                 if is_picked {
-                    for line in request.statement.lines() {
+                    for line in readable_statement(request).lines() {
                         push_wrapped(&mut body, "    ", "    ", line, width);
                     }
                     picked = Some((first, body.len() - 1));
@@ -156,8 +202,8 @@ impl McpAuditScreen {
         if self.events.is_empty() {
             body.push("  nothing yet".into());
         }
-        for event in self.events.iter().take(20) {
-            body.push(format!("  {event}"));
+        for event in &self.events {
+            push_wrapped(&mut body, "  ", "    ", event, width);
         }
         let mut footer = Vec::new();
         if let Some(deciding) = &self.deciding {
@@ -177,25 +223,55 @@ impl McpAuditScreen {
                 None => question.into(),
             };
             push_wrapped(&mut footer, "", "", &asked, width);
+            // The statement that would run is in the question, where it is answered.
+            if let Some(request) = self
+                .pending
+                .iter()
+                .find(|request| request.id == deciding.id)
+            {
+                // Its first line, here beside the buttons; the rest is in the list above,
+                // which scrolls, so the buttons never leave a short popup.
+                let statement = readable_statement(request);
+                let mut lines = statement.lines();
+                if let Some(first) = lines.next() {
+                    let more = lines.count();
+                    let tail = if more > 0 {
+                        format!("  (+{more} more lines above)")
+                    } else {
+                        String::new()
+                    };
+                    footer.push(format!(
+                        "    {}{tail}",
+                        crate::model::truncate_cell(first, width.saturating_sub(40).max(20))
+                    ));
+                }
+            }
             footer.push(footer_line(label, deciding.focus));
         }
         footer.push(
-            "a approve  d deny  up/down pick  PgDn scroll  r revoke all grants  esc close".into(),
+            "a approve  d deny  up/down pick  PgUp/PgDn scroll  R revoke all grants  esc close"
+                .into(),
         );
         AuditView {
             body,
             footer,
             picked,
+            rows,
         }
     }
 
     fn summary(&self, request: &Approval) -> String {
+        let gone = if request.seems_gone(self.now) {
+            " (the agent has stopped answering)"
+        } else {
+            ""
+        };
         format!(
-            "{} on {} · {} · {}s left",
+            "{} on {} · {} · {} left{gone}",
             request.tool,
             request.connection,
             request.targets.join(", "),
-            request.seconds_left(self.now)
+            crate::screens::mcp_profiles::duration_words(request.seconds_left(self.now))
         )
     }
 }
@@ -242,7 +318,8 @@ mod tests {
         let lines = screen.lines().join("\n");
         assert!(lines.contains("> data_execute_sql"), "{lines}");
         assert!(lines.contains("UPDATE b SET x = 1"), "{lines}");
-        assert!(!lines.contains("UPDATE c SET x = 1"), "{lines}");
+        // The one not picked says what it is in a line; only the picked one in full.
+        assert!(lines.contains("-- UPDATE c SET x = 1"), "{lines}");
 
         assert!(
             screen.load(vec![c.clone()], 1003),
@@ -250,5 +327,71 @@ mod tests {
         );
         assert!(screen.deciding.is_none());
         assert_eq!(screen.selected, Some(c.id));
+    }
+
+    /// The list is read again every second. With nothing waiting, a reading that left the
+    /// pick where it was snapped a scrolled list back to its top.
+    #[test]
+    fn a_reading_keeps_a_scrolled_list_where_it_was() {
+        let mut screen = McpAuditScreen {
+            scroll: 7,
+            ..McpAuditScreen::default()
+        };
+        screen.load(Vec::new(), 1001);
+        screen.load(Vec::new(), 1002);
+        assert_eq!(screen.scroll, 7);
+        // A different pick does start from the top.
+        let a = request("UPDATE a SET x = 1");
+        screen.load(vec![a], 1003);
+        assert_eq!(screen.scroll, 0);
+    }
+
+    /// Every waiting request says what it would do, not only the picked one, and the
+    /// question that settles it repeats the statement.
+    #[test]
+    fn every_request_says_what_it_does_and_the_question_repeats_it() {
+        let (a, b) = (request("UPDATE a SET x = 1"), request("UPDATE b SET x = 1"));
+        let mut screen = McpAuditScreen::default();
+        screen.load(vec![a.clone(), b.clone()], 1001);
+        let lines = screen.lines().join("\n");
+        assert!(lines.contains("UPDATE a SET x = 1"), "{lines}");
+        assert!(lines.contains("UPDATE b SET x = 1"), "{lines}");
+        assert!(
+            lines.contains("2 min left"),
+            "times are not raw seconds: {lines}"
+        );
+        screen.deciding = Some(Deciding {
+            id: a.id,
+            approve: true,
+            focus: FooterFocus::Cancel,
+        });
+        let view = screen.view(100);
+        let footer = view.footer.join("\n");
+        assert!(footer.contains("Run this write now?"), "{footer}");
+        assert!(footer.contains("UPDATE a SET x = 1"), "{footer}");
+    }
+
+    /// A structured write is shown as the fields it sets, not as the call's JSON.
+    #[test]
+    fn a_structured_write_reads_as_its_fields() {
+        let arguments = serde_json::json!({
+            "target": "public.orders",
+            "identity": {"id": 7},
+            "values": {"note": "small-term"}
+        });
+        let request = dexo_app::mcp::Approval::pending(
+            "assistant",
+            "local",
+            "data_update",
+            arguments.as_object().unwrap(),
+            vec!["db.public.orders".into()],
+            1000,
+            120,
+        );
+        let mut screen = McpAuditScreen::default();
+        screen.load(vec![request], 1001);
+        let lines = screen.lines().join("\n");
+        assert!(lines.contains("values: note = small-term"), "{lines}");
+        assert!(!lines.contains("{\""), "no raw JSON: {lines}");
     }
 }
