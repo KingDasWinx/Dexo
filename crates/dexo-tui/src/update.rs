@@ -5489,12 +5489,22 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             effects.extend(explain_effect(
                 model,
                 matches!(action, Action::RunExplainAnalyze),
+                None,
                 Vec::new(),
             ));
             return effects;
         }
         Action::TryIndex { definition } => {
-            effects.extend(explain_effect(model, false, vec![definition]));
+            // The index is tried on the statement the plan on screen is for, wherever
+            // the cursor went since: on another statement the comparison with the plan
+            // without the index silently went away.
+            let statement = model.results.explain.sql.clone();
+            effects.extend(explain_effect(
+                model,
+                false,
+                Some(statement),
+                vec![definition],
+            ));
             return effects;
         }
         _ => return effects,
@@ -7936,8 +7946,14 @@ fn analyze_refused(model: &mut Model) -> bool {
 }
 
 /// EXPLAIN is an operation like a run: it holds the slot Ctrl+F2 cancels, and it waits
-/// for one already running instead of racing it on the same session.
-fn explain_effect(model: &mut Model, analyze: bool, indexes: Vec<String>) -> Vec<Effect> {
+/// for one already running instead of racing it on the same session. It explains
+/// `statement` when given, else the statement under the cursor.
+fn explain_effect(
+    model: &mut Model,
+    analyze: bool,
+    statement: Option<String>,
+    indexes: Vec<String>,
+) -> Vec<Effect> {
     let Some(session) = model.active_session else {
         return Vec::new();
     };
@@ -7957,7 +7973,9 @@ fn explain_effect(model: &mut Model, analyze: bool, indexes: Vec<String>) -> Vec
         document.byte_cursor(),
         crate::screens::editor::editor_dialect(model),
     );
-    if under_cursor.is_some_and(|span| dexo_sql::is_backslash_command(&text[span.byte_range])) {
+    if statement.is_none()
+        && under_cursor.is_some_and(|span| dexo_sql::is_backslash_command(&text[span.byte_range]))
+    {
         model.messages.warn(
             "A backslash command is answered by Dexo from the catalog; the server has no plan for it."
                 .into(),
@@ -7969,12 +7987,18 @@ fn explain_effect(model: &mut Model, analyze: bool, indexes: Vec<String>) -> Vec
     model.results.view = crate::model::ResultsView::Explain;
     model.results.explain_scroll = 0;
     let document = model.active_document();
-    let sql = document.text();
-    let cursor = sql
-        .chars()
-        .take(document.cursor())
-        .map(char::len_utf8)
-        .sum();
+    let (sql, cursor) = match statement {
+        Some(statement) => (statement, 0),
+        None => {
+            let sql = document.text();
+            let cursor = sql
+                .chars()
+                .take(document.cursor())
+                .map(char::len_utf8)
+                .sum();
+            (sql, cursor)
+        }
+    };
     vec![Effect::RunExplain {
         sql,
         cursor,
@@ -10677,8 +10701,9 @@ mod tests {
         ));
     }
 
-    /// In the Explain view `i` asks for an index, which is tried on the statement's plan;
-    /// the plan that comes back is compared with the one made without it.
+    /// In the Explain view `i` asks for an index, which is tried on the statement's plan
+    /// -- not on the one the cursor moved to since; the plan that comes back is compared
+    /// with the one made without it.
     #[test]
     fn an_index_is_tried_against_the_plan_without_it() {
         let session = crate::runtime::SessionId(uuid::Uuid::from_u128(1));
@@ -10688,7 +10713,8 @@ mod tests {
             focus: Focus::Results,
             ..Model::default()
         };
-        model.set_sql("select * from orders where customer_id = 7");
+        let text = "select * from orders where customer_id = 7;\nselect 1;";
+        model.set_sql(text);
         let plan = |cost: f64| dexo_driver_api::ExplainPlan {
             planning_ms: None,
             execution_ms: None,
@@ -10727,6 +10753,8 @@ mod tests {
             );
         };
         loaded(&mut model, 2084.0, Vec::new());
+        let end = text.chars().count();
+        model.active_document_mut().sql.set_cursor(end).unwrap();
         update(
             &mut model,
             Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
@@ -10742,8 +10770,10 @@ mod tests {
         assert!(
             effects.iter().any(|effect| matches!(
                 effect,
-                Effect::RunExplain { indexes, analyze: false, .. }
+                Effect::RunExplain { sql: explained, cursor, dialect, indexes, analyze: false, .. }
                     if indexes == &["CREATE INDEX ON orders (customer_id)".to_string()]
+                        && crate::runtime::explain_manager::statement_sql(explained, *cursor, *dialect)
+                            .as_deref() == Some(sql.as_str())
             )),
             "{effects:?}"
         );
