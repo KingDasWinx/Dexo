@@ -25,12 +25,12 @@ impl ProcessRunner for SlowRunner {
 
 #[async_trait::async_trait]
 impl RunningProcess for SlowChild {
-    async fn cancel(&mut self) -> Result<(), NativeToolError> {
+    async fn cancel(&self) -> Result<(), NativeToolError> {
         *self.cancelled.lock().unwrap() = true;
         Ok(())
     }
 
-    async fn wait(&mut self) -> Result<NativeStatus, NativeToolError> {
+    async fn wait(&self) -> Result<NativeStatus, NativeToolError> {
         if *self.cancelled.lock().unwrap() {
             Ok(NativeStatus::Cancelled)
         } else {

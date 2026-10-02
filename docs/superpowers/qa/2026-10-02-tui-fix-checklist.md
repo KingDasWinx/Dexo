@@ -249,7 +249,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-42** `BLOCKER` Dexo cannot import its own TSV export (tab delimiter is not applied)
 - [x] **AT-50** `BLOCKER` Production guard is skipped by Import Data and Native Restore: no connection name is asked
 - [ ] **AT-51** `BLOCKER` Native Restore (and Backup) freeze the whole UI for the full duration; Cancel and Esc do nothing and the process is not stopped
-- [ ] **AT-53** `BLOCKER` Dexo's own backup cannot be restored by Dexo's own restore
+- [x] **AT-53** `BLOCKER` Dexo's own backup cannot be restored by Dexo's own restore
 - [ ] **AT-07** `MAJOR` Transaction commands on an offline connection refuse instead of connecting
 - [x] **AT-10** `MAJOR` MySQL UPDATE/DELETE gives no feedback (Results pane stays empty), while Postgres says "1 row affected"
 - [ ] **AT-16** `MAJOR` After a session is terminated from the Sessions dialog, the document's connection stays broken: every run says "connection closed" and nothing reconnects it
@@ -264,8 +264,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-43** `MAJOR` SQL is offered as an import format (initial value) and the on-error strategy cannot be changed
 - [ ] **AT-44** `MAJOR` Import errors name no file line, row or column; empty cells cannot be NULL
 - [ ] **AT-45** `MAJOR` Sessions list does not scroll: the selection moves onto rows that are not visible, and `t` then targets an invisible session
-- [ ] **AT-52** `MAJOR` Native Restore reports `error: status=Failed pg_restore --no-password --host ...` even though the data was restored; the real error is hidden
-- [ ] **AT-54** `MAJOR` MySQL Native Backup / Native Restore hang forever with `running=true` and say nothing about mysqldump
+- [x] **AT-52** `MAJOR` Native Restore reports `error: status=Failed pg_restore --no-password --host ...` even though the data was restored; the real error is hidden
+- [x] **AT-54** `MAJOR` MySQL Native Backup / Native Restore hang forever with `running=true` and say nothing about mysqldump
 - [ ] **AT-55** `MAJOR` Backup/Restore reuse the export dialog: irrelevant `format=` / `strategy=` / `rows=` fields, stale state, and a confirmation that carries over
 - [ ] **AT-01** `MINOR` Transaction commands succeed silently: no toast, no Messages entry
 - [ ] **AT-02** `MINOR` Status bar shows a raw `tx:active` and never changes for savepoints or an aborted transaction
