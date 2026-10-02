@@ -125,6 +125,30 @@ mod tests {
         );
     }
 
+    /// A command still starting processes when it is stopped leaves none behind: each
+    /// one is frozen before its children are listed.
+    #[test]
+    fn a_command_that_keeps_starting_processes_leaves_none() {
+        let error = run(
+            "while :; do sleep 41.274 & sleep 0.005; done",
+            Duration::from_millis(300),
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(error.contains("did not finish"), "{error}");
+        std::thread::sleep(Duration::from_millis(200));
+        let left = std::process::Command::new("pgrep")
+            .args(["-f", "^sleep 41.274"])
+            .output()
+            .map(|output| output.stdout)
+            .unwrap_or_default();
+        assert!(
+            left.is_empty(),
+            "still running: {}",
+            String::from_utf8_lossy(&left)
+        );
+    }
+
     /// The command shares the terminal's process group, so one that reads the terminal
     /// is not stopped for it.
     #[test]

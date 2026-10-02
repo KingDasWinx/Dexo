@@ -263,8 +263,10 @@ pub(crate) fn run_until(
 }
 
 /// Stops a command left in the terminal's process group -- a password command, which
-/// may prompt there -- and what it started, found by parent: all of them before any is
-/// stopped and re-parented.
+/// may prompt there -- and what it started, found by parent. Each process is frozen
+/// before its children are listed, so none can start another between the listing and
+/// the kill, nor leave and have its children re-parented; then the frozen tree is
+/// killed whole.
 pub(crate) fn stop_tree(child: &mut Child) {
     unregister(child.id());
     #[cfg(unix)]
@@ -272,11 +274,15 @@ pub(crate) fn stop_tree(child: &mut Child) {
         let mut tree = vec![child.id()];
         let mut at = 0;
         while let Some(&parent) = tree.get(at) {
+            // SAFETY: kill only sends a signal; a process that has gone already is ESRCH.
+            unsafe {
+                libc::kill(parent as libc::pid_t, libc::SIGSTOP);
+            }
             tree.extend(children_of(parent));
             at += 1;
         }
-        for pid in tree.into_iter().skip(1) {
-            // SAFETY: kill only sends a signal; a process that has gone already is ESRCH.
+        for pid in tree {
+            // SAFETY: as above.
             unsafe {
                 libc::kill(pid as libc::pid_t, libc::SIGKILL);
             }
@@ -288,8 +294,34 @@ pub(crate) fn stop_tree(child: &mut Child) {
     let _ = child.wait();
 }
 
-/// The processes whose parent is `pid`, as `pgrep -P` lists them.
-#[cfg(unix)]
+/// The processes whose parent is `pid`, read from /proc: nothing to install, unlike
+/// the `pgrep` the cleanup needed before.
+#[cfg(target_os = "linux")]
+fn children_of(pid: u32) -> Vec<u32> {
+    let Ok(entries) = std::fs::read_dir("/proc") else {
+        return Vec::new();
+    };
+    entries
+        .filter_map(|entry| {
+            let child: u32 = entry.ok()?.file_name().to_str()?.parse().ok()?;
+            let stat = std::fs::read_to_string(format!("/proc/{child}/stat")).ok()?;
+            // `pid (name) state ppid …`: the name may hold spaces and parentheses, so the
+            // fields are counted from its last `)`.
+            let parent: u32 = stat
+                .rsplit_once(')')?
+                .1
+                .split_whitespace()
+                .nth(1)?
+                .parse()
+                .ok()?;
+            (parent == pid).then_some(child)
+        })
+        .collect()
+}
+
+/// The processes whose parent is `pid`, as `pgrep -P` lists them: macOS and the BSDs
+/// have no /proc to read.
+#[cfg(all(unix, not(target_os = "linux")))]
 fn children_of(pid: u32) -> Vec<u32> {
     Command::new("pgrep")
         .args(["-P", &pid.to_string()])
