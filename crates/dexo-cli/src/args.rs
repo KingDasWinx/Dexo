@@ -253,7 +253,7 @@ pub enum SchemaCommand {
         #[arg(long)]
         output: Option<PathBuf>,
     },
-    /// Compare two schemas -- live connections or snapshots -- as JSON or SQL
+    /// Compare two saved snapshots as JSON or SQL; --apply runs the migration on a connection
     Diff {
         #[arg(long)]
         from: String,
