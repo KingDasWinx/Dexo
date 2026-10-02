@@ -36,8 +36,6 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
     let (scheme, rest) = url
         .split_once("://")
         .ok_or_else(|| invalid("expected scheme://, such as postgres://user@host/db"))?;
-    // A fragment is for the client that wrote the URL; it names nothing here.
-    let rest = rest.split_once('#').map_or(rest, |(rest, _)| rest);
     let driver = match scheme.to_ascii_lowercase().as_str() {
         "postgres" | "postgresql" => "postgres",
         "mysql" => "mysql",
@@ -51,13 +49,12 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
         }
         other => return Err(invalid(&format!("unknown scheme {other}"))),
     };
+    let (userinfo, rest) = split_userinfo(rest);
+    // A fragment is for the client that wrote the URL; it names nothing here.
+    let rest = rest.split_once('#').map_or(rest, |(rest, _)| rest);
     let (main, query) = rest.split_once('?').unwrap_or((rest, ""));
     let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
-    let (authority, database) = main.split_once('/').unwrap_or((main, ""));
-    let (userinfo, hostport) = match authority.rsplit_once('@') {
-        Some((userinfo, hostport)) => (Some(userinfo), hostport),
-        None => (None, authority),
-    };
+    let (hostport, database) = main.split_once('/').unwrap_or((main, ""));
     let (user, password) = match userinfo {
         Some(userinfo) => match userinfo.split_once(':') {
             Some((user, password)) => (user, Some(password)),
@@ -113,6 +110,27 @@ pub fn parse(url: &str) -> Result<UrlConnection, AppError> {
         password,
         warning: None,
     })
+}
+
+/// The user and password, and what follows them. A password is pasted as it is, `/`,
+/// `?`, `#` and `@` in it unencoded, so they end at the last `@` before the host's `/`
+/// or `?` -- splitting at `?` first sent half the password to the parameters, and the
+/// error quoted it.
+fn split_userinfo(rest: &str) -> (Option<&str>, &str) {
+    let Some(first) = rest.find('@') else {
+        return (None, rest);
+    };
+    let end = rest[first..]
+        .find(['/', '?'])
+        .map_or(rest.len(), |at| first + at);
+    let at = rest[..end].rfind('@').unwrap_or(first);
+    let userinfo = &rest[..at];
+    // An `@` past the host -- in a parameter -- is not the user's: no user has a `/`.
+    let user = userinfo.split(':').next().unwrap_or("");
+    if user.contains(['/', '?', '#']) {
+        return (None, rest);
+    }
+    (Some(userinfo), &rest[at + 1..])
 }
 
 /// `sqlite:///abs/path` and `sqlite://relative/path`: the rest is the file, and
@@ -347,6 +365,29 @@ mod tests {
         let parsed = parse("sqlite:///tmp/x.db?mode=ro").unwrap();
         assert_eq!(parsed.profile.policy.read_only, Some(true));
         assert_eq!(parsed.profile.config["path"], "/tmp/x.db");
+    }
+
+    /// A password with `?`, `/`, `#` or `@` in it, unencoded, is the password: split at
+    /// the `?` first, half of it went to the parameters and the error quoted it.
+    #[test]
+    fn a_pasted_password_stays_whole_and_out_of_errors() {
+        for (url, password) in [
+            ("postgres://u:pa?ss@h/db", "pa?ss"),
+            ("postgres://u:pa/ss@h/db", "pa/ss"),
+            ("postgres://u:pa#ss@h/db", "pa#ss"),
+            ("postgres://u:p@ss@h/db?sslmode=require", "p@ss"),
+        ] {
+            let parsed = parse(url).unwrap_or_else(|error| panic!("{url}: {error}"));
+            assert_eq!(parsed.password.unwrap().expose_secret(), password, "{url}");
+            assert_eq!(parsed.profile.config["host"], "h", "{url}");
+            assert_eq!(parsed.profile.config["database"], "db", "{url}");
+        }
+        let error = parse("postgres://u:se?cret=x@h/db?bogus=1")
+            .unwrap_err()
+            .to_string();
+        assert!(!error.contains("cret"), "{error}");
+        // A parameter's `@` is not a user's.
+        assert!(parse("postgres://h/db?application_name=a@b").is_err());
     }
 
     #[test]
