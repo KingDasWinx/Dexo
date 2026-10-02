@@ -363,6 +363,18 @@ mod tests {
     use crate::model::Model;
     use dexo_driver_api::TransactionState;
 
+    /// A key keymap.toml gives a command no built-in keymap binds shows in the palette.
+    #[test]
+    fn an_overlay_only_binding_shows_its_key() {
+        let mut model = Model::default();
+        model.keymap =
+            crate::keymap::merge_overlay(&model.keymap, "[global]\n\"f9\" = \"connection.test\"\n")
+                .unwrap();
+        let entries = palette_entries(&model);
+        let test = entries.iter().find(|e| e.id == "connection.test").unwrap();
+        assert_eq!(test.shortcut.as_deref(), Some("F9"));
+    }
+
     #[test]
     fn palette_explains_disabled_commit() {
         let mut model = Model::fixture(TransactionState::Idle);

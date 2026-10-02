@@ -47,6 +47,8 @@ pub struct KeymapConflict {
 pub struct KeymapError {
     pub field: String,
     pub reason: String,
+    /// The 1-based line of the file it is about.
+    pub line: Option<usize>,
 }
 
 impl std::fmt::Display for KeymapError {
@@ -225,52 +227,98 @@ impl Keymap {
     }
 }
 
-pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
-    let table: toml::Table = src.parse().map_err(|err: toml::de::Error| KeymapError {
+/// One `chord = "command"` of a keymap file, with the line it is on.
+struct Entry {
+    section: String,
+    spec: String,
+    binding: Binding,
+    line: usize,
+}
+
+/// A keymap file's `profile` name and its entries, in file order. An entry whose
+/// command is `""` (an overlay's unbind) is kept, with that empty command.
+fn entries(src: &str) -> Result<(Option<String>, Vec<Entry>), KeymapError> {
+    let line_of = |offset: usize| crate::theme::line_at(src, offset);
+    let table = toml::de::DeTable::parse(src).map_err(|error| KeymapError {
         field: "keymap".into(),
-        reason: err.message().to_string(),
+        reason: error.message().to_string(),
+        line: error.span().map(|span| line_of(span.start)),
     })?;
-    let name = table
-        .get("profile")
-        .and_then(|v| v.as_str())
-        .unwrap_or("custom")
-        .to_string();
-    let mut bindings = Vec::new();
-    for (key, value) in &table {
-        if key == "profile" {
+    let mut profile = None;
+    let mut entries = Vec::new();
+    // The map is sorted by key; the file's order is what its lines are read in.
+    let mut sections: Vec<_> = table.get_ref().iter().collect();
+    sections.sort_by_key(|(key, _)| key.span().start);
+    for (key, value) in sections {
+        let section = key.get_ref().to_string();
+        let line = line_of(key.span().start);
+        if section == "profile" {
+            profile = value.get_ref().as_str().map(str::to_string);
             continue;
         }
-        let context = parse_context(key)?;
-        let Some(map) = value.as_table() else {
+        let context = parse_context(&section).map_err(|error| KeymapError {
+            line: Some(line),
+            ..error
+        })?;
+        let toml::de::DeValue::Table(map) = value.get_ref() else {
             return Err(KeymapError {
-                field: key.clone(),
-                reason: "context must be a table of chord = command".into(),
+                field: section,
+                reason: "a section must be a table of chord = command".into(),
+                line: Some(line),
             });
         };
-        for (chord, command) in map {
-            let command = command.as_str().ok_or_else(|| KeymapError {
-                field: format!("{key}.{chord}"),
-                reason: "command id must be a string".into(),
+        let mut chords: Vec<(Chord, String, String, usize)> = Vec::new();
+        let mut map: Vec<_> = map.iter().collect();
+        map.sort_by_key(|(spec, _)| spec.span().start);
+        for (spec, command) in map {
+            let line = line_of(spec.span().start);
+            let spec = spec.get_ref().to_string();
+            let field = format!("[{section}] {spec}");
+            let command = command.get_ref().as_str().ok_or_else(|| KeymapError {
+                field: field.clone(),
+                reason: "a command id must be a string".into(),
+                line: Some(line),
             })?;
-            bindings.push(Binding {
-                chord: parse_chord(chord).map_err(|reason| KeymapError {
-                    field: format!("{key}.{chord}"),
-                    reason,
-                })?,
-                command: command.to_string(),
-                context,
+            let chord = parse_chord(&spec).map_err(|reason| KeymapError {
+                field: field.clone(),
+                reason,
+                line: Some(line),
+            })?;
+            // `"ctrl+p"` and `"Ctrl+P"` are two keys to TOML and one chord to Dexo.
+            if let Some((_, first, bound, at)) = chords
+                .iter()
+                .find(|(seen, _, bound, _)| *seen == chord && bound != command)
+            {
+                return Err(KeymapError {
+                    field,
+                    reason: format!(
+                        "is the chord `{first}` on line {at} binds to {bound}, and here to {command}; keep one"
+                    ),
+                    line: Some(line),
+                });
+            }
+            chords.push((chord.clone(), spec.clone(), command.to_string(), line));
+            entries.push(Entry {
+                section: section.clone(),
+                spec,
+                binding: Binding {
+                    chord,
+                    command: command.to_string(),
+                    context,
+                },
+                line,
             });
         }
     }
-    let keymap = Keymap { name, bindings };
-    let conflicts = keymap.conflicts();
-    if let Some(conflict) = conflicts.into_iter().next() {
-        return Err(KeymapError {
-            field: format!("{:?}.{}", conflict.context, conflict.chord),
-            reason: format!("ambiguous commands {}", conflict.commands.join(" / ")),
-        });
-    }
-    Ok(keymap)
+    Ok((profile, entries))
+}
+
+pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
+    let (profile, entries) = entries(src)?;
+    Ok(Keymap {
+        name: profile.unwrap_or_else(|| "custom".into()),
+        bindings: entries.into_iter().map(|entry| entry.binding).collect(),
+    })
 }
 
 /// `profile` with the user's overlay, `<data dir>/keymap.toml`, merged over it, and
@@ -279,13 +327,22 @@ pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
 pub fn load(profile: &str, data_dir: &std::path::Path) -> (Keymap, Option<String>) {
     let base = Keymap::named(profile);
     let path = data_dir.join("keymap.toml");
-    let Ok(src) = std::fs::read_to_string(&path) else {
-        return (base, None);
+    let src = match std::fs::read_to_string(&path) {
+        Ok(src) => src,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return (base, None),
+        Err(error) => {
+            let message = format!(
+                "{} could not be read ({error}); the {} keymap is used as it is",
+                path.display(),
+                base.name
+            );
+            return (base, Some(message));
+        }
     };
     match merge_overlay(&base, &src) {
         Ok(keymap) => (keymap, None),
         Err(error) => {
-            let place = match crate::theme::error_line(&src, &error.field) {
+            let place = match error.line {
                 Some(line) => format!("{} line {line}", path.display()),
                 None => path.display().to_string(),
             };
@@ -299,61 +356,79 @@ pub fn load(profile: &str, data_dir: &std::path::Path) -> (Keymap, Option<String
 }
 
 /// An overlay in the profiles' format over `base`: a chord it binds replaces the
-/// profile's binding of that chord in that context, and `""` unbinds it.
+/// profile's binding of that chord in that section, and `""` unbinds it. A chord that
+/// starts a longer one where both apply is refused: Dexo would wait for the rest of the
+/// longer chord, and the shorter would never fire.
 pub fn merge_overlay(base: &Keymap, src: &str) -> Result<Keymap, KeymapError> {
-    let table: toml::Table = src.parse().map_err(|err: toml::de::Error| KeymapError {
-        field: err.span().map_or("keymap".into(), |span| {
-            format!("toml[{}..{}]", span.start, span.end)
-        }),
-        reason: err.message().to_string(),
-    })?;
+    let (_, entries) = entries(src)?;
     let mut keymap = base.clone();
-    for (key, value) in &table {
-        if key == "profile" {
-            continue;
-        }
-        let context = parse_context(key)?;
-        let Some(map) = value.as_table() else {
+    for entry in &entries {
+        let command = entry.binding.command.as_str();
+        if !command.is_empty() && crate::palette::command_spec(command).is_none() {
             return Err(KeymapError {
-                field: key.clone(),
-                reason: "context must be a table of chord = command".into(),
+                field: format!("[{}] {}", entry.section, entry.spec),
+                reason: format!("no command is called `{command}`"),
+                line: Some(entry.line),
             });
-        };
-        for (spec, command) in map {
-            let field = format!("{key}.{spec}");
-            let command = command.as_str().ok_or_else(|| KeymapError {
-                field: field.clone(),
-                reason: "command id must be a string".into(),
-            })?;
-            let chord = parse_chord(spec).map_err(|reason| KeymapError {
-                field: field.clone(),
-                reason,
-            })?;
-            if !command.is_empty() && crate::palette::command_spec(command).is_none() {
-                return Err(KeymapError {
-                    field,
-                    reason: format!("no command is called `{command}`"),
-                });
-            }
-            keymap
-                .bindings
-                .retain(|binding| binding.context != context || binding.chord != chord);
-            if !command.is_empty() {
-                keymap.bindings.push(Binding {
-                    chord,
-                    command: command.to_string(),
-                    context,
-                });
-            }
+        }
+        keymap.bindings.retain(|binding| {
+            binding.context != entry.binding.context || binding.chord != entry.binding.chord
+        });
+        if !command.is_empty() {
+            keymap.bindings.push(entry.binding.clone());
         }
     }
-    if let Some(conflict) = keymap.conflicts().into_iter().next() {
-        return Err(KeymapError {
-            field: format!("{:?}.{}", conflict.context, conflict.chord),
-            reason: format!("ambiguous commands {}", conflict.commands.join(" / ")),
-        });
+    for entry in entries
+        .iter()
+        .filter(|entry| !entry.binding.command.is_empty())
+    {
+        let mine = &entry.binding;
+        let together = |other: &Binding| {
+            other.context == mine.context
+                || other.context == KeyContext::Global
+                || mine.context == KeyContext::Global
+        };
+        let starts = |short: &Chord, long: &Chord| {
+            long.keys.len() > short.keys.len() && long.keys.starts_with(&short.keys)
+        };
+        if let Some(other) = keymap.bindings.iter().find(|other| {
+            together(other)
+                && (starts(&mine.chord, &other.chord) || starts(&other.chord, &mine.chord))
+        }) {
+            let (short, long) = if starts(&mine.chord, &other.chord) {
+                (mine, other)
+            } else {
+                (other, mine)
+            };
+            return Err(KeymapError {
+                field: format!("[{}] {}", entry.section, entry.spec),
+                reason: format!(
+                    "`{}` ({}) starts `{}` ({}) in [{}], so it would never fire; unbind one with \"\"",
+                    chord_label(&short.chord),
+                    short.command,
+                    chord_label(&long.chord),
+                    long.command,
+                    section_name(other.context)
+                ),
+                line: Some(entry.line),
+            });
+        }
     }
     Ok(keymap)
+}
+
+/// The section a context is written as in a keymap file.
+fn section_name(context: KeyContext) -> &'static str {
+    match context {
+        KeyContext::Global => "global",
+        KeyContext::Editor => "editor",
+        KeyContext::Explorer => "explorer",
+        KeyContext::Results => "results",
+        KeyContext::Console => "console",
+        KeyContext::DocumentTabs => "tabs",
+        KeyContext::Palette => "palette",
+        KeyContext::Modal => "modal",
+    }
 }
 
 pub fn parse_chord(spec: &str) -> Result<Chord, String> {
@@ -434,8 +509,9 @@ fn parse_context(name: &str) -> Result<KeyContext, KeymapError> {
         "palette" => Ok(KeyContext::Palette),
         "modal" => Ok(KeyContext::Modal),
         other => Err(KeymapError {
-            field: other.into(),
-            reason: format!("unknown keymap context `{other}`"),
+            field: format!("[{other}]"),
+            reason: "is no keymap section; use global, editor, explorer, results, console, tabs, palette or modal".into(),
+            line: None,
         }),
     }
 }
@@ -1044,10 +1120,12 @@ profile = "overlap"
 "#,
         )
         .unwrap_err();
-        assert!(err.field.contains("ctrl+p") || err.reason.contains("ambiguous"));
+        assert_eq!(err.field, "[editor] Ctrl+P");
+        assert_eq!(err.line, Some(4));
+        assert!(err.reason.contains("`ctrl+p` on line 3"), "{err}");
         assert!(
-            err.reason.contains("palette.open") && err.reason.contains("query.execute_document")
-                || err.field.contains("editor")
+            err.reason.contains("palette.open") && err.reason.contains("query.execute_document"),
+            "{err}"
         );
     }
 
@@ -1155,5 +1233,72 @@ profile = "overlap"
         let problem = problem.unwrap();
         assert!(problem.contains("keymap.toml line 3"), "{problem}");
         assert!(problem.contains("no.such"), "{problem}");
+    }
+
+    /// Each problem in an overlay names its own line -- a second section, a chord with
+    /// a dot, an unknown section, a TOML syntax error -- and the file's section names.
+    #[test]
+    fn overlay_problems_name_their_own_line() {
+        let base = Keymap::default_profile();
+        let problem = |src: &str| super::merge_overlay(&base, src).unwrap_err();
+        let error = problem(
+            "[global]\n\"ctrl+k\" = \"palette.open\"\n\n[editor]\n\"ctrl+k\" = \"no.such\"\n",
+        );
+        assert_eq!(
+            (error.line, error.field.as_str()),
+            (Some(5), "[editor] ctrl+k")
+        );
+        let error = problem("[editor]\n\"ctrl+.\" = \"no.such\"\n");
+        assert_eq!(error.line, Some(2));
+        let error = problem("\n[editr]\n\"ctrl+k\" = \"palette.open\"\n");
+        assert_eq!((error.line, error.field.as_str()), (Some(2), "[editr]"));
+        let error = problem("[editor]\n\"ctrl+k\" = palette.open\n");
+        assert_eq!(error.line, Some(2));
+        assert!(!error.to_string().contains("toml["), "{error}");
+    }
+
+    /// An overlay chord that starts a profile chord, or a profile chord that starts an
+    /// overlay chord, would never fire, and is refused.
+    #[test]
+    fn an_overlay_chord_that_starts_another_is_refused() {
+        let emacs = Keymap::emacs_profile();
+        let error =
+            super::merge_overlay(&emacs, "[editor]\n\"ctrl+x\" = \"palette.open\"\n").unwrap_err();
+        assert_eq!(error.line, Some(2));
+        assert!(error.reason.contains("never fire"), "{error}");
+        assert!(
+            error.reason.contains("[global]") || error.reason.contains("[editor]"),
+            "{error}"
+        );
+        let error =
+            super::merge_overlay(&emacs, "[global]\n\"ctrl+x ctrl+c x\" = \"palette.open\"\n")
+                .unwrap_err();
+        assert!(
+            error.reason.contains("`ctrl+x ctrl+c` (workbench.quit)"),
+            "{error}"
+        );
+        // Unbinding the longer one makes room.
+        assert!(
+            super::merge_overlay(
+                &emacs,
+                "[global]\n\"ctrl+x ctrl+c\" = \"\"\n\"ctrl+x ctrl+n\" = \"\"\n[editor]\n\"ctrl+x ctrl+e\" = \"\"\n\"ctrl+x\" = \"palette.open\"\n"
+            )
+            .is_ok()
+        );
+    }
+
+    /// A keymap.toml that cannot be read -- not UTF-8, or not a file -- says so.
+    #[test]
+    fn an_unreadable_overlay_says_so() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("keymap.toml"), [0xff, 0xfe, b'[']).unwrap();
+        let (keymap, problem) = super::load("default", dir.path());
+        assert_eq!(keymap, Keymap::default_profile());
+        assert!(problem.unwrap().contains("could not be read"));
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join("keymap.toml")).unwrap();
+        assert!(super::load("default", dir.path()).1.is_some());
+        let dir = tempfile::tempdir().unwrap();
+        assert_eq!(super::load("default", dir.path()).1, None);
     }
 }

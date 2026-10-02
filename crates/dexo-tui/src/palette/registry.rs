@@ -1401,15 +1401,17 @@ pub(crate) fn shortcut_for(
         })
         .collect()
     });
-    if !bound.contains(id) {
-        return fallback.map(str::to_string);
-    }
-    model
+    // The active keymap first: keymap.toml may bind a command no built-in one does.
+    let bound_here = model
         .keymap
         .bindings
         .iter()
         .find(|binding| binding.command == id)
-        .map(|binding| pretty_chord(&crate::keymap::chord_label(&binding.chord)))
+        .map(|binding| pretty_chord(&crate::keymap::chord_label(&binding.chord)));
+    if bound_here.is_none() && !bound.contains(id) {
+        return fallback.map(str::to_string);
+    }
+    bound_here
 }
 
 /// `ctrl+shift+d` as `Ctrl+Shift+D`, `ctrl+x ctrl+e` as `Ctrl+X Ctrl+E`.

@@ -676,6 +676,12 @@ pub fn choices(user: &[UserTheme]) -> Vec<(String, String)> {
         .collect()
 }
 
+/// The 1-based line `offset` is on.
+pub(crate) fn line_at(src: &str, offset: usize) -> usize {
+    src.get(..offset)
+        .map_or(1, |before| before.matches('\n').count() + 1)
+}
+
 /// The 1-based line a parse error points at: a TOML error's span, or the line that
 /// names the field.
 pub fn error_line(src: &str, field: &str) -> Option<usize> {
