@@ -11,7 +11,9 @@ use crate::Dialect;
 pub struct OrderKey {
     pub column: String,
     pub descending: bool,
-    /// Written quoted, so it names exactly this spelling; a bare name matches any case.
+    /// Whether only this spelling names the column, as in Postgres, which takes a quoted
+    /// name as written and folds a bare one to lower case first. MySQL and SQLite match
+    /// a column's name in any case, quoted or not.
     pub exact: bool,
 }
 
@@ -52,32 +54,406 @@ pub fn order_keys(text: &str, dialect: Dialect) -> Option<Vec<OrderKey>> {
     items
         .iter()
         .map(|item| match &item.expr {
-            Expr::Identifier(ident) if item.options.nulls_first.is_none() => Some(OrderKey {
-                column: ident.value.clone(),
-                descending: item.options.asc == Some(false),
-                exact: ident.quote_style.is_some(),
-            }),
+            Expr::Identifier(ident) if item.options.nulls_first.is_none() => {
+                let (column, exact) = match dialect {
+                    Dialect::Postgres if ident.quote_style.is_none() => {
+                        (ident.value.to_ascii_lowercase(), true)
+                    }
+                    Dialect::Postgres => (ident.value.clone(), true),
+                    Dialect::Mysql | Dialect::Sqlite => (ident.value.clone(), false),
+                };
+                Some(OrderKey {
+                    column,
+                    descending: item.options.asc == Some(false),
+                    exact,
+                })
+            }
             _ => None,
         })
         .collect()
 }
 
-/// `keys` as ORDER BY text, each name quoted when it has to be.
+/// `keys` as ORDER BY text. A name goes bare only when it is a plain lower-case word
+/// no dialect takes for a keyword -- `total`, `created_at` -- and is quoted otherwise,
+/// so it names the column everywhere: Postgres read a bare `user` as the current user
+/// and sorted by a constant, and MySQL refused a bare `rank`.
 pub fn order_text(keys: &[OrderKey], dialect: Dialect) -> String {
     keys.iter()
         .map(|key| {
-            let name = if crate::is_reserved(&key.column) {
+            let name = if bare(&key.column) {
+                key.column.clone()
+            } else {
                 let quote = dialect.quote();
                 let escaped = key.column.replace(quote, &format!("{quote}{quote}"));
                 format!("{quote}{escaped}{quote}")
-            } else {
-                dialect.quote_if_needed(&key.column)
             };
             format!("{name} {}", if key.descending { "DESC" } else { "ASC" })
         })
         .collect::<Vec<_>>()
         .join(", ")
 }
+
+/// Whether `name` means the same column written bare in every dialect.
+fn bare(name: &str) -> bool {
+    let mut chars = name.chars();
+    chars
+        .next()
+        .is_some_and(|first| first.is_ascii_lowercase() || first == '_')
+        && chars.all(|ch| ch.is_ascii_lowercase() || ch.is_ascii_digit() || ch == '_')
+        && !crate::is_reserved(name)
+        && KEYWORDS.binary_search(&name).is_err()
+}
+
+/// The words Postgres reserves, MySQL reserves, and SQLite's keywords: one of these
+/// bare is not a column name in some dialect. sqlparser's list holds every word any
+/// dialect knows -- `id`, `name`, `status` -- and quoting those helps nobody. Sorted,
+/// for the binary search.
+const KEYWORDS: &[&str] = &[
+    "abort",
+    "accessible",
+    "action",
+    "add",
+    "after",
+    "all",
+    "alter",
+    "always",
+    "analyse",
+    "analyze",
+    "and",
+    "any",
+    "array",
+    "as",
+    "asc",
+    "asensitive",
+    "asymmetric",
+    "attach",
+    "authorization",
+    "autoincrement",
+    "before",
+    "begin",
+    "between",
+    "bigint",
+    "binary",
+    "blob",
+    "both",
+    "by",
+    "call",
+    "cascade",
+    "case",
+    "cast",
+    "change",
+    "char",
+    "character",
+    "check",
+    "collate",
+    "collation",
+    "column",
+    "commit",
+    "concurrently",
+    "condition",
+    "conflict",
+    "constraint",
+    "continue",
+    "convert",
+    "create",
+    "cross",
+    "cube",
+    "cume_dist",
+    "current",
+    "current_catalog",
+    "current_date",
+    "current_role",
+    "current_schema",
+    "current_time",
+    "current_timestamp",
+    "current_user",
+    "cursor",
+    "database",
+    "databases",
+    "day_hour",
+    "day_microsecond",
+    "day_minute",
+    "day_second",
+    "dec",
+    "decimal",
+    "declare",
+    "default",
+    "deferrable",
+    "deferred",
+    "delayed",
+    "delete",
+    "dense_rank",
+    "desc",
+    "describe",
+    "detach",
+    "deterministic",
+    "distinct",
+    "distinctrow",
+    "div",
+    "do",
+    "double",
+    "drop",
+    "dual",
+    "each",
+    "else",
+    "elseif",
+    "empty",
+    "enclosed",
+    "end",
+    "escape",
+    "escaped",
+    "except",
+    "exclude",
+    "exclusive",
+    "exists",
+    "exit",
+    "explain",
+    "fail",
+    "false",
+    "fetch",
+    "filter",
+    "first",
+    "first_value",
+    "float",
+    "float4",
+    "float8",
+    "following",
+    "for",
+    "force",
+    "foreign",
+    "freeze",
+    "from",
+    "full",
+    "fulltext",
+    "function",
+    "generated",
+    "get",
+    "glob",
+    "grant",
+    "group",
+    "grouping",
+    "groups",
+    "having",
+    "high_priority",
+    "hour_microsecond",
+    "hour_minute",
+    "hour_second",
+    "if",
+    "ignore",
+    "ilike",
+    "immediate",
+    "in",
+    "index",
+    "indexed",
+    "infile",
+    "initially",
+    "inner",
+    "inout",
+    "insensitive",
+    "insert",
+    "instead",
+    "int",
+    "int1",
+    "int2",
+    "int3",
+    "int4",
+    "int8",
+    "integer",
+    "intersect",
+    "interval",
+    "into",
+    "io_after_gtids",
+    "io_before_gtids",
+    "is",
+    "isnull",
+    "iterate",
+    "join",
+    "json_table",
+    "key",
+    "keys",
+    "kill",
+    "lag",
+    "last",
+    "last_value",
+    "lateral",
+    "lead",
+    "leading",
+    "leave",
+    "left",
+    "like",
+    "limit",
+    "linear",
+    "lines",
+    "load",
+    "localtime",
+    "localtimestamp",
+    "lock",
+    "long",
+    "longblob",
+    "longtext",
+    "loop",
+    "low_priority",
+    "manual",
+    "master_bind",
+    "master_ssl_verify_server_cert",
+    "match",
+    "materialized",
+    "maxvalue",
+    "mediumblob",
+    "mediumint",
+    "mediumtext",
+    "middleint",
+    "minute_microsecond",
+    "minute_second",
+    "mod",
+    "modifies",
+    "natural",
+    "no",
+    "no_write_to_binlog",
+    "not",
+    "nothing",
+    "notnull",
+    "nth_value",
+    "ntile",
+    "null",
+    "nulls",
+    "numeric",
+    "of",
+    "offset",
+    "on",
+    "only",
+    "optimize",
+    "optimizer_costs",
+    "option",
+    "optionally",
+    "or",
+    "order",
+    "others",
+    "out",
+    "outer",
+    "outfile",
+    "over",
+    "overlaps",
+    "parallel",
+    "partition",
+    "percent_rank",
+    "placing",
+    "plan",
+    "pragma",
+    "preceding",
+    "precision",
+    "primary",
+    "procedure",
+    "purge",
+    "qualify",
+    "query",
+    "raise",
+    "range",
+    "rank",
+    "read",
+    "read_write",
+    "reads",
+    "real",
+    "recursive",
+    "references",
+    "regexp",
+    "reindex",
+    "release",
+    "rename",
+    "repeat",
+    "replace",
+    "require",
+    "resignal",
+    "restrict",
+    "return",
+    "returning",
+    "revoke",
+    "right",
+    "rlike",
+    "rollback",
+    "row",
+    "row_number",
+    "rows",
+    "savepoint",
+    "schema",
+    "schemas",
+    "second_microsecond",
+    "select",
+    "sensitive",
+    "separator",
+    "session_user",
+    "set",
+    "show",
+    "signal",
+    "similar",
+    "smallint",
+    "some",
+    "spatial",
+    "specific",
+    "sql",
+    "sql_big_result",
+    "sql_calc_found_rows",
+    "sql_small_result",
+    "sqlexception",
+    "sqlstate",
+    "sqlwarning",
+    "ssl",
+    "starting",
+    "stored",
+    "straight_join",
+    "symmetric",
+    "system",
+    "system_user",
+    "table",
+    "tablesample",
+    "temp",
+    "temporary",
+    "terminated",
+    "then",
+    "ties",
+    "tinyblob",
+    "tinyint",
+    "tinytext",
+    "to",
+    "trailing",
+    "transaction",
+    "trigger",
+    "true",
+    "unbounded",
+    "undo",
+    "union",
+    "unique",
+    "unlock",
+    "unsigned",
+    "update",
+    "usage",
+    "use",
+    "user",
+    "using",
+    "utc_date",
+    "utc_time",
+    "utc_timestamp",
+    "vacuum",
+    "values",
+    "varbinary",
+    "varchar",
+    "varcharacter",
+    "variadic",
+    "varying",
+    "verbose",
+    "view",
+    "virtual",
+    "when",
+    "where",
+    "while",
+    "window",
+    "with",
+    "without",
+    "write",
+    "xor",
+    "year_month",
+    "zerofill",
+];
 
 /// The keys after a header click on `column`: ascending, then descending, then not
 /// sorted. A plain click sorts by that column alone; `add` keeps the others, putting a
@@ -116,18 +492,25 @@ mod tests {
 
     #[test]
     fn order_text_reads_back_as_columns_or_not_at_all() {
-        let keys = order_keys("total desc, \"Name\", id asc", Dialect::Postgres).unwrap();
+        let keys = order_keys("TOTAL desc, \"Name\", id asc", Dialect::Postgres).unwrap();
         assert_eq!(
             keys.iter()
                 .map(|key| (key.column.as_str(), key.descending, key.exact))
                 .collect::<Vec<_>>(),
             [
-                ("total", true, false),
+                ("total", true, true),
                 ("Name", false, true),
-                ("id", false, false)
+                ("id", false, true)
             ]
         );
-        assert!(keys[0].names("TOTAL") && !keys[1].names("name"));
+        // Postgres folds a bare name to lower case and takes a quoted one as written.
+        assert!(keys[0].names("total") && !keys[0].names("TOTAL"));
+        assert!(keys[1].names("Name") && !keys[1].names("name"));
+        // MySQL and SQLite match a column's name in any case, quoted or not.
+        let mysql = order_keys("`TOTAL` desc", Dialect::Mysql).unwrap();
+        assert!(mysql[0].names("total") && mysql[0].names("Total"));
+        let sqlite = order_keys("\"TOTAL\"", Dialect::Sqlite).unwrap();
+        assert!(sqlite[0].names("total"));
         assert_eq!(order_keys("  ", Dialect::Mysql), Some(Vec::new()));
         for unreadable in [
             "lower(name)",
@@ -184,8 +567,40 @@ mod tests {
             order_text(&keys, Dialect::Postgres),
             "\"order\" DESC, \"Total\" ASC"
         );
-        assert_eq!(order_text(&keys, Dialect::Mysql), "`order` DESC, Total ASC");
+        assert_eq!(
+            order_text(&keys, Dialect::Mysql),
+            "`order` DESC, `Total` ASC"
+        );
         let back = order_keys(&order_text(&keys, Dialect::Postgres), Dialect::Postgres).unwrap();
         assert_eq!(back, keys);
+        assert!(super::KEYWORDS.windows(2).all(|pair| pair[0] < pair[1]));
+        // A keyword in any dialect is quoted in every one: bare, Postgres read `user`
+        // as the current user, and MySQL refused `rank`.
+        let named = |column: &str| OrderKey {
+            column: column.into(),
+            descending: false,
+            exact: true,
+        };
+        for dialect in [Dialect::Postgres, Dialect::Mysql, Dialect::Sqlite] {
+            for keyword in [
+                "user",
+                "current_user",
+                "current_role",
+                "localtime",
+                "rank",
+                "rows",
+                "range",
+            ] {
+                let quote = dialect.quote();
+                assert_eq!(
+                    order_text(&[named(keyword)], dialect),
+                    format!("{quote}{keyword}{quote} ASC"),
+                    "{dialect:?}"
+                );
+            }
+            for plain in ["total", "created_at", "_n2", "id", "name", "status"] {
+                assert_eq!(order_text(&[named(plain)], dialect), format!("{plain} ASC"));
+            }
+        }
     }
 }
