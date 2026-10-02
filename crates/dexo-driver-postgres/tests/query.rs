@@ -443,3 +443,52 @@ async fn a_failed_hypothetical_index_in_a_transaction_leaves_none_behind() {
         .unwrap();
     assert!(!plain.raw.contains("Index"), "{}", plain.raw);
 }
+
+/// Trying an index drops only what the try made: a hypothetical index the user made on
+/// the session is still there after it.
+#[tokio::test]
+#[ignore = "requires a Postgres with hypopg"]
+async fn trying_an_index_keeps_the_users_own_hypothetical_ones() {
+    let Some(session) = hypopg_session("hypo_own").await else {
+        return;
+    };
+    let names = async |session: &dyn Session| {
+        collect(
+            session
+                .execute(QueryRequest::write(
+                    "select coalesce(string_agg(index_name, ','), '') from hypopg_list_indexes",
+                ))
+                .await
+                .unwrap(),
+        )
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            QueryEvent::Rows(batch) => batch.rows.into_iter().next(),
+            _ => None,
+        })
+    };
+    collect(
+        session
+            .execute(QueryRequest::write(
+                "select * from hypopg_create_index('CREATE INDEX ON hypo_own (a)')",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let before = names(session.as_ref()).await;
+    let explain = session.explain().unwrap();
+    explain
+        .explain(dexo_driver_api::ExplainRequest::with_indexes(
+            "select * from hypo_own where a + 1 = 42",
+            vec!["CREATE INDEX ON hypo_own ((a + 1))".into()],
+        ))
+        .await
+        .unwrap();
+    assert_eq!(names(session.as_ref()).await, before);
+    assert_ne!(
+        before,
+        Some(vec![dexo_driver_api::DbValue::Text(String::new())])
+    );
+}

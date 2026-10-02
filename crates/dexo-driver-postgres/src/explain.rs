@@ -269,29 +269,45 @@ impl PostgresSession {
             }
             Err(error) => return Err(map_error(error)),
         };
-        let mut made = Ok(());
+        // Dexo drops the indexes it made and only those: hypopg_reset() would also take
+        // the ones the user made on this session.
+        let mut made = Vec::new();
+        let mut failed = None;
         for index in indexes {
-            if let Err(error) = self
+            match self
                 .client
                 .query("SELECT indexrelid FROM hypopg_create_index($1)", &[index])
                 .await
             {
-                made = Err(map_error(error));
-                break;
+                Ok(rows) => made.extend(rows.iter().map(|row| row.get::<_, u32>(0))),
+                Err(error) => {
+                    failed = Some(map_error(error));
+                    break;
+                }
             }
         }
-        let plan = match made {
-            Ok(()) => self.explain_estimated(sql).await,
-            Err(error) => Err(error),
+        let plan = match failed {
+            None => self.explain_estimated(sql).await,
+            Some(error) => Err(error),
         };
-        let close = if fenced {
-            "ROLLBACK TO SAVEPOINT dexo_hypopg; RELEASE SAVEPOINT dexo_hypopg; SELECT hypopg_reset()"
-        } else {
-            "SELECT hypopg_reset()"
+        // Whatever happened, the session keeps no hypothetical index of Dexo's for a later
+        // plan, or says it could not get rid of them.
+        let dropped = async {
+            if fenced {
+                self.client
+                    .batch_execute(
+                        "ROLLBACK TO SAVEPOINT dexo_hypopg; RELEASE SAVEPOINT dexo_hypopg",
+                    )
+                    .await?;
+            }
+            self.client
+                .execute(
+                    "SELECT hypopg_drop_index(id) FROM unnest($1::oid[]) id",
+                    &[&made],
+                )
+                .await
         };
-        // Whatever happened, the session keeps no hypothetical index for a later plan, or
-        // says it could not get rid of them.
-        if let Err(error) = self.client.batch_execute(close).await {
+        if let Err(error) = dropped.await {
             return Err(DriverError::new(
                 DriverErrorCategory::Internal,
                 format!(
