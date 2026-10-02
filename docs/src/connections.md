@@ -59,14 +59,16 @@ The path is stored absolute. Opening a file that does not exist creates it, exce
 
 ## DuckDB
 
-A DuckDB connection is a file too: a DuckDB database, or a CSV, TSV, Parquet or JSON file, which opens as an in-memory database with the file as a view named after it -- `sales.parquet` browses as the table `sales`. `:memory:` is an empty database that lasts as long as the connection. From the command line:
+A DuckDB connection is a file too: a DuckDB database, or a CSV, TSV, Parquet or JSON file, which opens as an in-memory database with the file as a view named after it -- `sales.parquet` browses as the table `sales`. `:memory:` is an empty database that lasts as long as the connection (`dexo duckdb://:memory:`; `sqlite://:memory:` does the same for SQLite). From the command line:
 
 ```sh
 dexo duckdb:///data/sales.parquet
 dexo connections add --name warehouse --driver duckdb --path ./warehouse.duckdb
 ```
 
-Any query can read other files itself, `SELECT * FROM 'other.csv'`. A CSV, Parquet or JSON file is only ever read: its connection refuses statements that write, so a `COPY ... TO` cannot replace it. The catalog shows each database (the file's, and any you `ATTACH`) with its schemas, tables, views, columns, indexes and keys; DuckDB's own `system` and `temp` show with system objects. Rows are edited by primary key, or by `rowid` when a table has none; a view has no key and is read-only. A table's row estimate is DuckDB's own, kept as it writes. Explain shows DuckDB's plan, and Analyze runs the statement with DuckDB's profiler for each operator's actual rows and time, inside a transaction rolled back after it; inside your own transaction DuckDB has no savepoint to undo a write with, so Analyze runs only a read there. DuckDB has no savepoints for your transactions either, and the schema editor and administration screens do not apply to it.
+Any query can read other files itself, `SELECT * FROM 'other.csv'`. A CSV, Parquet or JSON file is only ever read: its connection runs only queries, so a `COPY ... TO` cannot replace it. What reads is decided by DuckDB's own parser as well as Dexo's, so text DuckDB would split differently -- a `--` comment ended by a bare carriage return -- hides no statement. Every connection to one file in a Dexo shares its database, so two never fight over its write-ahead log; a file open read-only has to be closed before a connection can open it for writing. Extensions DuckDB does not have are never downloaded on their own; one installed already loads when a query needs it.
+
+The catalog shows each database (the file's, and any you `ATTACH`) with its schemas, tables, views, columns, indexes and keys; DuckDB's own `system` and `temp` show with system objects. Values show as DuckDB writes them cast to text -- a `TIMESTAMP WITH TIME ZONE` in UTC -- which DuckDB reads back as the same value. Rows are edited by primary key, or by `rowid` when a table has none; a view has no key and is read-only, and lists, structs, maps and unions are matched by their text. A table's row estimate is DuckDB's own, kept as it writes. Explain shows DuckDB's plan; Analyze runs a query, an INSERT, an UPDATE or a DELETE with DuckDB's profiler, for each operator's actual rows and time, inside a transaction rolled back after it, and anything else -- a COPY, a SET -- has only the estimated plan, since a rollback would not undo it. Inside your own transaction DuckDB has no savepoint to undo a write with, so Analyze runs only a query there. DuckDB has no savepoints for your transactions either; the schema editor and administration screens do not apply to it, and the MCP server serves Postgres, MySQL and MariaDB connections, not DuckDB or SQLite ones.
 
 DuckDB's engine is large, so it is built into Dexo only with the `duckdb` cargo feature:
 
@@ -84,6 +86,6 @@ Each connection has an environment: local, development, staging or production. A
 - On production, any write asks for the connection's name, typed exactly, before it runs.
 - Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.
 
-A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`, SQLite opens the file read-only, which covers anything it attaches, so neither `PRAGMA query_only = 0` nor an `ATTACH` can write, and DuckDB opens its file read-only and refuses any statement that writes elsewhere, a `COPY ... TO` or an `ATTACH`.
+A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`, SQLite opens the file read-only, which covers anything it attaches, so neither `PRAGMA query_only = 0` nor an `ATTACH` can write, and DuckDB opens its file read-only and runs only queries, so a `COPY ... TO`, an `ATTACH` or a `SET` is refused too.
 
 A statement Dexo cannot read counts as a write: production asks for the name, and elsewhere it asks before running, like a destructive statement. Maintenance it knows -- `VACUUM`, `ANALYZE`, `REINDEX`, `CLUSTER`, `REFRESH MATERIALIZED VIEW`, `CHECKPOINT`, `OPTIMIZE` -- asks only on production.

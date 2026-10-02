@@ -2,13 +2,14 @@
 
 `dexo` with no subcommand starts the TUI. Subcommands reuse the same app layer.
 
-`dexo <url>` starts it connected to a URL -- `postgres://`, `postgresql://`, `mysql://`, `mariadb://` or `sqlite:///path` -- without saving a connection; the password stays in memory, and `--password-prompt` asks for it instead of reading it from the URL. "Save Connection…" in the palette keeps it. `dexo --demo` starts it on a sample shop in SQLite, recreated on every run.
+`dexo <url>` starts it connected to a URL -- `postgres://`, `postgresql://`, `mysql://`, `mariadb://`, `sqlite:///path` or, in a build with DuckDB, `duckdb:///path` (a DuckDB file, or a CSV, Parquet or JSON file) -- without saving a connection; the password stays in memory, and `--password-prompt` asks for it instead of reading it from the URL. "Save Connection…" in the palette keeps it. `dexo --demo` starts it on a sample shop in SQLite, recreated on every run.
 
 Help text is golden-tested in `crates/dexo-cli/tests/help.rs`. Snippets:
 
 ```text
 dexo connections add --name NAME --driver postgres --host 127.0.0.1 --username USER --database DB
 dexo connections add --name NAME --driver sqlite --path FILE
+dexo connections add --name NAME --driver duckdb --path FILE
 dexo connections list
 dexo query --connection NAME --sql "select 1" --format jsonl --non-interactive
 dexo schema diff

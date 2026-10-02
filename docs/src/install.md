@@ -42,7 +42,7 @@ Rust 1.93 or later:
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo
 ```
 
-DuckDB is built in only with the `duckdb` feature, which the release binaries leave out: it compiles DuckDB's C++ engine, which needs a C++ compiler, added about 11 minutes to a release build on a 12-core machine, and takes the binary from 56 MB to 120 MB.
+DuckDB is built in only with the `duckdb` feature, which the release binaries leave out: it compiles DuckDB's C++ engine, which needs a C++ compiler. Measured on a 12-core Linux machine, not in CI, it added about 11 minutes to a release build and took the binary from 56 MB to 120 MB; no release target ships it until CI shows a target's build time and size are acceptable.
 
 ```sh
 cargo install --locked --git https://github.com/kingdaswinx/Dexo dexo --features duckdb
