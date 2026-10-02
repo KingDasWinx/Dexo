@@ -253,6 +253,21 @@ fn the_command_line_holds_sql_to_the_connection_policy() {
             .unwrap(),
         "ro is read-only",
     );
+    refused(
+        dexo()
+            .args([
+                "sessions",
+                "cancel",
+                "--connection",
+                "ro",
+                "--session",
+                "1",
+                "--confirm",
+            ])
+            .output()
+            .unwrap(),
+        "ro is read-only",
+    );
     assert_eq!(count("lite"), "{\"n\":0}\n");
 }
 

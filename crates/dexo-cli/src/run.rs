@@ -1351,6 +1351,21 @@ async fn admin_action(
                 format!("unknown connection '{connection}'"),
             )
         })?;
+    // Cancelling a query or ending a session changes the server: the connection's policy
+    // is asked before it is dialled, as the TUI and the MCP server ask it.
+    let resolved = dexo_app::ConnectionPolicy::resolve(&profile.environment, &profile.policy)?;
+    let policy = dexo_app::admin_service::AdminPolicy {
+        production: dexo_app::Environment::parse_strict(&profile.environment)
+            == dexo_app::Environment::Production,
+        read_only: resolved.read_only,
+    };
+    if !dexo_app::admin_service::evaluate(&action, "", &policy).allowed {
+        return Err(AppError::new(
+            ErrorCategory::Permission,
+            format!("Not done: {connection} is read-only"),
+        )
+        .into());
+    }
     let session = connect_session(&registry, &profile).await?;
     let admin = session
         .admin()
