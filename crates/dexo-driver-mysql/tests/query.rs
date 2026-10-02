@@ -445,6 +445,42 @@ async fn a_timed_out_query_stops_on_the_server() {
         tokio::time::sleep(std::time::Duration::from_millis(200)).await;
     }
 
+/// MariaDB runs what `/*M! … */` holds, so the read check takes it for code: the ORDER
+/// BY that wrote a file past it is refused, and so is a statement holding one.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn executable_comments_are_read_as_the_server_runs_them() {
+    let fixture = connect_mysql_fixture().await;
+    let mut stream = fixture
+        .session
+        .execute(QueryRequest::read("select version()", 1))
+        .await
+        .unwrap();
+    let mariadb = matches!(
+        first_value(&mut stream).await,
+        DbValue::Text(version) if version.to_ascii_lowercase().contains("mariadb")
+    );
+    drain(stream).await;
+    let mut stream = fixture
+        .session
+        .execute(QueryRequest::read("select 1 /*M!100100 + 1 */", 1))
+        .await
+        .unwrap();
+    let value = first_value(&mut stream).await;
+    drain(stream).await;
+    let ran = matches!(value, DbValue::I64(2) | DbValue::U64(2));
+    assert_eq!(ran, mariadb, "{value:?}");
+    let clauses = dexo_driver_api::RawClauses {
+        where_sql: None,
+        order_by: Some("id /*M! LIMIT 1 INTO OUTFILE '/tmp/x' */ -- x".into()),
+    };
+    assert!(dexo_sql::clauses_read(&clauses, dexo_sql::Dialect::Mysql).is_err());
+    assert!(!dexo_sql::is_read(
+        "select 1 /*M!100100 into outfile '/tmp/x' */",
+        dexo_sql::Dialect::Mysql
+    ));
+}
+
 /// An exported INSERT replays its values as they were: a backslash is a backslash, and
 /// `\'` in a value does not end the literal and run what follows it.
 #[tokio::test]

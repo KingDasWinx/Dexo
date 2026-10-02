@@ -1773,6 +1773,7 @@ dependencies = [
  "async-trait",
  "dexo-app",
  "dexo-driver-api",
+ "dexo-sql",
  "dexo-test-support",
  "dexo-transport",
  "futures-util",
