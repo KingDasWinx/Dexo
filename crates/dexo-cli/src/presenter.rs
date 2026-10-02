@@ -81,37 +81,86 @@ fn write_json(
     Ok(())
 }
 
+/// CSV and TSV as `dexo export` writes them: values quoted where they hold the
+/// separator, a quote or a line break, and NULL as `\N`, apart from an empty string.
 fn write_delimited(
     columns: &[String],
     rows: &[Vec<DbValue>],
     stdout: &mut dyn std::io::Write,
     sep: char,
 ) -> std::io::Result<()> {
-    writeln!(stdout, "{}", columns.join(&sep.to_string()))?;
-    for row in rows {
-        let cells: Vec<String> = row.iter().map(display_cell).collect();
-        writeln!(stdout, "{}", cells.join(&sep.to_string()))?;
-    }
-    Ok(())
+    use dexo_app::transfer::{FormatOptions, TransferFormat, encode_document};
+    let format = if sep == '\t' {
+        TransferFormat::Tsv
+    } else {
+        TransferFormat::Csv
+    };
+    let bytes = encode_document(format, &FormatOptions::default(), columns, rows)
+        .map_err(std::io::Error::other)?;
+    stdout.write_all(&bytes)
 }
 
+/// Columns padded to their widest value, a rule under the names, NULL as `<null>` so it
+/// reads apart from an empty string, and a value's line breaks as spaces so a row stays
+/// on one line.
 fn write_table(
     columns: &[String],
     rows: &[Vec<DbValue>],
     stdout: &mut dyn std::io::Write,
 ) -> std::io::Result<()> {
-    write_delimited(columns, rows, stdout, '|')
+    let cells: Vec<Vec<String>> = rows
+        .iter()
+        .map(|row| row.iter().map(table_cell).collect())
+        .collect();
+    let widths: Vec<usize> = columns
+        .iter()
+        .enumerate()
+        .map(|(index, name)| {
+            cells
+                .iter()
+                .filter_map(|row| row.get(index))
+                .map(|cell| cell.chars().count())
+                .chain([name.chars().count()])
+                .max()
+                .unwrap_or(0)
+        })
+        .collect();
+    let line = |values: &mut dyn Iterator<Item = &str>| {
+        values
+            .zip(&widths)
+            .map(|(value, width)| format!("{value:<width$}"))
+            .collect::<Vec<_>>()
+            .join(" | ")
+            .trim_end()
+            .to_string()
+    };
+    writeln!(stdout, "{}", line(&mut columns.iter().map(String::as_str)))?;
+    writeln!(
+        stdout,
+        "{}",
+        widths
+            .iter()
+            .map(|width| "-".repeat(*width))
+            .collect::<Vec<_>>()
+            .join("-+-")
+    )?;
+    for row in &cells {
+        writeln!(stdout, "{}", line(&mut row.iter().map(String::as_str)))?;
+    }
+    Ok(())
 }
 
-fn display_cell(value: &DbValue) -> String {
+fn table_cell(value: &DbValue) -> String {
     match value {
-        DbValue::Null => String::new(),
+        DbValue::Null => "<null>".into(),
         DbValue::Bool(v) => v.to_string(),
         DbValue::I64(v) => v.to_string(),
         DbValue::U64(v) => v.to_string(),
-        DbValue::Decimal(v) | DbValue::Text(v) | DbValue::Json(v) => v.clone(),
+        DbValue::Decimal(v) | DbValue::Text(v) | DbValue::Json(v) => {
+            v.replace(['\n', '\r', '\t'], " ")
+        }
         DbValue::Bytes(v) => format!("\\x{}", hex(v)),
-        DbValue::Native { text, .. } => text.clone(),
+        DbValue::Native { text, .. } => text.replace(['\n', '\r', '\t'], " "),
     }
 }
 
