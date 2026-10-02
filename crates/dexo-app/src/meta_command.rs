@@ -167,8 +167,21 @@ pub async fn answer(
             })
         }
         MetaCommand::Describe(name) => {
-            let mut relations = Vec::new();
-            collect(reader, None, DESCRIBED, false, &options, &mut relations).await?;
+            // The server's own answer to what the name means: the search_path, the
+            // current database. A reader that cannot give one is looked through.
+            let (schema, leaf) = split_name(name);
+            let relations = match reader
+                .relations_named(schema.as_deref(), &leaf)
+                .await
+                .map_err(map_driver_error)?
+            {
+                Some(relations) => relations,
+                None => {
+                    let mut relations = Vec::new();
+                    collect(reader, None, DESCRIBED, false, &options, &mut relations).await?;
+                    relations
+                }
+            };
             let object = describe_target(relations, name).ok_or_else(|| {
                 AppError::new(
                     ErrorCategory::Syntax,
@@ -247,14 +260,21 @@ const DESCRIBED: &[ObjectKind] = &[
     ObjectKind::MaterializedView,
 ];
 
-/// The relation `name` -- `orders` or `public.orders` -- means: one spelled exactly so
-/// first, then one that differs only in case.
+/// `orders` or `public.orders`, quotes left out, as its schema and its own name.
+fn split_name(name: &str) -> (Option<String>, String) {
+    let unquoted = name.replace(['"', '`'], "");
+    match unquoted.rsplit_once('.') {
+        Some((schema, leaf)) => (Some(schema.to_string()), leaf.to_string()),
+        None => (None, unquoted),
+    }
+}
+
+/// The relation `name` -- `orders` or `public.orders` -- means among `relations`, in
+/// the order the server looks: one spelled exactly so first, then one that differs
+/// only in case.
 fn describe_target(relations: Vec<CatalogObject>, name: &str) -> Option<CatalogObject> {
-    let unquoted = name.replace('"', "");
-    let (schema, leaf) = match unquoted.rsplit_once('.') {
-        Some((schema, leaf)) => (Some(schema), leaf),
-        None => (None, unquoted.as_str()),
-    };
+    let (schema, leaf) = split_name(name);
+    let (schema, leaf) = (schema.as_deref(), leaf.as_str());
     let named = |object: &CatalogObject, exact: bool| {
         let same = |a: &str, b: &str| {
             if exact {

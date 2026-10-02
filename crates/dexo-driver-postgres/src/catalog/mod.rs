@@ -968,4 +968,50 @@ impl CatalogReader for PostgresSession {
             .map_err(map_error)?;
         Ok(rows.into_iter().map(|row| row.get(0)).collect())
     }
+
+    async fn relations_named(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Vec<CatalogObject>>, DriverError> {
+        // `current_schemas(true)` is the search_path as the server walks it: pg_temp
+        // and pg_catalog in their places, schemas that do not exist left out.
+        let rows = self
+            .client
+            .query(
+                "SELECT c.oid::bigint, n.oid::bigint, n.nspname::text, c.relname::text,
+                        c.relkind::text, current_database()::text
+                 FROM pg_class c
+                 JOIN pg_namespace n ON n.oid = c.relnamespace
+                 WHERE c.relkind IN ('r','p','f','v','m')
+                   AND lower(c.relname) = lower($2::text)
+                   AND CASE WHEN $1::text IS NULL THEN n.nspname = ANY (current_schemas(true))
+                            ELSE lower(n.nspname) = lower($1::text) END
+                 ORDER BY array_position(current_schemas(true), n.nspname), n.nspname,
+                          c.relname",
+                &[&schema, &name],
+            )
+            .await
+            .map_err(map_error)?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|row| {
+                    let oid: i64 = row.get(0);
+                    let schema_oid: i64 = row.get(1);
+                    let schema: String = row.get(2);
+                    let relation: String = row.get(3);
+                    let relkind: String = row.get(4);
+                    let catalog: String = row.get(5);
+                    CatalogObject::new(
+                        pg_id(relkind_key(&relkind), oid),
+                        relkind_to_kind(&relkind),
+                        QualifiedName::new(Some(catalog), Some(schema), relation),
+                        Some(pg_id("schema", schema_oid)),
+                    )
+                    .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+                    .with_attribute("driver.postgres.relkind", serde_json::json!(relkind))
+                })
+                .collect(),
+        ))
+    }
 }

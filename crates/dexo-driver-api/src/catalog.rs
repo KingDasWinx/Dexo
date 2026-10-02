@@ -146,6 +146,20 @@ pub trait CatalogReader: Send + Sync {
     /// Every foreign key from `table` or to it, columns in key order.
     async fn foreign_keys(&self, table: &QualifiedName) -> Result<Vec<ForeignKeyRef>, DriverError>;
 
+    /// The tables and views a statement would find under `name`, in any case: in
+    /// `schema` when one is given, system ones included, and otherwise where the server
+    /// looks for a name written without one -- Postgres's search_path, MySQL's current
+    /// database -- in the order it looks there. In one round trip. `None` when the
+    /// reader cannot say, and the caller looks through what it lists instead.
+    async fn relations_named(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Vec<CatalogObject>>, DriverError> {
+        let _ = (schema, name);
+        Ok(None)
+    }
+
     /// Every database the server holds, not only the one connected to. By default the
     /// names of the catalogs at the top of the tree.
     async fn databases(&self) -> Result<Vec<String>, DriverError> {

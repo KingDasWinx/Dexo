@@ -257,6 +257,42 @@ impl CatalogReader for MysqlSession {
         )
         .await
     }
+
+    async fn relations_named(
+        &self,
+        schema: Option<&str>,
+        name: &str,
+    ) -> Result<Option<Vec<CatalogObject>>, DriverError> {
+        // A name without a database is the current database's, as a statement reads it.
+        let rows: Vec<(String, String, String)> = self
+            .exec_rows(
+                "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE FROM information_schema.TABLES
+                 WHERE LOWER(TABLE_NAME) = LOWER(?)
+                   AND LOWER(TABLE_SCHEMA) = LOWER(COALESCE(?, DATABASE()))
+                 ORDER BY TABLE_SCHEMA, TABLE_NAME",
+                (name.to_string(), schema.map(str::to_string)),
+            )
+            .await?;
+        Ok(Some(
+            rows.into_iter()
+                .map(|(schema, name, table_type)| {
+                    let is_view = table_type.eq_ignore_ascii_case("VIEW")
+                        || table_type.eq_ignore_ascii_case("SYSTEM VIEW");
+                    let (key, kind) = if is_view {
+                        ("view", ObjectKind::View)
+                    } else {
+                        ("table", ObjectKind::Table)
+                    };
+                    CatalogObject::new(
+                        my_id(key, format!("{schema}/{name}")),
+                        kind,
+                        QualifiedName::new(Some(schema.clone()), None::<String>, name),
+                        Some(my_id("catalog", &schema)),
+                    )
+                })
+                .collect(),
+        ))
+    }
 }
 
 impl MysqlSession {

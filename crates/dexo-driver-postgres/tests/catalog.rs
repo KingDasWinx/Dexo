@@ -455,3 +455,65 @@ async fn comments_come_with_tables_and_columns() {
     );
     assert_eq!(comment("noted.id"), None);
 }
+
+/// `\d name` describes the table the search_path finds -- a system one too -- not the
+/// alphabetically first of that name.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn describe_resolves_a_name_through_the_search_path() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    for sql in [
+        "CREATE SCHEMA audit",
+        "CREATE TABLE audit.orders (changed_at timestamptz)",
+        "CREATE TABLE public.orders (id int PRIMARY KEY, total numeric)",
+    ] {
+        drain(
+            session
+                .execute(dexo_driver_api::QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    let catalog = session.catalog().unwrap();
+    let describe = |line: &'static str| async move {
+        let command = dexo_app::meta_command::parse(line).unwrap();
+        dexo_app::meta_command::answer(catalog, &command)
+            .await
+            .map(|answer| {
+                answer
+                    .rows
+                    .into_iter()
+                    .map(|row| row[0].clone())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let columns = describe("\\d orders").await.unwrap();
+    assert!(columns.contains(&"total".to_string()), "{columns:?}");
+    let columns = describe("\\d pg_class").await.unwrap();
+    assert!(columns.contains(&"relname".to_string()), "{columns:?}");
+    let columns = describe("\\d information_schema.tables").await.unwrap();
+    assert!(columns.contains(&"table_name".to_string()), "{columns:?}");
+    assert!(describe("\\d missing").await.is_err());
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "SET search_path = audit, public",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let columns = describe("\\d orders").await.unwrap();
+    assert!(columns.contains(&"changed_at".to_string()), "{columns:?}");
+}

@@ -407,3 +407,50 @@ async fn comments_come_with_tables_and_columns() {
     );
     assert_eq!(comment("noted.id"), None);
 }
+
+/// `\d name` describes the current database's table of that name, and one named with
+/// its database -- a system one too -- from that database.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn describe_resolves_a_name_in_the_current_database() {
+    let pair = DatabasePair::start().await.unwrap();
+    let session = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "CREATE TABLE described (id INT PRIMARY KEY, total DECIMAL(10, 2))",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let catalog = session.catalog().unwrap();
+    let describe = |line: &'static str| async move {
+        let command = dexo_app::meta_command::parse(line).unwrap();
+        dexo_app::meta_command::answer(catalog, &command)
+            .await
+            .map(|answer| {
+                answer
+                    .rows
+                    .into_iter()
+                    .map(|row| row[0].to_ascii_lowercase())
+                    .collect::<Vec<_>>()
+            })
+    };
+    let columns = describe("\\d described").await.unwrap();
+    assert!(columns.contains(&"total".to_string()), "{columns:?}");
+    let columns = describe("\\d dexo.DESCRIBED").await.unwrap();
+    assert!(columns.contains(&"total".to_string()), "{columns:?}");
+    let columns = describe("\\d information_schema.tables").await.unwrap();
+    assert!(columns.contains(&"table_name".to_string()), "{columns:?}");
+    assert!(describe("\\d tables").await.is_err());
+}
