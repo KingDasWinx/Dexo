@@ -166,7 +166,17 @@ fn open_data_file(path: &Path, reader: &str) -> Result<Connection, duckdb::Error
         .and_then(|name| name.split('.').next())
         .filter(|name| !name.is_empty())
         .unwrap_or("data");
-    let literal = format!("'{}'", path.display().to_string().replace('\'', "''"));
+    let Some(text) = path.to_str() else {
+        return Err(duckdb::Error::InvalidPath(path.to_path_buf()));
+    };
+    // DuckDB reads `[`, `*` and `?` in a file name as a glob: `s[1].csv` read `s1.csv`.
+    // Each stands for itself inside brackets.
+    let literal = text
+        .replace('[', "[[]")
+        .replace('*', "[*]")
+        .replace('?', "[?]")
+        .replace('\'', "''");
+    let literal = format!("'{literal}'");
     conn.execute_batch(&format!(
         "CREATE VIEW {} AS SELECT * FROM {reader}({literal})",
         quote(name)

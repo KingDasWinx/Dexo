@@ -925,3 +925,23 @@ async fn analyze_runs_only_queries_and_row_changes() {
         .await
         .unwrap();
 }
+
+/// DuckDB reads `[`, `*` and `?` in a file name as a glob: `s[1].csv` opened `s1.csv`.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_data_file_is_the_file_its_path_names() {
+    let dir = tempfile::tempdir().unwrap();
+    std::fs::write(dir.path().join("s1.csv"), "n\n99\n").unwrap();
+    for name in ["s[1].csv", "s?.csv", "s*.csv"] {
+        let path = dir.path().join(name);
+        std::fs::write(&path, "n\n1\n").unwrap();
+        let session = open(&path, false).await;
+        let view = name.split('.').next().unwrap();
+        let events = run(
+            &*session,
+            QueryRequest::read(format!("select n from \"{view}\""), 0),
+        )
+        .await
+        .unwrap();
+        assert_eq!(texts(&events), [["1"]], "{name}");
+    }
+}
