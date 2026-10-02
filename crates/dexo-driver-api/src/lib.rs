@@ -31,6 +31,7 @@ pub use ddl::{DdlExecutor, DdlOutcome, DdlPlan, DdlStatement, ObjectDdl, Securit
 pub use error::{DriverError, DriverErrorCategory};
 pub use explain::{
     ExplainPlan, ExplainProvider, ExplainRequest, PlanMetrics, PlanNode, hypothetical_unsupported,
+    parameters_unsupported,
 };
 pub use identifier::QualifiedName;
 pub use mutation::{

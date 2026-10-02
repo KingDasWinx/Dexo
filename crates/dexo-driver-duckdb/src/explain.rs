@@ -37,10 +37,17 @@ impl ExplainProvider for DuckdbSession {
         }
         let text = self
             .with_conn(move |conn| {
-                conn.query_row(&format!("EXPLAIN (FORMAT JSON) {sql}"), [], |row| {
-                    row.get::<_, String>(1)
-                })
-                .map_err(map_error)
+                // DuckDB folds the values it is given into the plan, so a parameter has no
+                // value to stand in for it.
+                let mut statement = conn
+                    .prepare(&format!("EXPLAIN (FORMAT JSON) {sql}"))
+                    .map_err(map_error)?;
+                if statement.parameter_count() > 0 {
+                    return Err(dexo_driver_api::parameters_unsupported());
+                }
+                statement
+                    .query_row([], |row| row.get::<_, String>(1))
+                    .map_err(map_error)
             })
             .await?;
         let parsed: Value = serde_json::from_str(&text).map_err(|error| {
@@ -83,6 +90,9 @@ fn analyzed(conn: &Connection, sql: &str, read_only: bool) -> Result<ExplainPlan
         )
         .map_err(map_error)?;
         let mut statement = conn.prepare(sql).map_err(map_error)?;
+        if statement.parameter_count() > 0 {
+            return Err(dexo_driver_api::parameters_unsupported());
+        }
         let _ = statement.stream_arrow([]).map_err(map_error)?;
         while statement.step().map_err(map_error)?.is_some() {}
         drop(statement);

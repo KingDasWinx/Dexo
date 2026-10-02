@@ -501,6 +501,15 @@ async fn explain_draws_estimated_and_analyzed_plans() {
     assert_eq!(refused.category(), DriverErrorCategory::Capability);
     transactions.rollback().await.unwrap();
 
+    for request in [
+        ExplainRequest::estimated("select * from orders where id = ?"),
+        ExplainRequest::analyzed("select * from orders where id = $1"),
+    ] {
+        let refused = explain.explain(request).await.unwrap_err();
+        assert_eq!(refused.category(), DriverErrorCategory::Capability);
+        assert!(refused.to_string().contains("parameters"), "{refused}");
+    }
+
     let hypothetical = explain
         .explain(ExplainRequest::with_indexes(
             sql,

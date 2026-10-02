@@ -586,7 +586,20 @@ fn extract_actual_time(text: &str) -> Option<f64> {
 
 #[async_trait::async_trait]
 impl ExplainProvider for MysqlSession {
+    /// MySQL and MariaDB refuse a `?` in an EXPLAIN as a syntax error; a statement that
+    /// failed is prepared on its own to tell that apart, and refused for what it is.
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
+        match self.plan(&request).await {
+            Err(error) if self.has_parameters(&request.sql).await => {
+                Err(dexo_driver_api::parameters_unsupported().with_detail(error.to_string()))
+            }
+            planned => planned,
+        }
+    }
+}
+
+impl MysqlSession {
+    async fn plan(&self, request: &ExplainRequest) -> Result<ExplainPlan, DriverError> {
         if !request.hypothetical_indexes.is_empty() {
             return Err(dexo_driver_api::hypothetical_unsupported());
         }
@@ -630,6 +643,17 @@ impl ExplainProvider for MysqlSession {
 }
 
 impl MysqlSession {
+    /// Whether `sql` prepares with placeholders. Preparing runs nothing.
+    async fn has_parameters(&self, sql: &str) -> bool {
+        let mut conn = self.conn.lock().await;
+        let Ok(statement) = conn.prep(sql.trim().trim_end_matches(';')).await else {
+            return false;
+        };
+        let parameters = statement.num_params();
+        let _ = conn.close(statement).await;
+        parameters > 0
+    }
+
     async fn fetch_explain_text(&self, sql: &str) -> Result<String, DriverError> {
         let mut conn = self.conn.lock().await;
         explain_text(&mut conn, sql).await

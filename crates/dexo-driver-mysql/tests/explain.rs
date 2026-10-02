@@ -95,6 +95,23 @@ async fn container_explain_json_and_analyze_tree() {
             || analyzed.root.loops.is_some()
             || !analyzed.root.kind.is_empty()
     );
+    // A `?` is a syntax error inside an EXPLAIN; it is refused as what it is.
+    for request in [
+        ExplainRequest::estimated("select ? + 1"),
+        ExplainRequest::analyzed("select ? + 1"),
+    ] {
+        let refused = session
+            .explain()
+            .unwrap()
+            .explain(request)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.category(),
+            dexo_driver_api::DriverErrorCategory::Capability
+        );
+        assert!(refused.to_string().contains("parameters"), "{refused}");
+    }
 }
 
 /// Every table read shows in the plan, the ones a subquery, a derived table or a CTE

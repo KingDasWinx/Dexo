@@ -76,6 +76,14 @@ pub fn hypothetical_unsupported() -> DriverError {
     )
 }
 
+/// What a driver says to a statement with parameters, whose plan it cannot make without
+/// their values.
+pub fn parameters_unsupported() -> DriverError {
+    DriverError::unsupported(
+        "this statement has parameters, and its plan needs their values: write them into the statement to explain it",
+    )
+}
+
 #[async_trait::async_trait]
 pub trait ExplainProvider: Send + Sync {
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError>;

@@ -26,11 +26,23 @@ impl ExplainProvider for SqliteSession {
         let rows = self
             .with_conn(move |conn| {
                 let mut statement = conn.prepare(&sql).map_err(map_error)?;
-                statement
-                    .query_map([], |row| Ok((row.get(0)?, row.get(1)?, row.get(3)?)))
-                    .map_err(map_error)?
-                    .collect::<rusqlite::Result<Vec<(i64, i64, String)>>>()
-                    .map_err(map_error)
+                // SQLite plans a statement before it sees any value, so a parameter's
+                // plan is the same whatever it is bound to.
+                for index in 1..=statement.parameter_count() {
+                    statement
+                        .raw_bind_parameter(index, rusqlite::types::Null)
+                        .map_err(map_error)?;
+                }
+                let mut rows = statement.raw_query();
+                let mut found: Vec<(i64, i64, String)> = Vec::new();
+                while let Some(row) = rows.next().map_err(map_error)? {
+                    found.push((
+                        row.get(0).map_err(map_error)?,
+                        row.get(1).map_err(map_error)?,
+                        row.get(3).map_err(map_error)?,
+                    ));
+                }
+                Ok(found)
             })
             .await?;
         let raw = rows

@@ -499,6 +499,15 @@ async fn explain_draws_the_query_plan_and_refuses_analyze() {
             .any(|node| node.kind == "USE TEMP B-TREE")
     );
 
+    // A parameter has no value to plan with, and SQLite needs none.
+    let parameterised = explain
+        .explain(ExplainRequest::estimated(
+            "select * from orders where customer_id = ?1 and total > :min",
+        ))
+        .await
+        .unwrap();
+    assert_eq!(parameterised.root.children[0].kind, "SEARCH");
+
     let analyze = explain
         .explain(ExplainRequest::analyzed("select * from orders"))
         .await
