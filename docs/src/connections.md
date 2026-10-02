@@ -83,7 +83,7 @@ A build without it still knows DuckDB connections, and says how to get the drive
 Each connection has an environment: local, development, staging or production. A label Dexo does not know, such as `prod`, counts as production.
 
 - On a read-only connection, the editor refuses any statement that is not a read and sends nothing. `SET`, transaction commands and anything Dexo cannot parse count as writes.
-- On production, any write asks for the connection's name, typed exactly, before it runs.
+- On production, any write asks for the connection's name, typed exactly, before it runs: a statement from the editor, grid edits, DDL from the schema form, an import, a restore, and EXPLAIN ANALYZE of a write.
 - Elsewhere, `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE` and `ALTER ... DROP` ask first. Turn this off with the connection's `confirm_destructive` setting.
 
 A read-only connection is also enforced by the server: Postgres sessions start with `default_transaction_read_only`, MySQL and MariaDB sessions with `SET SESSION TRANSACTION READ ONLY`, SQLite opens the file read-only, which covers anything it attaches, so neither `PRAGMA query_only = 0` nor an `ATTACH` can write, and DuckDB opens its file read-only and runs only queries, so a `COPY ... TO`, an `ATTACH` or a `SET` is refused too.
