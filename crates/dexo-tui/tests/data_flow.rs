@@ -1007,3 +1007,45 @@ fn related_rows_open_both_ways_and_back_returns_to_the_row() {
     assert_eq!(filter_of(&effects), None);
     assert_eq!(model.active_document, orders_doc);
 }
+
+/// From the keyboard, Right moves the current column, and `S` adds that column to the
+/// sort -- not the first column every time.
+#[test]
+fn the_keyboard_sorts_the_column_it_is_on() {
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        ..Model::default()
+    };
+    model.apply_size(100, 30);
+    let mut tab = ResultTab::new(result_key(0), "r0");
+    tab.source_sql = Some("select id, customer_id from orders".into());
+    model.results.tabs = vec![tab];
+    model.results.set_columns(
+        ["id", "customer_id"]
+            .into_iter()
+            .map(|name| dexo_driver_api::ColumnMeta {
+                name: name.into(),
+                type_name: "int".into(),
+                nullable: false,
+            })
+            .collect(),
+    );
+    model
+        .results
+        .append_rows(vec![vec![DbValue::I64(1), DbValue::I64(9)]]);
+    model.results.select_row(0);
+    update(&mut model, Action::ResultsRight);
+    assert_eq!(model.results.selection().map(|(_, col)| col), Some(1));
+    update(
+        &mut model,
+        Action::SortByColumn {
+            column: None,
+            add: true,
+        },
+    );
+    assert!(
+        model.data.bars.order_input.as_str().contains("customer_id"),
+        "{}",
+        model.data.bars.order_input.as_str()
+    );
+}

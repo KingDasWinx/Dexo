@@ -2016,11 +2016,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ResultsLeft => {
-            model.results.scroll_columns(-1);
+            model.results.move_cursor_col(-1);
             Vec::new()
         }
         Action::ResultsRight => {
-            model.results.scroll_columns(1);
+            model.results.move_cursor_col(1);
             Vec::new()
         }
         Action::ResultsPageUp => {

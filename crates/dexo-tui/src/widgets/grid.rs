@@ -383,6 +383,7 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
     let mut header = Vec::new();
     let mut remaining = area.width as usize;
     let header_style = model.theme.header(model.capabilities);
+    let current_column = grid.selection().map(|(_, col)| col);
     for (&index, &width) in col_indices.iter().zip(cell_widths.iter()) {
         let Some(column) = grid.columns().get(index) else {
             continue;
@@ -404,13 +405,19 @@ fn preview_lines(model: &Model, area: Rect, hits: &mut HitMap) -> Vec<Line<'stat
             }
             None => column.name.clone(),
         };
+        // The current column -- the one `s` sorts -- is marked without colour too.
+        let style = if current_column == Some(index) {
+            header_style.add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            header_style
+        };
         header.push(Span::styled(
             format!(
                 "{:width$}",
                 truncate_cell(&label, cell_width),
                 width = cell_width
             ),
-            header_style,
+            style,
         ));
         remaining = remaining.saturating_sub(cell_width);
         if remaining > 0 {

@@ -985,24 +985,58 @@ impl GridModel {
         self.ensure_row_visible(next);
     }
 
+    /// Left and Right: the current column -- the one `s` sorts and the header marks --
+    /// moves among the shown columns, the view following it. A row cursor or a range
+    /// stays what it is.
     pub fn move_cursor_col(&mut self, delta: i32) {
-        match self.kind {
-            // ponytail: H-scroll is column_offset pan (pre-row-cursor). Ceiling: no sticky column cursor. Add one if cell-edit lands.
-            GridSelection::Row { .. } | GridSelection::Range { .. } => self.scroll_columns(delta),
-            GridSelection::Cell { .. } | GridSelection::Column { .. } => {
-                self.ensure_cursor();
-                let Some((row, col)) = self.selection else {
-                    return;
-                };
-                let last = self.buffer.columns.len().saturating_sub(1);
-                let next = (col as i32 + delta).clamp(0, last as i32) as usize;
-                match &mut self.kind {
-                    GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
-                    GridSelection::Row { .. } | GridSelection::Range { .. } => {}
-                }
-                self.selection = Some((row, next));
-                self.scroll_columns(delta);
+        self.ensure_cursor();
+        let Some((row, col)) = self.selection else {
+            self.scroll_columns(delta);
+            return;
+        };
+        let shown: Vec<usize> = (0..self.buffer.columns.len())
+            .filter(|index| !self.hidden_columns.contains(index))
+            .collect();
+        let at = shown.iter().position(|index| *index >= col).unwrap_or(0) as i32;
+        let Some(&next) = shown.get((at + delta).clamp(0, shown.len() as i32 - 1) as usize) else {
+            return;
+        };
+        match &mut self.kind {
+            GridSelection::Cell { col, .. } | GridSelection::Column { col } => *col = next,
+            GridSelection::Row { .. } | GridSelection::Range { .. } => {}
+        }
+        self.selection = Some((row, next));
+        self.ensure_column_visible(next);
+    }
+
+    /// Scrolls sideways just enough for column `col` to be on screen, as the widths the
+    /// viewport was last fitted with lay the columns out.
+    fn ensure_column_visible(&mut self, col: usize) {
+        let frozen = self.frozen_columns;
+        if col < frozen {
+            return;
+        }
+        if col < self.viewport.column_offset {
+            self.viewport.column_offset = col;
+            return;
+        }
+        let width_of =
+            |index: usize| usize::from(self.column_widths.get(index).copied().unwrap_or(8)) + 1;
+        let fixed: usize = (0..frozen)
+            .filter(|index| !self.hidden_columns.contains(index))
+            .map(width_of)
+            .sum();
+        let room = self.viewport.width.saturating_sub(fixed).max(1);
+        loop {
+            let start = self.viewport.column_offset.max(frozen);
+            let used: usize = (start..=col)
+                .filter(|index| !self.hidden_columns.contains(index))
+                .map(width_of)
+                .sum();
+            if used <= room || start >= col {
+                break;
             }
+            self.viewport.column_offset = start + 1;
         }
     }
 
