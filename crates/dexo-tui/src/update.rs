@@ -4593,8 +4593,12 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         Ok(Some(command)) => {
             model.pending_chord.keys.clear();
             // Ctrl+S is the grid's review and the document's save. With nothing pending
-            // in the grid it is the save: it opened a review of no changes.
-            let command = if command == "data.review" && model.data.changes.pending().is_empty() {
+            // in a SQL document's grid it is the save: it opened a review of no changes. A
+            // table has no file to save, so there the review says nothing is pending.
+            let command = if command == "data.review"
+                && model.data.changes.pending().is_empty()
+                && !model.active_document().kind.is_table()
+            {
                 "document.save"
             } else {
                 command
@@ -9753,7 +9757,6 @@ fn remove_document(model: &mut Model, index: usize) -> Vec<Effect> {
             _ => Vec::new(),
         }
     };
-    let was_active = index == model.active_document;
     model.documents.remove(index);
     if model.documents.is_empty() {
         model
