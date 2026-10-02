@@ -202,6 +202,50 @@ async fn parameters_rows_affected_and_result_sets_are_observable() {
     }));
 }
 
+/// An UPDATE, an INSERT and a DELETE each come back as a result set with its count, as
+/// on Postgres and SQLite; the grid and the messages read the count from there.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_write_is_a_result_set_with_its_row_count() {
+    let fixture = connect_mysql_fixture().await;
+    for sql in [
+        "create table if not exists dexo_writes(id int primary key, note varchar(16))",
+        "delete from dexo_writes",
+    ] {
+        drain(
+            fixture
+                .session
+                .execute(QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+    }
+    for (sql, count) in [
+        ("insert into dexo_writes values (1, 'a'), (2, 'b')", 2),
+        ("update dexo_writes set note = 'z' where id = 1", 1),
+        ("delete from dexo_writes where id in (1, 2)", 2),
+        ("delete from dexo_writes", 0),
+    ] {
+        let events = collect(
+            fixture
+                .session
+                .execute(QueryRequest::write(sql))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                QueryEvent::ResultSetFinished { index: 0, rows_affected: Some(rows), .. }
+                    if *rows == count
+            )),
+            "{sql}: {events:?}"
+        );
+    }
+}
+
 #[tokio::test]
 #[ignore = "requires Docker"]
 async fn two_result_sets_are_indexed() {

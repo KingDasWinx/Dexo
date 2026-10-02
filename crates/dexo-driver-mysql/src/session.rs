@@ -364,10 +364,26 @@ async fn emit_mysql_sets<P>(
     let mut last_affected = None;
     loop {
         if result.is_empty() {
-            // MariaDB hands a prepared write back as an empty result straight away; the
-            // count is still on it, and leaving here first lost it.
+            // A write comes back as an empty result straight away (MariaDB's prepared
+            // ones too); the count is still on it. It is sent as a result set of its own,
+            // as Postgres and SQLite do, because the grid and the messages read the
+            // count from there: leaving here first made an UPDATE look like nothing ran.
             if index == 0 {
-                last_affected = Some(result.affected_rows());
+                let affected = Some(result.affected_rows());
+                last_affected = affected;
+                for event in [
+                    QueryEvent::ResultSetStarted { index },
+                    QueryEvent::Columns(Vec::new()),
+                    QueryEvent::ResultSetFinished {
+                        index,
+                        rows_affected: affected,
+                        truncated: false,
+                    },
+                ] {
+                    if tx.send(Ok(event)).await.is_err() {
+                        return;
+                    }
+                }
             }
             break;
         }

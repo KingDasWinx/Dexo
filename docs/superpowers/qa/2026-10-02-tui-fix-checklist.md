@@ -68,7 +68,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **ED-16** `MAJOR` Parameters prompt starts pre-filled with the last value typed anywhere, so typing appends to stale text
 - [ ] **ED-25** `MAJOR` Unbound Alt+letter combinations are typed into the document
 - [ ] **ED-26** `MAJOR` Emacs keymap is only a partial overlay: Emacs motion keys do other things
-- [ ] **ED-30** `MAJOR` Writes on MySQL give no feedback at all (no "N rows affected", empty Results, nothing in Messages)
+- [x] **ED-30** `MAJOR` Writes on MySQL give no feedback at all (no "N rows affected", empty Results, nothing in Messages)
 - [ ] **ED-02** `MINOR` `join ` table list ranks a table from another schema first and unrelated tables ahead of the FK target
 - [ ] **ED-03** `MINOR` No live diagnostic for a mistyped keyword or other syntax error
 - [ ] **ED-04** `MINOR` Enter right after typing a complete table name only accepts the completion, the newline is swallowed
@@ -251,7 +251,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-51** `BLOCKER` Native Restore (and Backup) freeze the whole UI for the full duration; Cancel and Esc do nothing and the process is not stopped
 - [ ] **AT-53** `BLOCKER` Dexo's own backup cannot be restored by Dexo's own restore
 - [ ] **AT-07** `MAJOR` Transaction commands on an offline connection refuse instead of connecting
-- [ ] **AT-10** `MAJOR` MySQL UPDATE/DELETE gives no feedback (Results pane stays empty), while Postgres says "1 row affected"
+- [x] **AT-10** `MAJOR` MySQL UPDATE/DELETE gives no feedback (Results pane stays empty), while Postgres says "1 row affected"
 - [ ] **AT-16** `MAJOR` After a session is terminated from the Sessions dialog, the document's connection stays broken: every run says "connection closed" and nothing reconnects it
 - [ ] **AT-20** `MAJOR` Sessions list is a stale snapshot while the connection has an open transaction; `r` refresh changes nothing
 - [ ] **AT-22** `MAJOR` A running (or blocked) query shows nothing: no "running" state, no elapsed time, no hint that Ctrl+F2 cancels
