@@ -430,8 +430,8 @@ through the connections the profile `{profile}` allows, and nothing else.
 Access is read-only. A write tool appears only while a person has granted it with
 `dexo mcp grant create`, for a connection and a set of tables, for a limited time.
 Some grants ask: then each write waits until the person approves it in Dexo's Agent
-Activity screen, or it is denied after two minutes -- say what you are about to change
-and why before you call the tool. Every call is audited. Never retry a denied write with
+Activity screen, or is denied when the wait the person set on the grant runs out -- say
+what you are about to change and why before you call the tool. Every call is audited. Never retry a denied write with
 a different statement to get around the decision; ask the person instead.
 "
     )
@@ -721,5 +721,17 @@ mod tests {
         assert!(super::resolve_command("dexo-surely-not-on-path").is_none());
         let here = std::env::current_exe().unwrap();
         assert_eq!(super::resolve_command(here.to_str().unwrap()), Some(here));
+    }
+
+    /// How long a write waits is set on each grant, after setup: the skill names no
+    /// fixed time.
+    #[test]
+    fn the_skill_names_no_fixed_wait() {
+        let text = super::skill_text(McpClient::ClaudeCode, "agent");
+        assert!(!text.contains("two minutes"), "{text}");
+        assert!(
+            text.contains("the wait the person set on the grant"),
+            "{text}"
+        );
     }
 }
