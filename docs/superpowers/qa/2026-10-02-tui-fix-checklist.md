@@ -291,12 +291,12 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **AT-37** `MINOR` Exporting into a directory that does not exist shows a raw OS error and keeps the previous success line
 - [x] **AT-38** `MINOR` JSON/JSONL export loses column order, writes jsonb/numeric as strings
 - [x] **AT-39** `MINOR` The Results hint line does not list `e` (Export) although `e` opens it
-- [ ] **AT-40** `MINOR` Transfer keys are not in the keybindings help
+- [x] **AT-40** `MINOR` Transfer keys are not in the keybindings help
 - [x] **AT-46** `MINOR` Import of a file that does not exist: `error: No such file or directory (os error 2)` without the file name
 - [x] **AT-48** `MINOR` Rollback on a non-transactional table (MySQL MyISAM) says nothing and keeps the rows
 - [x] **AT-49** `MINOR` Sessions on MySQL: rows in no clear order, different state vocabulary
 - [x] **AT-56** `MINOR` SQLite Native Restore shows the backup text: `a SQLite database is its file: copy the file to back it up`
-- [ ] **AT-57** `MINOR` Backup/Restore/Import/Export hotkeys: none
+- [x] **AT-57** `MINOR` Backup/Restore/Import/Export hotkeys: none
 - [=] **AT-58** `MINOR` After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves (fixed by SL-16)
 - [x] **AT-05** `COSMETIC` Savepoint dialog: one title for three actions, lowercase action line, a lot of empty space
 - [=] **AT-13** `COSMETIC` Long refusal toasts are cut off mid-word without an ellipsis (fixed by PC-15)
