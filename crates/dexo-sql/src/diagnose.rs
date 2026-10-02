@@ -360,15 +360,15 @@ fn check(
     // different tables somewhere in it -- `o` in a query and in its subquery -- stands
     // for neither, and its columns go unchecked.
     let mut aliases: HashMap<String, Option<(Option<String>, String)>> = HashMap::new();
-    let mut name = |key: String, target: (Option<String>, String)| {
+    let mut name = |key: String, target: Option<(Option<String>, String)>| {
         aliases
             .entry(key)
             .and_modify(|known| {
-                if known.as_ref() != Some(&target) {
+                if *known != target {
                     *known = None;
                 }
             })
-            .or_insert(Some(target));
+            .or_insert(target);
     };
     for (parts, alias) in &refs.tables {
         let names: Vec<String> = parts
@@ -380,9 +380,13 @@ fn check(
             [schema, table] | [_, schema, table] => (Some(schema.clone()), table.clone()),
             _ => continue,
         };
-        name(table.clone(), (schema.clone(), table.clone()));
+        // A CTE named like a table stands for the CTE, under an alias too: its columns
+        // are the CTE's, not the table's.
+        let target = (schema.is_some() || !refs.ctes.contains(&table))
+            .then(|| (schema.clone(), table.clone()));
+        name(table.clone(), target.clone());
         if let Some(alias) = alias {
-            name(alias.clone(), (schema.clone(), table.clone()));
+            name(alias.clone(), target);
         }
         // `FROM ONLY t`, `UPDATE IGNORE t`: the parser took a keyword it does not know
         // there for the table.
@@ -764,6 +768,7 @@ mod tests {
             "select o.rowid, o.oid, o._rowid_, o.ctid, o.xmin, o.tableoid from orders o",
             "select o.total from orders o where exists (select 1 from customers o where o.id = 1)",
             "with orders as (select id, 1 as extra from orders) select orders.extra from orders",
+            "with orders as (select id, 1 as extra from orders) select o.extra from orders o",
             "create unlogged table ul (id int); select * from ul",
             "create table t2 (like orders including all); select * from t2",
             "select * into newtab from orders; select * from newtab",
