@@ -152,13 +152,22 @@ fn chrome_lines(state: &ExplorerState, show_offline_chrome: bool) -> Vec<String>
     if !state.search.is_empty() {
         lines.push(format!("search:{}", state.search));
     }
-    if !state.filter_name.is_empty() || state.filter_kind.is_some() || state.favorites_only {
-        lines.push(format!(
-            "filter:{} kind:{} fav:{}",
-            state.filter_name,
-            state.filter_kind.as_deref().unwrap_or("-"),
-            state.favorites_only
-        ));
+    // In words, with the way back: the filter used to read `filter: kind:- fav:true`.
+    let mut shown = Vec::new();
+    if state.favorites_only {
+        shown.push("favorites only".to_string());
+    }
+    if !state.filter_name.is_empty() {
+        shown.push(format!("name \"{}\"", state.filter_name));
+    }
+    if let Some(kind) = &state.filter_kind {
+        shown.push(format!("kind {kind}"));
+    }
+    if !shown.is_empty() {
+        lines.push(format!("showing {}", shown.join(", ")));
+    }
+    if state.include_system {
+        lines.push("system objects shown".into());
     }
     lines
 }

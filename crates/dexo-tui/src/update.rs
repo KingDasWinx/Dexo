@@ -1422,10 +1422,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ToggleFavorite => toggle_favorite(model),
         Action::ToggleFavoritesOnly => {
             model.explorer.favorites_only = !model.explorer.favorites_only;
+            model.messages.info(if model.explorer.favorites_only {
+                "Showing favorites only; run Show Favorites Only again to see everything.".into()
+            } else {
+                "Showing every object.".into()
+            });
             Vec::new()
         }
         Action::ToggleSystemObjects => {
             model.explorer.include_system = !model.explorer.include_system;
+            model.messages.info(if model.explorer.include_system {
+                "System objects are shown.".into()
+            } else {
+                "System objects are hidden.".into()
+            });
             if model.explorer.include_system && model.connection.ready {
                 refresh_catalog(model, true)
             } else {
