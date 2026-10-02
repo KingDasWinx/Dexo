@@ -777,6 +777,28 @@ fn render_editor_content(frame: &mut Frame, area: Rect, model: &Model, _hits: &m
     crate::widgets::editor::render(frame, area, model);
 }
 
+/// The name of an object the inspector lists, from the tree; one the tree has not loaded
+/// is said by its kind. The catalog's own ids (`pg:table:17104`) mean nothing to a person.
+fn object_name(model: &Model, id: &dexo_driver_api::ObjectId) -> String {
+    fn find(nodes: &[crate::screens::explorer::ExplorerNode], id: &str) -> Option<String> {
+        nodes.iter().find_map(|node| {
+            if node.id.as_str() == id {
+                Some(if node.qualified.is_empty() {
+                    node.label.clone()
+                } else {
+                    node.qualified.clone()
+                })
+            } else {
+                find(&node.children, id)
+            }
+        })
+    }
+    find(&model.explorer.roots, id.as_str()).unwrap_or_else(|| {
+        let kind = id.as_str().split(':').nth(1).unwrap_or("object");
+        format!("a {kind}")
+    })
+}
+
 fn properties_tab_body(model: &Model) -> String {
     if model.inspector.qualified_name.is_empty() && model.inspector.object.is_none() {
         return "Select an object in Explorer.".into();
@@ -805,7 +827,7 @@ fn properties_tab_body(model: &Model) -> String {
                 .inspector
                 .dependencies
                 .iter()
-                .map(|id| id.as_str())
+                .map(|id| object_name(model, id))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));
@@ -817,7 +839,7 @@ fn properties_tab_body(model: &Model) -> String {
                 .inspector
                 .dependents
                 .iter()
-                .map(|id| id.as_str())
+                .map(|id| object_name(model, id))
                 .collect::<Vec<_>>()
                 .join(", ")
         ));

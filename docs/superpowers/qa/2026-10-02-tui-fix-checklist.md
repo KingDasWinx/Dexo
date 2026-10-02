@@ -343,7 +343,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-38** `MINOR` CLI messages and output of `dexo mcp grant` are raw
 - [x] **MA-39** `MINOR` Agent side: raw Rust/serde and Debug text in errors and results
 - [x] **MA-40** `MINOR` `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
-- [ ] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids
+- [x] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids
 - [x] **MA-06** `COSMETIC` MCP Profiles selected row has no highlight
 - [x] **MA-20** `COSMETIC` New MCP Grant: the checkbox label describes the unchecked state as a feature
 - [-] **MA-33** `COSMETIC` Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`) (not a defect: a popup overlays the panes beneath it; it draws nothing of its own over their borders)
