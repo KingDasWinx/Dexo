@@ -205,7 +205,7 @@ pub(crate) fn capabilities() -> Vec<CapabilityState> {
         CapabilityState::available(Capability::Export),
         CapabilityState::unavailable(
             Capability::Backup,
-            "a DuckDB database is its file: copy the file, or EXPORT DATABASE, to back it up",
+            "a DuckDB database is its file: copy it to back it up, replace it to restore",
         ),
     ]
 }

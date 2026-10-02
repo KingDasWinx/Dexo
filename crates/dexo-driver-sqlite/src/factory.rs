@@ -87,7 +87,7 @@ pub(crate) fn capabilities() -> Vec<CapabilityState> {
         CapabilityState::available(Capability::Export),
         CapabilityState::unavailable(
             Capability::Backup,
-            "a SQLite database is its file: copy the file to back it up",
+            "a SQLite database is its file: copy it to back it up, replace it to restore",
         ),
     ]
 }

@@ -295,7 +295,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **AT-46** `MINOR` Import of a file that does not exist: `error: No such file or directory (os error 2)` without the file name
 - [ ] **AT-48** `MINOR` Rollback on a non-transactional table (MySQL MyISAM) says nothing and keeps the rows
 - [ ] **AT-49** `MINOR` Sessions on MySQL: rows in no clear order, different state vocabulary
-- [ ] **AT-56** `MINOR` SQLite Native Restore shows the backup text: `a SQLite database is its file: copy the file to back it up`
+- [x] **AT-56** `MINOR` SQLite Native Restore shows the backup text: `a SQLite database is its file: copy the file to back it up`
 - [ ] **AT-57** `MINOR` Backup/Restore/Import/Export hotkeys: none
 - [ ] **AT-58** `MINOR` After shrinking the terminal to 60x20 and growing back, the sidebar and Results pane are not drawn until focus moves
 - [ ] **AT-05** `COSMETIC` Savepoint dialog: one title for three actions, lowercase action line, a lot of empty space
