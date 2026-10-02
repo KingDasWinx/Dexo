@@ -199,7 +199,8 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             file,
             output,
             format,
-        } => run_export(registry, connection, sql, file, output, format)?,
+            table,
+        } => run_export(registry, connection, sql, file, (output, table), format)?,
         Command::Import {
             connection,
             table,
@@ -269,7 +270,7 @@ fn run_export(
     connection: String,
     sql: Option<String>,
     file: Option<std::path::PathBuf>,
-    output: std::path::PathBuf,
+    (output, table): (std::path::PathBuf, Option<String>),
     format: TransferCliFormat,
 ) -> anyhow::Result<()> {
     let sql = load_sql(sql, file, false)?;
@@ -302,7 +303,10 @@ fn run_export(
             }
         }
     }
-    let mut options = dexo_app::transfer::FormatOptions::default();
+    let mut options = dexo_app::transfer::FormatOptions {
+        table,
+        ..Default::default()
+    };
     if format == TransferCliFormat::Tsv {
         options.delimiter = b'\t';
     }

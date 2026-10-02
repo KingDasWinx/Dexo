@@ -161,6 +161,9 @@ pub enum Command {
         output: PathBuf,
         #[arg(long, value_enum, default_value_t = TransferCliFormat::Csv)]
         format: TransferCliFormat,
+        /// The table the SQL format inserts into; the output file's name by default.
+        #[arg(long)]
+        table: Option<String>,
     },
     /// Load a CSV, TSV, JSON or JSON Lines file into a table
     Import {

@@ -24,6 +24,9 @@ pub struct FormatOptions {
     pub encoding: &'static encoding_rs::Encoding,
     pub binary: BinaryMode,
     pub dialect: SqlDialect,
+    /// The table an SQL export inserts into, unquoted, `schema.table` or `table`.
+    /// `export_rows` names it after the file when it is not given.
+    pub table: Option<String>,
 }
 
 impl Default for FormatOptions {
@@ -35,6 +38,7 @@ impl Default for FormatOptions {
             encoding: encoding_rs::UTF_8,
             binary: BinaryMode::Hex,
             dialect: SqlDialect::Postgres,
+            table: None,
         }
     }
 }
@@ -142,7 +146,8 @@ impl<'a, W: std::io::Write> StreamEncoder<'a, W> {
                     .map_err(|error| error.to_string())?;
             }
             TransferFormat::Sql => {
-                let sql = sql_insert(self.columns, row, self.options.dialect);
+                let table = self.options.table.as_deref().unwrap_or("dest");
+                let sql = sql_insert(table, self.columns, row, self.options.dialect);
                 self.writer
                     .write_all(sql.as_bytes())
                     .map_err(|error| error.to_string())?;
@@ -229,13 +234,14 @@ fn json_value(value: &DbValue) -> serde_json::Value {
     }
 }
 
-fn sql_insert(columns: &[String], row: &[DbValue], dialect: SqlDialect) -> String {
+fn sql_insert(table: &str, columns: &[String], row: &[DbValue], dialect: SqlDialect) -> String {
     let ident = |name: &str| match dialect {
         SqlDialect::Postgres | SqlDialect::Sqlite | SqlDialect::Duckdb => {
             format!("\"{}\"", name.replace('"', "\"\""))
         }
         SqlDialect::Mysql => format!("`{}`", name.replace('`', "``")),
     };
+    let table = table.split('.').map(ident).collect::<Vec<_>>().join(".");
     let cols = columns
         .iter()
         .map(|name| ident(name))
@@ -246,7 +252,7 @@ fn sql_insert(columns: &[String], row: &[DbValue], dialect: SqlDialect) -> Strin
         .map(|value| sql_literal(value, dialect))
         .collect::<Vec<_>>()
         .join(", ");
-    format!("INSERT INTO dest ({cols}) VALUES ({values});")
+    format!("INSERT INTO {table} ({cols}) VALUES ({values});")
 }
 
 fn decode_text(encoding: &'static encoding_rs::Encoding, bytes: &[u8]) -> Result<String, String> {
