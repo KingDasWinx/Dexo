@@ -8941,13 +8941,10 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.file_picker.move_up(rows);
             Vec::new()
         }
-        KeyCode::Left
-        | KeyCode::Right
-        | KeyCode::Home
-        | KeyCode::End
-        | KeyCode::Backspace
-        | KeyCode::Delete
-            if model.file_picker.focus == FilePickerFocus::Name =>
+        // Every key the name edits with, Ctrl+A and Ctrl+W among them: only the arrows,
+        // Backspace, Delete and plain letters reached it.
+        _ if model.file_picker.focus == FilePickerFocus::Name
+            && crate::widgets::text_input::TextInput::owns(&key) =>
         {
             let _ = model.file_picker.name.handle_key(key);
             Vec::new()
@@ -8990,13 +8987,6 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     == crate::screens::file_picker::FilePickerSection::Browser =>
         {
             model.file_picker.toggle_hidden();
-            Vec::new()
-        }
-        KeyCode::Char(ch)
-            if model.file_picker.focus == FilePickerFocus::Name
-                && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
-        {
-            let _ = model.file_picker.name.handle_key(key);
             Vec::new()
         }
         KeyCode::Char(ch)

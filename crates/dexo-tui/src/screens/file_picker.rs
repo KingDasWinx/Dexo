@@ -761,4 +761,31 @@ mod tests {
             .handle_key(KeyEvent::new(KeyCode::Left, KeyModifiers::CONTROL));
         assert_eq!(picker.name.cursor(), "query-1.".chars().count());
     }
+
+    /// Ctrl+A and Ctrl+W never reached the name: only the arrows, Backspace, Delete
+    /// and plain letters did.
+    #[test]
+    fn the_name_takes_ctrl_a_and_ctrl_w() {
+        let mut model = crate::model::Model {
+            file_picker: FilePicker {
+                open: true,
+                focus: FilePickerFocus::Name,
+                name: TextInput::new("monthly sales.sql"),
+                ..FilePicker::default()
+            },
+            ..crate::model::Model::default()
+        };
+        let ctrl = |ch| {
+            crate::action::Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::CONTROL))
+        };
+        crate::update::update(&mut model, ctrl('w'));
+        assert_eq!(model.file_picker.name.as_str(), "monthly sales.");
+        crate::update::update(&mut model, ctrl('a'));
+        assert!(model.file_picker.name.is_selected());
+        crate::update::update(
+            &mut model,
+            crate::action::Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
+        );
+        assert_eq!(model.file_picker.name.as_str(), "x");
+    }
 }
