@@ -139,11 +139,12 @@ impl ExplorerNode {
 
     pub fn from_object(object: CatalogObject) -> Self {
         let label = object_label(&object);
+        let qualified = object.display_name();
         Self {
             id: object.id,
             label,
             kind: object.kind,
-            qualified: object.qualified_name.display_unquoted(),
+            qualified,
             schema: object.qualified_name.schema().map(str::to_string),
             state: NodeState::Collapsed,
             expanded: false,

@@ -77,6 +77,22 @@ pub struct CatalogObject {
 }
 
 impl CatalogObject {
+    /// The name a person would write for the object. A schema or a database carries its
+    /// own name as the object part and, for a schema, again as the schema part, so the
+    /// plain join read `qa4.reporting.reporting`.
+    pub fn display_name(&self) -> String {
+        let name = &self.qualified_name;
+        match self.kind {
+            ObjectKind::Schema => [name.catalog(), Some(name.object())]
+                .into_iter()
+                .flatten()
+                .collect::<Vec<_>>()
+                .join("."),
+            ObjectKind::Catalog => name.object().to_string(),
+            _ => name.display_unquoted(),
+        }
+    }
+
     pub fn new(
         id: ObjectId,
         kind: ObjectKind,
@@ -179,6 +195,26 @@ pub trait CatalogReader: Send + Sync {
 mod tests {
     use super::{CatalogObject, ObjectId, ObjectKind};
     use crate::QualifiedName;
+
+    #[test]
+    fn a_schema_and_a_database_are_named_once() {
+        let name = |kind, qualified| CatalogObject::new(ObjectId::new("x"), kind, qualified, None);
+        let schema = name(
+            ObjectKind::Schema,
+            QualifiedName::new(Some("qa4"), Some("reporting"), "reporting"),
+        );
+        assert_eq!(schema.display_name(), "qa4.reporting");
+        let database = name(
+            ObjectKind::Catalog,
+            QualifiedName::new(Some("qa4"), None::<String>, "qa4"),
+        );
+        assert_eq!(database.display_name(), "qa4");
+        let table = name(
+            ObjectKind::Table,
+            QualifiedName::new(Some("qa4"), Some("reporting"), "reporting"),
+        );
+        assert_eq!(table.display_name(), "qa4.reporting.reporting");
+    }
 
     #[test]
     fn catalog_object_round_trip() {

@@ -130,7 +130,7 @@ pub async fn load_inspector(
             session: session_id.0.to_string(),
             qualified_name: object
                 .as_ref()
-                .map(|object| object.qualified_name.display_unquoted())
+                .map(|object| object.display_name())
                 .unwrap_or_default(),
             object,
             ddl,
