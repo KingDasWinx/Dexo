@@ -638,6 +638,68 @@ async fn reg_values_read_as_their_names() {
     assert_eq!(shown, ["hidden.t", "pg_class"]);
 }
 
+/// Floats as the server itself writes them, value by value, alone and inside the types
+/// made of them: 1e300 came out as 301 digits, 1e-7 as `0.0000001`, infinity as `inf`.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn floats_read_as_the_server_writes_them() {
+    let fixture = connect_postgres_fixture().await;
+    let values = [
+        "1e300",
+        "1e-7",
+        "1e20",
+        "1e15",
+        "1e14",
+        "1.5e-5",
+        "0.0001",
+        "0.1",
+        "-2.5",
+        "-0",
+        "1.2345678901234567e19",
+        "Infinity",
+        "-Infinity",
+        "NaN",
+        "3.141592653589793",
+        "1e6",
+        "123456",
+        "1234567",
+    ];
+    let mut columns = Vec::new();
+    for value in values {
+        columns.push(format!("'{value}'::float8"));
+        // Past a float4's range.
+        if value != "1e300" {
+            columns.push(format!("'{value}'::float4"));
+        }
+        columns.push(format!("point('{value}', 1e-7)"));
+    }
+    columns.extend(
+        [
+            "line '{1e20,1e-7,0.1}'",
+            "circle '<(1e300,0.1),1e15>'",
+            "box '(1e20,1e20),(1e-7,1e-7)'",
+            "lseg '[(1e20,1),(2,1e-5)]'",
+            "path '[(1e20,1),(2,1e-5)]'",
+            "polygon '((1e20,1),(2,1e-5),(3,3))'",
+            "array[1e300, 1e-7]::float8[]",
+        ]
+        .map(String::from),
+    );
+    let sql = columns
+        .iter()
+        .map(|column| format!("{column}, ({column})::text"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let texts = first_row_texts(
+        &*fixture.session,
+        QueryRequest::read(format!("select {sql}"), 0),
+    )
+    .await;
+    for (pair, column) in texts.chunks(2).zip(&columns) {
+        assert_eq!(pair[0], pair[1], "{column}");
+    }
+}
+
 /// The first row's cells as text: what the grid shows for each.
 async fn first_row_texts(session: &dyn Session, request: QueryRequest) -> Vec<String> {
     let events = collect(session.execute(request).await.unwrap()).await;

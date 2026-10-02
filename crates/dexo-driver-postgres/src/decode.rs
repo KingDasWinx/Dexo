@@ -178,8 +178,8 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         Type::INT4 => DbValue::I64(wire::int4_from_sql(raw).ok()?.into()),
         Type::INT8 => DbValue::I64(wire::int8_from_sql(raw).ok()?),
         Type::OID => DbValue::U64(wire::oid_from_sql(raw).ok()?.into()),
-        Type::FLOAT4 => native(ty, raw, wire::float4_from_sql(raw).ok()?.to_string()),
-        Type::FLOAT8 => native(ty, raw, wire::float8_from_sql(raw).ok()?.to_string()),
+        Type::FLOAT4 => native(ty, raw, float4_text(wire::float4_from_sql(raw).ok()?)),
+        Type::FLOAT8 => native(ty, raw, float8_text(wire::float8_from_sql(raw).ok()?)),
         Type::NUMERIC => DbValue::Decimal(numeric_text(raw)?),
         Type::MONEY => native(ty, raw, money_text(wire::int8_from_sql(raw).ok()?)),
         Type::CHAR => DbValue::Text((wire::char_from_sql(raw).ok()? as u8 as char).to_string()),
@@ -222,7 +222,11 @@ fn scalar(ty: &Type, raw: &[u8]) -> Option<DbValue> {
         Type::BIT | Type::VARBIT => native(ty, raw, varbit_text(raw)?),
         Type::POINT => {
             let point = wire::point_from_sql(raw).ok()?;
-            native(ty, raw, format!("({},{})", point.x(), point.y()))
+            native(
+                ty,
+                raw,
+                format!("({},{})", float8_text(point.x()), float8_text(point.y())),
+            )
         }
         Type::PG_LSN => {
             let lsn = wire::lsn_from_sql(raw).ok()?;
@@ -245,7 +249,11 @@ fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
         _ => None,
     };
     let u32_at = |at: usize| Some(u32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?));
-    let f8_at = |at: usize| Some(f64::from_be_bytes(raw.get(at..at + 8)?.try_into().ok()?));
+    let f8_at = |at: usize| {
+        Some(float8_text(f64::from_be_bytes(
+            raw.get(at..at + 8)?.try_into().ok()?,
+        )))
+    };
     let point_at = |at: usize| Some(format!("({},{})", f8_at(at)?, f8_at(at + 8)?));
     let points = |from: usize, count: usize| {
         (0..count)
@@ -302,7 +310,9 @@ fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
                 let values = (0..dimensions)
                     .map(|index| {
                         let at = 4 + index * 4;
-                        Some(f32::from_be_bytes(raw.get(at..at + 4)?.try_into().ok()?).to_string())
+                        Some(float4_text(f32::from_be_bytes(
+                            raw.get(at..at + 4)?.try_into().ok()?,
+                        )))
                     })
                     .collect::<Option<Vec<_>>>()?;
                 format!("[{}]", values.join(","))
@@ -312,6 +322,39 @@ fn other(ty: &Type, raw: &[u8], names: &RegNames) -> Option<DbValue> {
         _ => return None,
     };
     Some(native(ty, raw, text))
+}
+
+/// A float8 as Postgres 12 on prints it: the shortest digits that read back as the
+/// same value, written out from 1e-4 up to 1e15 and in exponent form outside it, the
+/// way `%g` places it -- `1e+20`, `1e-07` -- and the non-numbers by name. Rust's own
+/// form wrote 1e300 as 301 digits and infinity as `inf`.
+fn float8_text(value: f64) -> String {
+    float_text(&format!("{value}"), &format!("{value:e}"), 15)
+}
+
+/// A float4 the same way, written out up to 1e6.
+fn float4_text(value: f32) -> String {
+    float_text(&format!("{value}"), &format!("{value:e}"), 6)
+}
+
+/// `plain` and `scientific` are the same shortest digits, written out and as `1.5e20`.
+fn float_text(plain: &str, scientific: &str, written_below: i32) -> String {
+    match plain {
+        "NaN" => return "NaN".into(),
+        "inf" => return "Infinity".into(),
+        "-inf" => return "-Infinity".into(),
+        _ => {}
+    }
+    let Some((digits, exponent)) = scientific.split_once('e') else {
+        return plain.to_string();
+    };
+    match exponent.parse::<i32>() {
+        Ok(exponent) if !(-4..written_below).contains(&exponent) => {
+            let sign = if exponent < 0 { '-' } else { '+' };
+            format!("{digits}e{sign}{:02}", exponent.unsigned_abs())
+        }
+        _ => plain.to_string(),
+    }
 }
 
 /// `'fat':2,4A 'cat':3`: each lexeme quoted, with its positions and their weights.
@@ -733,6 +776,46 @@ mod tests {
             raw.extend(value.to_be_bytes());
         }
         assert_eq!(text_of(&decode_value(&ty, &raw)), "[1,0.5,-2]");
+    }
+
+    /// Floats read as psql prints them, in every type made of them.
+    #[test]
+    fn floats_read_as_postgres_prints_them() {
+        use super::{float4_text, float8_text};
+        for (value, text) in [
+            (1e300, "1e+300"),
+            (1e-7, "1e-07"),
+            (1e20, "1e+20"),
+            (1e15, "1e+15"),
+            (1e14, "100000000000000"),
+            (1.5e-5, "1.5e-05"),
+            (0.0001, "0.0001"),
+            (0.1, "0.1"),
+            (-2.5, "-2.5"),
+            (-0.0, "-0"),
+            (1.2345678901234567e19, "1.2345678901234567e+19"),
+            (f64::INFINITY, "Infinity"),
+            (f64::NEG_INFINITY, "-Infinity"),
+            (f64::NAN, "NaN"),
+        ] {
+            assert_eq!(float8_text(value), text);
+        }
+        for (value, text) in [
+            (1e6f32, "1e+06"),
+            (100_000.0, "100000"),
+            (1_234_567.0, "1.234567e+06"),
+            (0.1, "0.1"),
+            (f32::INFINITY, "Infinity"),
+        ] {
+            assert_eq!(float4_text(value), text);
+        }
+        let mut point = Vec::new();
+        point.extend(1e300f64.to_be_bytes());
+        point.extend(1e-7f64.to_be_bytes());
+        assert_eq!(
+            text_of(&decode_value(&Type::POINT, &point)),
+            "(1e+300,1e-07)"
+        );
     }
 
     /// An extension's type is known by name only as the plain type it is: a composite
