@@ -669,8 +669,11 @@ fn run_inspect(
         }
     } else if snapshot.as_deref() == Some("latest") {
         serde_json::to_value(&cached)?
+    } else if refresh {
+        // Caching was the whole request: what `dexo lsp` and the offline reads use.
+        serde_json::json!({ "connection": connection, "cached": cached.len() })
     } else {
-        anyhow::bail!("provide --object, --search, --grants, or --snapshot latest");
+        anyhow::bail!("provide --object, --search, --grants, --refresh, or --snapshot latest");
     };
     let mut stdout = std::io::stdout();
     match format {

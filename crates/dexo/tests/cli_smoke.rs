@@ -65,3 +65,40 @@ fn mcp_probe_json_is_only_json() {
         assert_eq!(status("cursor"), "ok", "{report}");
     }
 }
+
+/// `inspect --refresh` alone caches the connection's catalog -- what `dexo lsp` reads --
+/// and says how much it cached, rather than asking for another flag after caching it.
+#[test]
+fn inspect_refresh_alone_caches_the_catalog() {
+    let dir = tempfile::tempdir().unwrap();
+    // Any SQLite file with tables in it will do.
+    let file = dir.path().join("shop.db");
+    dexo_storage::Database::open(&file).unwrap();
+    let dexo = || {
+        let mut command = Command::cargo_bin("dexo").unwrap();
+        command
+            .env("DEXO_DATA_HOME", dir.path().join("data"))
+            .env("HOME", dir.path());
+        command
+    };
+    dexo()
+        .args([
+            "connections",
+            "add",
+            "--name",
+            "lite",
+            "--driver",
+            "sqlite",
+            "--path",
+        ])
+        .arg(&file)
+        .assert()
+        .success();
+    let output = dexo()
+        .args(["inspect", "--connection", "lite", "--refresh"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(report["cached"].as_u64().unwrap() > 1, "{report}");
+}
