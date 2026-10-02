@@ -23,3 +23,45 @@ fn doctor_is_non_interactive() {
         .success()
         .stdout(predicate::str::contains(r#""status":"ok""#));
 }
+
+/// `mcp doctor --probe --json` prints one JSON document and nothing else; a Codex file
+/// that does not parse says so, and a bare command is found on PATH.
+#[test]
+fn mcp_probe_json_is_only_json() {
+    let dir = tempfile::tempdir().unwrap();
+    let home = dir.path().join("home");
+    std::fs::create_dir_all(home.join(".codex")).unwrap();
+    std::fs::create_dir_all(home.join(".cursor")).unwrap();
+    std::fs::write(home.join(".codex/config.toml"), "[mcp_servers.dexo\n").unwrap();
+    std::fs::write(
+        home.join(".cursor/mcp.json"),
+        r#"{"mcpServers": {"dexo": {"command": "sh"}}}"#,
+    )
+    .unwrap();
+    let output = Command::cargo_bin("dexo")
+        .unwrap()
+        .current_dir(dir.path())
+        .env("DEXO_DATA_HOME", dir.path().join("data"))
+        .env("HOME", &home)
+        .env("XDG_CONFIG_HOME", home.join(".config"))
+        .args(["mcp", "doctor", "--probe", "--json"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let report: serde_json::Value = serde_json::from_slice(&output.stdout).unwrap();
+    let status = |client: &str| {
+        report["probe"]["clients"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|entry| entry["client"] == client)
+            .and_then(|entry| entry["status"].as_str())
+            .unwrap()
+            .to_string()
+    };
+    assert_eq!(status("codex"), "unparseable", "{report}");
+    assert_eq!(status("claude-code"), "no_file", "{report}");
+    if cfg!(unix) {
+        assert_eq!(status("cursor"), "ok", "{report}");
+    }
+}

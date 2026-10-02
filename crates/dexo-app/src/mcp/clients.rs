@@ -121,28 +121,75 @@ impl McpClient {
         Ok(format!("{bom}{merged}"))
     }
 
-    /// Whether the file has a `dexo` entry, and the command it runs.
-    pub fn configured_command(self, contents: &str) -> Option<String> {
+    /// Whether the file has a `dexo` entry, and the command it runs; an error when the
+    /// file does not parse, which setup would leave alone.
+    pub fn configured_command(self, contents: &str) -> Result<Option<String>, AppError> {
         let contents = contents.strip_prefix(BOM).unwrap_or(contents);
-        match self {
+        let unparsed = |error: String| {
+            AppError::new(
+                ErrorCategory::Configuration,
+                format!("it cannot be parsed ({error}), and dexo mcp setup leaves it alone"),
+            )
+        };
+        let command = match self {
             Self::Codex => {
-                let table: toml::Table = contents.parse().ok()?;
+                let table: toml::Table = contents
+                    .parse()
+                    .map_err(|error: toml::de::Error| unparsed(error.message().to_string()))?;
                 table
-                    .get("mcp_servers")?
-                    .get("dexo")?
-                    .get("command")?
-                    .as_str()
+                    .get("mcp_servers")
+                    .and_then(|servers| servers.get("dexo"))
+                    .and_then(|dexo| dexo.get("command"))
+                    .and_then(toml::Value::as_str)
                     .map(str::to_string)
             }
-            _ => {
-                let value: serde_json::Value = serde_json::from_str(contents).ok()?;
-                value
-                    .pointer("/mcpServers/dexo/command")?
-                    .as_str()
-                    .map(str::to_string)
-            }
-        }
+            _ if contents.trim().is_empty() => None,
+            _ => serde_json::from_str::<serde_json::Value>(contents)
+                .map_err(|error| unparsed(error.to_string()))?
+                .pointer("/mcpServers/dexo/command")
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_string),
+        };
+        Ok(command)
     }
+}
+
+/// The file `command` runs, found the way a client starting it would: a path as it is,
+/// a bare name on PATH.
+pub fn resolve_command(command: &str) -> Option<PathBuf> {
+    let runnable = |path: &Path| {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            path.metadata()
+                .is_ok_and(|meta| meta.is_file() && meta.permissions().mode() & 0o111 != 0)
+        }
+        #[cfg(not(unix))]
+        path.is_file()
+    };
+    let path = Path::new(command);
+    if path.components().count() > 1 {
+        return runnable(path).then(|| path.to_path_buf());
+    }
+    let extensions: Vec<String> = if cfg!(windows) {
+        std::iter::once(String::new())
+            .chain(
+                std::env::var("PATHEXT")
+                    .unwrap_or_else(|_| ".EXE;.CMD;.BAT".into())
+                    .split(';')
+                    .map(str::to_string),
+            )
+            .collect()
+    } else {
+        vec![String::new()]
+    };
+    std::env::split_paths(&std::env::var_os("PATH")?)
+        .flat_map(|dir| {
+            extensions
+                .iter()
+                .map(move |extension| dir.join(format!("{command}{extension}")))
+        })
+        .find(|candidate| runnable(candidate))
 }
 
 /// A JSON value whose objects keep their keys in the file's order. serde_json's own map
@@ -413,7 +460,10 @@ mod tests {
         assert_eq!(value["mcpServers"]["dexo"]["command"], "/bin/dexo");
         assert_eq!(value["mcpServers"]["dexo"]["args"][3], "agent");
         assert_eq!(
-            McpClient::Cursor.configured_command(&merged).as_deref(),
+            McpClient::Cursor
+                .configured_command(&merged)
+                .unwrap()
+                .as_deref(),
             Some("/bin/dexo")
         );
         assert!(
@@ -451,7 +501,10 @@ mod tests {
             Some("/bin/dexo")
         );
         assert_eq!(
-            McpClient::Codex.configured_command(&merged).as_deref(),
+            McpClient::Codex
+                .configured_command(&merged)
+                .unwrap()
+                .as_deref(),
             Some("/bin/dexo")
         );
         let fresh = McpClient::Codex
@@ -641,7 +694,7 @@ mod tests {
             assert!(merged.starts_with('\u{feff}'), "{merged}");
             assert!(!merged[3..].contains('\u{feff}'), "{merged}");
             assert_eq!(
-                client.configured_command(&merged).as_deref(),
+                client.configured_command(&merged).unwrap().as_deref(),
                 Some("/bin/dexo")
             );
         }
@@ -650,5 +703,23 @@ mod tests {
         assert!(super::read_config(&path).unwrap().is_none());
         std::fs::write(&path, b"{\"a\": \"\xff\"}").unwrap();
         assert!(super::read_config(&path).is_err());
+    }
+
+    /// The probe tells a file it cannot parse from one without Dexo, and finds a bare
+    /// command on PATH as the client would.
+    #[test]
+    fn the_probe_reads_what_setup_would() {
+        assert!(McpClient::Codex.configured_command("[mcp_servers").is_err());
+        assert!(McpClient::Cursor.configured_command("{ nope").is_err());
+        assert_eq!(McpClient::Cursor.configured_command("  ").unwrap(), None);
+        assert_eq!(
+            McpClient::Codex.configured_command("model = 1").unwrap(),
+            None
+        );
+        let shell = if cfg!(windows) { "cmd" } else { "sh" };
+        assert!(super::resolve_command(shell).is_some());
+        assert!(super::resolve_command("dexo-surely-not-on-path").is_none());
+        let here = std::env::current_exe().unwrap();
+        assert_eq!(super::resolve_command(here.to_str().unwrap()), Some(here));
     }
 }

@@ -1345,12 +1345,7 @@ fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> 
             profile,
             json,
             probe,
-        } => {
-            mcp_doctor(profile.as_deref(), json)?;
-            if probe {
-                mcp_probe(profile.as_deref())?;
-            }
-        }
+        } => mcp_doctor(profile.as_deref(), json, probe)?,
         McpCommand::Setup {
             client,
             profile,
@@ -1535,7 +1530,9 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
     Ok(())
 }
 
-fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
+/// Each profile's tools; with `probe`, what the probe found too -- in one JSON document
+/// with `json`, so nothing but JSON reaches stdout.
+fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let repo = McpProfileRepository::new(db.connection());
@@ -1544,27 +1541,60 @@ fn mcp_doctor(name: Option<&str>, json: bool) -> anyhow::Result<()> {
     } else {
         repo.list()?
     };
+    let probed = probe.then(|| mcp_probe(name)).transpose()?;
     if json {
-        println!(
-            "{}",
-            serde_json::json!({
-                "profiles": profiles.iter().map(|p| serde_json::json!({
-                    "name": p.name,
-                    "enabled": p.enabled,
-                    "access": "read_only",
-                    "tools": advertised_tools(p),
-                })).collect::<Vec<_>>()
-            })
-        );
-    } else {
-        for profile in profiles {
-            println!(
-                "{} enabled={} tools={}",
-                profile.name,
-                profile.enabled,
-                advertised_tools(&profile).join(",")
-            );
+        let mut report = serde_json::json!({
+            "profiles": profiles.iter().map(|p| serde_json::json!({
+                "name": p.name,
+                "enabled": p.enabled,
+                "access": "read_only",
+                "tools": advertised_tools(p),
+            })).collect::<Vec<_>>()
+        });
+        if let Some(probed) = probed {
+            report["probe"] = probed;
         }
+        println!("{report}");
+        return Ok(());
+    }
+    for profile in profiles {
+        println!(
+            "{} enabled={} tools={}",
+            profile.name,
+            profile.enabled,
+            advertised_tools(&profile).join(",")
+        );
+    }
+    let Some(probed) = probed else {
+        return Ok(());
+    };
+    for server in probed["servers"].as_array().into_iter().flatten() {
+        let profile = server["profile"].as_str().unwrap_or("");
+        match server["error"].as_str() {
+            Some(error) => println!("probe {profile}: failed: {error}"),
+            None => {
+                let tools: Vec<&str> = server["tools"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .filter_map(serde_json::Value::as_str)
+                    .collect();
+                println!(
+                    "probe {profile}: ok, {} answered with {} tools: {}",
+                    server["server"].as_str().unwrap_or("server"),
+                    tools.len(),
+                    tools.join(",")
+                );
+            }
+        }
+    }
+    for client in probed["clients"].as_array().into_iter().flatten() {
+        println!(
+            "client {}: {} ({})",
+            client["client"].as_str().unwrap_or(""),
+            client["path"].as_str().unwrap_or(""),
+            client["detail"].as_str().unwrap_or("")
+        );
     }
     Ok(())
 }
@@ -1638,8 +1668,8 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
 
 /// `dexo mcp doctor --probe`: each enabled profile's server started and asked for its
 /// tools the way an agent would, then every client's config checked for Dexo.
-fn mcp_probe(name: Option<&str>) -> anyhow::Result<()> {
-    use dexo_app::mcp::clients::{McpClient, Places};
+fn mcp_probe(name: Option<&str>) -> anyhow::Result<serde_json::Value> {
+    use dexo_app::mcp::clients::{McpClient, Places, read_config, resolve_command};
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let repo = McpProfileRepository::new(db.connection());
@@ -1652,33 +1682,63 @@ fn mcp_probe(name: Option<&str>) -> anyhow::Result<()> {
             .collect(),
     };
     let exe = std::env::current_exe()?;
-    for profile in &profiles {
-        match probe_server(&exe, &profile.name, std::time::Duration::from_secs(10)) {
-            Ok((server, tools)) => println!(
-                "probe {}: ok, {server} answered with {} tools: {}",
-                profile.name,
-                tools.len(),
-                tools.join(",")
-            ),
-            Err(error) => println!("probe {}: failed: {error}", profile.name),
-        }
-    }
+    let servers: Vec<serde_json::Value> = profiles
+        .iter()
+        .map(|profile| {
+            match probe_server(&exe, &profile.name, std::time::Duration::from_secs(10)) {
+                Ok((server, tools)) => serde_json::json!({
+                    "profile": profile.name, "server": server, "tools": tools,
+                }),
+                Err(error) => serde_json::json!({
+                    "profile": profile.name, "error": error.to_string(),
+                }),
+            }
+        })
+        .collect();
     let places = Places::discover()?;
-    for client in McpClient::ALL {
-        let path = client.config_path(&places);
-        let state = match std::fs::read_to_string(&path) {
-            Err(_) => "no config file".to_string(),
-            Ok(contents) => match client.configured_command(&contents) {
-                None => "no dexo entry; dexo mcp setup adds one".to_string(),
-                Some(command) if std::path::Path::new(&command).exists() => {
-                    format!("dexo entry runs {command}")
-                }
-                Some(command) => format!("dexo entry runs {command}, which does not exist"),
-            },
-        };
-        println!("client {}: {} ({state})", client.id(), path.display());
-    }
-    Ok(())
+    let clients: Vec<serde_json::Value> = McpClient::ALL
+        .into_iter()
+        .map(|client| {
+            let path = client.config_path(&places);
+            let configured = read_config(&path)
+                .map(|contents| contents.map(|contents| client.configured_command(&contents)));
+            let (status, command, detail) = match configured {
+                Err(error) => ("unreadable", None, error.to_string()),
+                Ok(None) => ("no_file", None, "no config file".to_string()),
+                Ok(Some(Err(error))) => ("unparseable", None, error.to_string()),
+                Ok(Some(Ok(None))) => (
+                    "no_entry",
+                    None,
+                    "no dexo entry; dexo mcp setup adds one".to_string(),
+                ),
+                Ok(Some(Ok(Some(command)))) => match resolve_command(&command) {
+                    Some(found) if found.as_os_str() == command.as_str() => (
+                        "ok",
+                        Some(command.clone()),
+                        format!("dexo entry runs {command}"),
+                    ),
+                    Some(found) => (
+                        "ok",
+                        Some(command.clone()),
+                        format!("dexo entry runs {command}, found at {}", found.display()),
+                    ),
+                    None => (
+                        "command_missing",
+                        Some(command.clone()),
+                        format!("dexo entry runs {command}, which does not exist"),
+                    ),
+                },
+            };
+            serde_json::json!({
+                "client": client.id(),
+                "path": path.display().to_string(),
+                "status": status,
+                "command": command,
+                "detail": detail,
+            })
+        })
+        .collect();
+    Ok(serde_json::json!({ "servers": servers, "clients": clients }))
 }
 
 /// Starts `dexo mcp serve --profile name`, sends initialize, initialized and tools/list
