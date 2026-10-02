@@ -20,7 +20,7 @@ fn choose_effects_id(model: &mut Model, id: &str) -> Vec<Effect> {
     let mut effects = update(model, Action::OpenPalette);
     effects.extend(update(model, Action::PaletteQuery(id.into())));
     let entries = palette_entries(model);
-    let visible = filter_entries(&entries, &model.palette.query);
+    let visible = filter_entries(&entries, model.palette.query.as_str());
     if let Some(index) = visible.iter().position(|entry| entry.id == id) {
         model.palette.selected = index;
     }

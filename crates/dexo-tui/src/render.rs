@@ -888,15 +888,44 @@ fn paint_selection(
     input: &crate::widgets::text_input::TextInput,
     focused: bool,
 ) {
-    if !focused || !input.is_selected() {
-        return;
+    use unicode_width::UnicodeWidthStr;
+    if focused && input.is_selected() {
+        paint_reversed(frame, line, before.width(), input.as_str().width());
     }
-    let width =
-        |text: &str| u16::try_from(unicode_width::UnicodeWidthStr::width(text)).unwrap_or(u16::MAX);
-    let start = line.x.saturating_add(width(before));
-    let end = start
-        .saturating_add(width(input.as_str()))
-        .min(line.x.saturating_add(line.width));
+}
+
+/// A field drawn as plain text, with no cursor of its own: the terminal's cursor goes
+/// where the input's is, and a selection shows in reverse. `before` is what precedes the
+/// value on `line`; a `masked` value is drawn as one mark per character.
+fn show_input(
+    frame: &mut Frame,
+    line: Rect,
+    before: &str,
+    input: &crate::widgets::text_input::TextInput,
+    masked: bool,
+) {
+    use unicode_width::UnicodeWidthStr;
+    let head: String = input.as_str().chars().take(input.cursor()).collect();
+    let (value, cursor) = if masked {
+        (input.len(), input.cursor())
+    } else {
+        (input.as_str().width(), head.width())
+    };
+    let start = before.width();
+    if input.is_selected() {
+        paint_reversed(frame, line, start, value);
+    }
+    let x = start + cursor;
+    if x < usize::from(line.width) {
+        frame.set_cursor_position(ratatui::layout::Position::new(line.x + x as u16, line.y));
+    }
+}
+
+/// Reverses `columns` cells of `line` from its column `from`, as far as the line goes.
+fn paint_reversed(frame: &mut Frame, line: Rect, from: usize, columns: usize) {
+    let cells = |count: usize| u16::try_from(count).unwrap_or(u16::MAX);
+    let start = line.x.saturating_add(cells(from));
+    let end = start.saturating_add(cells(columns)).min(line.right());
     let buffer = frame.buffer_mut();
     for x in start..end {
         if let Some(cell) = buffer.cell_mut((x, line.y)) {
@@ -917,13 +946,13 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         return;
     }
     let entries = palette_entries(model);
-    let visible = filter_entries(&entries, &model.palette.query);
+    let visible = filter_entries(&entries, model.palette.query.as_str());
     let width = area.width.clamp(10, crate::palette::POPUP_MAX_WIDTH);
     let height = crate::palette::popup_height(area.height, visible.len());
     let x = area.x + area.width.saturating_sub(width) / 2;
     let y = area.y + area.height.saturating_sub(height) / 3;
     let popup = Rect::new(x, y, width, height);
-    let mut lines = vec![format!("> {}", model.palette.query)];
+    let mut lines = vec![format!("> {}", model.palette.query.as_str())];
     let rows = crate::palette::popup_list_rows(area.height, visible.len());
     let offset = scroll_to_selection(
         model.palette.selected,
@@ -1013,6 +1042,13 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     frame.render_widget(
         Paragraph::new(body).block(overlay_block(model, "Command Palette")),
         popup,
+    );
+    show_input(
+        frame,
+        crate::mouse::line_rect(popup_inner(popup), 0),
+        "> ",
+        &model.palette.query,
+        false,
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, _, rect| {

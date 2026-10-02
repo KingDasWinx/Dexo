@@ -625,7 +625,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::PaletteQuery(query) => {
-            model.palette.query = query;
+            model.palette.query.set_text(query);
             model.palette.selected = 0;
             model.palette.offset = 0;
             Vec::new()
@@ -4374,19 +4374,17 @@ fn handle_palette_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             move_palette_selection(model, 1);
             Vec::new()
         }
-        KeyCode::Backspace => {
-            model.palette.query.pop();
-            model.palette.selected = 0;
-            model.palette.offset = 0;
+        // The query edits like any input: Ctrl+A selects it, the word keys work, and
+        // a letter typed with Ctrl is never text.
+        _ => {
+            let before = model.palette.query.as_str().to_string();
+            model.palette.query.handle_key(key);
+            if model.palette.query.as_str() != before {
+                model.palette.selected = 0;
+                model.palette.offset = 0;
+            }
             Vec::new()
         }
-        KeyCode::Char(ch) if key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT => {
-            model.palette.query.push(ch);
-            model.palette.selected = 0;
-            model.palette.offset = 0;
-            Vec::new()
-        }
-        _ => Vec::new(),
     }
 }
 
@@ -5062,7 +5060,7 @@ fn open_palette(model: &mut Model) {
 fn move_palette_selection(model: &mut Model, delta: isize) {
     let count = crate::palette::filter_entries(
         &crate::palette::palette_entries(model),
-        &model.palette.query,
+        model.palette.query.as_str(),
     )
     .len();
     if count == 0 {
@@ -9721,7 +9719,7 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
 
 fn palette_select(model: &mut Model) -> Vec<Effect> {
     let entries = crate::palette::palette_entries(model);
-    let visible = crate::palette::filter_entries(&entries, &model.palette.query);
+    let visible = crate::palette::filter_entries(&entries, model.palette.query.as_str());
     let Some(entry) = visible.get(model.palette.selected) else {
         return Vec::new();
     };

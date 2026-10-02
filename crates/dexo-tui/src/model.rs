@@ -107,7 +107,7 @@ pub struct ConnectionStatus {
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct PaletteState {
     pub open: bool,
-    pub query: String,
+    pub query: crate::widgets::text_input::TextInput,
     pub selected: usize,
     pub offset: usize,
     pub origin_focus: Option<Focus>,
