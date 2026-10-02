@@ -83,8 +83,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if answered_connect && ready {
                 // Replaces the "Connecting…" toast; leaving that one up would read as a
                 // dial that never finished. A warning from startup outranks it.
-                match model.startup_warning.take() {
-                    Some(warning) => model.messages.warn(warning),
+                match model
+                    .startup_warning
+                    .take_if(|(connection, _)| *connection == name)
+                {
+                    Some((_, warning)) => model.messages.warn(warning),
                     None => model.messages.info(format!("Connected to {name}")),
                 }
             }
@@ -8422,6 +8425,42 @@ mod tests {
         assert!(model.connections.temporary.is_empty());
         assert_eq!(model.connection.name, "shop");
         assert_eq!(model.connections.sessions[0].connection, "shop");
+    }
+
+    /// The warning a temporary connection was opened with is said when that one
+    /// connects, not when another does first.
+    #[test]
+    fn a_startup_warning_waits_for_its_own_connection() {
+        let mut model = Model {
+            startup_warning: Some(("demo".into(), "the URL's password shows".into())),
+            ..Model::default()
+        };
+        let connected = |model: &mut Model, name: &str, token: u64| {
+            model.connections.pending_connect = Some(token);
+            update(
+                model,
+                Action::ConnectionChanged {
+                    name: name.into(),
+                    ready: true,
+                    environment: "local".into(),
+                    session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(
+                        token.into(),
+                    ))),
+                    generation: token,
+                    token,
+                    read_only: false,
+                    driver: "sqlite".into(),
+                },
+            );
+            model
+                .messages
+                .last()
+                .map(|last| last.message.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(connected(&mut model, "prod", 1), "Connected to prod");
+        assert_eq!(connected(&mut model, "demo", 2), "the URL's password shows");
+        assert!(model.startup_warning.is_none());
     }
 
     /// Going back to an open session of another driver brings its SQL dialect back.

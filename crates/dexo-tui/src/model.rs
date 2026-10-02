@@ -1719,7 +1719,8 @@ pub struct Model {
     /// Vim mode's state, when the keymap profile is `vim`.
     pub vim: crate::screens::vim::VimState,
     /// Said once the startup connection is ready, where "Connected" would cover it.
-    pub startup_warning: Option<String>,
+    /// With the name of the connection it is about: only its connect says it.
+    pub startup_warning: Option<(String, String)>,
     /// `\x`: the grid shows each row as a record, one field per line, as psql's
     /// expanded display does. For the session, not one result.
     pub expanded_records: bool,
