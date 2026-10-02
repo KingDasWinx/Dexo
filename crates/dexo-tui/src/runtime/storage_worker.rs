@@ -51,6 +51,12 @@ pub enum StorageCommand {
     ListSnippets {
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_sql::Snippet>>>,
     },
+    /// The agents' writes waiting for approval, asked every two seconds on this open
+    /// connection rather than a new one each time.
+    WaitingApprovals {
+        now: i64,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_app::mcp::Approval>>>,
+    },
     /// Names matching `query` from the captured catalog snapshot. The in-memory catalog
     /// only holds what the user expanded in the sidebar; the snapshot holds everything
     /// the connection ever reported, and reading it is a disk hit that has no business
@@ -209,6 +215,10 @@ impl StorageWorker {
                                     .collect()
                             });
                             let _ = reply.send(result);
+                        }
+                        StorageCommand::WaitingApprovals { now, reply } => {
+                            let _ =
+                                reply.send(dexo_storage::waiting_approvals(db.connection(), now));
                         }
                         StorageCommand::DeleteSnippet { id } => {
                             let repo = SnippetRepository::new(db.connection());
@@ -425,6 +435,16 @@ impl StorageWorker {
     pub async fn list_snippets(&self) -> anyhow::Result<Vec<dexo_sql::Snippet>> {
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.tx.send(StorageCommand::ListSnippets { reply })?;
+        receive.await?
+    }
+
+    pub async fn waiting_approvals(
+        &self,
+        now: i64,
+    ) -> anyhow::Result<Vec<dexo_app::mcp::Approval>> {
+        let (reply, receive) = tokio::sync::oneshot::channel();
+        self.tx
+            .send(StorageCommand::WaitingApprovals { now, reply })?;
         receive.await?
     }
 

@@ -63,6 +63,15 @@ pub fn touch(conn: &Connection, id: Uuid, now: i64) -> anyhow::Result<()> {
     Ok(())
 }
 
+pub fn any_pending(conn: &Connection) -> anyhow::Result<bool> {
+    conn.query_row(
+        "SELECT EXISTS (SELECT 1 FROM mcp_approvals WHERE decision = 'pending')",
+        [],
+        |row| row.get(0),
+    )
+    .map_err(Into::into)
+}
+
 pub fn pending(conn: &Connection, now: i64) -> anyhow::Result<Vec<Approval>> {
     let mut stmt = conn.prepare(&format!(
         "{SELECT} WHERE decision = 'pending' AND deadline > ?1 ORDER BY created_at"

@@ -15,6 +15,16 @@ use dexo_app::mcp::operation::{OperationRecord, OperationState, SideEffect};
 use rusqlite::Connection;
 use uuid::Uuid;
 
+/// The requests waiting at `now`, for a screen that asks every few seconds: nothing is
+/// written unless one is pending, so someone who never used MCP pays one indexed read.
+pub fn waiting_approvals(conn: &Connection, now: i64) -> anyhow::Result<Vec<Approval>> {
+    if !approval_repo::any_pending(conn)? {
+        return Ok(Vec::new());
+    }
+    approval_repo::sweep(conn, now)?;
+    approval_repo::pending(conn, now)
+}
+
 pub struct SqliteGrantLedger {
     conn: Mutex<Connection>,
 }
@@ -199,6 +209,41 @@ mod tests {
     use dexo_app::mcp::ledger::GrantLedger;
     use dexo_app::mcp::profile::McpProfile;
     use dexo_app::mcp::selector::{Effect, SelectorRule};
+
+    /// The TUI asks every two seconds: with nothing pending it writes nothing, and with
+    /// a request pending it sweeps and lists.
+    #[test]
+    fn waiting_approvals_writes_nothing_when_nothing_waits() {
+        use dexo_app::mcp::approval::{Approval, ApprovalDecision};
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let changes = |conn: &rusqlite::Connection| -> i64 {
+            conn.query_row("SELECT total_changes()", [], |row| row.get(0))
+                .unwrap()
+        };
+        let arguments = serde_json::json!({"sql": "DELETE FROM orders"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let decided = Approval {
+            decision: ApprovalDecision::Denied,
+            ..Approval::pending("p", "c", "data_execute_sql", &arguments, vec![], 0, 10)
+        };
+        super::approval_repo::insert(&conn, &decided).unwrap();
+        let before = changes(&conn);
+        assert!(
+            super::waiting_approvals(&conn, 1_000_000)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(changes(&conn), before);
+
+        let waiting = Approval::pending("p", "c", "data_execute_sql", &arguments, vec![], 100, 60);
+        super::approval_repo::insert(&conn, &waiting).unwrap();
+        let listed = super::waiting_approvals(&conn, 101).unwrap();
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].id, waiting.id);
+    }
 
     #[test]
     fn consume_is_transactional_one_use() {

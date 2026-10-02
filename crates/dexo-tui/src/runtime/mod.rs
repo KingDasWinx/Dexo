@@ -2151,16 +2151,15 @@ impl WorkbenchRuntime {
         self.load_mcp_audit().await;
     }
 
+    /// Asked every two seconds, on the storage worker's open connection: it opened a
+    /// database and wrote to it each time, for people who never use MCP too.
     async fn check_approvals(&self) {
-        use dexo_app::mcp::GrantLedger;
-        let Ok(paths) = AppPaths::discover() else {
+        let Some(storage) = &self.storage else {
             return;
         };
-        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
-            return;
-        };
-        let pending = ledger.pending_approvals(unix_now());
-        self.emit(Action::ApprovalsWaiting(pending)).await;
+        if let Ok(pending) = storage.waiting_approvals(unix_now()).await {
+            self.emit(Action::ApprovalsWaiting(pending)).await;
+        }
     }
 
     async fn set_mcp_profile_enabled(&self, name: String, enabled: bool) {

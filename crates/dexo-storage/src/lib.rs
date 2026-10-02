@@ -29,7 +29,7 @@ pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_exte
 pub use explain_plan::{ExplainPlanRepository, SavedExplainPlan};
 pub use history::HistoryRepository;
 pub use layout::{LAYOUT_VERSION, LayoutRepository, Preferences, WorkbenchLayout};
-pub use mcp::SqliteGrantLedger;
+pub use mcp::{SqliteGrantLedger, waiting_approvals};
 pub use mcp_profile::McpProfileRepository;
 pub use migrations::{
     LATEST_SCHEMA_VERSION, MIGRATION_1, MIGRATION_2, MIGRATION_3, MIGRATION_4, MIGRATION_5,
