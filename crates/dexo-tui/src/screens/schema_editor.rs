@@ -1,3 +1,4 @@
+use crate::widgets::form::{FooterFocus, footer_line};
 use crate::widgets::text_input::TextInput;
 use dexo_app::schema::{Confirmation, DdlPreview};
 use dexo_driver_api::{
@@ -45,8 +46,13 @@ pub struct DdlPreviewState {
     pub sql: String,
     pub risk: String,
     pub confirmation: Confirmation,
-    pub typed: String,
+    /// The name typed to confirm a destructive change.
+    pub typed: TextInput,
     pub confirmed: bool,
+    /// The typed name, or one of the two buttons under it.
+    pub footer: FooterFocus,
+    /// Why Apply did nothing.
+    pub error: Option<String>,
 }
 
 impl DdlPreviewState {
@@ -66,22 +72,52 @@ impl DdlPreviewState {
                 preview.risk.destructive, preview.risk.lock_level
             ),
             confirmation: preview.confirmation.clone(),
-            typed: String::new(),
+            typed: TextInput::default(),
             confirmed: false,
+            // With a name to type the input has the focus; with none, Apply has it, as
+            // Enter applied before there were buttons.
+            footer: if matches!(preview.confirmation, Confirmation::TypeTarget(_)) {
+                FooterFocus::Input
+            } else {
+                FooterFocus::Submit
+            },
+            error: None,
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
-        vec![
+    pub fn needs_typing(&self) -> bool {
+        matches!(self.confirmation, Confirmation::TypeTarget(_))
+    }
+
+    /// The preview in at most `rows` lines. The SQL gives way first: the name to type
+    /// and the buttons always show.
+    pub fn lines(&self, rows: usize) -> Vec<String> {
+        let mut tail = vec![String::new()];
+        if let Confirmation::TypeTarget(expected) = &self.confirmation {
+            tail.push(format!("Type {expected} to apply this."));
+            tail.push(
+                self.typed
+                    .inline_line("name: ", self.footer == FooterFocus::Input),
+            );
+        }
+        if let Some(error) = &self.error {
+            tail.push(error.clone());
+        }
+        tail.push(footer_line("Apply", self.footer));
+        let mut lines = vec![
             format!("target: {}", self.target),
             format!("risk: {}", self.risk),
-            self.sql.clone(),
-            if matches!(self.confirmation, Confirmation::TypeTarget(_)) && !self.confirmed {
-                "type target to confirm".into()
-            } else {
-                "ready".into()
-            },
-        ]
+        ];
+        lines.extend(self.sql.lines().map(str::to_string));
+        let room = rows.saturating_sub(tail.len());
+        if lines.len() > room {
+            lines.truncate(room.saturating_sub(1));
+            if room > 0 {
+                lines.push("…".into());
+            }
+        }
+        lines.extend(tail);
+        lines
     }
 }
 
@@ -349,7 +385,7 @@ impl SchemaEditor {
             return;
         };
         if let Confirmation::TypeTarget(expected) = &preview.confirmation {
-            preview.confirmed = preview.typed == *expected;
+            preview.confirmed = preview.typed.as_str() == expected;
         } else {
             preview.confirmed = true;
         }
@@ -491,6 +527,97 @@ mod tests {
         };
         update(&mut model, Action::OpenDdlPreview);
         assert!(model.schema_editor.preview.is_some());
+    }
+
+    /// The preview after the form had no Submit and Cancel, and what was typed to
+    /// confirm a destructive change never showed.
+    #[test]
+    fn the_ddl_preview_has_buttons_and_shows_the_typed_name() {
+        use super::DdlPreviewState;
+        use crate::widgets::form::FooterFocus;
+        use crossterm::event::{
+            KeyCode, KeyEvent, KeyModifiers, MouseButton, MouseEvent, MouseEventKind,
+        };
+        use dexo_app::schema::Confirmation;
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let preview = DdlPreviewState {
+            target: "public.orders".into(),
+            sql: "DROP TABLE public.orders".into(),
+            risk: "destructive=true lock=None".into(),
+            confirmation: Confirmation::TypeTarget("public.orders".into()),
+            typed: Default::default(),
+            confirmed: false,
+            footer: FooterFocus::Input,
+            error: None,
+        };
+        let mut model = Model::default();
+        model.apply_size(100, 30);
+        model.schema_editor.preview = Some(preview.clone());
+        for ch in "public.ord".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        let screen = crate::render::render_to_string(&model, 100, 30);
+        assert!(screen.contains("name: public.ord█"), "{screen}");
+        assert!(screen.contains(" [Apply]   [Cancel]"), "{screen}");
+        // Ctrl+A selects the name, in reverse, and typing replaces it.
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('a'), KeyModifiers::CONTROL)),
+        );
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        let frame = terminal
+            .draw(|frame| crate::render::render(frame, &model, &mut hits))
+            .unwrap();
+        let reversed: String = frame
+            .buffer
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(ratatui::style::Modifier::REVERSED))
+            .map(|cell| cell.symbol())
+            .collect();
+        assert!(reversed.contains("public.ord"), "{reversed:?}");
+        for ch in "public.ord".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        // A name that does not match applies nothing, and says so.
+        update(&mut model, key(KeyCode::Enter));
+        let current = model.schema_editor.preview.as_ref().expect("still open");
+        assert!(current.error.is_some());
+        for ch in "ers".chars() {
+            update(&mut model, key(KeyCode::Char(ch)));
+        }
+        assert!(model.schema_editor.preview.as_ref().unwrap().confirmed);
+
+        // The arrows walk to the buttons, and Enter on Cancel cancels.
+        update(&mut model, key(KeyCode::Down));
+        update(&mut model, key(KeyCode::Right));
+        let current = model.schema_editor.preview.as_ref().unwrap();
+        assert_eq!(current.footer, FooterFocus::Cancel);
+        update(&mut model, key(KeyCode::Enter));
+        assert!(model.schema_editor.preview.is_none());
+
+        // And Cancel takes a click.
+        model.schema_editor.preview = Some(preview);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| crate::render::render(frame, &model, &mut hits))
+            .unwrap();
+        model.hits = hits;
+        let (column, row) = model.hits.center(crate::mouse::HitTarget::FooterCancel);
+        update(
+            &mut model,
+            Action::Mouse(MouseEvent {
+                kind: MouseEventKind::Down(MouseButton::Left),
+                column,
+                row,
+                modifiers: KeyModifiers::NONE,
+            }),
+        );
+        assert!(model.schema_editor.preview.is_none());
     }
 
     /// The form took Tab, Enter and Esc and nothing else: nothing typed reached a field,

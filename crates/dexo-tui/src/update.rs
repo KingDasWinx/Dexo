@@ -2960,11 +2960,15 @@ fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(
-            HitTarget::Button(HitButton::Apply | HitButton::Confirm) | HitTarget::FooterSubmit,
-        ) => apply_ddl(model),
-        Some(HitTarget::Button(HitButton::Cancel)) => {
+        Some(HitTarget::FooterSubmit) => apply_ddl(model),
+        Some(HitTarget::FooterCancel) => {
             model.schema_editor.preview = None;
+            Vec::new()
+        }
+        Some(HitTarget::FormField(0)) => {
+            if let Some(preview) = model.schema_editor.preview.as_mut() {
+                preview.footer = crate::widgets::form::FooterFocus::Input;
+            }
             Vec::new()
         }
         _ => Vec::new(),
@@ -3886,28 +3890,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         return handle_admin_key(model, key);
     }
     if model.schema_editor.preview.is_some() {
-        return match key.code {
-            KeyCode::Esc => {
-                model.schema_editor.preview = None;
-                Vec::new()
-            }
-            KeyCode::Enter => apply_ddl(model),
-            KeyCode::Char(ch) => {
-                if let Some(preview) = &mut model.schema_editor.preview {
-                    preview.typed.push(ch);
-                    model.schema_editor.confirm_typed();
-                }
-                Vec::new()
-            }
-            KeyCode::Backspace => {
-                if let Some(preview) = &mut model.schema_editor.preview {
-                    preview.typed.pop();
-                    model.schema_editor.confirm_typed();
-                }
-                Vec::new()
-            }
-            _ => Vec::new(),
-        };
+        return ddl_preview_key(model, key);
     }
     if model.schema_diff.open {
         return match key.code {
@@ -7930,22 +7913,52 @@ fn open_ddl_preview(model: &mut Model) -> Vec<Effect> {
     }]
 }
 
+/// The DDL preview answers like every dialog: Esc cancels, the arrows walk the name to
+/// type and the two buttons, Enter applies unless Cancel has the focus. With no name to
+/// type, the walk stays on the buttons.
+fn ddl_preview_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::widgets::form::{FooterFocus, FooterKey, confirm_key, footer_key};
+    let Some(preview) = model.schema_editor.preview.as_mut() else {
+        return Vec::new();
+    };
+    let outcome = if preview.needs_typing() {
+        footer_key(&mut preview.footer, &key)
+    } else {
+        confirm_key(&mut preview.footer, &key)
+    };
+    match outcome {
+        FooterKey::Submit => apply_ddl(model),
+        FooterKey::Cancel => {
+            model.schema_editor.preview = None;
+            Vec::new()
+        }
+        FooterKey::Moved => Vec::new(),
+        FooterKey::Pass => {
+            if preview.needs_typing()
+                && preview.footer == FooterFocus::Input
+                && preview.typed.handle_key(key)
+            {
+                preview.error = None;
+                model.schema_editor.confirm_typed();
+            }
+            Vec::new()
+        }
+    }
+}
+
 fn apply_ddl(model: &mut Model) -> Vec<Effect> {
     if model.connection.read_only {
         model.messages.warn("connection is read-only".into());
         return Vec::new();
     }
-    let Some(preview) = &model.schema_editor.preview else {
+    let Some(preview) = &mut model.schema_editor.preview else {
         return Vec::new();
     };
-    if matches!(
-        preview.confirmation,
-        dexo_app::schema::Confirmation::TypeTarget(_)
-    ) && !preview.confirmed
-    {
+    if preview.needs_typing() && !preview.confirmed {
+        preview.error = Some("The name does not match; nothing was applied.".into());
         return Vec::new();
     }
-    let typed = preview.typed.clone();
+    let typed = preview.typed.as_str().to_string();
     let Ok(change) = model.schema_editor.to_change() else {
         return Vec::new();
     };

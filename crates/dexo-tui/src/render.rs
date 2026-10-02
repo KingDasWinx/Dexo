@@ -1434,21 +1434,25 @@ fn render_ddl_preview(
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let popup = centered(area, 72, 14);
-    let lines = crate::modals::preview_lines(preview);
+    let room = popup_inner(centered(area, 72, area.height.saturating_sub(2).min(20))).height;
+    let lines = crate::modals::preview_lines(preview, usize::from(room));
+    let popup = centered(area, 72, lines.len() as u16 + 2);
     paint_popup(
         frame,
         model,
         popup,
-        Block::bordered().title("DDL preview"),
+        overlay_block(model, "DDL preview"),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    let typing = preview.footer == crate::widgets::form::FooterFocus::Input;
     for_popup_lines(popup, &lines, |_, line, rect| {
-        if line == "ready" {
-            hits.register(HitTarget::Button(HitButton::Apply), rect);
-        } else if line.contains("confirm") {
-            hits.register(HitTarget::Button(HitButton::Confirm), rect);
+        if preview.needs_typing() && line.starts_with("name: ") {
+            paint_selection(frame, rect, "name: ", &preview.typed, typing);
+            hits.register(HitTarget::FormField(0), rect);
+        }
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Apply");
         }
     });
 }
