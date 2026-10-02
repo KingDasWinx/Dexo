@@ -55,7 +55,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`
 - [x] **PC-31** `COSMETIC` Single-line inputs never scroll horizontally (palette query, New document, Rename, Save, name field)
 - [x] **PC-32** `COSMETIC` Narrow status bar shows lower-case `ctrl+p  F1` before `Alt+1 connections  Ctrl+P commands`
-- [ ] **PC-39** `COSMETIC` Diagnostics export: file name field starts empty, bundle is a ZIP whatever the name, log tail is empty, key=value text
+- [x] **PC-39** `COSMETIC` Diagnostics export: file name field starts empty, bundle is a ZIP whatever the name, log tail is empty, key=value text
 
 ## ED: SQL editor
 

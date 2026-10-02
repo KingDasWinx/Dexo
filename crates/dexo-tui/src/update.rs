@@ -2007,6 +2007,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::DiagnosticsWritten { path } => {
             model.diagnostics.writing = false;
+            model.messages.info(format!(
+                "Diagnostics saved to {} (a zip of text files; no passwords in it).",
+                path.display()
+            ));
             model.diagnostics.path = Some(path);
             model.diagnostics.error = None;
             Vec::new()
@@ -12467,9 +12471,22 @@ pub(crate) fn open_text_document(
 fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::DiagnosticBundle {
     dexo_app::diagnostic_service::DiagnosticBundle::assemble(
         env!("CARGO_PKG_VERSION").into(),
-        format!("{:?}", model.capabilities),
         format!(
-            "mode={} accent={} mouse={}",
+            "colors: {}\nunicode: {}\nmouse: {}",
+            format!("{:?}", model.capabilities.color_depth).to_lowercase(),
+            if model.capabilities.unicode {
+                "yes"
+            } else {
+                "no"
+            },
+            if model.capabilities.mouse {
+                "yes"
+            } else {
+                "no"
+            },
+        ),
+        format!(
+            "mode = \"{}\"\naccent = \"{}\"\nmouse = {}\n",
             model.settings.mode, model.settings.accent, model.mouse
         ),
         String::new(),
@@ -12498,6 +12515,10 @@ fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePi
     }
     if mode == crate::screens::file_picker::FilePickerMode::ConfigExport {
         model.file_picker.name.set_text("dexo-config.toml");
+    }
+    if mode == crate::screens::file_picker::FilePickerMode::Diagnostics {
+        // The bundle is a zip whatever it is called: the name says so.
+        model.file_picker.name.set_text("dexo-diagnostics.zip");
     }
     if mode == crate::screens::file_picker::FilePickerMode::Save {
         // The picker only opens for a document that has never been saved, so the file
