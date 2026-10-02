@@ -670,7 +670,11 @@ pub struct ScriptRequest {
     /// How each statement is read, to tell a read from a write.
     pub dialect: dexo_sql::Dialect,
     pub policy: ScriptPolicy,
+    /// Values bound in order to every statement: Dexo's own `$n` in a re-run.
     pub parameters: Vec<DbValue>,
+    /// The editor's `:name` values: each statement is rewritten to the dialect's
+    /// placeholders and given only the values it names.
+    pub named: Vec<(String, DbValue)>,
     pub timeout: std::time::Duration,
     /// Dexo's own re-run around text from the bars: it runs where it cannot write (see
     /// `QueryRequest::read_only`).

@@ -57,6 +57,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
             dialect: dexo_app::dialect_for_driver(driver),
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
+            named: Vec::new(),
             timeout: Duration::from_secs(10),
             read_only: false,
         }))
@@ -79,6 +80,7 @@ async fn run_driver(driver: &str, endpoint: &str, sleep_sql: &str) {
             dialect: dexo_app::dialect_for_driver(driver),
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
+            named: Vec::new(),
             timeout: Duration::from_secs(30),
             read_only: false,
         }))

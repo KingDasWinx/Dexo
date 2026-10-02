@@ -313,6 +313,7 @@ fn script_request(sql: &str) -> ScriptRequest {
         dialect: dexo_sql::Dialect::Postgres,
         policy: ScriptPolicy::StopOnError,
         parameters: Vec::new(),
+        named: Vec::new(),
         timeout: std::time::Duration::from_secs(5),
         read_only: false,
     }

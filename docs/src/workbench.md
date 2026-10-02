@@ -54,6 +54,8 @@ Command ids are the palette's. A chord that starts a longer one where both apply
 
 The editor underlines what is wrong as you type: a statement that does not parse, and, once the catalog has been read whole, a table or a `alias.column` the database does not have -- never one it simply has not loaded. With the cursor on an underline the status line says what it is. When a run fails and the server says where, that spot is underlined and the cursor goes to it.
 
+A `:name` in a statement asks for its value before the run. Each statement goes to the server with the database's own placeholders (`$1` on Postgres and DuckDB, `?` on MySQL and MariaDB, `?1` on SQLite) and only the values it names.
+
 Lines starting with a backslash are psql's commands, answered by Dexo from the catalog on every database and never sent to the server: `\dt`, `\dv`, `\di`, `\dn` and `\df` with an optional pattern (`*` and `?` wildcards), `\d name` for a table's columns, keys and indexes, `\l` for databases, `\x` for one field per line, and `\?` for the list.
 
 ### Vim mode

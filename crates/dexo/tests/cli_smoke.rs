@@ -312,3 +312,36 @@ fn completion_prints_a_script_with_every_subcommand() {
         );
     }
 }
+
+/// `--param name=value` binds `:name` by its name, whatever order the flags come in.
+#[test]
+fn params_bind_by_name() {
+    let dir = tempfile::tempdir().unwrap();
+    let dexo = || {
+        let mut command = Command::cargo_bin("dexo").unwrap();
+        command
+            .env("DEXO_DATA_HOME", dir.path().join("data"))
+            .env("HOME", dir.path());
+        command
+    };
+    dexo()
+        .args([
+            "connections",
+            "add",
+            "--name",
+            "lite",
+            "--driver",
+            "sqlite",
+            "--path",
+        ])
+        .arg(dir.path().join("lite.db"))
+        .assert()
+        .success();
+    dexo()
+        .args(["query", "--connection", "lite", "--format", "jsonl"])
+        .args(["--sql", "select :b as b, :a as a, :b as again"])
+        .args(["--param", "a=1", "--param", "b=2"])
+        .assert()
+        .success()
+        .stdout("{\"a\":\"1\",\"again\":\"2\",\"b\":\"2\"}\n");
+}

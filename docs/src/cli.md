@@ -22,7 +22,7 @@ dexo doctor --json
 
 `--non-interactive` never prompts. Destructive actions need an explicit confirm flag.
 
-`query`, `run`, `export`, `import` and `explain --analyze` hold the SQL to the connection's policy, as the editor does, before anything is dialled: a read-only connection refuses every statement that is not a read (and `import`, and an `EXPLAIN ANALYZE` of one); a production connection runs no write until `--confirm-target <connection>` names it; elsewhere a destructive statement -- `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, `ALTER … DROP` -- waits for `--confirm` when the connection asks before them. Nothing is asked at the terminal: what is not confirmed is not run, and the error lists the statements and the flag. `export` runs only reads, and `sessions cancel` and `sessions terminate` change nothing on a read-only connection.
+`query`, `run`, `export`, `import` and `explain --analyze` hold the SQL to the connection's policy, as the editor does, before anything is dialled: a read-only connection refuses every statement that is not a read (and `import`, and an `EXPLAIN ANALYZE` of one); a production connection runs no write until `--confirm-target <connection>` names it; elsewhere a destructive statement -- `DELETE` or `UPDATE` without `WHERE`, `DROP`, `TRUNCATE`, `ALTER … DROP` -- waits for `--confirm` when the connection asks before them. Nothing is asked at the terminal: what is not confirmed is not run, and the error lists the statements and the flag. `--param name=value` binds a `:name` in the SQL by its name (`$1` or `?` take the values in the order given). `export` runs only reads, and `sessions cancel` and `sessions terminate` change nothing on a read-only connection.
 
 ## Language server
 

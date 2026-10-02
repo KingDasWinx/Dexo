@@ -5850,11 +5850,12 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         statements,
         dialect,
         policy: model.script_policy,
-        parameters: model
+        parameters: Vec::new(),
+        named: model
             .editor
             .parameters
             .iter()
-            .map(|parameter| parameter.value.clone())
+            .map(|parameter| (parameter.name.clone(), parameter.value.clone()))
             .collect(),
         timeout: std::time::Duration::from_secs(30),
         read_only: false,
@@ -7052,6 +7053,7 @@ fn start_derived_script(model: &mut Model, sql: String, parameters: Vec<DbValue>
         dialect: crate::screens::editor::editor_dialect(model),
         policy: model.script_policy,
         parameters,
+        named: Vec::new(),
         timeout: std::time::Duration::from_secs(30),
         read_only: true,
     })]

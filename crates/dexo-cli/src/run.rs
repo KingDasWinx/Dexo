@@ -1101,7 +1101,7 @@ async fn execute_script(
     connection: String,
     sql: String,
     confirmed: Confirmed,
-    parameters: Vec<DbValue>,
+    parameters: Vec<(String, DbValue)>,
     policy: ScriptPolicy,
 ) -> anyhow::Result<Vec<Result<Vec<QueryEvent>, AppError>>> {
     let paths = AppPaths::discover()?;
@@ -1383,12 +1383,14 @@ async fn admin_action(
         .map_err(map_driver_error)?)
 }
 
-fn parse_params(param: Vec<String>) -> anyhow::Result<Vec<DbValue>> {
+/// `name=value` pairs: a `:name` in the SQL takes its value by name; `$1` or `?` take
+/// them in the order given.
+fn parse_params(param: Vec<String>) -> anyhow::Result<Vec<(String, DbValue)>> {
     param
         .into_iter()
         .map(|item| {
             item.split_once('=')
-                .map(|(_, value)| DbValue::Text(value.to_string()))
+                .map(|(name, value)| (name.to_string(), DbValue::Text(value.to_string())))
                 .ok_or_else(|| anyhow::anyhow!("--param must be name=value"))
         })
         .collect()

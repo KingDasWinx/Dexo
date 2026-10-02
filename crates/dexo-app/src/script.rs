@@ -114,7 +114,7 @@ impl QueryService {
         policy: ScriptPolicy,
         row_limit: u64,
         read_only: bool,
-        parameters: Vec<dexo_driver_api::DbValue>,
+        parameters: Vec<(String, dexo_driver_api::DbValue)>,
         timeout: std::time::Duration,
     ) -> Vec<Result<Vec<QueryEvent>, AppError>> {
         let statements = statements_for_dialect(sql, target, cursor, selection, dialect);
@@ -123,6 +123,8 @@ impl QueryService {
             let effect = split_statements_in(&statement, dialect)
                 .first()
                 .map_or(StatementEffect::Unknown, |span| span.effect);
+            // `:name` is bound by name, each statement taking only its own values.
+            let (statement, values) = dexo_sql::bind_named(&statement, dialect, &parameters);
             let mut request = if effect == StatementEffect::ReadOnly {
                 QueryRequest::read(statement, row_limit)
             } else {
@@ -133,7 +135,7 @@ impl QueryService {
             request.row_limit = row_limit;
             request.read_only = read_only;
             request.timeout = timeout;
-            request.parameters = parameters.clone();
+            request.parameters = values;
             let result = self.collect(Arc::clone(&session), request).await;
             let failed = result.is_err();
             out.push(result);

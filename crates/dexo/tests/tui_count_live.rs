@@ -73,6 +73,7 @@ async fn a_count_answers_beside_the_session_and_stops_when_cancelled() {
             dialect: dexo_sql::Dialect::Sqlite,
             policy: ScriptPolicy::StopOnError,
             parameters: Vec::new(),
+            named: Vec::new(),
             timeout: Duration::from_secs(10),
             read_only: false,
         })

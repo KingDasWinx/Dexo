@@ -46,15 +46,20 @@ pub async fn run_script(
             .unwrap_or(StatementEffect::Unknown);
         let mutating = !matches!(effect, StatementEffect::ReadOnly);
         // ponytail: mutating statements run once; network failure never retries them.
-        let mut query_request = if mutating {
-            QueryRequest::write(sql.clone())
+        let (text, parameters) = if request.named.is_empty() {
+            (sql.clone(), request.parameters.clone())
         } else {
-            QueryRequest::read(sql.clone(), 10_000)
+            dexo_sql::bind_named(sql, request.dialect, &request.named)
+        };
+        let mut query_request = if mutating {
+            QueryRequest::write(text)
+        } else {
+            QueryRequest::read(text, 10_000)
         };
         // Whatever it is taken for, what it returns stops at the grid's limit: a
         // `with recursive` the splitter cannot read went out as a write with none.
         query_request.row_limit = 10_000;
-        query_request.parameters = request.parameters.clone();
+        query_request.parameters = parameters;
         query_request.timeout = request.timeout;
         query_request.read_only = request.read_only;
         let timeout = if request.timeout == Duration::ZERO {
@@ -310,6 +315,7 @@ mod tests {
             dialect: dexo_sql::Dialect::Postgres,
             policy: dexo_app::ScriptPolicy::ContinueOnError,
             parameters: Vec::new(),
+            named: Vec::new(),
             timeout: std::time::Duration::from_secs(5),
             read_only: false,
         };
@@ -323,5 +329,73 @@ mod tests {
         .await;
         while actions.try_recv().is_ok() {}
         assert_eq!(*session.0.lock().unwrap(), [10_000, 10_000]);
+    }
+
+    #[derive(Default)]
+    struct Sent(Mutex<Vec<(String, Vec<dexo_driver_api::DbValue>)>>);
+
+    #[async_trait::async_trait]
+    impl Session for Sent {
+        fn capabilities(&self) -> &[CapabilityState] {
+            &[]
+        }
+
+        async fn execute(&self, request: QueryRequest) -> Result<QueryStream, DriverError> {
+            self.0
+                .lock()
+                .unwrap()
+                .push((request.sql.clone(), request.parameters.clone()));
+            let done: Vec<Result<QueryEvent, DriverError>> = vec![Ok(QueryEvent::Finished {
+                rows_affected: None,
+            })];
+            Ok(Box::pin(futures_util::stream::iter(done)))
+        }
+
+        async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
+            Ok(())
+        }
+
+        async fn close(self: Box<Self>) -> Result<(), DriverError> {
+            Ok(())
+        }
+    }
+
+    /// The editor's `:name` reached the server as typed, a syntax error on Postgres and
+    /// MySQL, and every statement of a script got every value. Each statement now goes
+    /// out with the dialect's placeholders and only the values it names.
+    #[tokio::test]
+    async fn each_statement_gets_the_values_it_names() {
+        use dexo_driver_api::DbValue;
+        let session = Arc::new(Sent::default());
+        let (action_tx, mut actions) = tokio::sync::mpsc::channel(64);
+        let request = crate::action::ScriptRequest {
+            key: crate::runtime::OperationKey::new(crate::runtime::OperationId::new(), "s", "d", 1),
+            statements: vec!["select * from t where id = :id".into(), "select 1".into()],
+            dialect: dexo_sql::Dialect::Postgres,
+            policy: dexo_app::ScriptPolicy::ContinueOnError,
+            parameters: Vec::new(),
+            named: vec![("id".into(), DbValue::I64(5))],
+            timeout: std::time::Duration::from_secs(5),
+            read_only: false,
+        };
+        super::run_script(
+            dexo_app::QueryService::new(Arc::new(dexo_runtime::TaskRegistry::default())),
+            Arc::clone(&session) as Arc<dyn Session>,
+            request,
+            action_tx,
+            Arc::new(tokio::sync::Mutex::new(None)),
+        )
+        .await;
+        while actions.try_recv().is_ok() {}
+        assert_eq!(
+            *session.0.lock().unwrap(),
+            [
+                (
+                    "select * from t where id = $1".to_string(),
+                    vec![DbValue::I64(5)]
+                ),
+                ("select 1".to_string(), Vec::new()),
+            ]
+        );
     }
 }

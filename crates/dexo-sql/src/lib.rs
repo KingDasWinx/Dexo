@@ -38,7 +38,7 @@ pub use format::{Indent, format_sql, format_sql_with};
 pub use lex::{Token, TokenKind, is_reserved, suppressed_at, tokenize};
 pub use navigation::definition_at;
 pub use order::{OrderKey, cycle_order, order_keys, order_text};
-pub use parameter::{HistoryEntry, HistoryPolicy, named_parameters};
+pub use parameter::{HistoryEntry, HistoryPolicy, bind_named, named_parameters};
 pub use parse::{Highlight, HighlightSpan, ParsedSql, ParserService};
 pub use snippet::{Expansion, Snippet, expand, expand_placeholders};
 pub use statement::{
