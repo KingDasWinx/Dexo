@@ -49,6 +49,20 @@ impl PostgresSession {
     }
 }
 
+/// Tells the server to stop the query the session is running, over the same TLS.
+async fn cancel_with(
+    token: &tokio_postgres::CancelToken,
+    tls: Option<crate::tls::NamedRustls>,
+) -> Result<(), DriverError> {
+    match tls {
+        Some(tls) => token.cancel_query(tls).await.map_err(map_error),
+        None => token
+            .cancel_query(tokio_postgres::NoTls)
+            .await
+            .map_err(map_error),
+    }
+}
+
 #[async_trait::async_trait]
 impl Session for PostgresSession {
     fn capabilities(&self) -> &[dexo_driver_api::CapabilityState] {
@@ -62,6 +76,8 @@ impl Session for PostgresSession {
         let sql = request.sql;
         let parameters = request.parameters;
         let timeout = request.timeout;
+        let token = client.cancel_token();
+        let tls = self.cancel.tls.clone();
         tokio::spawn(async move {
             let run = run_postgres_query(client, sql, parameters, row_limit, tx.clone());
             if timeout == Duration::ZERO {
@@ -71,6 +87,9 @@ impl Session for PostgresSession {
             match tokio::time::timeout(timeout, run).await {
                 Ok(()) => {}
                 Err(_) => {
+                    // Dropping the future stopped only the waiting: the server goes on
+                    // with the query until it is told to stop.
+                    let _ = cancel_with(&token, tls).await;
                     let _ = tx
                         .send(Err(DriverError::new(
                             DriverErrorCategory::Timeout,
@@ -86,14 +105,7 @@ impl Session for PostgresSession {
     }
 
     async fn cancel(&self, _query: QueryId) -> Result<(), DriverError> {
-        let token = self.client.cancel_token();
-        match &self.cancel.tls {
-            Some(tls) => token.cancel_query(tls.clone()).await.map_err(map_error),
-            None => token
-                .cancel_query(tokio_postgres::NoTls)
-                .await
-                .map_err(map_error),
-        }
+        cancel_with(&self.client.cancel_token(), self.cancel.tls.clone()).await
     }
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {

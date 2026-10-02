@@ -210,3 +210,54 @@ async fn drain(mut stream: dexo_driver_api::QueryStream) {
         event.unwrap();
     }
 }
+
+/// A query that times out is stopped on the server, not only no longer waited for.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Docker"]
+async fn a_timed_out_query_stops_on_the_server() {
+    let fixture = connect_postgres_fixture().await;
+    let mut request = QueryRequest::read("select pg_sleep(30) /* dexo-timeout-probe */", 1);
+    request.timeout = std::time::Duration::from_secs(1);
+    let events = collect_results(fixture.session.execute(request).await.unwrap()).await;
+    assert!(events.iter().any(|event| matches!(
+        event,
+        Err(error) if error.category() == dexo_driver_api::DriverErrorCategory::Timeout
+    )));
+    let watcher = PostgresFactory
+        .connect(ConnectRequest::new(
+            fixture._pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let stream = watcher
+            .execute(QueryRequest::read(
+                "select count(*)::text from pg_stat_activity \
+                 where query like '%dexo-timeout-' || 'probe%' and state = 'active' \
+                 and pid <> pg_backend_pid()",
+                1,
+            ))
+            .await
+            .unwrap();
+        let still = collect(stream)
+            .await
+            .into_iter()
+            .find_map(|event| match event {
+                QueryEvent::Rows(batch) => batch.rows.into_iter().next(),
+                _ => None,
+            });
+        if still == Some(vec![dexo_driver_api::DbValue::Text("0".into())]) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the query still runs on the server: {still:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}

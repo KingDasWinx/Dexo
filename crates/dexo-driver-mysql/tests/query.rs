@@ -341,3 +341,50 @@ async fn a_read_only_session_refuses_writes_on_the_server() {
         .unwrap();
     first_value(&mut stream).await;
 }
+
+/// A query that times out is stopped on the server, not only no longer waited for.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "requires Docker"]
+async fn a_timed_out_query_stops_on_the_server() {
+    let fixture = connect_mysql_fixture().await;
+    let mut request = QueryRequest::read("SELECT SLEEP(30) /* dexo-timeout-probe */", 1);
+    request.timeout = std::time::Duration::from_secs(1);
+    let mut stream = fixture.session.execute(request).await.unwrap();
+    let mut timed_out = false;
+    while let Some(event) = stream.next().await {
+        if let Err(error) = event {
+            timed_out |= error.category() == dexo_driver_api::DriverErrorCategory::Timeout;
+        }
+    }
+    assert!(timed_out);
+    let watcher = MysqlFactory
+        .connect(ConnectRequest::new(
+            fixture._pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let mut stream = watcher
+            .execute(QueryRequest::read(
+                "SELECT CAST(COUNT(*) AS CHAR) FROM information_schema.PROCESSLIST \
+                 WHERE INFO LIKE CONCAT('%dexo-timeout-', 'probe%') AND ID <> CONNECTION_ID()",
+                1,
+            ))
+            .await
+            .unwrap();
+        let still = first_value(&mut stream).await;
+        if still == DbValue::Text("0".into()) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the query still runs on the server: {still:?}"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+}

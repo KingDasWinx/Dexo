@@ -70,6 +70,15 @@ impl MysqlSession {
     }
 }
 
+/// Stops the query connection `conn_id` is running, from a connection of its own.
+async fn kill_query(opts: Opts, conn_id: u32) -> Result<(), DriverError> {
+    let mut killer = Conn::new(opts).await.map_err(map_error)?;
+    killer
+        .query_drop(format!("KILL QUERY {conn_id}"))
+        .await
+        .map_err(map_error)
+}
+
 #[async_trait::async_trait]
 impl Session for MysqlSession {
     fn capabilities(&self) -> &[dexo_driver_api::CapabilityState] {
@@ -82,6 +91,7 @@ impl Session for MysqlSession {
         let row_limit = request.row_limit;
         let parameters = request.parameters;
         let timeout = request.timeout;
+        let (opts, conn_id) = (self.opts.clone(), self.conn_id);
         let (tx, rx) = tokio::sync::mpsc::channel(4);
         tokio::spawn(async move {
             let run = run_mysql_query(conn, sql, parameters, row_limit, tx.clone());
@@ -90,6 +100,9 @@ impl Session for MysqlSession {
                 return;
             }
             if tokio::time::timeout(timeout, run).await.is_err() {
+                // Dropping the future stopped only the waiting: the server goes on with
+                // the query until it is told to stop.
+                let _ = kill_query(opts, conn_id).await;
                 let _ = tx
                     .send(Err(DriverError::new(
                         DriverErrorCategory::Timeout,
@@ -112,11 +125,7 @@ impl Session for MysqlSession {
         }
         // ponytail: cache conn_id at connect so KILL QUERY does not wait on the execute lock.
         // Ceiling: id is stale after a server-side reconnect. Store a generation when sessions reconnect.
-        let mut killer = Conn::new(self.opts.clone()).await.map_err(map_error)?;
-        killer
-            .query_drop(format!("KILL QUERY {}", self.conn_id))
-            .await
-            .map_err(map_error)
+        kill_query(self.opts.clone(), self.conn_id).await
     }
 
     async fn close(self: Box<Self>) -> Result<(), DriverError> {
