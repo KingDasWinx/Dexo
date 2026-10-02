@@ -21,6 +21,8 @@ pub enum HitTarget {
     DocumentTabScrollNext,
     Explorer,
     ExplorerNode(usize),
+    /// The arrow before a node's name: a click on it opens or closes the node.
+    ExplorerTwistie(usize),
     SidebarConnection(usize),
     Editor,
     PaneDivider(PaneEdge),

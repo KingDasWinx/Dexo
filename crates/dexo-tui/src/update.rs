@@ -877,6 +877,51 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             move_sidebar_selection(model, 1);
             Vec::new()
         }
+        Action::ExplorerFirst => {
+            move_sidebar_selection(model, i32::MIN / 2);
+            Vec::new()
+        }
+        Action::ExplorerLast => {
+            move_sidebar_selection(model, i32::MAX / 2);
+            Vec::new()
+        }
+        Action::ExplorerPageUp => {
+            move_sidebar_selection(model, -(explorer_visible_rows(model).max(2) as i32 - 1));
+            Vec::new()
+        }
+        Action::ExplorerPageDown => {
+            move_sidebar_selection(model, explorer_visible_rows(model).max(2) as i32 - 1);
+            Vec::new()
+        }
+        Action::ExplorerCollapse => {
+            let Some(id) = model.explorer.selected.clone() else {
+                return Vec::new();
+            };
+            if model
+                .explorer
+                .selected_node()
+                .is_some_and(|node| node.expanded)
+            {
+                model.explorer.collapse(&id);
+            } else if let Some(parent) = model.explorer.parent_of(&id) {
+                model.explorer.select(parent);
+                model.explorer.sync_scroll(explorer_visible_rows(model));
+            }
+            Vec::new()
+        }
+        Action::ExplorerOpen => {
+            let Some(node) = model.explorer.selected_node() else {
+                return Vec::new();
+            };
+            if !node.expanded {
+                return expand_selected_catalog(model);
+            }
+            if let Some(child) = node.children.first().map(|child| child.id.clone()) {
+                model.explorer.select(child);
+                model.explorer.sync_scroll(explorer_visible_rows(model));
+            }
+            Vec::new()
+        }
         Action::SelectDocument { index } => {
             if index < model.documents.len() {
                 model.document_tab_focus = crate::model::DocumentTabFocus::Document(index);
@@ -3972,6 +4017,19 @@ fn mouse_workbench(
             } else {
                 Vec::new()
             }
+        }
+        Some(HitTarget::ExplorerTwistie(index)) => {
+            crate::screens::editor::end_typing(model);
+            close_palette(model);
+            model.focus = Focus::Explorer;
+            model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
+            if index < model.explorer.visible_ids().len() {
+                model.explorer.select_visible(index);
+                if let Some(profile_index) = selected_connection_profile_index(model) {
+                    model.connections.selected_profile = profile_index;
+                }
+            }
+            expand_or_open_selected(model)
         }
         Some(HitTarget::SidebarConnection(index)) => {
             crate::screens::editor::end_typing(model);

@@ -233,6 +233,14 @@ pub enum Action {
     OpenDependencies,
     ExplorerUp,
     ExplorerDown,
+    ExplorerFirst,
+    ExplorerLast,
+    ExplorerPageUp,
+    ExplorerPageDown,
+    /// Left: close the node, or step to the one it belongs to.
+    ExplorerCollapse,
+    /// Right: open the node, or step into it.
+    ExplorerOpen,
     SelectDocument {
         index: usize,
     },

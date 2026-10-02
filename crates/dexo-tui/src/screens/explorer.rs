@@ -902,6 +902,20 @@ impl ExplorerState {
         self.selected = Some(selections[next].1.clone());
     }
 
+    /// The node `id` is listed under.
+    pub fn parent_of(&self, id: &ObjectId) -> Option<ObjectId> {
+        fn walk(nodes: &[ExplorerNode], id: &ObjectId) -> Option<ObjectId> {
+            nodes.iter().find_map(|node| {
+                if node.children.iter().any(|child| child.id == *id) {
+                    Some(node.id.clone())
+                } else {
+                    walk(&node.children, id)
+                }
+            })
+        }
+        walk(&self.roots, id)
+    }
+
     pub fn selected_index(&self) -> usize {
         self.visible_selections()
             .iter()

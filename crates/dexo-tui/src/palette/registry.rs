@@ -644,6 +644,54 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ExplorerDown),
         },
         CommandSpec {
+            id: "explorer.first",
+            title: "Explorer First",
+            keywords: &["tree", "select"],
+            shortcut: Some("Home"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ExplorerFirst),
+        },
+        CommandSpec {
+            id: "explorer.last",
+            title: "Explorer Last",
+            keywords: &["tree", "select"],
+            shortcut: Some("End"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ExplorerLast),
+        },
+        CommandSpec {
+            id: "explorer.page_up",
+            title: "Explorer Page Up",
+            keywords: &["tree", "select"],
+            shortcut: Some("PageUp"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ExplorerPageUp),
+        },
+        CommandSpec {
+            id: "explorer.page_down",
+            title: "Explorer Page Down",
+            keywords: &["tree", "select"],
+            shortcut: Some("PageDown"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ExplorerPageDown),
+        },
+        CommandSpec {
+            id: "explorer.collapse",
+            title: "Explorer Collapse",
+            keywords: &["tree", "select"],
+            shortcut: Some("Left"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ExplorerCollapse),
+        },
+        CommandSpec {
+            id: "explorer.open",
+            title: "Explorer Open",
+            keywords: &["tree", "select"],
+            shortcut: Some("Right"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ExplorerOpen),
+        },
+        CommandSpec {
             id: "explorer.dependencies",
             title: "Show Dependencies",
             keywords: &["depends", "inspector"],
@@ -1424,6 +1472,7 @@ fn hidden(id: &str) -> bool {
             | "results.actions"
             | "explorer.up"
             | "explorer.down"
+            | "explorer.actions"
             // the document strip's own cursor: it only means something with the strip
             // focused, where the arrows and Enter are the keys
             | "document.activate_tab"
@@ -1712,7 +1761,13 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "explorer.copy_simple"
         | "explorer.favorite"
         | "explorer.up"
-        | "explorer.down" => &[ExplorerNode],
+        | "explorer.down"
+        | "explorer.first"
+        | "explorer.last"
+        | "explorer.page_up"
+        | "explorer.page_down"
+        | "explorer.collapse"
+        | "explorer.open" => &[ExplorerNode],
         "transfer.import" | "backup.dump" | "backup.restore" | "explorer.refresh_all" => {
             &[ActiveSession]
         }

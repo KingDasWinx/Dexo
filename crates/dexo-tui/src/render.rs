@@ -1013,6 +1013,27 @@ fn register_explorer_nodes(hits: &mut HitMap, area: Rect, model: &Model) {
             HitTarget::ExplorerNode(layout.offset.saturating_add(index)),
         );
     }
+    // The arrow is its own target, over the row's: it toggles what a plain click only
+    // selects.
+    let lines = crate::widgets::object_tree::render_sidebar(
+        &model.explorer,
+        &model.connections.profiles,
+        &model.connection.name,
+        model.capabilities.unicode,
+        (inner.height as usize).max(1),
+        inner.width as usize,
+    );
+    for (index, _) in layout.nodes.iter().enumerate() {
+        let row = layout.node_row(index);
+        let Some(line) = lines.get(row) else { continue };
+        if let Some(column) = line.chars().position(|ch| ch == '▸' || ch == '▾') {
+            let line = crate::mouse::line_rect(inner, row);
+            hits.register(
+                HitTarget::ExplorerTwistie(layout.offset.saturating_add(index)),
+                Rect::new(line.x.saturating_add(column as u16), line.y, 1, 1),
+            );
+        }
+    }
 }
 
 /// `Clear` leaves the cells in the terminal's own colours, and the terminal's background
