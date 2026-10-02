@@ -31,6 +31,8 @@ pub struct Server {
     documents: HashMap<String, Document>,
     /// Read once per connection; `None` when it has no cached catalog.
     schemas: HashMap<String, Option<Schema>>,
+    /// Whether the client asked the server to shut down; `exit` without it is an error.
+    shut_down: bool,
 }
 
 impl Server {
@@ -40,6 +42,7 @@ impl Server {
             database,
             documents: HashMap::new(),
             schemas: HashMap::new(),
+            shut_down: false,
         }
     }
 
@@ -60,7 +63,10 @@ impl Server {
                 },
                 "serverInfo": { "name": "dexo", "version": env!("CARGO_PKG_VERSION") }
             })),
-            "shutdown" => Ok(Value::Null),
+            "shutdown" => {
+                self.shut_down = true;
+                Ok(Value::Null)
+            }
             "textDocument/didOpen" => {
                 let document = &params["textDocument"];
                 if let (Some(uri), Some(text)) =
@@ -311,8 +317,17 @@ fn position_of(text: &str, offset: usize) -> Value {
     json!({ "line": line, "character": character })
 }
 
+/// What a header block and its body held: a message, or why it is none.
+enum Incoming {
+    Message(Value),
+    /// The body was not JSON; the length still said where the next message starts.
+    Malformed(String),
+    /// No Content-Length, so nothing says where the body ends or the next one starts.
+    Unframed,
+}
+
 /// One message from `input`, or `None` at its end.
-fn read_message(input: &mut impl BufRead) -> std::io::Result<Option<Value>> {
+fn read_message(input: &mut impl BufRead) -> std::io::Result<Option<Incoming>> {
     let mut length = None;
     loop {
         let mut header = String::new();
@@ -328,16 +343,14 @@ fn read_message(input: &mut impl BufRead) -> std::io::Result<Option<Value>> {
         }
     }
     let Some(length) = length else {
-        return Err(std::io::Error::new(
-            std::io::ErrorKind::InvalidData,
-            "a message without Content-Length",
-        ));
+        return Ok(Some(Incoming::Unframed));
     };
     let mut body = vec![0; length];
     input.read_exact(&mut body)?;
-    serde_json::from_slice(&body)
-        .map(Some)
-        .map_err(|error| std::io::Error::new(std::io::ErrorKind::InvalidData, error))
+    Ok(Some(match serde_json::from_slice(&body) {
+        Ok(message) => Incoming::Message(message),
+        Err(error) => Incoming::Malformed(error.to_string()),
+    }))
 }
 
 fn write_message(output: &mut impl Write, message: &Value) -> std::io::Result<()> {
@@ -346,21 +359,46 @@ fn write_message(output: &mut impl Write, message: &Value) -> std::io::Result<()
     output.flush()
 }
 
-/// Serves `input` to `output` until the client says `exit` or the input ends.
+/// Serves `input` to `output` until the client says `exit` or the input ends, and says
+/// whether the client shut the server down first: the exit code is 1 when it did not.
+/// A body that is not JSON is answered with a parse error and the next message read; a
+/// message without a length is answered too, and ends the stream, which can no longer
+/// be followed.
 pub fn serve(
     server: &mut Server,
     input: &mut impl BufRead,
     output: &mut impl Write,
-) -> std::io::Result<()> {
-    while let Some(message) = read_message(input)? {
+) -> std::io::Result<bool> {
+    let parse_error = |message: &str| {
+        json!({
+            "jsonrpc": "2.0",
+            "id": null,
+            "error": { "code": -32700, "message": message }
+        })
+    };
+    while let Some(incoming) = read_message(input)? {
+        let message = match incoming {
+            Incoming::Message(message) => message,
+            Incoming::Malformed(error) => {
+                write_message(output, &parse_error(&error))?;
+                continue;
+            }
+            Incoming::Unframed => {
+                write_message(output, &parse_error("a message without Content-Length"))?;
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "a message without Content-Length: the stream cannot be followed",
+                ));
+            }
+        };
         let Some(replies) = server.handle(&message) else {
-            return Ok(());
+            return Ok(server.shut_down);
         };
         for reply in replies.iter().filter(|reply| !reply.is_null()) {
             write_message(output, reply)?;
         }
     }
-    Ok(())
+    Ok(server.shut_down)
 }
 
 #[cfg(test)]
@@ -381,7 +419,10 @@ mod tests {
     fn replies(output: &[u8]) -> Vec<Value> {
         let mut input = std::io::BufReader::new(output);
         let mut out = Vec::new();
-        while let Some(message) = super::read_message(&mut input).unwrap() {
+        while let Some(incoming) = super::read_message(&mut input).unwrap() {
+            let super::Incoming::Message(message) = incoming else {
+                panic!("the server wrote a message that does not parse");
+            };
             out.push(message);
         }
         out
@@ -438,12 +479,13 @@ mod tests {
         ]);
         let mut output = Vec::new();
         let mut server = Server::new(None, None);
-        serve(
+        let shut_down = serve(
             &mut server,
             &mut std::io::BufReader::new(&input[..]),
             &mut output,
         )
         .unwrap();
+        assert!(shut_down);
         let replies = replies(&output);
         let answered: Vec<i64> = replies
             .iter()
@@ -480,6 +522,42 @@ mod tests {
         );
         let unknown = replies.iter().find(|reply| reply["id"] == 4).unwrap();
         assert_eq!(unknown["error"]["code"], -32601);
+    }
+
+    /// A body that is not JSON gets a parse error and the server reads on; one without a
+    /// length gets one too and ends the stream; `exit` with no `shutdown` before it is
+    /// not a clean end.
+    #[test]
+    fn a_broken_message_is_answered_with_a_parse_error() {
+        let mut input = b"Content-Length: 9\r\n\r\n{not json".to_vec();
+        input.extend(framed(&[
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {}}),
+            json!({"jsonrpc": "2.0", "method": "exit"}),
+        ]));
+        let mut output = Vec::new();
+        let shut_down = serve(
+            &mut Server::new(None, None),
+            &mut std::io::BufReader::new(&input[..]),
+            &mut output,
+        )
+        .unwrap();
+        assert!(!shut_down);
+        let answers = replies(&output);
+        assert_eq!(answers[0]["error"]["code"], -32700, "{answers:?}");
+        assert_eq!(answers[0]["id"], Value::Null);
+        assert_eq!(answers[1]["id"], 1, "{answers:?}");
+
+        let input = b"Content-Type: x\r\n\r\n{}".to_vec();
+        let mut output = Vec::new();
+        assert!(
+            serve(
+                &mut Server::new(None, None),
+                &mut std::io::BufReader::new(&input[..]),
+                &mut output,
+            )
+            .is_err()
+        );
+        assert_eq!(replies(&output)[0]["error"]["code"], -32700);
     }
 
     /// The first line names the document's connection over the server's.

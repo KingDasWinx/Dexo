@@ -227,11 +227,14 @@ fn run_cli(command: Command, registry: DriverRegistry) -> anyhow::Result<()> {
             let database = AppPaths::discover().ok().map(|paths| paths.database);
             let mut server = crate::lsp::Server::new(connection, database);
             let stdin = std::io::stdin();
-            crate::lsp::serve(
+            let shut_down = crate::lsp::serve(
                 &mut server,
                 &mut stdin.lock(),
                 &mut std::io::stdout().lock(),
             )?;
+            if !shut_down {
+                anyhow::bail!("the editor ended the language server without shutting it down");
+            }
         }
     }
     Ok(())
