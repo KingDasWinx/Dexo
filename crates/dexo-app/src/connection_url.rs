@@ -142,7 +142,10 @@ fn file_connection(driver: &str, rest: &str) -> Result<UrlConnection, AppError> 
             format!("not a connection URL: {reason}"),
         )
     };
-    let rest = rest.split_once('#').map_or(rest, |(rest, _)| rest);
+    // A `#` would end the path as a fragment and open another file, created empty.
+    if rest.contains('#') {
+        return Err(invalid("a # in a file's path is written %23"));
+    }
     let (path, query) = rest.split_once('?').unwrap_or((rest, ""));
     let parameters = Parameters::read(query, driver).map_err(|reason| invalid(&reason))?;
     let path = decode(path).map_err(|_| invalid("the path is not valid percent-encoding"))?;
@@ -388,6 +391,12 @@ mod tests {
         assert!(!error.contains("cret"), "{error}");
         // A parameter's `@` is not a user's.
         assert!(parse("postgres://h/db?application_name=a@b").is_err());
+        // `#` in a SQLite path would open another file; it must be written %23.
+        assert!(parse("sqlite:///data/sales#2.db").is_err());
+        assert_eq!(
+            parse("sqlite:///data/sales%232.db").unwrap().profile.config["path"],
+            "/data/sales#2.db"
+        );
     }
 
     #[test]
