@@ -1984,12 +1984,26 @@ fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, line, rect| {
+        if i == 0 {
+            paint_selection(
+                frame,
+                rect,
+                "search: ",
+                &picker.search,
+                picker.renaming.is_none(),
+            );
+        }
         if (1..=rows).contains(&i) && offset + i - 1 < filtered.len() {
             let list = Rect {
                 width: (list_width as u16).min(rect.width),
                 ..rect
             };
             hits.register(HitTarget::ListRow(offset + i - 1), list);
+            if let Some(input) = &picker.renaming
+                && offset + i - 1 == picker.selected
+            {
+                paint_selection(frame, list, "> ", input, true);
+            }
         }
         if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Delete");
@@ -2863,6 +2877,61 @@ mod tests {
             .map(|cell| cell.symbol())
             .collect();
         assert!(reversed.contains("query-1.sql"), "{reversed:?}");
+    }
+
+    /// The cells a frame of `model` draws in reverse video, in order.
+    fn reversed(model: &Model) -> String {
+        use ratatui::style::Modifier;
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(100, 30)).unwrap();
+        let mut hits = crate::mouse::HitMap::default();
+        terminal
+            .draw(|frame| super::render(frame, model, &mut hits))
+            .unwrap();
+        terminal
+            .backend()
+            .buffer()
+            .content()
+            .iter()
+            .filter(|cell| cell.modifier.contains(Modifier::REVERSED))
+            .map(|cell| cell.symbol())
+            .collect()
+    }
+
+    /// Ctrl+A selected the saved-queries search, its rename and Vim's `:` line without
+    /// showing it, and the next letter typed wiped the text.
+    #[test]
+    fn every_selected_input_is_drawn_in_reverse() {
+        use crate::widgets::text_input::TextInput;
+        let mut model = Model::default();
+        model.saved_queries.open = true;
+        model
+            .saved_queries
+            .set_items(vec![dexo_storage::SavedQuery {
+                id: "1".into(),
+                connection_id: String::new(),
+                name: "monthly".into(),
+                sql: "select 1".into(),
+            }]);
+        model.saved_queries.search = TextInput::new("mon");
+        model.saved_queries.search.select_all();
+        assert!(reversed(&model).contains("mon"));
+
+        model.saved_queries.search.clear();
+        let mut name = TextInput::new("monthly-sales");
+        name.select_all();
+        model.saved_queries.renaming = Some(name);
+        assert!(reversed(&model).contains("monthly-sales"));
+
+        let mut model = Model {
+            keymap: crate::keymap::Keymap::vim_profile(),
+            focus: crate::model::Focus::Editor,
+            ..Model::default()
+        };
+        let mut input = TextInput::new("s/a/b/");
+        input.select_all();
+        model.vim.prompt = Some(crate::screens::vim::Prompt { kind: ':', input });
+        assert!(reversed(&model).contains("s/a/b/"));
     }
 
     /// PageUp and PageDown moved one line, like the arrows.

@@ -51,8 +51,19 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     if crate::screens::vim::active(model)
         && let Some(prompt) = &model.vim.prompt
     {
-        let typed = format!("{}{}", prompt.kind, prompt.input.as_str());
-        frame.render_widget(Paragraph::new(typed.clone()), area);
+        // Selected, the text shows in reverse: typing replaces it.
+        let style = if prompt.input.is_selected() {
+            Style::default().add_modifier(ratatui::style::Modifier::REVERSED)
+        } else {
+            Style::default()
+        };
+        frame.render_widget(
+            Paragraph::new(Line::from(vec![
+                Span::raw(prompt.kind.to_string()),
+                Span::styled(prompt.input.as_str().to_string(), style),
+            ])),
+            area,
+        );
         let before: String = prompt
             .input
             .as_str()
