@@ -360,6 +360,8 @@ pub enum Action {
     CancelInsertRow,
     InspectValue,
     OpenRelated,
+    /// The databases running in Docker, for the connections screen.
+    DockerDiscovered(Vec<dexo_app::docker::DockerDatabase>),
     /// Save Query As: name what the selection or the document holds.
     OpenSaveQuery,
     OpenSavedQueries,
@@ -737,6 +739,8 @@ pub enum Effect {
     CancelCount {
         operation: OperationId,
     },
+    /// Look for databases running in Docker.
+    DiscoverDocker,
     SaveQuery {
         project_id: String,
         connection_id: String,

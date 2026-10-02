@@ -43,6 +43,9 @@ pub struct ConnectionsScreen {
     /// They are kept here, apart from the saved list, so reloading that list from
     /// storage does not drop them while their session is still open.
     pub temporary: Vec<ConnectionProfile>,
+    /// Databases running in Docker, listed after the saved connections; a selection
+    /// past the saved ones is one of these.
+    pub docker: Vec<dexo_app::docker::DockerDatabase>,
 }
 
 /// The buttons of the "Delete connection" dialog. Cancel comes first in the focus, so
@@ -65,7 +68,7 @@ impl DeleteChoice {
 
 /// The key hints under the list. Rendering registers a click target on each, by label,
 /// so the line and its targets cannot drift apart.
-pub const HINTS: [&str; 7] = [
+pub const HINTS: [&str; 8] = [
     "Enter connect",
     "n new",
     "e edit",
@@ -73,6 +76,7 @@ pub const HINTS: [&str; 7] = [
     "t test",
     "x delete",
     "c close",
+    "r docker",
 ];
 
 impl ConnectionsScreen {
@@ -110,6 +114,18 @@ impl ConnectionsScreen {
         if self.selected_profile >= self.profiles.len() {
             self.selected_profile = 0;
         }
+    }
+
+    /// The Docker database the selection is on, when it is past the saved connections.
+    pub fn selected_docker(&self) -> Option<&dexo_app::docker::DockerDatabase> {
+        self.selected_profile
+            .checked_sub(self.profiles.len())
+            .and_then(|index| self.docker.get(index))
+    }
+
+    /// Saved connections, then the Docker ones: what Up and Down walk.
+    pub fn row_count(&self) -> usize {
+        self.profiles.len() + self.docker.len()
     }
 
     pub fn is_temporary(&self, name: &str) -> bool {
@@ -190,9 +206,51 @@ impl ConnectionsScreen {
     }
 
     pub fn profile_lines(&self, active: Option<SessionId>) -> Vec<String> {
-        if self.profiles.is_empty() {
-            return vec!["  No connections yet. n adds one.".into()];
+        self.rows(active)
+            .into_iter()
+            .map(|(_, line)| line)
+            .collect()
+    }
+
+    /// Each line with the selectable row it shows, if any: the saved connections, then a
+    /// heading and the databases running in Docker.
+    pub fn rows(&self, active: Option<SessionId>) -> Vec<(Option<usize>, String)> {
+        let mut rows: Vec<(Option<usize>, String)> = if self.profiles.is_empty() {
+            vec![(None, "  No connections yet. n adds one.".into())]
+        } else {
+            self.saved_lines(active)
+                .into_iter()
+                .enumerate()
+                .map(|(index, line)| (Some(index), line))
+                .collect()
+        };
+        if !self.docker.is_empty() {
+            rows.push((None, String::new()));
+            rows.push((None, "  Running in Docker".into()));
+            for (offset, database) in self.docker.iter().enumerate() {
+                let index = self.profiles.len() + offset;
+                let marker = if index == self.selected_profile {
+                    ">"
+                } else {
+                    " "
+                };
+                let connection = &database.connection;
+                rows.push((
+                    Some(index),
+                    format!(
+                        "{marker} {} [{}] {}:{}",
+                        database.container,
+                        connection.driver,
+                        connection.host,
+                        connection.port.unwrap_or_default()
+                    ),
+                ));
+            }
         }
+        rows
+    }
+
+    fn saved_lines(&self, active: Option<SessionId>) -> Vec<String> {
         let mut lines = Vec::new();
         for (index, row) in self.profiles.iter().enumerate() {
             let marker = if index == self.selected_profile {

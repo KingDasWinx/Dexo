@@ -6,6 +6,7 @@ pub mod connection_service;
 pub mod connection_url;
 pub mod data;
 pub mod diagnostic_service;
+pub mod docker;
 pub mod driver_registry;
 pub mod error;
 pub mod event;

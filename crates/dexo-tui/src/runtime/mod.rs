@@ -341,6 +341,13 @@ impl WorkbenchRuntime {
                 sql,
                 parameters,
             } => self.count_rows(session, operation, sql, parameters).await,
+            crate::Effect::DiscoverDocker => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let found = dexo_app::docker::discover(Duration::from_secs(3));
+                    let _ = action_tx.blocking_send(Action::DockerDiscovered(found));
+                });
+            }
             crate::Effect::SaveQuery {
                 project_id,
                 connection_id,

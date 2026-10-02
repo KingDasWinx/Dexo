@@ -1511,15 +1511,21 @@ fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let screen = &model.connections;
-    let profiles = screen.profile_lines(model.active_session);
+    let listed = screen.rows(model.active_session);
     // The popup is 72 wide at most, 70 inside its borders.
     let footer = screen.footer_lines((area.width.min(72) as usize).saturating_sub(2));
     // Borders, the blank line above the hints, and a row of air above and below.
     let chrome = 2 + 1 + footer.len();
     let room = (area.height as usize).saturating_sub(chrome + 2).max(1);
-    let rows = profiles.len().clamp(1, room);
-    let offset = scroll_to_selection(screen.selected_profile, 0, profiles.len(), rows);
-    let mut lines: Vec<String> = profiles.into_iter().skip(offset).take(rows).collect();
+    let rows = listed.len().clamp(1, room);
+    // Scrolled by line, so the Docker heading scrolls with its rows.
+    let selected_line = listed
+        .iter()
+        .position(|(row, _)| *row == Some(screen.selected_profile))
+        .unwrap_or(0);
+    let offset = scroll_to_selection(selected_line, 0, listed.len(), rows);
+    let shown: Vec<(Option<usize>, String)> = listed.into_iter().skip(offset).take(rows).collect();
+    let mut lines: Vec<String> = shown.iter().map(|(_, line)| line.clone()).collect();
     lines.push(String::new());
     lines.extend(footer);
     let popup = centered(area, 72, (lines.len() + 2) as u16);
@@ -1539,10 +1545,11 @@ fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         Some(HitButton::Test),
         Some(HitButton::Delete),
         Some(HitButton::CloseSession),
+        None,
     ];
     for_popup_lines(popup, &lines, |i, line, rect| {
-        if i < rows && offset + i < screen.profiles.len() {
-            hits.register(HitTarget::ListRow(offset + i), rect);
+        if let Some((Some(row), _)) = shown.get(i).filter(|_| i < rows) {
+            hits.register(HitTarget::ListRow(*row), rect);
         }
         if i > rows {
             for (label, button) in crate::screens::connections::HINTS.iter().zip(buttons) {

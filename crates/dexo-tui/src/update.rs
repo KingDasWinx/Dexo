@@ -358,8 +358,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::SubmitSecret { kind } => submit_secret(model, kind),
         Action::ConfirmDeleteProfile { decision } => confirm_delete(model, decision),
-        Action::OpenConnections => {
-            model.connections.open = true;
+        Action::OpenConnections => open_connections(model),
+        Action::DockerDiscovered(found) => {
+            let screen = &mut model.connections;
+            screen.docker = found;
+            if screen.selected_profile >= screen.row_count() {
+                screen.selected_profile = 0;
+            }
             Vec::new()
         }
         Action::ConnectSelected => connect_selected(model),
@@ -2536,7 +2541,7 @@ fn mouse_config_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
 fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
     match hit {
         Some(HitTarget::ListRow(index)) => {
-            if index < model.connections.profiles.len() {
+            if index < model.connections.row_count() {
                 model.connections.selected_profile = index;
             }
             if doubled {
@@ -4041,11 +4046,12 @@ fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Down => {
-            if model.connections.selected_profile + 1 < model.connections.profiles.len() {
+            if model.connections.selected_profile + 1 < model.connections.row_count() {
                 model.connections.selected_profile += 1;
             }
             Vec::new()
         }
+        KeyCode::Char('r') => vec![Effect::DiscoverDocker],
         KeyCode::Char('n') => update(model, Action::OpenConnectionForm),
         KeyCode::Char('e') => update(model, Action::EditSelectedConnection),
         KeyCode::Char('d') => update(model, Action::DuplicateConnection),
@@ -8344,7 +8350,37 @@ fn choose_project_intent(model: &mut Model) -> Vec<Effect> {
     }
 }
 
+/// The connections screen, with the databases running in Docker looked for again.
+fn open_connections(model: &mut Model) -> Vec<Effect> {
+    model.connections.open = true;
+    vec![Effect::DiscoverDocker]
+}
+
 fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
+    // A database running in Docker opens the New Connection form filled in from it;
+    // nothing is saved, nor its password kept, until the form is saved.
+    if let Some(database) = model.connections.selected_docker().cloned() {
+        let mut form = crate::screens::connection::ConnectionForm::open();
+        let connection = &database.connection;
+        form.set_value("driver", &connection.driver);
+        form.sync_descriptor_fields();
+        let port = connection
+            .port
+            .map(|port| port.to_string())
+            .unwrap_or_default();
+        for (label, value) in [
+            ("name", connection.name.as_str()),
+            ("host", connection.host.as_str()),
+            ("port", port.as_str()),
+            ("database", connection.database.as_str()),
+            ("username", connection.username.as_str()),
+            ("password", database.password.as_deref().unwrap_or("")),
+        ] {
+            form.set_value(label, value);
+        }
+        model.connection_form = form;
+        return Vec::new();
+    }
     if model.connections.selected().is_none() {
         model.connections.error = Some("select a connection first".into());
         return Vec::new();
@@ -9062,6 +9098,59 @@ mod tests {
         assert_eq!(connected(&mut model, "prod", 1), "Connected to prod");
         assert_eq!(connected(&mut model, "demo", 2), "the URL's password shows");
         assert!(model.startup_warning.is_none());
+    }
+
+    /// A database running in Docker is listed under the saved connections, and Enter on
+    /// it opens the New Connection form filled in from it -- saving nothing.
+    #[test]
+    fn a_docker_database_prefills_the_connection_form() {
+        let mut model = Model::default();
+        let effects = update(&mut model, Action::OpenConnections);
+        assert!(matches!(effects.as_slice(), [Effect::DiscoverDocker]));
+        let found = dexo_app::docker::from_inspect(
+            r#"[{"Name": "/shop-pg", "Config": {"Image": "postgres:16",
+                 "Env": ["POSTGRES_USER=ana", "POSTGRES_PASSWORD=s3cret", "POSTGRES_DB=shop"]},
+               "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5433"}]}}}]"#,
+        );
+        update(&mut model, Action::DockerDiscovered(found));
+        let screen = crate::render::render_to_string(&model, 100, 30);
+        assert!(screen.contains("Running in Docker"), "{screen}");
+        assert!(
+            screen.contains("shop-pg [postgres] 127.0.0.1:5433"),
+            "{screen}"
+        );
+        assert!(
+            update(
+                &mut model,
+                Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+            )
+            .is_empty()
+        );
+        let form = &model.connection_form;
+        assert!(form.open);
+        let value = |label: &str| {
+            form.fields
+                .iter()
+                .find(|field| field.label == label)
+                .map(|field| field.value.clone())
+                .unwrap_or_default()
+        };
+        assert_eq!(
+            [
+                "name", "driver", "host", "port", "database", "username", "password"
+            ]
+            .map(value),
+            [
+                "shop-pg",
+                "postgres",
+                "127.0.0.1",
+                "5433",
+                "shop",
+                "ana",
+                "s3cret"
+            ]
+            .map(String::from)
+        );
     }
 
     /// Going back to an open session of another driver brings its SQL dialect back.
