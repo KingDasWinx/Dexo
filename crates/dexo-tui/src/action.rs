@@ -597,6 +597,11 @@ pub enum Action {
         path: std::path::PathBuf,
         content: String,
     },
+    /// The file could not be read: the tab opened for it goes away again.
+    DocumentLoadFailed {
+        document: String,
+        message: String,
+    },
     DocumentAutosaved {
         id: String,
         revision: u64,

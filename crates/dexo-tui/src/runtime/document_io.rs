@@ -15,6 +15,25 @@ pub enum DocumentIoError {
     },
 }
 
+/// Why a file was not opened, in words: Rust's own text for a binary file was
+/// "stream did not contain valid UTF-8", with no file name.
+pub fn load_failure(path: &Path, error: &io::Error) -> String {
+    let name = path.file_name().map_or_else(
+        || path.display().to_string(),
+        |name| name.to_string_lossy().into_owned(),
+    );
+    match error.kind() {
+        io::ErrorKind::InvalidData => {
+            format!("{name} was not opened: it is not a text file (not valid UTF-8).")
+        }
+        io::ErrorKind::NotFound => format!("{name} was not opened: the file does not exist."),
+        io::ErrorKind::PermissionDenied => {
+            format!("{name} was not opened: Dexo is not allowed to read it.")
+        }
+        _ => format!("{name} was not opened: {error}"),
+    }
+}
+
 pub async fn save_sql_atomic(path: &Path, content: &str) -> Result<(), DocumentIoError> {
     tokio::task::spawn_blocking({
         let path = path.to_path_buf();

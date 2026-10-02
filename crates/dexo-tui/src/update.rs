@@ -2128,6 +2128,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             touch_recent_sql_file(model, &path)
         }
+        Action::DocumentLoadFailed { document, message } => {
+            // The tab was opened for the file before it was read. With nothing read
+            // into it, it is only a way to write over a file Dexo could not open.
+            if let Some(index) = model
+                .documents
+                .iter()
+                .position(|candidate| candidate.id == document)
+            {
+                model.messages.error(message);
+                return remove_document(model, index);
+            }
+            model.messages.error(message);
+            Vec::new()
+        }
         Action::DocumentAutosaved { id, revision } => {
             if let Some(document) = model
                 .documents
@@ -10792,15 +10806,15 @@ fn open_document_path(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect
     model.documents.push(document);
     model.active_document = model.documents.len().saturating_sub(1);
     model.sync_document_tabs_scroll();
-    let mut effects = touch_recent_sql_file(model, &normalized);
-    effects.push(Effect::LoadDocument(crate::action::DocumentIoRequest {
+    // The recent list takes the file once it has been read: a file that could not be
+    // opened is not one to offer again.
+    vec![Effect::LoadDocument(crate::action::DocumentIoRequest {
         document: document_id,
         path: normalized,
         content: String::new(),
         revision: 0,
         expected_fingerprint: None,
-    }));
-    effects
+    })]
 }
 
 fn open_diagnostics_picker(model: &mut Model) -> Vec<Effect> {
@@ -12782,6 +12796,19 @@ mod tests {
         assert_eq!(model.documents.len(), 2);
         assert_eq!(model.active_document, 1);
         assert_eq!(model.documents[1].path.as_ref(), Some(&path));
+        assert!(
+            model.recent_sql_files.is_empty(),
+            "a file is a recent one only once it has been read"
+        );
+        let id = model.documents[1].id.clone();
+        update(
+            &mut model,
+            Action::DocumentLoaded {
+                document: id,
+                path: path.clone(),
+                content: "select 1".into(),
+            },
+        );
         assert_eq!(
             model.recent_sql_files.first().map(|p| p.as_path()),
             Some(path.as_path())

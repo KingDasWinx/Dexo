@@ -1690,9 +1690,9 @@ impl WorkbenchRuntime {
                 .await;
             }
             Err(error) => {
-                self.emit(Action::OperationFailed {
-                    key: OperationKey::new(OperationId::new(), "", request.document, 0),
-                    message: error.to_string(),
+                self.emit(Action::DocumentLoadFailed {
+                    document: request.document,
+                    message: document_io::load_failure(&request.path, &error),
                 })
                 .await;
             }
