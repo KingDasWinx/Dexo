@@ -29,6 +29,31 @@ pub struct McpAuditScreen {
     pub now: i64,
     /// Requests already announced while the screen was closed.
     pub announced: Vec<uuid::Uuid>,
+    /// Lines scrolled down from the picked request's first: PgUp/PgDn and the wheel read
+    /// a statement taller than the popup.
+    pub scroll: u16,
+}
+
+/// Agent Activity laid out for a width: the list and the recent calls scroll, while the
+/// confirmation and the keys stay at the bottom, where they cannot fall off the popup.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AuditView {
+    pub body: Vec<String>,
+    pub footer: Vec<String>,
+    /// The picked request's first and last lines in `body`.
+    pub picked: Option<(usize, usize)>,
+}
+
+/// `text` wrapped to `width`, its first line after `first` and the rest after `rest`.
+fn push_wrapped(lines: &mut Vec<String>, first: &str, rest: &str, text: &str, width: usize) {
+    let room = width.saturating_sub(first.len()).max(1);
+    for (index, part) in crate::model::wrap_display_text(text, room)
+        .into_iter()
+        .enumerate()
+    {
+        let prefix = if index == 0 { first } else { rest };
+        lines.push(format!("{prefix}{part}"));
+    }
 }
 
 impl McpAuditScreen {
@@ -67,6 +92,7 @@ impl McpAuditScreen {
             .position()
             .map_or(0, |index| index.saturating_add_signed(delta).min(last));
         self.selected = Some(self.pending[index].id);
+        self.scroll = 0;
     }
 
     /// Takes the list as read again. The pick stays on its request; one decided elsewhere
@@ -78,6 +104,7 @@ impl McpAuditScreen {
         self.announced = pending.iter().map(|request| request.id).collect();
         self.pending = pending;
         if self.current().is_none() {
+            self.scroll = 0;
             self.selected = self
                 .pending
                 .get(was.unwrap_or(0).min(self.pending.len().saturating_sub(1)))
@@ -93,23 +120,46 @@ impl McpAuditScreen {
         gone
     }
 
+    /// Every line, at any width: the view without a viewport.
     pub fn lines(&self) -> Vec<String> {
-        let mut lines = Vec::new();
+        let view = self.view(usize::MAX);
+        let mut lines = view.body;
+        lines.extend(view.footer);
+        lines
+    }
+
+    /// The screen laid out `width` cells wide. The picked request's statement is shown
+    /// whole and wrapped -- it used to stop at six lines and at the popup's edge, so an
+    /// `OR TRUE` on the seventh line, or at the end of a long one, was approved unseen.
+    pub fn view(&self, width: usize) -> AuditView {
+        let mut body = Vec::new();
+        let mut picked = None;
         if self.pending.is_empty() {
-            lines.push("No agent's write is waiting for approval.".into());
+            body.push("No agent's write is waiting for approval.".into());
         } else {
-            lines.push(format!("Waiting for you ({})", self.pending.len()));
+            body.push(format!("Waiting for you ({})", self.pending.len()));
             for request in &self.pending {
-                let picked = self.selected == Some(request.id);
-                let marker = if picked { ">" } else { " " };
-                lines.push(format!("{marker} {}", self.summary(request)));
-                if picked {
-                    for line in request.statement.lines().take(6) {
-                        lines.push(format!("    {line}"));
+                let is_picked = self.selected == Some(request.id);
+                let first = body.len();
+                let marker = if is_picked { "> " } else { "  " };
+                push_wrapped(&mut body, marker, "  ", &self.summary(request), width);
+                if is_picked {
+                    for line in request.statement.lines() {
+                        push_wrapped(&mut body, "    ", "    ", line, width);
                     }
+                    picked = Some((first, body.len() - 1));
                 }
             }
         }
+        body.push(String::new());
+        body.push("Recent activity".into());
+        if self.events.is_empty() {
+            body.push("  nothing yet".into());
+        }
+        for event in self.events.iter().take(20) {
+            body.push(format!("  {event}"));
+        }
+        let mut footer = Vec::new();
         if let Some(deciding) = &self.deciding {
             let question = if deciding.approve {
                 "Run this write now?"
@@ -118,27 +168,25 @@ impl McpAuditScreen {
             };
             let label = if deciding.approve { "Approve" } else { "Deny" };
             // The question names its own request, the one the answer settles.
-            match self
+            let asked = match self
                 .pending
                 .iter()
                 .find(|request| request.id == deciding.id)
             {
-                Some(request) => lines.push(format!("{question} {}", self.summary(request))),
-                None => lines.push(question.into()),
-            }
-            lines.push(footer_line(label, deciding.focus));
+                Some(request) => format!("{question} {}", self.summary(request)),
+                None => question.into(),
+            };
+            push_wrapped(&mut footer, "", "", &asked, width);
+            footer.push(footer_line(label, deciding.focus));
         }
-        lines.push(String::new());
-        lines.push("Recent activity".into());
-        if self.events.is_empty() {
-            lines.push("  nothing yet".into());
+        footer.push(
+            "a approve  d deny  up/down pick  PgDn scroll  r revoke all grants  esc close".into(),
+        );
+        AuditView {
+            body,
+            footer,
+            picked,
         }
-        for event in self.events.iter().take(20) {
-            lines.push(format!("  {event}"));
-        }
-        lines.push(String::new());
-        lines.push("a approve  d deny  up/down pick  r revoke all grants  esc close".into());
-        lines
     }
 
     fn summary(&self, request: &Approval) -> String {

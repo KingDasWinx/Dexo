@@ -2196,24 +2196,57 @@ fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     });
 }
 
+/// The list scrolls and the confirmation does not: with many requests, a tall statement
+/// or a short terminal, [Approve]/[Cancel] fell off the bottom of the popup.
 fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
-    let lines = model.mcp_audit.lines();
+    let screen = &model.mcp_audit;
+    let view = screen.view(area.width.min(100).saturating_sub(2) as usize);
+    let wanted = view.body.len() + view.footer.len() + 2;
     let popup = centered(
         area,
         100,
-        (lines.len() as u16 + 2).min(area.height.saturating_sub(2)),
+        u16::try_from(wanted)
+            .unwrap_or(u16::MAX)
+            .min(area.height.saturating_sub(2)),
     );
+    let inner = crate::mouse::popup_inner(popup);
+    let footer_rows = (view.footer.len() as u16).min(inner.height);
+    let body_rows = inner.height - footer_rows;
+    let max_scroll = view.body.len().saturating_sub(body_rows as usize);
+    // The picked request starts one line from the top, the line above it for context,
+    // and the view scrolls on down through its statement and the recent calls.
+    let base = view
+        .picked
+        .map_or(0, |(first, _)| first.saturating_sub(1))
+        .min(max_scroll);
+    hits.set_scroll_limit(crate::mouse::ScrollArea::McpAudit, max_scroll - base);
+    let top = (base + screen.scroll as usize).min(max_scroll);
+    let title = if top < max_scroll {
+        "Agent activity · PgDn for more"
+    } else {
+        "Agent activity"
+    };
     paint_popup(
         frame,
         model,
         popup,
-        overlay_block(model, "Agent activity"),
-        lines.join("\n"),
+        overlay_block(model, title),
+        String::new(),
     );
+    let style = model.theme.base(model.capabilities);
+    frame.render_widget(
+        Paragraph::new(view.body.join("\n"))
+            .style(style)
+            .scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
+        Rect::new(inner.x, inner.y, inner.width, body_rows),
+    );
+    let footer = Rect::new(inner.x, inner.y + body_rows, inner.width, footer_rows);
+    frame.render_widget(Paragraph::new(view.footer.join("\n")).style(style), footer);
     register_overlay(hits, popup);
-    let deciding = model.mcp_audit.deciding.as_ref();
-    for_popup_lines(popup, &lines, |_, line, rect| {
+    let deciding = screen.deciding.as_ref();
+    for (index, line) in view.footer.iter().enumerate().take(footer_rows as usize) {
+        let rect = crate::mouse::line_rect(footer, index);
         if line.contains("[Cancel]") {
             let label = if deciding.is_some_and(|deciding| deciding.approve) {
                 "Approve"
@@ -2230,7 +2263,7 @@ fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 HitTarget::Button(HitButton::Revoke),
             );
         }
-    });
+    }
 }
 
 fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

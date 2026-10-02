@@ -3477,6 +3477,14 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         };
         return Vec::new();
     }
+    if overlay == Some(OverlayKind::McpAudit) {
+        model.mcp_audit.scroll = model.hits.scroll(
+            crate::mouse::ScrollArea::McpAudit,
+            model.mcp_audit.scroll,
+            delta,
+        );
+        return Vec::new();
+    }
     if overlay == Some(OverlayKind::McpProfiles) {
         if delta < 0 {
             model.mcp_profiles.select_previous();
@@ -4040,6 +4048,22 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.mcp_audit.open {
         use crate::widgets::form::{FooterFocus, FooterKey};
+        // A statement taller than the popup is read page by page, the confirmation open
+        // or not.
+        let page = i32::from((model.height / 3).max(1));
+        let paged = match key.code {
+            KeyCode::PageDown => Some(page),
+            KeyCode::PageUp => Some(-page),
+            _ => None,
+        };
+        if let Some(delta) = paged {
+            model.mcp_audit.scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::McpAudit,
+                model.mcp_audit.scroll,
+                delta,
+            );
+            return Vec::new();
+        }
         let screen = &mut model.mcp_audit;
         if let Some(deciding) = screen.deciding.as_mut() {
             return match crate::widgets::form::confirm_key(&mut deciding.focus, &key) {
@@ -9979,6 +10003,64 @@ mod tests {
             update(&mut model, Action::AgentActivityTick).as_slice(),
             [Effect::LoadMcpAudit]
         ));
+    }
+
+    /// The statement being approved is shown whole: its seventh line and the tail of a
+    /// long one are reached by scrolling, wrapped, while [Approve]/[Cancel] stay on
+    /// screen however long the list and short the terminal.
+    #[test]
+    fn agent_activity_shows_the_whole_statement_and_keeps_its_buttons() {
+        let key = |code| Action::Key(KeyEvent::new(code, KeyModifiers::NONE));
+        let request = |sql: &str| {
+            dexo_app::mcp::Approval::pending(
+                "assistant",
+                "local",
+                "data_execute_sql",
+                serde_json::json!({ "sql": sql }).as_object().unwrap(),
+                vec!["db.public.orders".into()],
+                1000,
+                120,
+            )
+        };
+        let long = format!(
+            "UPDATE orders SET note = '{}' WHERE id = 2 OR 1 = 1",
+            "x".repeat(150)
+        );
+        let sql = format!(
+            "UPDATE orders SET paid = true\nWHERE id = 1\nAND a\nAND b\nAND c\nAND d\nOR TRUE;\n{long}"
+        );
+        let mut pending = vec![request(&sql)];
+        pending.extend((0..8).map(|table| request(&format!("DELETE FROM t{table}"))));
+        let mut model = Model::default();
+        update(
+            &mut model,
+            Action::Resize {
+                width: 80,
+                height: 16,
+            },
+        );
+        model.mcp_audit.open = true;
+        update(
+            &mut model,
+            Action::McpAuditLoaded {
+                events: Vec::new(),
+                pending,
+                now: 1010,
+            },
+        );
+        update(&mut model, key(KeyCode::Char('a')));
+        let mut seen = String::new();
+        for _ in 0..12 {
+            let frame = crate::render::render_to_string(&model, 80, 16);
+            assert!(
+                frame.contains("[Approve]") && frame.contains("[Cancel]"),
+                "{frame}"
+            );
+            seen.push_str(&frame);
+            update(&mut model, key(KeyCode::PageDown));
+        }
+        assert!(seen.contains("OR TRUE"), "{seen}");
+        assert!(seen.contains("WHERE id = 2 OR 1 = 1"), "{seen}");
     }
 
     /// A database running in Docker is listed under the saved connections, and Enter on

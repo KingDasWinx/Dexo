@@ -143,6 +143,7 @@ pub enum ScrollArea {
     Help,
     Inspector,
     Explain,
+    McpAudit,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
