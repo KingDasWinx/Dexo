@@ -17,7 +17,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## PC: Palette, documents, running SQL, recovery
 
-- [ ] **PC-18** `BLOCKER` Save picker overwrites an existing file without asking (data loss)
+- [x] **PC-18** `BLOCKER` Save picker overwrites an existing file without asking (data loss)
 - [ ] **PC-19** `BLOCKER` Opening a binary file fails with a raw error and still creates a document bound to that file; saving it destroys the file
 - [ ] **PC-01** `MAJOR` Palette search ranks loose subsequence matches above the obvious prefix/word match
 - [ ] **PC-02** `MAJOR` PageUp / PageDown do nothing in the palette list

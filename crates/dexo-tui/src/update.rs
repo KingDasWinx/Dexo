@@ -3063,6 +3063,16 @@ fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
 
 fn mouse_file_picker(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
     let rows = file_picker_rows(model);
+    if model.file_picker.confirm.is_some() {
+        return match hit {
+            Some(HitTarget::FooterSubmit) => replace_file(model),
+            Some(HitTarget::FooterCancel) => {
+                model.file_picker.confirm = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
     match hit {
         Some(HitTarget::RecentSqlFile(index)) => {
             model.file_picker.select_recent(index);
@@ -10120,6 +10130,17 @@ fn file_picker_rows(model: &Model) -> usize {
 fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     use crate::screens::file_picker::FilePickerFocus;
     let rows = file_picker_rows(model);
+    if let Some(confirm) = model.file_picker.confirm.as_mut() {
+        use crate::widgets::form::{FooterKey, confirm_key};
+        return match confirm_key(&mut confirm.focus, &key) {
+            FooterKey::Submit => replace_file(model),
+            FooterKey::Cancel => {
+                model.file_picker.confirm = None;
+                Vec::new()
+            }
+            FooterKey::Moved | FooterKey::Pass => Vec::new(),
+        };
+    }
     match key.code {
         KeyCode::Esc => cancel_file_picker(model),
         KeyCode::Tab => {
@@ -10219,11 +10240,52 @@ fn cancel_file_picker(model: &mut Model) -> Vec<Effect> {
     Vec::new()
 }
 
+/// A write to a file that is already there waits for a yes: the picker used to replace
+/// whatever was in it, a database among the files it offered.
 fn file_picker_submit(model: &mut Model) -> Vec<Effect> {
     let Some(path) = model.file_picker.chosen_path() else {
         model.file_picker.error = Some("choose a file or type a name".into());
         return Vec::new();
     };
+    if file_picker_writes(model) {
+        if path.is_dir() {
+            model.file_picker.error = Some("that is a folder; type a file name".into());
+            return Vec::new();
+        }
+        if path.exists() {
+            model.file_picker.confirm = Some(crate::screens::file_picker::OverwriteConfirm {
+                path,
+                focus: crate::widgets::form::FooterFocus::Cancel,
+            });
+            return Vec::new();
+        }
+    }
+    file_picker_accept(model, path)
+}
+
+/// Whether the picked path is written to rather than read: Open, Import and Restore
+/// read the file they are given.
+fn file_picker_writes(model: &Model) -> bool {
+    use crate::screens::file_picker::FilePickerMode;
+    match model.file_picker_mode {
+        FilePickerMode::Save | FilePickerMode::Diagnostics | FilePickerMode::ConfigExport => true,
+        FilePickerMode::Transfer => matches!(
+            model.transfer.mode,
+            crate::screens::transfer::TransferMode::Export
+                | crate::screens::transfer::TransferMode::Backup
+        ),
+        FilePickerMode::Open | FilePickerMode::ConfigImport => false,
+    }
+}
+
+fn replace_file(model: &mut Model) -> Vec<Effect> {
+    match model.file_picker.confirm.take() {
+        Some(confirm) => file_picker_accept(model, confirm.path),
+        None => Vec::new(),
+    }
+}
+
+fn file_picker_accept(model: &mut Model, path: std::path::PathBuf) -> Vec<Effect> {
     model.file_picker.open = false;
     match model.file_picker_mode {
         crate::screens::file_picker::FilePickerMode::Open => open_document_path(model, path),

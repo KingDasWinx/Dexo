@@ -80,6 +80,28 @@ pub struct FileEntry {
     pub is_parent: bool,
 }
 
+/// A write that would replace a file that is already there, waiting for the answer.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OverwriteConfirm {
+    pub path: PathBuf,
+    pub focus: FooterFocus,
+}
+
+impl OverwriteConfirm {
+    pub fn lines(&self) -> Vec<String> {
+        let name = self.path.file_name().map_or_else(
+            || self.path.display().to_string(),
+            |name| name.to_string_lossy().into_owned(),
+        );
+        vec![
+            format!("{name} already exists."),
+            "Writing here replaces what is in it.".to_string(),
+            String::new(),
+            footer_line("Replace", self.focus),
+        ]
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct FilePicker {
     pub open: bool,
@@ -89,7 +111,8 @@ pub struct FilePicker {
     pub offset: usize,
     pub show_hidden: bool,
     pub error: Option<String>,
-    pub overwrite: bool,
+    /// Set while the picker asks whether to replace the file it was about to write.
+    pub confirm: Option<OverwriteConfirm>,
     pub name: TextInput,
     pub focus: FilePickerFocus,
     pub section: FilePickerSection,
@@ -107,7 +130,7 @@ impl Default for FilePicker {
             offset: 0,
             show_hidden: false,
             error: None,
-            overwrite: false,
+            confirm: None,
             name: TextInput::default(),
             focus: FilePickerFocus::List,
             section: FilePickerSection::Browser,
@@ -124,6 +147,7 @@ impl FilePicker {
 
     pub fn open_browser_with_recents(&mut self, recent: &[PathBuf]) {
         self.open = true;
+        self.confirm = None;
         self.name.clear();
         self.focus = FilePickerFocus::List;
         self.error = None;

@@ -3058,6 +3058,26 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             _ => {}
         }
     });
+    if let Some(confirm) = &model.file_picker.confirm {
+        let lines = confirm.lines();
+        let width = lines
+            .iter()
+            .map(|line| line.chars().count() as u16 + 4)
+            .max()
+            .unwrap_or(0)
+            .max(34);
+        let ask = centered(area, width, lines.len() as u16 + 2);
+        paint_popup(
+            frame,
+            model,
+            ask,
+            overlay_block(model, "Replace file?"),
+            lines.join("\n"),
+        );
+        register_overlay(hits, ask);
+        let footer = crate::mouse::line_rect(popup_inner(ask), lines.len() - 1);
+        crate::widgets::form::register_footer(hits, footer, &lines[lines.len() - 1], "Replace");
+    }
 }
 
 pub fn render_to_string(model: &Model, width: u16, height: u16) -> String {
