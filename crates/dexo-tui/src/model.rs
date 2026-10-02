@@ -1741,6 +1741,8 @@ pub struct Model {
     pub capabilities: TerminalCapabilities,
     /// The user's theme files, `<data dir>/themes/*.toml`, read at start.
     pub user_themes: Vec<crate::theme::UserTheme>,
+    /// The theme files' problems already said, so reopening Settings says only new ones.
+    pub theme_problems: Vec<String>,
     pub keymap: Keymap,
     pub pending_chord: Chord,
     pub panes: PaneLayout,
@@ -1783,6 +1785,7 @@ impl Default for Model {
             },
             keymap: Keymap::default_profile(),
             user_themes: Vec::new(),
+            theme_problems: Vec::new(),
             pending_chord: Chord { keys: Vec::new() },
             help: HelpState::default(),
             onboarding: OnboardingState::default(),

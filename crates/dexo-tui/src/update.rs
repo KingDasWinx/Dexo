@@ -938,6 +938,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             open_file_picker(model, crate::screens::file_picker::FilePickerMode::Open);
             Vec::new()
         }
+        Action::CycleTheme => cycle_theme(model, 1),
         Action::CycleMode => cycle_mode(model, 1),
         Action::CycleAccent => cycle_accent(model, 1),
         Action::CycleKeymap => cycle_keymap(model, 1),
@@ -1498,11 +1499,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.settings.open = true;
             model.settings.focus = 0;
             model.settings.confirm_reset = false;
-            // A theme file dropped in since the start shows up without one.
+            // A theme file dropped in, changed or removed since the start shows as it is.
             if let Ok(paths) = dexo_storage::AppPaths::discover() {
-                let (themes, _) = crate::theme::user_themes(&paths.data_dir);
-                model.settings.themes = crate::theme::choices(&themes);
-                model.user_themes = themes;
+                load_user_themes(model, &paths.data_dir);
             }
             sync_settings_screen(model);
             Vec::new()
@@ -3843,6 +3842,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Enter | KeyCode::Char(' ') | KeyCode::Right => step_focused_setting(model, 1),
             KeyCode::Left => step_focused_setting(model, -1),
             KeyCode::Char('r') => update(model, Action::ConfirmResetSettings),
+            KeyCode::Char('e') => update(model, Action::CycleTheme),
             KeyCode::Char('t') => update(model, Action::CycleMode),
             KeyCode::Char('c') => update(model, Action::CycleAccent),
             KeyCode::Char('k') => update(model, Action::CycleKeymap),
@@ -7826,16 +7826,26 @@ fn apply_saved_settings(model: &mut Model) {
     model.settings.accent = manager.active.accent.clone();
     model.settings.completion_trigger = manager.active.completion_trigger;
     model.settings.updates = manager.active.update_check;
-    // The user's theme files, each one that does not parse said by file and line.
-    let (themes, problems) = crate::theme::user_themes(&paths.data_dir);
-    for problem in problems {
-        model
-            .messages
-            .warn(format!("{problem}; that theme is left out"));
+    model.settings.theme = manager.active.color_theme.clone();
+    load_user_themes(model, &paths.data_dir);
+    sync_settings_screen(model);
+}
+
+/// The user's theme files read again, each one that does not parse said by file and
+/// line once; the theme in use painted from what its file says now, or Dexo's own when
+/// its file is gone.
+fn load_user_themes(model: &mut Model, data_dir: &std::path::Path) {
+    let (themes, problems) = crate::theme::user_themes(data_dir);
+    for problem in &problems {
+        if !model.theme_problems.contains(problem) {
+            model
+                .messages
+                .warn(format!("{problem}; that theme is left out"));
+        }
     }
+    model.theme_problems = problems;
     model.settings.themes = crate::theme::choices(&themes);
     model.user_themes = themes;
-    model.settings.theme = manager.active.color_theme.clone();
     if !model
         .settings
         .themes
@@ -7852,11 +7862,10 @@ fn apply_saved_settings(model: &mut Model) {
     }
     model.theme = crate::theme::resolve(
         &model.settings.theme,
-        mode,
+        crate::theme::Mode::from_key(&model.settings.mode),
         &model.settings.accent,
         &model.user_themes,
     );
-    sync_settings_screen(model);
 }
 
 fn run_transfer(model: &mut Model) -> Vec<Effect> {
@@ -9536,7 +9545,54 @@ mod tests {
         );
     }
 
-    /// A container that lets root in without a password saves with an empty one; one
+    /// Settings reads the theme files again: a broken one added since is said once, and
+    /// a theme in use whose file is gone goes back to Dexo's own, painted at once.
+    #[test]
+    fn reopened_settings_read_theme_files_again() {
+        let dir = tempfile::tempdir().unwrap();
+        let themes = dir.path().join("themes");
+        std::fs::create_dir(&themes).unwrap();
+        std::fs::write(
+            themes.join("mine.toml"),
+            "name = \"Mine\"\n[roles]\nbackground = \"#101010\"\n",
+        )
+        .unwrap();
+        let mut model = Model::default();
+        model.settings.theme = "file:mine".into();
+        super::load_user_themes(&mut model, dir.path());
+        assert_eq!(model.theme.name, "Mine");
+        std::fs::write(themes.join("broken.toml"), "mode = \"neon\"\n").unwrap();
+        super::load_user_themes(&mut model, dir.path());
+        super::load_user_themes(&mut model, dir.path());
+        let said = |model: &Model, text: &str| {
+            model
+                .messages
+                .iter()
+                .filter(|entry| entry.message.contains(text))
+                .count()
+        };
+        assert_eq!(said(&model, "broken.toml line 1"), 1);
+        std::fs::remove_file(themes.join("mine.toml")).unwrap();
+        super::load_user_themes(&mut model, dir.path());
+        assert_eq!(model.settings.theme, crate::theme::DEXO_THEME);
+        assert_ne!(model.theme.name, "Mine");
+        assert_eq!(said(&model, "There is no theme mine"), 1);
+    }
+
+    #[test]
+    fn the_theme_has_a_settings_key_and_a_command() {
+        let mut model = Model::default();
+        model.settings.open = true;
+        model.settings.themes = crate::theme::choices(&[]);
+        let before = model.settings.theme.clone();
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('e'), KeyModifiers::NONE)),
+        );
+        assert_ne!(model.settings.theme, before);
+        assert!(crate::palette::command_spec("settings.theme").is_some());
+    }
+
     /// a saved connection already dials is not listed again.
     #[test]
     fn docker_rows_without_a_password_or_already_saved() {

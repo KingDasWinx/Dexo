@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use ratatui::style::{Color, Modifier, Style};
-use serde::Deserialize;
 
 use crate::capabilities::{ColorDepth, TerminalCapabilities};
 
@@ -217,6 +216,8 @@ pub struct Theme {
 pub struct ThemeError {
     pub field: String,
     pub reason: String,
+    /// The 1-based line of the file it is about.
+    pub line: Option<usize>,
 }
 
 impl std::fmt::Display for ThemeError {
@@ -229,15 +230,6 @@ impl std::fmt::Display for ThemeError {
 pub struct LoadedTheme {
     pub theme: Theme,
     pub error: Option<ThemeError>,
-}
-
-#[derive(Deserialize)]
-struct ThemeToml {
-    name: Option<String>,
-    #[serde(alias = "kind")]
-    mode: Option<String>,
-    #[serde(default)]
-    roles: HashMap<String, String>,
 }
 
 impl Theme {
@@ -451,29 +443,90 @@ pub fn builtin_for_depth(depth: ColorDepth) -> Theme {
 }
 
 pub fn parse_theme(src: &str) -> Result<Theme, ThemeError> {
-    let parsed: ThemeToml = toml::from_str(src).map_err(|err| ThemeError {
-        field: field_from_toml_error(&err),
-        reason: err.message().to_string(),
+    let line_of = |offset: usize| line_at(src, offset);
+    let table = toml::de::DeTable::parse(src).map_err(|error| ThemeError {
+        field: "theme".into(),
+        reason: error.message().to_string(),
+        line: error.span().map(|span| line_of(span.start)),
     })?;
-    let mode = match parsed.mode.as_deref().unwrap_or("dark") {
-        "dark" => Mode::Dark,
-        "light" => Mode::Light,
-        "low-color" | "lowcolor" => Mode::LowColor,
-        other => {
-            return Err(ThemeError {
-                field: "mode".into(),
-                reason: format!("unknown theme mode `{other}`"),
-            });
-        }
+    let text = |value: &toml::de::DeValue, field: &str, line: usize| {
+        value
+            .as_str()
+            .map(str::to_string)
+            .ok_or_else(|| ThemeError {
+                field: field.into(),
+                reason: "must be a string".into(),
+                line: Some(line),
+            })
     };
+    // Read in the file's order, so the first problem reported is the first in the file.
+    fn in_order<'i>(table: &toml::de::DeTable<'i>) -> Vec<(String, toml::de::DeValue<'i>, usize)> {
+        let mut entries: Vec<_> = table
+            .iter()
+            .map(|(key, value)| {
+                (
+                    key.get_ref().to_string(),
+                    value.get_ref().clone(),
+                    key.span().start,
+                )
+            })
+            .collect();
+        entries.sort_by_key(|(.., start)| *start);
+        entries
+    }
+    let mut name = None;
+    let mut mode = Mode::Dark;
+    let mut roles = Vec::new();
+    for (key, value, start) in in_order(table.get_ref()) {
+        let line = line_of(start);
+        match key.as_str() {
+            "name" => name = Some(text(&value, "name", line)?),
+            // `kind` is what the first theme files called it.
+            "mode" | "kind" => {
+                mode = match text(&value, &key, line)?.as_str() {
+                    "dark" => Mode::Dark,
+                    "light" => Mode::Light,
+                    "low-color" | "lowcolor" => Mode::LowColor,
+                    other => {
+                        return Err(ThemeError {
+                            field: key,
+                            reason: format!(
+                                "unknown theme mode `{other}`; use dark, light or low-color"
+                            ),
+                            line: Some(line),
+                        });
+                    }
+                }
+            }
+            "roles" => {
+                let toml::de::DeValue::Table(table) = &value else {
+                    return Err(ThemeError {
+                        field: "roles".into(),
+                        reason: "must be a table of role = color".into(),
+                        line: Some(line),
+                    });
+                };
+                for (role, color, start) in in_order(table) {
+                    let line = line_of(start);
+                    let field = format!("roles.{role}");
+                    roles.push((role, text(&color, &field, line)?, line));
+                }
+            }
+            _ => {}
+        }
+    }
     let mut base = mode.theme();
-    base.name = parsed.name.unwrap_or(base.name);
+    base.name = name.unwrap_or(base.name);
     base.mode = mode;
-    for (key, value) in parsed.roles {
-        let role = parse_role(&key)?;
+    for (key, value, line) in roles {
+        let role = parse_role(&key).map_err(|error| ThemeError {
+            line: Some(line),
+            ..error
+        })?;
         let color = parse_color(&value).map_err(|reason| ThemeError {
             field: format!("roles.{key}"),
             reason,
+            line: Some(line),
         })?;
         base.slots.insert(role, palette_from(color));
     }
@@ -634,7 +687,7 @@ pub fn user_themes(data_dir: &Path) -> (Vec<UserTheme>, Vec<String>) {
         };
         match parse_theme(&src) {
             Ok(theme) => themes.push(UserTheme { name, theme }),
-            Err(error) => errors.push(match error_line(&src, &error.field) {
+            Err(error) => errors.push(match error.line {
                 Some(line) => format!("{} line {line}: {error}", path.display()),
                 None => format!("{}: {error}", path.display()),
             }),
@@ -680,32 +733,6 @@ pub fn choices(user: &[UserTheme]) -> Vec<(String, String)> {
 pub(crate) fn line_at(src: &str, offset: usize) -> usize {
     src.get(..offset)
         .map_or(1, |before| before.matches('\n').count() + 1)
-}
-
-/// The 1-based line a parse error points at: a TOML error's span, or the line that
-/// names the field.
-pub fn error_line(src: &str, field: &str) -> Option<usize> {
-    let line_at = |offset: usize| {
-        src.get(..offset)
-            .map(|before| before.matches('\n').count() + 1)
-    };
-    if let Some(span) = field
-        .strip_prefix("toml[")
-        .and_then(|rest| rest.split_once(".."))
-    {
-        return span.0.parse().ok().and_then(line_at);
-    }
-    // The key the field ends in, as a line starts with it: `focus = …`, `"ctrl+p" = …`.
-    let key = field.rsplit_once('.').map_or(field, |(_, key)| key);
-    src.lines()
-        .position(|line| {
-            let line = line.trim_start();
-            let rest = line
-                .strip_prefix(&format!("\"{key}\""))
-                .or_else(|| line.strip_prefix(key));
-            rest.is_some_and(|rest| rest.trim_start().starts_with('='))
-        })
-        .map(|index| index + 1)
 }
 
 pub fn load_theme_file(path: &Path, fallback: Theme) -> LoadedTheme {
@@ -809,6 +836,7 @@ fn parse_role(key: &str) -> Result<Role, ThemeError> {
         .ok_or_else(|| ThemeError {
             field: format!("roles.{key}"),
             reason: format!("unknown role `{key}`"),
+            line: None,
         })
 }
 
@@ -900,13 +928,6 @@ fn format_color(color: Color) -> String {
         Color::Rgb(r, g, b) => format!("#{r:02x}{g:02x}{b:02x}"),
         Color::Indexed(n) => format!("ansi:{n}"),
         other => format!("{other:?}"),
-    }
-}
-
-fn field_from_toml_error(err: &toml::de::Error) -> String {
-    match err.span() {
-        Some(span) => format!("toml[{}..{}]", span.start, span.end),
-        None => "theme".into(),
     }
 }
 
@@ -1099,5 +1120,32 @@ mod tests {
             super::resolve("file:gone", Mode::Light, "rose", &user),
             theme_for(Mode::Light, "rose")
         );
+    }
+
+    /// Every problem in a theme file names its own line: `kind`, a dotted role, a TOML
+    /// syntax error; with several bad roles, the first in the file is the one reported.
+    #[test]
+    fn theme_problems_name_their_own_line() {
+        let line = |src: &str| {
+            let error = parse_theme(src).unwrap_err();
+            (error.line, error.field)
+        };
+        assert_eq!(
+            line("name = \"x\"\nkind = \"neon\"\n"),
+            (Some(2), "kind".into())
+        );
+        assert_eq!(
+            line("name = \"x\"\n\nroles.focus = \"nope\"\n"),
+            (Some(3), "roles.focus".into())
+        );
+        let several = "[roles]\nzebra = \"#zzzzzz\"\nborder = \"bad\"\nfocus = \"worse\"\n";
+        for _ in 0..10 {
+            assert_eq!(line(several), (Some(2), "roles.zebra".into()));
+        }
+        let error = parse_theme("name = \"x\"\nmode = dark\n").unwrap_err();
+        assert_eq!(error.line, Some(2));
+        assert!(!error.to_string().contains("toml["), "{error}");
+        let error = parse_theme("[roles]\nnot-a-role = \"#ffffff\"\n").unwrap_err();
+        assert_eq!(error.line, Some(2));
     }
 }

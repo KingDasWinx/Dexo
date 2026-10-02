@@ -745,6 +745,21 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::PrevResultTab),
         },
         CommandSpec {
+            id: "settings.theme",
+            title: "Cycle Theme",
+            keywords: &[
+                "dracula",
+                "gruvbox",
+                "nord",
+                "catppuccin",
+                "tokyo",
+                "colors",
+            ],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::CycleTheme),
+        },
+        CommandSpec {
             id: "settings.mode",
             title: "Toggle Light/Dark Mode",
             keywords: &["dark", "light", "contrast"],
@@ -1340,6 +1355,7 @@ fn hidden(id: &str) -> bool {
             | "results.cycle_view"
             | "results.prev_tab"
             // already a labelled row inside the Settings screen
+            | "settings.theme"
             | "settings.mode"
             | "settings.accent"
             | "settings.keymap"

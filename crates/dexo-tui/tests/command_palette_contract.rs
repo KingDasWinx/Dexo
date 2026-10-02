@@ -87,6 +87,7 @@ const COMMAND_IDS: &[&str] = &[
     "results.sort_add_column",
     "results.next_tab",
     "results.prev_tab",
+    "settings.theme",
     "settings.mode",
     "settings.accent",
     "settings.keymap",
@@ -228,8 +229,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 157);
-    assert_eq!(actual.len(), 157, "duplicate command id");
+    assert_eq!(specs.len(), 158);
+    assert_eq!(actual.len(), 158, "duplicate command id");
     assert_eq!(actual, expected);
 }
 

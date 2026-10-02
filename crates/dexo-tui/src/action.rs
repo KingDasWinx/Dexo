@@ -259,6 +259,7 @@ pub enum Action {
     PrevDataPage,
     SaveActiveDocument,
     OpenDocument,
+    CycleTheme,
     CycleMode,
     CycleAccent,
     CycleKeymap,

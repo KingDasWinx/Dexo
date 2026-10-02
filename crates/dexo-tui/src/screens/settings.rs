@@ -98,8 +98,9 @@ impl SettingsScreen {
         vec![
             FieldOptions {
                 label: "Theme",
+                // The place first: a long file name is what gets cut, not where it is.
                 values: vec![format!(
-                    "{theme_label}  {}/{}",
+                    "{}/{}  {theme_label}",
                     theme + 1,
                     self.themes.len().max(1)
                 )],
