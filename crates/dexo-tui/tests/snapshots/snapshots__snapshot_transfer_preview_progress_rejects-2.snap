@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
-demo  local  public                                         
+demo  local  public      1 Explorer  [2 Editor]  3 Results  
 ┌Transfer──────────────────────────────────────────────────┐
 │export out.csv                                            │
 │format=csv (Ctrl+F to cycle) strategy=Stop                │

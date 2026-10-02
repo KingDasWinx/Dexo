@@ -56,10 +56,6 @@ impl WorkbenchLayout {
         self.explorer_width = self.explorer_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
         self.console_height = self.console_height.min(max_results).max(3);
-        if width < 60 || height < 24 {
-            self.explorer_visible = false;
-            self.results_visible = false;
-        }
         self
     }
 }
@@ -225,8 +221,14 @@ mod tests {
             ..WorkbenchLayout::default()
         }
         .clamp(50, 18);
-        assert!(!layout.explorer_visible);
-        assert!(!layout.results_visible);
+        assert!(
+            layout.explorer_visible,
+            "a small terminal hid the explorer for good"
+        );
+        assert!(
+            layout.results_visible,
+            "a small terminal hid the results for good"
+        );
         assert!(layout.explorer_width <= 25);
         assert!(layout.results_height <= 18);
     }

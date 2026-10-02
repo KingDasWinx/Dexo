@@ -72,6 +72,9 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if !overlay_blocks_workbench(model) && plan.mode != crate::layout::LayoutMode::Compact {
         register_pane_dividers(hits, plan);
     }
+    if plan.mode == crate::layout::LayoutMode::Compact {
+        render_pane_switcher(frame, plan.context, model, hits);
+    }
     crate::widgets::status::render(frame, plan.status, model);
     if model.onboarding.open {
         render_onboarding(frame, model, hits);
@@ -659,6 +662,60 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
             crate::widgets::grid::render(frame, area, model, hits);
         }
         Focus::Console => render_console_log(frame, area, model, true),
+    }
+}
+
+/// Compact mode draws one pane at a time, and only Alt+1..3 changed it: nothing on
+/// screen said so, and the mouse could not. The header row carries the three panes, the
+/// one on screen in brackets, each a click.
+fn render_pane_switcher(frame: &mut Frame, row: Rect, model: &Model, hits: &mut HitMap) {
+    let focus = model.effective_focus();
+    let panes = [
+        ("1 Sidebar", "1", Focus::Explorer, HitTarget::Explorer),
+        ("2 SQL", "2", Focus::Editor, HitTarget::Editor),
+        ("3 Results", "3", Focus::Results, HitTarget::Grid),
+    ];
+    let current = match focus {
+        Focus::Explorer => 0,
+        Focus::Results | Focus::Console => 2,
+        _ => 1,
+    };
+    // The names when the row has room beside the connection, the digits when not.
+    let spelled: usize = panes.iter().map(|pane| pane.0.len() + 3).sum();
+    let named = usize::from(row.width) >= context_line(model).chars().count() + spelled + 2;
+    let mut x = row.x + row.width;
+    let mut cells: Vec<(Rect, String, bool, HitTarget)> = Vec::new();
+    for (index, (name, digit, _, target)) in panes.iter().enumerate().rev() {
+        let label = if named { *name } else { *digit };
+        let text = format!("[{label}]");
+        let width = text.chars().count() as u16 + 1;
+        if x < row.x + width {
+            break;
+        }
+        x -= width;
+        cells.push((
+            Rect::new(x, row.y, width, 1),
+            text,
+            index == current,
+            *target,
+        ));
+    }
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let on = model.theme.style(Role::Focus, model.capabilities);
+    for (rect, text, active, target) in cells {
+        // The brackets stand for the pane in use even on a terminal with no colour.
+        let shown = if active {
+            text
+        } else {
+            text.replace(['[', ']'], " ")
+        };
+        frame.render_widget(
+            Paragraph::new(shown).style(if active { on } else { muted }),
+            rect,
+        );
+        if !overlay_blocks_workbench(model) {
+            hits.register(target, rect);
+        }
     }
 }
 
@@ -3360,6 +3417,12 @@ mod tests {
         let frame = render_to_string(&model, 60, 20);
 
         assert!(frame.contains("Alt+1 connections"));
+        // One spelling of the keys, and Ctrl+P once: it read `ctrl+p  F1  Alt+1
+        // connections  Ctrl+P commands`.
+        let status = frame.lines().last().unwrap_or_default();
+        assert!(status.contains("Ctrl+P  F1"), "{status}");
+        assert!(!status.contains("ctrl+p"), "{status}");
+        assert_eq!(status.matches("Ctrl+P").count(), 1, "{status}");
     }
 
     #[test]

@@ -98,7 +98,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         ));
     }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
-        spans.push(Span::raw(format!("{conn}  ctrl+p  F1")));
+        spans.push(Span::raw(format!("{conn}  {}", doors(model))));
         if let Some(notice) = &model.update_notice {
             let arrow = if model.capabilities.unicode {
                 "↑"
@@ -110,8 +110,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 model.theme.style(Role::Warning, model.capabilities),
             ));
         }
+        // Whole hints that fit, as on the wide bar: the line ended mid-hint at 60 columns.
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
         if let Some(hint) = footer_hint(model) {
-            spans.push(Span::raw(format!("  {hint}")));
+            let hint = fit_hint(&hint, (area.width as usize).saturating_sub(used + 2));
+            if !hint.is_empty() {
+                spans.push(Span::raw(format!("  {hint}")));
+            }
         }
         frame.render_widget(Paragraph::new(Line::from(spans)), area);
         return;
@@ -238,13 +243,8 @@ fn footer_hint(model: &Model) -> Option<String> {
             crate::model::Focus::Editor | crate::model::Focus::Palette
         )
     {
-        return Some(keyed_hint(
-            model,
-            &[
-                ("focus.explorer", "connections"),
-                ("palette.open", "commands"),
-            ],
-        ));
+        // The palette's own key is already on this line, as a door.
+        return Some(keyed_hint(model, &[("focus.explorer", "connections")]));
     }
     // A table document has no editor on screen, so the editor's hint would be a lie.
     match model.effective_focus() {
@@ -388,10 +388,7 @@ mod tests {
             layout_mode: LayoutMode::Compact,
             ..Model::default()
         };
-        assert_eq!(
-            footer_hint(&model).as_deref(),
-            Some("Alt+1 connections  Ctrl+P commands")
-        );
+        assert_eq!(footer_hint(&model).as_deref(), Some("Alt+1 connections"));
     }
 
     #[test]

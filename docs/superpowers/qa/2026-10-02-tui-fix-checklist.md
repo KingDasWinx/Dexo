@@ -28,7 +28,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **PC-21** `MAJOR` Open file picker: in a folder with many entries the name field and the [Open]/[Cancel] buttons are pushed out of the dialog
 - [ ] **PC-25** `MAJOR` After a crash (kill) the recovered documents lose their connection and the "unsaved" marker
 - [ ] **PC-26** `MAJOR` Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
-- [ ] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
+- [x] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
 - [ ] **PC-29** `MAJOR` A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
 - [ ] **PC-33** `MAJOR` Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command
 - [ ] **PC-35** `MAJOR` Ctrl+N creates the document on the "active" connection, not on the connection under the explorer cursor; the status bar names a third one
@@ -54,7 +54,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20
 - [ ] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`
 - [ ] **PC-31** `COSMETIC` Single-line inputs never scroll horizontally (palette query, New document, Rename, Save, name field)
-- [ ] **PC-32** `COSMETIC` Narrow status bar shows lower-case `ctrl+p  F1` before `Alt+1 connections  Ctrl+P commands`
+- [x] **PC-32** `COSMETIC` Narrow status bar shows lower-case `ctrl+p  F1` before `Alt+1 connections  Ctrl+P commands`
 - [ ] **PC-39** `COSMETIC` Diagnostics export: file name field starts empty, bundle is a ZIP whatever the name, log tail is empty, key=value text
 
 ## ED: SQL editor
@@ -353,7 +353,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **SL-05** `MAJOR` "MOUSE OFF · Ctrl+P settings.mouse" shows an internal command id and points to a palette entry that does not exist
 - [ ] **SL-06** `MAJOR` Cycle Theme / Toggle Light-Dark Mode / Cycle Accent / Cycle Keymap / Toggle Mouse / Toggle Animation / Toggle Unicode / Reset Settings and Hide Explorer / Hide Results / Grow-Shrink Results / Grow-Shrink Explorer are not in the command palette
 - [ ] **SL-07** `MAJOR` Alt+[ (Shrink Explorer Pane) does nothing and swallows the next key
-- [ ] **SL-16** `MAJOR` Running Dexo in a small terminal permanently hides the explorer and results (compact mode overwrites the saved layout)
+- [x] **SL-16** `MAJOR` Running Dexo in a small terminal permanently hides the explorer and results (compact mode overwrites the saved layout)
 - [ ] **SL-17** `MAJOR` "Inspect value" shows raw Rust Debug text for numbers and booleans
 - [ ] **SL-01** `MINOR` Clicking an option in Settings cycles to the next value instead of choosing the clicked one
 - [ ] **SL-02** `MINOR` Empty-editor hint `Ctrl+N  new query / Ctrl+O  open a file` is hard-coded and wrong under the Emacs keymap
@@ -363,7 +363,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **SL-10** `MINOR` Only one of the two border cells of a divider is draggable
 - [ ] **SL-18** `MINOR` "Toggle Light/Dark Mode" cycles through three modes
 - [ ] **SL-19** `MINOR` The terminal's colour depth (TERM / COLORTERM) is ignored; only NO_COLOR works
-- [ ] **SL-20** `MINOR` Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
+- [x] **SL-20** `MINOR` Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
 - [ ] **SL-21** `MINOR` Help: any click closes the overlay, even a click on the Search field
 - [ ] **SL-22** `MINOR` "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling
 - [ ] **SL-23** `MINOR` "Search History" is not searchable and shows duplicates

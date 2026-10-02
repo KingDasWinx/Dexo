@@ -2238,11 +2238,12 @@ impl Model {
         self.height = height;
         self.layout_mode = LayoutPlan::for_area_with_document_tabs(
             ratatui::layout::Rect::new(0, 0, width, height),
-            Some(&self.panes.clamp(width, height)),
+            Some(&self.effective_panes()),
             true,
         )
         .mode;
-        self.panes = self.panes.clamp(width, height);
+        // `self.panes` is what the user set, and is saved as it is: a resize used to
+        // clamp it in place, so a pass through a small terminal shrank it for good.
         self.sync_grid_viewport();
         self.sync_document_tabs_scroll();
     }
@@ -2255,7 +2256,7 @@ impl Model {
         if self.active_document().kind.is_table() {
             panes.results_height = self.panes.console_height;
         }
-        panes
+        panes.clamp(self.width, self.height)
     }
 
     /// Switches the active document and brings its output pane with it. Assigning

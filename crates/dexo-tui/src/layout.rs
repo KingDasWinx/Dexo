@@ -66,7 +66,7 @@ impl LayoutPreset {
                 console_height: 4,
             },
         };
-        panes.clamp(width, height)
+        panes.fit(width, height)
     }
 }
 
@@ -135,17 +135,28 @@ pub struct PaneLayout {
 }
 
 impl PaneLayout {
+    /// The sizes this terminal can hold. What is shown or hidden is the user's choice and
+    /// stays: a small terminal only draws one pane (compact mode), it does not hide the
+    /// others for good, which is what it did when this cleared both flags and the next
+    /// save wrote that down.
     pub fn clamp(mut self, width: u16, height: u16) -> Self {
         let max_side = width.saturating_div(2).max(8);
         let max_results = height.saturating_sub(6).max(3);
         self.explorer_width = self.explorer_width.min(max_side).max(8);
         self.results_height = self.results_height.min(max_results).max(3);
         self.console_height = self.console_height.min(max_results).max(3);
-        if width < 60 || height < 24 {
-            self.explorer_visible = false;
-            self.results_visible = false;
-        }
         self
+    }
+
+    /// [`Self::clamp`] for what gets stored. Compact mode draws none of the panes, so a
+    /// terminal that small has nothing to fit them to, and clamping there only shrank the
+    /// sizes the user had set.
+    pub fn fit(self, width: u16, height: u16) -> Self {
+        if width < 80 || height < 24 {
+            self
+        } else {
+            self.clamp(width, height)
+        }
     }
 }
 
@@ -369,7 +380,6 @@ mod tests {
         assert!(plan.explorer.width <= 80);
         assert!(plan.results.height <= 44);
         let compact = huge.clamp(50, 18);
-        assert!(!compact.explorer_visible);
         let compact_plan = LayoutPlan::for_area_with(Rect::new(0, 0, 50, 18), Some(&compact));
         assert_eq!(compact_plan.mode, LayoutMode::Compact);
         assert_eq!(compact_plan.explorer.width, 0);

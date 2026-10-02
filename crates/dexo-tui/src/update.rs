@@ -2402,7 +2402,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if !model.panes.explorer_visible && model.focus == Focus::Explorer {
                 model.focus = Focus::Editor;
             }
-            model.panes = model.panes.clamp(model.width, model.height);
             model.layout_dirty = true;
             model.sync_grid_viewport();
             Vec::new()
@@ -2412,7 +2411,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if !model.panes.results_visible && model.focus == Focus::Results {
                 model.focus = Focus::Editor;
             }
-            model.panes = model.panes.clamp(model.width, model.height);
             model.layout_dirty = true;
             model.sync_grid_viewport();
             Vec::new()
@@ -2623,7 +2621,6 @@ fn focus_pane(model: &mut Model, target: FocusTarget) -> Vec<Effect> {
             Focus::Results
         }
     };
-    model.panes = model.panes.clamp(model.width, model.height);
     model.sync_grid_viewport();
     close_palette(model);
     if leaving_editor {
@@ -3747,7 +3744,7 @@ fn resize_pane_drag(model: &mut Model, mouse: MouseEvent) {
         PaneEdge::Explorer => model.panes.explorer_width = value,
         PaneEdge::Results => set_bottom_pane_height(model, value),
     }
-    model.panes = model.panes.clamp(model.width, model.height);
+    model.panes = model.panes.fit(model.width, model.height);
     model.sync_grid_viewport();
     model.layout_dirty = true;
 }
@@ -5738,7 +5735,7 @@ fn adjust_results_height(model: &mut Model, delta: i16) {
     let next = (current + delta).max(floor) as u16;
     model.panes.results_visible = true;
     set_bottom_pane_height(model, next);
-    model.panes = model.panes.clamp(model.width, model.height);
+    model.panes = model.panes.fit(model.width, model.height);
     model.sync_grid_viewport();
     model.layout_dirty = true;
 }
@@ -5747,7 +5744,7 @@ fn adjust_explorer_width(model: &mut Model, delta: i16) {
     let next = (model.panes.explorer_width as i16 + delta).max(8) as u16;
     model.panes.explorer_visible = true;
     model.panes.explorer_width = next;
-    model.panes = model.panes.clamp(model.width, model.height);
+    model.panes = model.panes.fit(model.width, model.height);
     model.sync_grid_viewport();
     model.layout_dirty = true;
 }
@@ -6401,14 +6398,16 @@ fn document_from_stored(stored: dexo_storage::StoredDocument) -> crate::model::E
 }
 
 fn apply_layout(model: &mut Model, layout: Option<dexo_storage::WorkbenchLayout>) {
-    let Some(layout) = layout.map(|layout| layout.clamp(model.width, model.height)) else {
+    let Some(layout) = layout else {
         return;
     };
+    // As saved, not fitted to this terminal: it may be a small one for a moment, and
+    // what is applied here is what the next save writes back.
     model.panes.explorer_visible = layout.explorer_visible;
     model.panes.results_visible = layout.results_visible;
-    model.panes.explorer_width = layout.explorer_width;
-    model.panes.results_height = layout.results_height;
-    model.panes.console_height = layout.console_height;
+    model.panes.explorer_width = layout.explorer_width.max(8);
+    model.panes.results_height = layout.results_height.max(3);
+    model.panes.console_height = layout.console_height.max(3);
     if let Some(id) = &layout.active_document_id
         && let Some(index) = model
             .documents
