@@ -312,8 +312,9 @@ pub fn split_statements_in(sql: &str, dialect: Dialect) -> Vec<StatementSpan> {
     }
 }
 
-/// `sql` with every `;` inside a SQLite `[bracketed identifier]` replaced, byte for
-/// byte, so `[a;b]` stays one name and offsets into the mask are offsets into `sql`.
+/// `sql` with every `;` inside a SQLite `[bracketed identifier]` replaced, and each
+/// `/*` inside a comment -- SQLite's do not nest -- byte for byte, so `[a;b]` stays one
+/// name and offsets into the mask are offsets into `sql`.
 fn sqlite_mask(sql: &str) -> String {
     let bytes = sql.as_bytes();
     let mut out = bytes.to_vec();
@@ -332,6 +333,7 @@ fn sqlite_mask(sql: &str) -> String {
                     i += 1;
                 }
             }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => i = mask_comment(bytes, &mut out, i),
             b'[' => {
                 // A name never spans lines; a `[` with no `]` on its line masks nothing.
                 let close = bytes[i..]
@@ -389,13 +391,7 @@ pub(crate) fn mysql_mask(sql: &str) -> String {
                     i += 1;
                 }
             }
-            b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                i += 2;
-                while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
-                    i += 1;
-                }
-                i += 2;
-            }
+            b'/' if bytes.get(i + 1) == Some(&b'*') => i = mask_comment(bytes, &mut out, i),
             b'#' => {
                 while i < bytes.len() && bytes[i] != b'\n' {
                     out[i] = b' ';
@@ -566,9 +562,17 @@ fn skip_ws(sql: &str, mut i: usize) -> usize {
     i
 }
 
-/// The end of the comment starting at `i`, or `None` if one does not start there.
-/// Shared with the lexer, which needs comments as tokens rather than as whitespace.
+/// The end of the comment starting at `i`, or `None` if one does not start there. A
+/// block comment holds the ones opened inside it, as in Postgres: ending at the first
+/// `*/` split a nested comment at the `;` after it. MySQL and SQLite do not nest, so
+/// their masks take the inner `/*` out first.
 pub(crate) fn skip_comment(sql: &str, i: usize) -> Option<usize> {
+    skip_comment_nesting(sql, i, true)
+}
+
+/// [`skip_comment`], with block comments nesting or not. Shared with the lexer, which
+/// needs comments as tokens rather than as whitespace.
+pub(crate) fn skip_comment_nesting(sql: &str, i: usize, nested: bool) -> Option<usize> {
     let bytes = sql.as_bytes();
     match bytes.get(i)? {
         b'-' if bytes.get(i + 1) == Some(&b'-') => {
@@ -580,13 +584,38 @@ pub(crate) fn skip_comment(sql: &str, i: usize) -> Option<usize> {
         }
         b'/' if bytes.get(i + 1) == Some(&b'*') => {
             let mut end = i + 2;
-            while end + 1 < bytes.len() && !(bytes[end] == b'*' && bytes[end + 1] == b'/') {
-                end += 1;
+            let mut depth = 1;
+            while end + 1 < bytes.len() {
+                if bytes[end] == b'*' && bytes[end + 1] == b'/' {
+                    depth -= 1;
+                    end += 2;
+                    if depth == 0 {
+                        return Some(end);
+                    }
+                } else if nested && bytes[end] == b'/' && bytes[end + 1] == b'*' {
+                    depth += 1;
+                    end += 2;
+                } else {
+                    end += 1;
+                }
             }
-            Some((end + 2).min(bytes.len()))
+            Some(bytes.len())
         }
         _ => None,
     }
+}
+
+/// Blanks the `*` of each `/*` inside the block comment starting at `i`, in `out`, and
+/// says where it ends: for MySQL and SQLite, whose comments end at the first `*/`.
+fn mask_comment(bytes: &[u8], out: &mut [u8], mut i: usize) -> usize {
+    i += 2;
+    while i + 1 < bytes.len() && !(bytes[i] == b'*' && bytes[i + 1] == b'/') {
+        if bytes[i] == b'/' && bytes[i + 1] == b'*' {
+            out[i + 1] = b' ';
+        }
+        i += 1;
+    }
+    i + 2
 }
 
 fn skip_atom(sql: &str, i: usize) -> usize {
@@ -748,6 +777,32 @@ mod tests {
             split_statements_in(brackets, crate::Dialect::Sqlite).len(),
             2
         );
+    }
+
+    /// Postgres nests block comments: a `;` after an inner `*/` is still in the outer
+    /// one. MySQL and SQLite end a comment at its first `*/`.
+    #[test]
+    fn nested_comments_hold_their_semicolons_where_they_nest() {
+        let sql = "/* outer /* inner */ ; still comment */ select 1;\nselect 2";
+        let texts: Vec<&str> = split_statements_in(sql, crate::Dialect::Postgres)
+            .iter()
+            .map(|span| &sql[span.byte_range.clone()])
+            .collect();
+        assert_eq!(texts.len(), 2, "{texts:?}");
+        assert!(texts[0].ends_with("select 1"), "{texts:?}");
+        let flat = "/* a /* b */ select 1; select 2";
+        for dialect in [crate::Dialect::Mysql, crate::Dialect::Sqlite] {
+            let texts: Vec<&str> = split_statements_in(flat, dialect)
+                .iter()
+                .map(|span| &flat[span.byte_range.clone()])
+                .collect();
+            assert_eq!(texts.len(), 2, "{dialect:?}: {texts:?}");
+            assert!(texts[0].ends_with("select 1"), "{dialect:?}: {texts:?}");
+        }
+        let tokens = crate::tokenize("/* a /* b */ c */ x", crate::Dialect::Postgres);
+        assert_eq!(tokens.len(), 2);
+        let tokens = crate::tokenize("/* a /* b */ c */ x", crate::Dialect::Mysql);
+        assert!(tokens.len() > 2);
     }
 
     /// Only what a CREATE makes says whether it is a routine: a table or a column

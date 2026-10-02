@@ -1,7 +1,7 @@
 use std::ops::Range;
 
 use crate::dialect::Dialect;
-use crate::statement::{skip_comment, skip_dollar, skip_quote};
+use crate::statement::{skip_comment_nesting, skip_dollar, skip_quote};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TokenKind {
@@ -90,7 +90,7 @@ pub fn tokenize(sql: &str, dialect: Dialect) -> Vec<Token> {
             i += 1;
             continue;
         }
-        if let Some(end) = skip_comment(sql, i) {
+        if let Some(end) = skip_comment_nesting(sql, i, dialect == Dialect::Postgres) {
             let closed = !sql[i..end].starts_with("/*") || sql[i..end].ends_with("*/");
             tokens.push(Token {
                 kind: TokenKind::Comment,
