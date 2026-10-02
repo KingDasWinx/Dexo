@@ -112,6 +112,45 @@ async fn container_explain_json_and_analyze_tree() {
         );
         assert!(refused.to_string().contains("parameters"), "{refused}");
     }
+    // A `?` in a statement that does not prepare -- its table is missing -- is still a
+    // parameter, not a syntax error near `?`.
+    let refused = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::estimated(
+            "select * from no_such_table where id = ?",
+        ))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("parameters"), "{refused}");
+    // Any other refusal of a statement with a `?` is said as it is.
+    let refused = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::with_indexes(
+            "select ? + 1",
+            vec!["create index on t (a)".into()],
+        ))
+        .await
+        .unwrap_err();
+    assert!(!refused.to_string().contains("parameters"), "{refused}");
+    assert!(refused.to_string().contains("hypopg"), "{refused}");
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::write(
+            "create table pm (id int) engine = MyISAM",
+        ))
+        .await
+        .unwrap();
+    while let Some(event) = futures_util::StreamExt::next(&mut stream).await {
+        event.unwrap();
+    }
+    let refused = session
+        .explain()
+        .unwrap()
+        .explain(ExplainRequest::analyzed("delete from pm where id = ?"))
+        .await
+        .unwrap_err();
+    assert!(refused.to_string().contains("`pm`"), "{refused}");
 }
 
 /// Every table read shows in the plan, the ones a subquery, a derived table or a CTE

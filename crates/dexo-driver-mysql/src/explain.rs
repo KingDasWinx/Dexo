@@ -587,10 +587,17 @@ fn extract_actual_time(text: &str) -> Option<f64> {
 #[async_trait::async_trait]
 impl ExplainProvider for MysqlSession {
     /// MySQL and MariaDB refuse a `?` in an EXPLAIN as a syntax error; a statement that
-    /// failed is prepared on its own to tell that apart, and refused for what it is.
+    /// failed that way and holds one is refused for what it is. Any other error is the
+    /// statement's own: Try index, or an ANALYZE the server cannot run, used to read as
+    /// a parameters refusal.
     async fn explain(&self, request: ExplainRequest) -> Result<ExplainPlan, DriverError> {
         match self.plan(&request).await {
-            Err(error) if self.has_parameters(&request.sql).await => {
+            Err(error)
+                if error
+                    .native_code()
+                    .is_some_and(|code| code.starts_with("1064 "))
+                    && self.has_parameters(&request.sql).await =>
+            {
                 Err(dexo_driver_api::parameters_unsupported().with_detail(error.to_string()))
             }
             planned => planned,
@@ -644,8 +651,20 @@ impl MysqlSession {
 }
 
 impl MysqlSession {
-    /// Whether `sql` prepares with placeholders. Preparing runs nothing.
+    /// Whether `sql` holds a `?` placeholder: one outside strings, quoted names and
+    /// comments as the lexer reads it -- a statement naming a missing table does not
+    /// prepare, and its `?` used to surface as a bare syntax error -- or, past what the
+    /// lexer sees, one the server counts when it prepares the statement. Preparing runs
+    /// nothing.
     async fn has_parameters(&self, sql: &str) -> bool {
+        let placeholder = dexo_sql::tokenize(sql, dexo_sql::Dialect::Mysql)
+            .iter()
+            .any(|token| {
+                token.kind == dexo_sql::TokenKind::Param && token.text(sql).starts_with('?')
+            });
+        if placeholder {
+            return true;
+        }
         let mut conn = self.conn.lock().await;
         let Ok(statement) = conn.prep(sql.trim().trim_end_matches(';')).await else {
             return false;
