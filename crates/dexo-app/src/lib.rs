@@ -15,7 +15,7 @@ pub mod mcp;
 pub mod meta_command;
 pub mod password_command;
 pub mod pre_connect;
-mod process;
+pub mod process;
 pub mod project;
 pub mod query_service;
 pub mod recovery_service;

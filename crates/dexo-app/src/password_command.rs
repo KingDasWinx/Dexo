@@ -1,9 +1,7 @@
 //! A connection's password read from a password manager's command -- `op read …`,
 //! `pass show …`, `vault kv get …` -- instead of the keychain.
 
-use std::io::Read;
 use std::process::Stdio;
-use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
 use secrecy::SecretString;
@@ -22,44 +20,27 @@ pub fn run(command: &str, timeout: Duration) -> Result<SecretString, AppError> {
             format!("password command `{command}` {reason}"),
         )
     };
-    let mut child = crate::process::shell(command)
-        .stdin(Stdio::null())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::null())
-        .spawn()
-        .map_err(|error| fail(format!("could not start: {error}")))?;
-    let mut stdout = child.stdout.take().expect("stdout is piped");
-    let (sender, receiver) = mpsc::channel();
-    // Read on the side: a command that prints more than the pipe holds would otherwise
-    // wait on us while we wait on it.
-    std::thread::spawn(move || {
-        let mut output = Vec::new();
-        let _ = stdout.read_to_end(&mut output);
-        let _ = sender.send(output);
-    });
+    let mut shell = crate::process::shell(command);
+    // Left in the terminal's process group: a command that prompts there can read it.
+    shell.stdin(Stdio::null()).stderr(Stdio::null());
     let deadline = Instant::now() + timeout;
-    let status = loop {
-        match child.try_wait() {
-            Ok(Some(status)) => break status,
-            Ok(None) if Instant::now() >= deadline => {
-                crate::process::stop_tree(&mut child);
-                return Err(fail(format!(
-                    "did not finish within {}s",
-                    timeout.as_secs()
-                )));
-            }
-            Ok(None) => std::thread::sleep(Duration::from_millis(20)),
-            Err(error) => return Err(fail(format!("could not be waited on: {error}"))),
+    let ran = crate::process::run_until(shell, deadline, crate::process::stop_tree)
+        .map_err(|error| fail(format!("could not start: {error}")))?;
+    let (status, output) = match ran {
+        crate::process::Ran::TimedOut => {
+            return Err(fail(format!(
+                "did not finish within {}s",
+                timeout.as_secs()
+            )));
         }
+        crate::process::Ran::Exited(status, output) => (status, output),
     };
     if !status.success() {
         return Err(fail(format!("failed ({status})")));
     }
     // A helper the command left running can hold stdout open after it exits; the read
-    // gets what is left of the deadline, not forever.
-    let output = receiver
-        .recv_timeout(deadline.saturating_duration_since(Instant::now()))
-        .map_err(|_| fail("kept its output open after exiting".into()))?;
+    // got what was left of the deadline, not forever.
+    let output = output.ok_or_else(|| fail("kept its output open after exiting".into()))?;
     let text =
         String::from_utf8(output).map_err(|_| fail("printed something that is not text".into()))?;
     let secret = text.trim_end_matches(['\r', '\n']);

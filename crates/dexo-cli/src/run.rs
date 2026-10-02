@@ -102,8 +102,17 @@ pub fn run_dispatch(
     tui: impl TuiRunner,
 ) -> anyhow::Result<()> {
     match args.launch_mode() {
-        LaunchMode::Tui(start) => tui.run(start),
-        LaunchMode::Cli(command) => run_cli(command, registry),
+        // The TUI reads Ctrl+C as a key; the command line leaves on it.
+        LaunchMode::Tui(start) => {
+            dexo_app::process::stop_on_signals(false);
+            tui.run(start)
+        }
+        LaunchMode::Cli(command) => {
+            dexo_app::process::stop_on_signals(true);
+            let ran = run_cli(command, registry);
+            dexo_app::process::stop_all();
+            ran
+        }
     }
 }
 
@@ -1317,7 +1326,13 @@ fn run_mcp(registry: DriverRegistry, command: McpCommand) -> anyhow::Result<()> 
             }
         },
         McpCommand::Serve { profile } => {
-            tokio::runtime::Runtime::new()?.block_on(mcp_serve(registry, profile))?;
+            let runtime = tokio::runtime::Runtime::new()?;
+            let served = runtime.block_on(mcp_serve(registry, profile));
+            // A connect still starting its pre-connect command when the client left is
+            // not waited for.
+            dexo_app::process::stop_all();
+            runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+            served?;
         }
         McpCommand::Grant { command } => run_mcp_grant(command)?,
         McpCommand::Audit { profile } => mcp_audit(profile.as_deref())?,

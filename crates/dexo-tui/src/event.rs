@@ -33,7 +33,14 @@ pub enum Startup {
 
 pub fn run(registry: DriverRegistry, startup: Startup) -> Result<(), TuiError> {
     crate::terminal::install_panic_hook();
-    tokio::runtime::Runtime::new()?.block_on(run_async(registry, startup))
+    let runtime = tokio::runtime::Runtime::new()?;
+    let ran = runtime.block_on(run_async(registry, startup));
+    // Work still blocking a thread -- a pre-connect command opening its port, `docker`
+    // listing containers -- is not waited for: its commands are stopped, and quitting
+    // takes a second at most.
+    dexo_app::process::stop_all();
+    runtime.shutdown_timeout(std::time::Duration::from_secs(1));
+    ran
 }
 
 fn map_tui(error: impl std::fmt::Display) -> TuiError {

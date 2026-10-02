@@ -26,32 +26,75 @@ pub fn command(profile: &ConnectionProfile) -> Option<&str> {
         .filter(|command| !command.is_empty())
 }
 
-/// The running command. Dropping it stops the command and whatever it started.
+/// The running command. Dropping it stops the command and everything in its process
+/// group; Dexo leaving on a signal stops it too (see [`crate::process::stop_on_signals`]).
 // ponytail: a Dexo killed outright (SIGKILL) cannot stop it; PR_SET_PDEATHSIG follows the
 // thread that spawned the command, not the process, so it would end tunnels at random.
 pub struct PreConnectProcess {
-    child: Child,
+    child: Mutex<Child>,
+    command: String,
+    /// The last thing it said on stderr.
+    said: Arc<Mutex<String>>,
+    /// Set once the stderr reader has seen the end.
+    heard: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl PreConnectProcess {
+    /// Why the command is no longer running, when it is not: it ended, or was stopped,
+    /// and the tunnel with it.
+    pub fn stopped(&self) -> Option<String> {
+        let status = self
+            .child
+            .lock()
+            .ok()
+            .and_then(|mut child| child.try_wait().ok().flatten())?;
+        Some(format!(
+            "pre-connect command `{}` stopped ({status}){}",
+            self.command,
+            self.last_words()
+        ))
+    }
+
+    /// `: <the last line it printed on stderr>`, waiting a moment for the reader to have
+    /// it all.
+    fn last_words(&self) -> String {
+        let deadline = Instant::now() + Duration::from_millis(500);
+        while !self.heard.load(std::sync::atomic::Ordering::SeqCst) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        let said = self
+            .said
+            .lock()
+            .map(|said| said.clone())
+            .unwrap_or_default();
+        said.lines()
+            .rev()
+            .find(|line| !line.trim().is_empty())
+            .map(|line| format!(": {}", line.trim()))
+            .unwrap_or_default()
+    }
 }
 
 impl Drop for PreConnectProcess {
     fn drop(&mut self) {
-        crate::process::stop_tree(&mut self.child);
+        if let Ok(mut child) = self.child.lock() {
+            crate::process::stop_group(&mut child);
+        }
     }
 }
 
 impl std::fmt::Debug for PreConnectProcess {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("PreConnectProcess")
-            .field("pid", &self.child.id())
-            .finish()
+        f.debug_struct("PreConnectProcess").finish_non_exhaustive()
     }
 }
 
 /// Starts the profile's pre-connect command and waits, up to `timeout`, for the port it
 /// opens. Returns the profile to connect with -- `127.0.0.1` and the free port that
-/// `${port}` became, `pre_connect` taken out so a second connection rides the same
-/// tunnel -- and the process to keep alive with the session. A profile without a
-/// command comes back as it is.
+/// `${port}` became, the TLS name kept as the real host's, `pre_connect` taken out so a
+/// second connection rides the same tunnel -- and the process to keep alive with the
+/// session. A profile without a command comes back as it is. Dropping the future while
+/// it waits stops the command.
 pub async fn prepare(
     profile: &ConnectionProfile,
     timeout: Duration,
@@ -60,15 +103,26 @@ pub async fn prepare(
         return Ok((profile.clone(), None));
     }
     let profile = profile.clone();
-    tokio::task::spawn_blocking(move || start(&profile, timeout))
+    let cancel = CancelOnDrop(Arc::new(std::sync::atomic::AtomicBool::new(false)));
+    let cancelled = Arc::clone(&cancel.0);
+    tokio::task::spawn_blocking(move || start(&profile, timeout, &cancelled))
         .await
         .map_err(|error| AppError::new(ErrorCategory::Internal, error.to_string()))?
         .map(|(profile, process)| (profile, Some(process)))
 }
 
+struct CancelOnDrop(Arc<std::sync::atomic::AtomicBool>);
+
+impl Drop for CancelOnDrop {
+    fn drop(&mut self) {
+        self.0.store(true, std::sync::atomic::Ordering::SeqCst);
+    }
+}
+
 fn start(
     profile: &ConnectionProfile,
     timeout: Duration,
+    cancelled: &std::sync::atomic::AtomicBool,
 ) -> Result<(ConnectionProfile, PreConnectProcess), AppError> {
     let template = command(profile).unwrap_or_default().to_string();
     let fail = |reason: String| {
@@ -77,53 +131,60 @@ fn start(
             format!("pre-connect command `{template}` {reason}"),
         )
     };
-    let mut effective = profile.clone();
-    if let Some(config) = effective.config.as_object_mut() {
-        config.remove("pre_connect");
+    // Where the connection would have gone, read the way the connection reads it.
+    let (host, port, routed) =
+        crate::connection_profile::dial_target(&profile.config, &profile.driver)?;
+    if routed {
+        return Err(fail(
+            "cannot be combined with an SSH tunnel or a proxy; use one or the other".into(),
+        ));
     }
+    let mut effective = profile.clone();
     let (command, target) = if template.contains("${port}") {
-        let port = free_port().map_err(|error| fail(format!("found no free port: {error}")))?;
+        let local = free_port().map_err(|error| fail(format!("found no free port: {error}")))?;
         if let Some(config) = effective.config.as_object_mut() {
+            config.remove("endpoint");
             config.insert("host".into(), serde_json::json!("127.0.0.1"));
-            config.insert("port".into(), serde_json::json!(port));
+            config.insert("port".into(), serde_json::json!(local));
+            // Verified TLS still checks the certificate against the real host.
+            if let Some(tls) = config.get_mut("tls").and_then(|tls| tls.as_object_mut())
+                && tls
+                    .get("server_name")
+                    .is_none_or(serde_json::Value::is_null)
+            {
+                tls.insert("server_name".into(), serde_json::json!(host));
+            }
         }
         (
-            template.replace("${port}", &port.to_string()),
-            SocketAddr::from(([127, 0, 0, 1], port)),
+            template.replace("${port}", &local.to_string()),
+            SocketAddr::from(([127, 0, 0, 1], local)),
         )
     } else {
-        let host = profile
-            .config
-            .get("host")
-            .and_then(serde_json::Value::as_str)
-            .filter(|host| !host.is_empty())
-            .unwrap_or("127.0.0.1");
-        let port = profile
-            .config
-            .get("port")
-            .and_then(serde_json::Value::as_u64)
-            .and_then(|port| u16::try_from(port).ok())
-            .ok_or_else(|| {
-                fail("has no ${port}, so it waits for the connection's port; set one".into())
-            })?;
-        let target = (host, port)
+        let target = (host.as_str(), port)
             .to_socket_addrs()
             .ok()
             .and_then(|mut addresses| addresses.next())
             .ok_or_else(|| fail(format!("waits for {host}:{port}, which does not resolve")))?;
         (template.clone(), target)
     };
-    let mut child = crate::process::shell(&command)
-        .stdin(Stdio::null())
+    if let Some(config) = effective.config.as_object_mut() {
+        config.remove("pre_connect");
+    }
+    let mut shell = crate::process::shell(&command);
+    crate::process::detach(&mut shell);
+    let mut child = shell
         .stdout(Stdio::null())
         .stderr(Stdio::piped())
         .spawn()
         .map_err(|error| fail(format!("could not start: {error}")))?;
-    // The last thing it said, for when it gives up before the port opens. Read on the
-    // side: a command that writes more than the pipe holds would otherwise stall.
+    crate::process::register(child.id());
     let said = Arc::new(Mutex::new(String::new()));
+    let heard = Arc::new(std::sync::atomic::AtomicBool::new(false));
+    // Read on the side: a command that writes more than the pipe holds would otherwise
+    // stall. The last 4 KB are kept, for when it gives up.
     if let Some(mut stderr) = child.stderr.take() {
         let said = Arc::clone(&said);
+        let heard = Arc::clone(&heard);
         std::thread::spawn(move || {
             let mut buffer = [0_u8; 1024];
             while let Ok(read) = stderr.read(&mut buffer) {
@@ -138,22 +199,30 @@ fn start(
                     said.drain(..cut);
                 }
             }
+            heard.store(true, std::sync::atomic::Ordering::SeqCst);
         });
+    } else {
+        heard.store(true, std::sync::atomic::Ordering::SeqCst);
     }
-    let mut process = PreConnectProcess { child };
+    let process = PreConnectProcess {
+        child: Mutex::new(child),
+        command: template.clone(),
+        said,
+        heard,
+    };
     let deadline = Instant::now() + timeout;
     loop {
-        if TcpStream::connect_timeout(&target, Duration::from_millis(250)).is_ok() {
-            return Ok((effective, process));
+        if cancelled.load(std::sync::atomic::Ordering::SeqCst) {
+            return Err(fail("was stopped: the connect was given up".into()));
         }
-        if let Ok(Some(status)) = process.child.try_wait() {
-            std::thread::sleep(Duration::from_millis(50));
-            let said = said.lock().unwrap_or_else(|error| error.into_inner());
-            let last = said.lines().rev().find(|line| !line.trim().is_empty());
-            return Err(fail(match last {
-                Some(line) => format!("exited ({status}) before {target} opened: {}", line.trim()),
-                None => format!("exited ({status}) before {target} opened"),
-            }));
+        if let Some(stopped) = process.stopped() {
+            return Err(AppError::new(
+                ErrorCategory::Network,
+                format!("{stopped}, before {target} opened"),
+            ));
+        }
+        if TcpStream::connect_timeout(&target, Duration::from_millis(250)).is_ok() {
+            break;
         }
         if Instant::now() >= deadline {
             return Err(fail(format!(
@@ -163,6 +232,15 @@ fn start(
         }
         std::thread::sleep(Duration::from_millis(100));
     }
+    // A command that put itself in the background -- `ssh -f`, `&` -- has left nothing
+    // for Dexo to stop when the session ends; it is refused rather than left behind.
+    std::thread::sleep(Duration::from_millis(300));
+    if process.stopped().is_some() {
+        return Err(fail(
+            "went to the background; it has to keep running in the foreground (drop -f or &), so Dexo can stop it with the session".into(),
+        ));
+    }
+    Ok((effective, process))
 }
 
 /// A port nothing listens on, now.
@@ -194,6 +272,13 @@ impl Session for WithPreConnect {
         &self,
         request: dexo_driver_api::QueryRequest,
     ) -> Result<dexo_driver_api::QueryStream, dexo_driver_api::DriverError> {
+        // A tunnel that died says so, rather than leaving the session to time out on it.
+        if let Some(stopped) = self.process.stopped() {
+            return Err(dexo_driver_api::DriverError::new(
+                dexo_driver_api::DriverErrorCategory::Transport,
+                stopped,
+            ));
+        }
         self.session.execute(request).await
     }
 
@@ -309,7 +394,7 @@ mod tests {
         .await
         .unwrap_err()
         .to_string();
-        assert!(error.contains("exited"), "{error}");
+        assert!(error.contains("stopped (exit status: 3)"), "{error}");
         assert!(error.contains("no such service: db"), "{error}");
         let without = profile("true");
         let (same, process) = prepare(
@@ -323,5 +408,101 @@ mod tests {
         .unwrap();
         assert!(process.is_none());
         assert_eq!(same.config["host"], "h");
+    }
+
+    fn listener(marker: &str) -> String {
+        format!(
+            "python3 -c 'import socket,sys,time; s=socket.socket(); \
+             s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1); \
+             s.bind((\"127.0.0.1\", int(sys.argv[1]))); s.listen(); time.sleep(60)' ${{port}} {marker}"
+        )
+    }
+
+    /// A command that goes to the background is refused, and what it left in its group
+    /// is stopped with it.
+    #[tokio::test]
+    async fn a_command_that_goes_to_the_background_is_refused() {
+        let marker = "dexo-pre-connect-bg-31c9";
+        let error = prepare(
+            &profile(&format!("{} & sleep 0.2", listener(marker))),
+            Duration::from_secs(5),
+        )
+        .await
+        .unwrap_err()
+        .to_string();
+        assert!(
+            error.contains("background") || error.contains("stopped"),
+            "{error}"
+        );
+        std::thread::sleep(Duration::from_millis(200));
+        assert!(
+            !running(marker),
+            "what the command left running outlived it"
+        );
+    }
+
+    /// A profile routed through SSH is refused; a port written as text is read the way
+    /// the connection reads it; verified TLS keeps checking the real host's name.
+    #[tokio::test]
+    async fn routes_ports_and_tls_read_like_the_connection() {
+        let mut routed = profile("true ${port}");
+        routed.config["ssh"] = serde_json::json!({"host": "bastion", "port": 22, "username": "u"});
+        let error = prepare(&routed, Duration::from_secs(1))
+            .await
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("SSH tunnel or a proxy"), "{error}");
+
+        let listening = std::net::TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let mut textual = profile("sleep 30 # dexo-pre-connect-text-port");
+        textual.config["host"] = serde_json::json!("127.0.0.1");
+        textual.config["port"] =
+            serde_json::json!(listening.local_addr().unwrap().port().to_string());
+        let (_, process) = prepare(&textual, Duration::from_secs(5)).await.unwrap();
+        drop(process);
+
+        let mut verified = profile(&listener("dexo-pre-connect-tls-77a0"));
+        verified.config["tls"] = serde_json::json!({"mode": "verify_full"});
+        let (effective, process) = prepare(&verified, Duration::from_secs(10)).await.unwrap();
+        assert_eq!(effective.config["tls"]["server_name"], "db.internal");
+        drop(process);
+    }
+
+    /// A tunnel that died is what the session's next query says.
+    #[tokio::test]
+    async fn a_session_whose_tunnel_died_says_so() {
+        let marker = "dexo-pre-connect-died-a41e";
+        let (_, process) = prepare(&profile(&listener(marker)), Duration::from_secs(10))
+            .await
+            .unwrap();
+        let session = super::attach(Box::new(dexo_test_support::FakeSession::default()), process);
+        assert!(
+            session
+                .execute(dexo_driver_api::QueryRequest::read("select 1", 1))
+                .await
+                .is_ok()
+        );
+        let _ = std::process::Command::new("pkill")
+            .args(["-f", marker])
+            .status();
+        std::thread::sleep(Duration::from_millis(300));
+        let error = session
+            .execute(dexo_driver_api::QueryRequest::read("select 1", 1))
+            .await
+            .err()
+            .unwrap()
+            .to_string();
+        assert!(error.contains("stopped"), "{error}");
+    }
+
+    /// A connect given up while the command starts stops the command.
+    #[tokio::test]
+    async fn a_connect_given_up_stops_its_command() {
+        let marker = "dexo-pre-connect-cancel-5e2b";
+        let slow = profile(&format!("sleep 30 {marker} # ${{port}}"));
+        let pending = prepare(&slow, Duration::from_secs(20));
+        let _ = tokio::time::timeout(Duration::from_millis(400), pending).await;
+        std::thread::sleep(Duration::from_millis(600));
+        assert!(!running(marker), "the command outlived the connect");
     }
 }

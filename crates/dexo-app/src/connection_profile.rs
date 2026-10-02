@@ -203,6 +203,18 @@ fn endpoint_from_config(config: &serde_json::Value, driver: &str) -> Result<Stri
     Ok(format!("{host}:{port}"))
 }
 
+/// The host and port the profile dials -- an `endpoint`, or `host` and `port` with the
+/// driver's default port -- and whether it goes through SSH or a proxy to get there.
+pub(crate) fn dial_target(
+    config: &serde_json::Value,
+    driver: &str,
+) -> Result<(String, u16, bool), AppError> {
+    let endpoint = endpoint_from_config(config, driver)?;
+    let (host, port) = split_endpoint(&endpoint).map_err(map_driver_config)?;
+    let routed = !matches!(parse_route(config)?, RouteRequest::Direct);
+    Ok((host, port, routed))
+}
+
 fn transport_from_config(
     config: &serde_json::Value,
     driver: &str,
