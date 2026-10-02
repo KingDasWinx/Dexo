@@ -138,6 +138,35 @@ impl TextInput {
         format!("{label}{}", self.rendered_value(focused))
     }
 
+    /// [`Self::inline_line`] in `width` display columns, label included: a long value
+    /// scrolls with the cursor instead of running it off the field.
+    pub fn inline_line_within(&self, label: &str, focused: bool, width: usize) -> String {
+        let room = width.saturating_sub(unicode_width::UnicodeWidthStr::width(label));
+        if !focused {
+            return format!("{label}{}", crate::model::truncate_cell(&self.text, room));
+        }
+        // One column for the block cursor.
+        let (shown, at) = self.window(room.saturating_sub(1).max(1));
+        let mut chars: Vec<char> = Vec::new();
+        let mut column = 0;
+        let mut placed = false;
+        for ch in shown.chars() {
+            if !placed && column >= at {
+                chars.push('█');
+                placed = true;
+            }
+            chars.push(ch);
+            column += unicode_width::UnicodeWidthChar::width(ch).unwrap_or(0);
+        }
+        if !placed {
+            chars.push('█');
+        }
+        format!(
+            "{label}{}",
+            chars.into_iter().collect::<String>().trim_end()
+        )
+    }
+
     fn rendered_value(&self, show_cursor: bool) -> String {
         if !show_cursor {
             return self.text.clone();

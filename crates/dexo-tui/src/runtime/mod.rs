@@ -426,7 +426,13 @@ impl WorkbenchRuntime {
                 let done = storage
                     .save_query(project_id, connection_id, name, sql)
                     .await
-                    .map(|saved| format!("Saved query {}.", saved.name))
+                    .map(|(saved, replaced)| match replaced {
+                        true => format!(
+                            "Saved query {}, replacing the one of that name.",
+                            saved.name
+                        ),
+                        false => format!("Saved query {}.", saved.name),
+                    })
                     .map_err(|error| format!("The query was not saved: {error}"));
                 self.emit(Action::SavedQueryDone(done)).await;
             }
@@ -446,8 +452,13 @@ impl WorkbenchRuntime {
                     .await
                     .map(|()| format!("Renamed to {name}."))
                     .map_err(|error| error.to_string());
+                // A refused name stays in the field to be fixed; the list is read again
+                // only once the rename went through.
+                let renamed = done.is_ok();
                 self.emit(Action::SavedQueryDone(done)).await;
-                self.list_saved_queries(project_id).await;
+                if renamed {
+                    self.list_saved_queries(project_id).await;
+                }
             }
             crate::Effect::DeleteSavedQuery { project_id, id } => {
                 let Some(storage) = &self.storage else {

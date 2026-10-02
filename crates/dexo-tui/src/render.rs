@@ -135,8 +135,8 @@ pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         render_saved_queries(frame, model, hits);
     }
     if let Some(prompt) = &model.save_query_prompt {
-        let popup = centered(frame.area(), 64, 8);
-        let lines = prompt.lines();
+        let popup = centered(frame.area(), 64, 9);
+        let lines = prompt.lines(popup_inner(popup).width as usize);
         paint_popup(
             frame,
             model,
@@ -1582,7 +1582,10 @@ fn render_delete_connection(frame: &mut Frame, model: &Model, hits: &mut HitMap)
         })
         .collect::<Vec<_>>()
         .join("  ");
-    let mut notes = vec!["Its saved password is removed as well.".to_string()];
+    let mut notes = vec![
+        "Its saved password is removed as well.".to_string(),
+        "So are its saved queries and notes.".to_string(),
+    ];
     if model.connections.session_for(&target.name).is_some() {
         notes.push("Its open session is closed.".to_string());
     }
@@ -1740,23 +1743,42 @@ fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let rows = (inner.height as usize).saturating_sub(3).max(1);
     let filtered = picker.filtered();
     let offset = scroll_to_selection(picker.selected, 0, filtered.len(), rows);
-    let current_connection = model.active_document().connection_id.clone();
+    // The connection a save from here would use, so the owner marks agree with Save.
+    let current_connection = crate::update::query_connection(model);
     let preview: Vec<&str> = picker
         .current()
         .map(|query| query.sql.lines().collect())
         .unwrap_or_default();
-    let mut lines = vec![
-        picker
-            .search
-            .inline_line("search: ", picker.renaming.is_none()),
-    ];
+    let mut lines =
+        vec![
+            picker
+                .search
+                .inline_line_within("search: ", picker.renaming.is_none(), width),
+        ];
+    // Nothing to list: the message gets the whole width, not the list's column.
+    let note = if picker.items.is_none() {
+        Some("  Reading the saved queries…".to_string())
+    } else if picker.items.as_ref().is_some_and(Vec::is_empty) {
+        Some(
+            match crate::palette::shortcut_for(model, "editor.save_query", None) {
+                Some(key) => format!("  No saved queries yet; {key} saves one from the editor."),
+                None => "  No saved queries yet; Save Query As saves one.".into(),
+            },
+        )
+    } else if filtered.is_empty() {
+        Some("  No saved query matches.".into())
+    } else {
+        None
+    };
     for row in 0..rows {
         let left = match filtered.get(offset + row) {
             Some(query) => {
                 let index = offset + row;
                 let marker = if index == picker.selected { ">" } else { " " };
                 let name = match (&picker.renaming, index == picker.selected) {
-                    (Some(input), true) => input.inline_line("", true),
+                    (Some(input), true) => {
+                        input.inline_line_within("", true, list_width.saturating_sub(2))
+                    }
                     _ => query.name.clone(),
                 };
                 // Another connection's query says whose it is.
@@ -1776,22 +1798,20 @@ fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                     None => format!("{marker} {name}"),
                 }
             }
-            None if row == 0 && picker.items.is_none() => "  Reading the saved queries…".into(),
-            None if row == 0 && picker.items.as_ref().is_some_and(Vec::is_empty) => {
-                match crate::palette::shortcut_for(model, "editor.save_query", None) {
-                    Some(key) => {
-                        format!("  No saved queries yet; {key} saves one from the editor.")
-                    }
-                    None => "  No saved queries yet; Save Query As saves one.".into(),
+            None => {
+                if row == 0
+                    && let Some(note) = &note
+                {
+                    lines.push(crate::model::truncate_cell(note, width));
+                    continue;
                 }
+                String::new()
             }
-            None if row == 0 && filtered.is_empty() => "  No saved query matches.".into(),
-            None => String::new(),
         };
         let right = preview.get(row).copied().unwrap_or("");
         lines.push(format!(
-            "{:list_width$} │ {}",
-            crate::model::truncate_cell(&left, list_width),
+            "{} │ {}",
+            crate::model::fit_cell(&left, list_width),
             crate::model::truncate_cell(right, width.saturating_sub(list_width + 3)),
         ));
     }

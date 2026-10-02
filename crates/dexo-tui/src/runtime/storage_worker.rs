@@ -70,7 +70,7 @@ pub enum StorageCommand {
         connection_id: String,
         name: String,
         sql: String,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<dexo_storage::SavedQuery>>,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<(dexo_storage::SavedQuery, bool)>>,
     },
     ListSavedQueries {
         project_id: String,
@@ -452,7 +452,7 @@ impl StorageWorker {
         connection_id: String,
         name: String,
         sql: String,
-    ) -> anyhow::Result<dexo_storage::SavedQuery> {
+    ) -> anyhow::Result<(dexo_storage::SavedQuery, bool)> {
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.tx.send(StorageCommand::SaveQuery {
             project_id,

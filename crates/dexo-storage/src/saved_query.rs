@@ -1,4 +1,4 @@
-use rusqlite::{Connection, ErrorCode, params};
+use rusqlite::{Connection, ErrorCode, OptionalExtension, params};
 
 /// Named SQL kept for a project and a connection.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -20,31 +20,36 @@ impl<'a> SavedQueryRepository<'a> {
         Self { conn }
     }
 
-    /// Saves `sql` under `name`. A query of that name for the same project and
-    /// connection is replaced, keeping its id.
+    /// Saves `sql` under `name`, and says whether it replaced a query: one of that name,
+    /// in any case, for the same project and connection, keeping its id.
     pub fn save(
         &self,
         project_id: &str,
         connection_id: &str,
         name: &str,
         sql: &str,
-    ) -> anyhow::Result<SavedQuery> {
+    ) -> anyhow::Result<(SavedQuery, bool)> {
+        let find = || {
+            self.conn
+                .query_row(
+                    "SELECT id, project_id, connection_id, name, sql, updated_at FROM saved_queries
+                     WHERE project_id = ?1 AND connection_id = ?2 AND name = ?3",
+                    params![project_id, connection_id, name],
+                    row_to_query,
+                )
+                .optional()
+        };
+        let replaced = find()?.is_some();
         let id = uuid::Uuid::new_v4().to_string();
         self.conn.execute(
             "INSERT INTO saved_queries (id, project_id, connection_id, name, sql, created_at, updated_at)
              VALUES (?1, ?2, ?3, ?4, ?5, datetime('now'), datetime('now'))
              ON CONFLICT(project_id, connection_id, name)
-             DO UPDATE SET sql = excluded.sql, updated_at = excluded.updated_at",
+             DO UPDATE SET name = excluded.name, sql = excluded.sql, updated_at = excluded.updated_at",
             params![id, project_id, connection_id, name, sql],
         )?;
-        self.conn
-            .query_row(
-                "SELECT id, project_id, connection_id, name, sql, updated_at FROM saved_queries
-                 WHERE project_id = ?1 AND connection_id = ?2 AND name = ?3",
-                params![project_id, connection_id, name],
-                row_to_query,
-            )
-            .map_err(Into::into)
+        let saved = find()?.ok_or_else(|| anyhow::anyhow!("the saved query is gone"))?;
+        Ok((saved, replaced))
     }
 
     /// The project's queries, for every connection, by name.
@@ -80,10 +85,13 @@ impl<'a> SavedQueryRepository<'a> {
     }
 
     pub fn delete(&self, project_id: &str, id: &str) -> anyhow::Result<()> {
-        self.conn.execute(
+        let deleted = self.conn.execute(
             "DELETE FROM saved_queries WHERE id = ?1 AND project_id = ?2",
             params![id, project_id],
         )?;
+        if deleted == 0 {
+            anyhow::bail!("the saved query is gone");
+        }
         Ok(())
     }
 }
@@ -114,6 +122,14 @@ mod tests {
             )
             .unwrap();
         }
+        for connection in ["c1", "c2"] {
+            conn.execute(
+                "INSERT INTO connections (id, name, driver, environment, config_json, secret_ref)
+                 VALUES (?1, ?1, 'postgres', 'local', '{}', 'ref')",
+                [connection],
+            )
+            .unwrap();
+        }
         conn
     }
 
@@ -124,28 +140,50 @@ mod tests {
     fn saved_queries_stay_with_their_project_and_connection() {
         let conn = database();
         let repo = SavedQueryRepository::new(&conn);
-        let first = repo.save("p1", "c1", "Top customers", "select 1").unwrap();
-        let again = repo.save("p1", "c1", "Top customers", "select 2").unwrap();
+        let (first, replaced) = repo.save("p1", "c1", "Top customers", "select 1").unwrap();
+        assert!(!replaced);
+        // The name is the same in another case.
+        let (again, replaced) = repo.save("p1", "c1", "top CUSTOMERS", "select 2").unwrap();
+        assert!(replaced);
         assert_eq!(first.id, again.id);
         assert_eq!(again.sql, "select 2");
         repo.save("p1", "c2", "Top customers", "select 3").unwrap();
         repo.save("p2", "c1", "Top customers", "select 4").unwrap();
         assert_eq!(repo.list_for_project("p1").unwrap().len(), 2);
 
-        let other = repo.save("p1", "c1", "Late orders", "select 5").unwrap();
-        assert!(repo.rename("p1", &other.id, "Top customers").is_err());
+        let (other, _) = repo.save("p1", "c1", "Late orders", "select 5").unwrap();
+        assert!(repo.rename("p1", &other.id, "TOP customers").is_err());
         assert!(repo.rename("p2", &other.id, "Stolen").is_err());
         repo.rename("p1", &other.id, "Overdue orders").unwrap();
-        repo.delete("p2", &other.id).unwrap();
+        assert!(repo.delete("p2", &other.id).is_err());
         let names: Vec<String> = repo
             .list_for_project("p1")
             .unwrap()
             .into_iter()
             .map(|query| query.name)
             .collect();
-        assert_eq!(names, ["Overdue orders", "Top customers", "Top customers"]);
+        assert_eq!(names, ["Overdue orders", "top CUSTOMERS", "Top customers"]);
         repo.delete("p1", &other.id).unwrap();
+        assert!(
+            repo.delete("p1", &other.id).is_err(),
+            "a stale id is not deleted"
+        );
         assert_eq!(repo.list_for_project("p1").unwrap().len(), 2);
         assert_eq!(repo.list_for_project("p2").unwrap()[0].sql, "select 4");
+    }
+
+    /// A query belongs to a saved connection, and goes with it.
+    #[test]
+    fn a_deleted_connection_takes_its_queries() {
+        let conn = database();
+        let repo = SavedQueryRepository::new(&conn);
+        assert!(repo.save("p1", "not-saved", "q", "select 1").is_err());
+        repo.save("p1", "c1", "q", "select 1").unwrap();
+        repo.save("p1", "c2", "q", "select 1").unwrap();
+        conn.execute("DELETE FROM connections WHERE id = 'c1'", [])
+            .unwrap();
+        let left = repo.list_for_project("p1").unwrap();
+        assert_eq!(left.len(), 1);
+        assert_eq!(left[0].connection_id, "c2");
     }
 }

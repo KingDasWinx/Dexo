@@ -394,6 +394,22 @@ fn saved_queries_save_search_open_rename_and_delete() {
         ),
         "{effects:?}"
     );
+    // The field stays until the list comes back renamed.
+    assert!(model.saved_queries.renaming.is_some());
+    update(
+        &mut model,
+        Action::SavedQueriesLoaded(Ok(vec![
+            saved(
+                "q1",
+                "Late orders",
+                &conn_a,
+                "select * from orders where late",
+            ),
+            saved("q2", "User 7", &conn_a, "select * from users where id = 7;"),
+            saved("q3", "Users elsewhere (b)", &conn_b, "select * from users"),
+        ])),
+    );
+    assert!(model.saved_queries.renaming.is_none());
 
     // Delete asks; Enter on the question keeps the query, [Delete] removes it.
     update(&mut model, key(KeyCode::Delete));

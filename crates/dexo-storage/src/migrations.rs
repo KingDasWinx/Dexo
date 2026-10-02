@@ -276,8 +276,8 @@ BEGIN;
 CREATE TABLE saved_queries (
     id TEXT PRIMARY KEY NOT NULL,
     project_id TEXT NOT NULL REFERENCES projects(id) ON DELETE CASCADE,
-    connection_id TEXT NOT NULL,
-    name TEXT NOT NULL,
+    connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
+    name TEXT NOT NULL COLLATE NOCASE,
     sql TEXT NOT NULL,
     created_at TEXT NOT NULL,
     updated_at TEXT NOT NULL,
@@ -313,7 +313,7 @@ COMMIT;
 pub const MIGRATION_16: &str = r#"
 BEGIN;
 CREATE TABLE object_notes (
-    connection_id TEXT NOT NULL,
+    connection_id TEXT NOT NULL REFERENCES connections(id) ON DELETE CASCADE,
     object TEXT NOT NULL,
     note TEXT NOT NULL,
     updated_at TEXT NOT NULL,

@@ -770,9 +770,9 @@ fn is_sensitive_name(name: &str) -> bool {
 /// in one step and the document stays the same file on the same connection. It used to
 /// replace the document with a new untitled one.
 pub fn apply_format(model: &mut Model) {
+    let selection = model.editor_selection();
     let doc = model.active_document();
     let text = doc.text();
-    let selection = doc.selection();
     let range = selection.clone().unwrap_or(0..text.chars().count());
     let source: String = text.chars().skip(range.start).take(range.len()).collect();
     if source.trim().is_empty() {

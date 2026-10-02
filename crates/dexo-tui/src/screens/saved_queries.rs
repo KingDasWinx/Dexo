@@ -19,20 +19,18 @@ pub struct SaveQueryPrompt {
 }
 
 impl SaveQueryPrompt {
-    pub fn lines(&self) -> Vec<String> {
+    /// The dialog's lines, `width` columns wide.
+    pub fn lines(&self, width: usize) -> Vec<String> {
         let focused = self.footer == FooterFocus::Input;
+        let count = self.sql.lines().count();
         let mut lines = vec![
-            self.name.inline_line("name: ", focused),
+            self.name.inline_line_within("name: ", focused, width),
             format!(
-                "{}, {} line{}; a query of the same name is replaced",
+                "{}, {count} line{}",
                 self.source,
-                self.sql.lines().count(),
-                if self.sql.lines().count() == 1 {
-                    ""
-                } else {
-                    "s"
-                }
+                if count == 1 { "" } else { "s" }
             ),
+            "The same name replaces that query.".into(),
         ];
         if let Some(error) = &self.error {
             lines.push(error.clone());
@@ -55,20 +53,29 @@ pub struct SavedQueriesPicker {
     /// Delete asked; the footer's focus while it waits for an answer.
     pub deleting: Option<FooterFocus>,
     pub error: Option<String>,
+    /// Each item's name and SQL, lowered, for the search; see [`Self::set_items`].
+    pub lowered: Vec<String>,
 }
 
 impl SavedQueriesPicker {
     /// The queries whose name or SQL holds the search text, without regard to case.
+    /// Takes the list as read, with each query's text lowered once for the search.
+    pub fn set_items(&mut self, items: Vec<SavedQuery>) {
+        self.lowered = items
+            .iter()
+            .map(|query| format!("{}\n{}", query.name, query.sql).to_lowercase())
+            .collect();
+        self.items = Some(items);
+    }
+
     pub fn filtered(&self) -> Vec<&SavedQuery> {
         let needle = self.search.as_str().trim().to_lowercase();
         self.items
             .iter()
             .flatten()
-            .filter(|query| {
-                needle.is_empty()
-                    || query.name.to_lowercase().contains(&needle)
-                    || query.sql.to_lowercase().contains(&needle)
-            })
+            .zip(&self.lowered)
+            .filter(|(_, lowered)| needle.is_empty() || lowered.contains(&needle))
+            .map(|(query, _)| query)
             .collect()
     }
 
@@ -100,13 +107,11 @@ mod tests {
 
     #[test]
     fn the_search_matches_names_and_sql() {
-        let mut picker = SavedQueriesPicker {
-            items: Some(vec![
-                query("Top customers", "select * from customers"),
-                query("Late orders", "select * from orders where late"),
-            ]),
-            ..SavedQueriesPicker::default()
-        };
+        let mut picker = SavedQueriesPicker::default();
+        picker.set_items(vec![
+            query("Top customers", "select * from customers"),
+            query("Late orders", "select * from orders where late"),
+        ]);
         picker.search.set_text("ORDERS");
         assert_eq!(picker.filtered().len(), 1);
         picker.search.set_text("custom");

@@ -1293,6 +1293,14 @@ pub fn append_field_detail(lines: &mut Vec<String>, name: &str, value: &str, wid
     }
 }
 
+/// `text` cut to `width` display columns and padded to exactly that many: `format!`'s
+/// width counts characters, so a wide one shifted everything after it.
+pub fn fit_cell(text: &str, width: usize) -> String {
+    let cut = truncate_cell(text, width);
+    let used = unicode_width::UnicodeWidthStr::width(cut.as_str());
+    format!("{cut}{}", " ".repeat(width.saturating_sub(used)))
+}
+
 pub fn truncate_cell(text: &str, width: usize) -> String {
     let text_width = unicode_width::UnicodeWidthStr::width(text);
     if text_width <= width {
@@ -2130,6 +2138,15 @@ impl Model {
         }
         self.active_document = self.active_document.min(self.documents.len() - 1);
         self.sync_document_tab_focus();
+    }
+
+    /// What is selected in the editor as the user sees it: Vim's Visual selection when
+    /// that mode is on, else the editor's own. Running, saving or formatting "the
+    /// selection" takes this, not the editor's leftover range under a Visual one.
+    pub fn editor_selection(&self) -> Option<std::ops::Range<usize>> {
+        crate::screens::vim::display_selection(self)
+            .or_else(|| self.active_document().selection())
+            .filter(|range| range.start < range.end)
     }
 
     pub fn set_active_document(&mut self, index: usize) {

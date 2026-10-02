@@ -1279,7 +1279,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let picker = &mut model.saved_queries;
             match listed {
                 Ok(items) => {
-                    picker.items = Some(items);
+                    picker.set_items(items);
                     picker.renaming = None;
                     picker.deleting = None;
                     picker.clamp();
@@ -2442,6 +2442,12 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::History) => mouse_history(model, hit),
         Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
         Some(OverlayKind::SaveQuery) => match hit {
+            Some(HitTarget::FormField(0)) => {
+                if let Some(prompt) = &mut model.save_query_prompt {
+                    prompt.footer = crate::widgets::form::FooterFocus::Input;
+                }
+                Vec::new()
+            }
             Some(HitTarget::FooterSubmit) => submit_save_query(model),
             Some(HitTarget::FooterCancel) => {
                 model.save_query_prompt = None;
@@ -2450,7 +2456,11 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             _ => Vec::new(),
         },
         Some(OverlayKind::SavedQueries) => match hit {
-            Some(HitTarget::ListRow(index)) if model.saved_queries.deleting.is_none() => {
+            // A rename or a delete in progress is answered with its keys, not a click.
+            Some(HitTarget::ListRow(index))
+                if model.saved_queries.deleting.is_none()
+                    && model.saved_queries.renaming.is_none() =>
+            {
                 model.saved_queries.selected = index;
                 open_saved_query(model)
             }
@@ -3531,7 +3541,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 FooterKey::Submit => {
                     let note = input.as_str().trim().to_string();
                     model.inspector.editing_note = None;
-                    match (model.inspector.note_key(), active_connection_uuid(model)) {
+                    let connection =
+                        active_connection_uuid(model).filter(|id| is_saved_connection(model, id));
+                    match (model.inspector.note_key(), connection) {
                         (Some(object), Some(connection_id)) => {
                             model.inspector.note =
                                 Some(note.clone()).filter(|note| !note.is_empty());
@@ -3542,9 +3554,10 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                             }]
                         }
                         _ => {
-                            model
-                                .messages
-                                .warn("A note belongs to a saved connection's object.".into());
+                            model.messages.warn(
+                                "A note belongs to a saved connection's object; save this connection first (Save Connection…)."
+                                    .into(),
+                            );
                             Vec::new()
                         }
                     }
@@ -3972,6 +3985,33 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         && crate::screens::find::handle_key(model, key)
     {
         return Vec::new();
+    }
+    // A terminal sends Alt+key as Esc and the key, so Esc then `o` typed fast in Insert
+    // mode arrives as Alt+O and opened the saved queries. Vim reads it as the two keys
+    // wherever Esc changes the mode, and so does Dexo.
+    if crate::screens::vim::active(model)
+        && model.effective_focus() == Focus::Editor
+        && matches!(
+            model.vim.mode,
+            crate::screens::vim::Mode::Insert
+                | crate::screens::vim::Mode::Visual
+                | crate::screens::vim::Mode::VisualLine
+        )
+        && key.modifiers.difference(KeyModifiers::SHIFT) == KeyModifiers::ALT
+        && let KeyCode::Char(ch) = key.code
+    {
+        let mut effects = update(
+            model,
+            Action::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)),
+        );
+        effects.extend(update(
+            model,
+            Action::Key(KeyEvent::new(
+                KeyCode::Char(ch),
+                key.modifiers.difference(KeyModifiers::ALT),
+            )),
+        ));
+        return effects;
     }
     let spec = crate::keymap::KeySpec {
         modifiers: key.modifiers,
@@ -5076,6 +5116,26 @@ fn adjust_explorer_width(model: &mut Model, delta: i16) {
     model.layout_dirty = true;
 }
 
+/// Whether `id` is a saved connection's: a temporary one's (`dexo <url>`) is in no
+/// table, so nothing stored -- a saved query, a note -- can belong to it.
+fn is_saved_connection(model: &Model, id: &str) -> bool {
+    model
+        .connections
+        .profiles
+        .iter()
+        .any(|row| !row.temporary && row.profile.id.0.to_string() == id)
+}
+
+/// The connection a saved query of the active document belongs to: the document's, or
+/// the live one for a document bound to none. The picker marks queries against it.
+pub(crate) fn query_connection(model: &Model) -> Option<String> {
+    model
+        .active_document()
+        .connection_id
+        .clone()
+        .or_else(|| active_connection_uuid(model))
+}
+
 fn active_connection_uuid(model: &Model) -> Option<String> {
     let name = model.connection.name.as_str();
     if name.is_empty() {
@@ -5252,7 +5312,7 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
     };
     match action {
         Action::ExecuteStatement => {
-            if model.active_document().selection().is_some() {
+            if model.editor_selection().is_some() {
                 crate::screens::workbench::execute_selection(model);
             } else {
                 crate::screens::workbench::execute_current_statement(model);
@@ -6834,8 +6894,8 @@ fn open_save_query(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     }
     let text = document.text();
-    let (sql, source) = match document.selection() {
-        Some(range) if range.start < range.end => (
+    let (sql, source) = match model.editor_selection() {
+        Some(range) => (
             text.chars()
                 .skip(range.start)
                 .take(range.end - range.start)
@@ -6849,16 +6909,20 @@ fn open_save_query(model: &mut Model) -> Vec<Effect> {
         model.messages.warn("There is no SQL to save.".into());
         return Vec::new();
     }
-    let Some(connection_id) = document
-        .connection_id
-        .clone()
-        .or_else(|| active_connection_uuid(model))
-    else {
+    let Some(connection_id) = query_connection(model) else {
         model
             .messages
             .warn("A saved query belongs to a connection; connect this document first.".into());
         return Vec::new();
     };
+    if !is_saved_connection(model, &connection_id) {
+        model.messages.warn(
+            "A saved query belongs to a saved connection; save this one first (Save Connection…)."
+                .into(),
+        );
+        return Vec::new();
+    }
+    let document = model.active_document();
     if model.project_id.is_empty() {
         model
             .messages
@@ -6952,8 +7016,10 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 if name.is_empty() {
                     picker.error = Some("A saved query needs a name.".into());
                 } else if let Some(query) = picker.current() {
+                    // The field stays until the list comes back renamed: a refused name
+                    // is still there to fix.
                     let id = query.id.clone();
-                    picker.renaming = None;
+                    picker.error = None;
                     return vec![Effect::RenameSavedQuery {
                         project_id,
                         id,
@@ -9838,6 +9904,164 @@ mod tests {
                 .messages
                 .iter()
                 .any(|entry| entry.message.contains("press f again"))
+        );
+    }
+
+    /// In the Vim keymap, Save Query As takes the Visual selection on screen, not the
+    /// editor's own leftover range.
+    #[test]
+    fn save_query_takes_vims_visual_selection() {
+        let mut model = Model {
+            keymap: crate::keymap::Keymap::vim_profile(),
+            focus: Focus::Editor,
+            project_id: "p".into(),
+            ..Model::default()
+        };
+        model.set_sql("select 1;\nselect 2;");
+        model.active_document_mut().sql.set_cursor(0).unwrap();
+        model.connection.name = "pg".into();
+        model
+            .connections
+            .load_profiles(vec![dexo_app::ConnectionProfile::new(
+                dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+                None,
+                "pg",
+                "postgres",
+                "local",
+                serde_json::json!({"host": "h"}),
+                dexo_app::connection_profile::SecretRef::new("ref".into()),
+            )]);
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('V'), KeyModifiers::NONE)),
+        );
+        update(&mut model, Action::OpenSaveQuery);
+        assert_eq!(
+            model
+                .save_query_prompt
+                .as_ref()
+                .map(|prompt| prompt.sql.as_str()),
+            Some("select 1;")
+        );
+    }
+
+    /// Esc then `o`, typed fast in Insert mode, reaches Dexo as Alt+O: it leaves Insert
+    /// and opens a line, as in Vim, instead of opening the saved queries.
+    #[test]
+    fn esc_then_a_key_typed_fast_is_two_keys_in_vim() {
+        let mut model = Model {
+            keymap: crate::keymap::Keymap::vim_profile(),
+            focus: Focus::Editor,
+            ..Model::default()
+        };
+        model.set_sql("select 1");
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
+        );
+        assert_eq!(model.vim.mode, crate::screens::vim::Mode::Insert);
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT)),
+        );
+        assert!(!model.saved_queries.open);
+        assert_eq!(model.vim.mode, crate::screens::vim::Mode::Insert);
+        assert_eq!(model.active_document().text(), "select 1\n");
+    }
+
+    fn saved(name: &str, sql: &str) -> dexo_storage::SavedQuery {
+        dexo_storage::SavedQuery {
+            id: name.into(),
+            project_id: "p".into(),
+            connection_id: "c".into(),
+            name: name.into(),
+            sql: sql.into(),
+            updated_at: String::new(),
+        }
+    }
+
+    /// A refused rename keeps the typed name in the field; a click while renaming opens
+    /// nothing; wide names keep the preview's separator in its column.
+    #[test]
+    fn the_saved_query_picker_keeps_a_refused_rename_and_its_columns() {
+        let mut model = Model {
+            project_id: "p".into(),
+            ..Model::default()
+        };
+        model.saved_queries.open = true;
+        model.saved_queries.set_items(vec![
+            saved("日本語の売上", "select 1"),
+            saved("orders", "select 2"),
+        ]);
+        let screen = crate::render::render_to_string(&model, 100, 30);
+        let columns: Vec<usize> = screen
+            .lines()
+            .filter(|line| line.contains("日") || line.contains(" orders"))
+            // The rendered text gives a wide character's second cell as a space: cells
+            // are characters here.
+            .map(|line| line[..line.find(" │ ").unwrap()].chars().count())
+            .collect();
+        assert_eq!(columns.len(), 2, "{screen}");
+        assert_eq!(columns[0], columns[1], "{screen}");
+        let key = |model: &mut Model, code| {
+            update(model, Action::Key(KeyEvent::new(code, KeyModifiers::NONE)))
+        };
+        key(&mut model, KeyCode::F(2));
+        model
+            .saved_queries
+            .renaming
+            .as_mut()
+            .unwrap()
+            .set_text("orders");
+        let effects = key(&mut model, KeyCode::Enter);
+        assert!(matches!(
+            effects.as_slice(),
+            [Effect::RenameSavedQuery { .. }]
+        ));
+        update(
+            &mut model,
+            Action::SavedQueryDone(Err(
+                "a saved query of this connection is already called orders".into(),
+            )),
+        );
+        assert_eq!(
+            model
+                .saved_queries
+                .renaming
+                .as_ref()
+                .map(|input| input.as_str()),
+            Some("orders")
+        );
+        assert!(model.saved_queries.error.is_some());
+    }
+
+    /// A temporary connection is in no table: nothing can be saved for it.
+    #[test]
+    fn a_temporary_connection_keeps_no_saved_query() {
+        let mut model = Model {
+            project_id: "p".into(),
+            ..Model::default()
+        };
+        model.set_sql("select 1");
+        let temporary = dexo_app::ConnectionProfile::new(
+            dexo_app::connection_profile::ConnectionId(uuid::Uuid::new_v4()),
+            None,
+            "url",
+            "postgres",
+            "local",
+            serde_json::json!({"host": "h"}),
+            dexo_app::connection_profile::SecretRef::new("ref".into()),
+        );
+        model.connections.temporary = vec![temporary.clone()];
+        model.connections.load_profiles(Vec::new());
+        model.connection.name = "url".into();
+        update(&mut model, Action::OpenSaveQuery);
+        assert!(model.save_query_prompt.is_none());
+        assert!(
+            model
+                .messages
+                .iter()
+                .any(|entry| entry.message.contains("save this one first"))
         );
     }
 

@@ -15,8 +15,8 @@ pub fn planned_statement_spans(model: &Model) -> Vec<(usize, String)> {
     let doc = model.active_document();
     let sql = doc.text();
     let cursor = char_to_byte_index(&sql, doc.cursor());
-    let selection = doc
-        .selection()
+    let selection = model
+        .editor_selection()
         .map(|range| char_to_byte_index(&sql, range.start)..char_to_byte_index(&sql, range.end));
     statement_spans_for_dialect(
         &sql,

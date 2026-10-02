@@ -100,11 +100,12 @@ impl ProjectsScreen {
         }
         if let Some(delete) = &self.delete {
             lines.push(format!(
-                "delete {}? connections={} documents={} snippets={}",
+                "delete {}? connections={} documents={} snippets={} saved queries={}",
                 delete.project.name,
                 delete.preview.connections,
                 delete.preview.documents,
-                delete.preview.snippets
+                delete.preview.snippets,
+                delete.preview.saved_queries
             ));
             if !delete.preview.external_paths.is_empty() {
                 lines.push(format!(

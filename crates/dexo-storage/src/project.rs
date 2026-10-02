@@ -128,6 +128,11 @@ impl<'a> ProjectRepository<'a> {
                 "SELECT COUNT(*) FROM snippets WHERE project_id = ?1",
                 &pid,
             )?,
+            saved_queries: count(
+                self.conn,
+                "SELECT COUNT(*) FROM saved_queries WHERE project_id = ?1",
+                &pid,
+            )?,
             external_paths: {
                 let mut stmt = self.conn.prepare(
                     "SELECT path FROM documents WHERE project_id = ?1 AND path IS NOT NULL AND path <> ''",
@@ -197,6 +202,7 @@ pub struct ProjectDeletePreview {
     pub connections: usize,
     pub documents: usize,
     pub snippets: usize,
+    pub saved_queries: usize,
     pub external_paths: Vec<String>,
 }
 
