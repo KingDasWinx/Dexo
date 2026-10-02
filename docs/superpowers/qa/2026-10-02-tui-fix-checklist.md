@@ -37,13 +37,13 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-07** `MINOR` Hotkeys shown in the palette differ from the command table (or from the help)
 - [ ] **PC-08** `MINOR` F1 help: sections are sorted by key, not by purpose; layout keys appear under [Editor]
 - [x] **PC-09** `MINOR` F1 search is a loose subsequence match and shows unrelated rows
-- [ ] **PC-13** `MINOR` Query running: no sign anywhere that something is running; a second Ctrl+Enter is silently queued
+- [x] **PC-13** `MINOR` Query running: no sign anywhere that something is running; a second Ctrl+Enter is silently queued
 - [ ] **PC-14** `MINOR` Cancelling a query is reported as an error, and a timeout hits after 30 s with no hint
 - [x] **PC-15** `MINOR` Error toast never goes away by itself
 - [ ] **PC-16** `MINOR` Confirmation for an unparsable statement is titled "Run destructive statements"
 - [x] **PC-22** `MINOR` Pickers: PageUp/PageDown/Home/End do not move the file list; there is no hint for Esc
 - [x] **PC-23** `MINOR` Rename / New document dialogs: empty name closes silently; long names are clipped and the caret disappears
-- [ ] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
+- [x] **PC-24** `MINOR` Execute Selection with no selection, and Ctrl+F2 with nothing running, give no feedback
 - [ ] **PC-27** `MINOR` Tab strip / tab focus details
 - [ ] **PC-30** `MINOR` Running a document that has no connection says "session is closed"
 - [ ] **PC-34** `MINOR` Cursor does not jump to the failing statement on MySQL and SQLite; SQLite error says `SQLSTATE 1`

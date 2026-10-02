@@ -32,6 +32,20 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         TransactionState::Failed => "tx:failed",
         TransactionState::Unknown => "tx:unknown",
     };
+    // Nothing else on screen changes while a statement runs, and a second run used to
+    // queue behind it without a word.
+    let running = (model.active_query.is_some() && model.active_operation.is_some()).then(|| {
+        let cancel = crate::palette::shortcut_for(model, "query.cancel", Some("Ctrl+F2"))
+            .unwrap_or_default();
+        format!(
+            "running{} {cancel} cancels",
+            if model.capabilities.unicode {
+                "…"
+            } else {
+                "..."
+            }
+        )
+    });
     let env = environment_marker(&model.connection.environment, model.capabilities.unicode);
     let env_style = model.theme.style(
         crate::accessibility::environment_role(&model.connection.environment)
@@ -113,6 +127,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
                 model.theme.style(Role::Warning, model.capabilities),
             ));
         }
+        if let Some(running) = &running {
+            spans.push(Span::styled(
+                format!("  {running}"),
+                model.theme.style(Role::Warning, model.capabilities),
+            ));
+        }
         // Whole hints that fit, as on the wide bar: the line ended mid-hint at 60 columns.
         let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
         if let Some(hint) = footer_hint(model) {
@@ -130,6 +150,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     spans.push(Span::raw(format!("{conn}  ")));
     if !tx.is_empty() {
         spans.push(Span::styled(format!("{tx}  "), tx_style));
+    }
+    if let Some(running) = &running {
+        spans.push(Span::styled(
+            format!("{running}  "),
+            model.theme.style(Role::Warning, model.capabilities),
+        ));
     }
     // The focused pane already carries an accent border and the cursor; the layout
     // preset and the row count are both printed where they apply. None of them

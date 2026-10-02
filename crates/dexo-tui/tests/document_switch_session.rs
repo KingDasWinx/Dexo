@@ -86,7 +86,9 @@ fn alt_right_and_alt_left_bring_the_session_with_the_document() {
 #[test]
 fn alt_left_to_an_offline_connection_dials_it() {
     let mut model = two_live_connections();
-    model.connections.remove_session(SessionId(uuid::Uuid::from_u128(102)));
+    model
+        .connections
+        .remove_session(SessionId(uuid::Uuid::from_u128(102)));
     update(&mut model, Action::SelectDocument { index: 0 });
 
     let effects = update(&mut model, key(KeyCode::Right, KeyModifiers::ALT));

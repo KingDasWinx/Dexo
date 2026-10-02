@@ -88,6 +88,8 @@ mod tests {
         update(&mut model, Action::ExecuteStatement);
         let offset = model.results.tabs[0].source_offset.map(|(at, _)| at);
         assert_eq!(offset, Some(sql.rfind("select").unwrap()));
+        // The first run is over: a second one waits for it, and says so.
+        model.active_query = None;
         update(&mut model, Action::ExecuteDocument);
         let offsets: Vec<_> = model
             .results

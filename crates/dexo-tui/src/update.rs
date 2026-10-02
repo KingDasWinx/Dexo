@@ -5998,6 +5998,20 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
             return effects;
         }
     };
+    // One run at a time: a second one was queued without a word and started when the
+    // first ended, minutes later, with nothing on screen to say it was waiting.
+    if matches!(
+        action,
+        Action::ExecuteStatement | Action::ExecuteSelection | Action::ExecuteDocument
+    ) && model.active_query.is_some()
+    {
+        let cancel = crate::palette::shortcut_for(model, "query.cancel", Some("Ctrl+F2"))
+            .unwrap_or_else(|| "Cancel Query".into());
+        model.messages.warn(format!(
+            "A query is already running. Wait for it, or cancel it with {cancel}."
+        ));
+        return effects;
+    }
     match action {
         Action::ExecuteStatement => {
             if model.editor_selection().is_some() {
@@ -6006,7 +6020,15 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
                 crate::screens::workbench::execute_current_statement(model);
             }
         }
-        Action::ExecuteSelection => crate::screens::workbench::execute_selection(model),
+        Action::ExecuteSelection => {
+            if model.editor_selection().is_none() {
+                model.messages.warn(
+                    "Select some SQL first: Execute Selection runs only the selection.".into(),
+                );
+                return effects;
+            }
+            crate::screens::workbench::execute_selection(model)
+        }
         Action::ExecuteDocument => crate::screens::workbench::execute_document(model),
         Action::RefreshTableData => {
             effects.extend(refresh_table_data(model));
@@ -6372,11 +6394,14 @@ fn apply_sql_transactions(model: &mut Model, operation: crate::runtime::Operatio
 }
 
 fn cancel_query(model: &mut Model) -> Vec<Effect> {
-    model
-        .active_operation
-        .map(Effect::CancelOperation)
-        .into_iter()
-        .collect()
+    match model.active_operation {
+        Some(operation) => vec![Effect::CancelOperation(operation)],
+        None => {
+            // The palette says so for this command; the key stayed silent.
+            model.messages.warn("No query is running.".into());
+            Vec::new()
+        }
+    }
 }
 
 fn apply_bootstrap(model: &mut Model, state: crate::runtime::storage_worker::BootstrapState) {
