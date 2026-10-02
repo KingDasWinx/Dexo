@@ -92,8 +92,11 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         }
     }
     if !model.mouse {
+        // The way back is the palette's Toggle Mouse, said in the words the palette uses.
+        let palette = crate::palette::shortcut_for(model, "palette.open", Some("Ctrl+P"))
+            .unwrap_or_else(|| "the palette".into());
         spans.push(Span::styled(
-            "MOUSE OFF · Ctrl+P settings.mouse  ",
+            format!("MOUSE OFF · {palette}, Toggle Mouse  "),
             err_style,
         ));
     }
@@ -545,8 +548,12 @@ mod tests {
             model.apply_size(width, height);
             let view = render_to_string(&model, width, height);
             assert!(
-                view.contains("MOUSE OFF · Ctrl+P settings.mouse"),
+                view.contains("MOUSE OFF · Ctrl+P, Toggle Mouse"),
                 "missing mouse recovery command at {width}x{height}"
+            );
+            assert!(
+                !view.contains("settings.mouse"),
+                "an internal id on screen at {width}x{height}"
             );
         }
     }

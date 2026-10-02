@@ -4643,6 +4643,21 @@ fn handle_palette_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             move_palette_selection(model, 1);
             Vec::new()
         }
+        // A page is what the list shows; the list has a hundred and forty rows, and the
+        // arrows were the only way down it.
+        KeyCode::PageUp | KeyCode::PageDown => {
+            let count = palette_match_count(model);
+            let page = crate::palette::popup_list_rows(model.height, count) as isize;
+            move_palette_selection(
+                model,
+                if key.code == KeyCode::PageUp {
+                    -page
+                } else {
+                    page
+                },
+            );
+            Vec::new()
+        }
         // The query edits like any input: Ctrl+A selects it, the word keys work, and
         // a letter typed with Ctrl is never text.
         _ => {
@@ -5301,12 +5316,16 @@ fn open_palette(model: &mut Model) {
     model.focus = Focus::Palette;
 }
 
-fn move_palette_selection(model: &mut Model, delta: isize) {
-    let count = crate::palette::filter_entries(
+fn palette_match_count(model: &Model) -> usize {
+    crate::palette::filter_entries(
         &crate::palette::palette_entries(model),
         model.palette.query.as_str(),
     )
-    .len();
+    .len()
+}
+
+fn move_palette_selection(model: &mut Model, delta: isize) {
+    let count = palette_match_count(model);
     if count == 0 {
         model.palette.selected = 0;
         model.palette.offset = 0;

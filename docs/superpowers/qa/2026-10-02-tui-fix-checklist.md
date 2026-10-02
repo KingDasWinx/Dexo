@@ -19,9 +19,9 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 - [x] **PC-18** `BLOCKER` Save picker overwrites an existing file without asking (data loss)
 - [x] **PC-19** `BLOCKER` Opening a binary file fails with a raw error and still creates a document bound to that file; saving it destroys the file
-- [ ] **PC-01** `MAJOR` Palette search ranks loose subsequence matches above the obvious prefix/word match
-- [ ] **PC-02** `MAJOR` PageUp / PageDown do nothing in the palette list
-- [ ] **PC-05** `MAJOR` Most commands of the registry are missing from the palette (not searchable, not listed)
+- [x] **PC-01** `MAJOR` Palette search ranks loose subsequence matches above the obvious prefix/word match
+- [x] **PC-02** `MAJOR` PageUp / PageDown do nothing in the palette list
+- [x] **PC-05** `MAJOR` Most commands of the registry are missing from the palette (not searchable, not listed)
 - [ ] **PC-11** `MAJOR` Alt+Left / Alt+Right switch the document but not the session: header and status bar keep the old connection, no reconnect
 - [x] **PC-12** `MAJOR` Ctrl+Shift+Tab (Previous Document) does nothing
 - [x] **PC-20** `MAJOR` Save/Open pickers show the start of the path, so the current folder is never visible
@@ -30,13 +30,13 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-26** `MAJOR` Session recovery: no offer, "Session recovery" shows `key=value` debug text, and Recover / Discard cannot be run
 - [x] **PC-28** `MAJOR` Resizing small and back leaves the explorer and results hidden, with focus on the invisible explorer
 - [ ] **PC-29** `MAJOR` A transaction opened with plain SQL (`begin;`) is not tracked: no indicator, and Ctrl+Q quits without asking
-- [ ] **PC-33** `MAJOR` Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command
+- [x] **PC-33** `MAJOR` Palette `save` puts `Open Saved Query…` first; transposed typos find nothing or the wrong command
 - [ ] **PC-35** `MAJOR` Ctrl+N creates the document on the "active" connection, not on the connection under the explorer cursor; the status bar names a third one
-- [ ] **PC-03** `MINOR` Palette with no match shows an empty box and no message
-- [ ] **PC-06** `MINOR` The empty palette lists commands that cannot work in the current context, unordered, with repeated group names
+- [x] **PC-03** `MINOR` Palette with no match shows an empty box and no message
+- [x] **PC-06** `MINOR` The empty palette lists commands that cannot work in the current context, unordered, with repeated group names
 - [ ] **PC-07** `MINOR` Hotkeys shown in the palette differ from the command table (or from the help)
 - [ ] **PC-08** `MINOR` F1 help: sections are sorted by key, not by purpose; layout keys appear under [Editor]
-- [ ] **PC-09** `MINOR` F1 search is a loose subsequence match and shows unrelated rows
+- [x] **PC-09** `MINOR` F1 search is a loose subsequence match and shows unrelated rows
 - [ ] **PC-13** `MINOR` Query running: no sign anywhere that something is running; a second Ctrl+Enter is silently queued
 - [ ] **PC-14** `MINOR` Cancelling a query is reported as an error, and a timeout hits after 30 s with no hint
 - [x] **PC-15** `MINOR` Error toast never goes away by itself
@@ -50,7 +50,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **PC-36** `MINOR` Ctrl+S with focus in the Results pane opens "Review changes" with raw text instead of saving the document
 - [ ] **PC-37** `MINOR` Ctrl+Q while a query is running quits at once and leaves the statement running on the server
 - [ ] **PC-38** `MINOR` Header and status bar stay on the old connection after closing a document too
-- [ ] **PC-04** `COSMETIC` "Reset layout" is not Title Case
+- [x] **PC-04** `COSMETIC` "Reset layout" is not Title Case
 - [ ] **PC-10** `COSMETIC` Welcome: the last hint is cut off at 60x20
 - [ ] **PC-17** `COSMETIC` Error underline covers the semicolon; void value shown as `\x`
 - [ ] **PC-31** `COSMETIC` Single-line inputs never scroll horizontally (palette query, New document, Rename, Save, name field)
@@ -350,8 +350,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## SL: Settings, layout, mouse
 
-- [ ] **SL-05** `MAJOR` "MOUSE OFF · Ctrl+P settings.mouse" shows an internal command id and points to a palette entry that does not exist
-- [ ] **SL-06** `MAJOR` Cycle Theme / Toggle Light-Dark Mode / Cycle Accent / Cycle Keymap / Toggle Mouse / Toggle Animation / Toggle Unicode / Reset Settings and Hide Explorer / Hide Results / Grow-Shrink Results / Grow-Shrink Explorer are not in the command palette
+- [x] **SL-05** `MAJOR` "MOUSE OFF · Ctrl+P settings.mouse" shows an internal command id and points to a palette entry that does not exist
+- [x] **SL-06** `MAJOR` Cycle Theme / Toggle Light-Dark Mode / Cycle Accent / Cycle Keymap / Toggle Mouse / Toggle Animation / Toggle Unicode / Reset Settings and Hide Explorer / Hide Results / Grow-Shrink Results / Grow-Shrink Explorer are not in the command palette
 - [ ] **SL-07** `MAJOR` Alt+[ (Shrink Explorer Pane) does nothing and swallows the next key
 - [x] **SL-16** `MAJOR` Running Dexo in a small terminal permanently hides the explorer and results (compact mode overwrites the saved layout)
 - [ ] **SL-17** `MAJOR` "Inspect value" shows raw Rust Debug text for numbers and booleans
@@ -370,7 +370,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **SL-24** `MINOR` Key hints behind and inside modals are inconsistent
 - [ ] **SL-04** `COSMETIC` Modals sit at different heights and have different sizes
 - [ ] **SL-11** `COSMETIC` Layout and settings commands give no feedback about what they did
-- [ ] **SL-12** `COSMETIC` Command name case differs: "Reset layout" vs "Cycle Layout" / "Reset Settings"
+- [x] **SL-12** `COSMETIC` Command name case differs: "Reset layout" vs "Cycle Layout" / "Reset Settings"
 - [ ] **SL-13** `COSMETIC` Settings footer does not list `e` (cycle theme) which the docs describe
 - [ ] **SL-14** `COSMETIC` Explain placeholder is cut off at the pane edge instead of wrapped
 - [ ] **SL-15** `COSMETIC` Right click: grid and tree respond, editor, tabs and status bar do not

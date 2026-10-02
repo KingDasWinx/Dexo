@@ -192,7 +192,7 @@ fn command_spec_list() -> Vec<CommandSpec> {
         },
         CommandSpec {
             id: "layout.reset",
-            title: "Reset layout",
+            title: "Reset Layout",
             keywords: &["preset", "default", "panes"],
             shortcut: None,
             requirements: &[],
@@ -1420,50 +1420,13 @@ fn hidden(id: &str) -> bool {
             | "results.extend_down"
             | "results.toggle_pick"
             | "results.actions"
-            | "results.select_row"
-            | "results.select_column"
             | "explorer.up"
             | "explorer.down"
-            | "explorer.expand"
-            | "explorer.actions"
-            // pane focus and sizing
-            | "focus.explorer"
-            | "focus.editor"
-            | "focus.results"
-            | "focus.tabs"
+            // the document strip's own cursor: it only means something with the strip
+            // focused, where the arrows and Enter are the keys
             | "document.activate_tab"
             | "document.tab_prev"
             | "document.tab_next"
-            | "layout.hide_explorer"
-            | "layout.hide_results"
-            | "layout.results_grow"
-            | "layout.results_shrink"
-            | "layout.explorer_grow"
-            | "layout.explorer_shrink"
-            // tab switching
-            | "document.next"
-            | "document.prev"
-            | "document.prev_focus"
-            | "document.next_focus"
-            | "results.next_tab"
-            | "results.cycle_view"
-            | "results.prev_tab"
-            // already a labelled row inside the Settings screen
-            | "settings.theme"
-            | "settings.mode"
-            | "settings.accent"
-            | "settings.keymap"
-            | "settings.mouse"
-            | "settings.animation"
-            | "settings.unicode"
-            | "settings.reset"
-            // second step of a flow the palette already opened
-            | "recovery.restore"
-            | "recovery.discard"
-            // grid chrome
-            | "data.page_next"
-            | "data.page_prev"
-            | "data.toggle_delete"
             // listing the palette inside the palette
             | "palette.open"
             // opening the palette destroys completion state, so it is always disabled
@@ -1688,6 +1651,8 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "data.page_next"
         | "data.page_prev"
         | "data.refresh"
+        | "explain.open"
+        | "explain.analyze"
         | "data.insert_row" => &[ActiveSession],
         "explorer.inspect"
         | "explorer.note"
@@ -1708,6 +1673,7 @@ fn requirements_for(id: &str) -> &'static [Requirement] {
         | "data.copy.markdown"
         | "data.copy.sql"
         | "transfer.export"
+        | "results.record_view"
         | "results.select_row"
         | "results.select_column"
         | "results.next_tab"

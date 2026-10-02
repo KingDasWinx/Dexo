@@ -1132,6 +1132,12 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             " ".repeat(gap)
         ));
     }
+    if visible.is_empty() {
+        lines.push(format!(
+            "  No command matches `{}`.",
+            model.palette.query.as_str()
+        ));
+    }
     // One footer line, for the selected command only. The reason used to trail every
     // disabled row, which repeated "connect a session first" down the list and pushed
     // the shortcuts off the popup.
@@ -1174,7 +1180,7 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     );
     register_overlay(hits, popup);
     for_popup_lines(popup, &lines, |i, _, rect| {
-        if i == 0 || i > list_lines {
+        if i == 0 || i > list_lines || visible.is_empty() {
             return;
         }
         hits.register(HitTarget::ListRow(offset.saturating_add(i - 1)), rect);
