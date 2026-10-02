@@ -445,6 +445,7 @@ fn populate_advanced_fields(fields: &mut [FormField], profile: &ConnectionProfil
         "password_command",
         profile.config.get("password_command"),
     );
+    set_json_field(fields, "pre_connect", profile.config.get("pre_connect"));
     set_option_field(fields, "read_only", profile.policy.read_only);
     set_option_field(
         fields,
@@ -541,6 +542,9 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
         field_of("group", false),
         // Prints the password -- `op read …`, `pass show …` -- in place of the keychain.
         field_of("password_command", false),
+        // Opens the way first -- `kubectl port-forward svc/db ${port}:5432` -- and runs
+        // while the session does.
+        field_of("pre_connect", false),
     ];
     let Some(descriptor) = descriptor else {
         return fields;
@@ -667,6 +671,13 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
         extra.insert(
             "password_command".into(),
             serde_json::Value::String(password_command.trim().into()),
+        );
+    }
+    let pre_connect = field(fields, "pre_connect");
+    if !pre_connect.trim().is_empty() {
+        extra.insert(
+            "pre_connect".into(),
+            serde_json::Value::String(pre_connect.trim().into()),
         );
     }
     let path = field(fields, "path");

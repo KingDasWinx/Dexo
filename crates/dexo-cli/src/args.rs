@@ -276,7 +276,7 @@ pub enum ConnectionsCommand {
         /// The database file, for a driver that opens one (sqlite).
         #[arg(
             long,
-            conflicts_with_all = ["host", "port", "database", "username", "password_command", "password_stdin"]
+            conflicts_with_all = ["host", "port", "database", "username", "password_command", "password_stdin", "pre_connect"]
         )]
         path: Option<String>,
         #[arg(long, default_value = "local")]
@@ -288,6 +288,9 @@ pub enum ConnectionsCommand {
         /// Read the password from this command at every connect (`op read …`, `pass show …`).
         #[arg(long, conflicts_with = "password_stdin")]
         password_command: Option<String>,
+        /// Run this before connecting and wait for its port (`kubectl port-forward … ${port}:5432`).
+        #[arg(long)]
+        pre_connect: Option<String>,
         #[arg(long)]
         test: bool,
         #[arg(long)]

@@ -199,14 +199,31 @@ async fn dial(
     password: Password,
     memory: &MemorySecretStore,
     forget: bool,
-) -> Result<(Box<dyn dexo_driver_api::Session>, SecretString), String> {
+) -> Result<
+    (
+        Box<dyn dexo_driver_api::Session>,
+        SecretString,
+        ConnectionProfile,
+    ),
+    String,
+> {
     let forget = forget && matches!(password, Password::Ready(_));
     let secret = password.resolve().await?;
-    let (connect, _) = profile
+    // A pre-connect command opens the way first; the session keeps it running, and the
+    // profile it hands back dials that way, for the connections that follow.
+    let (effective, process) =
+        dexo_app::pre_connect::prepare(profile, dexo_app::pre_connect::TIMEOUT)
+            .await
+            .map_err(|error| error.to_string())?;
+    let (connect, _) = effective
         .connect_request(SecretString::from(secret.expose_secret().to_string()))
         .map_err(|error| error.to_string())?;
     match tokio::time::timeout(CONNECT_TIMEOUT, factory.connect(connect)).await {
-        Ok(Ok(session)) => Ok((session, secret)),
+        Ok(Ok(session)) => Ok((
+            dexo_app::pre_connect::attach(session, process),
+            secret,
+            effective,
+        )),
         Ok(Err(error)) => {
             let rejected = error.category() == dexo_driver_api::DriverErrorCategory::Authentication;
             let message = map_driver_error(error).to_string();
@@ -985,7 +1002,7 @@ impl WorkbenchRuntime {
         let slots = Arc::clone(&counts);
         let task = tokio::spawn(async move {
             let result = async {
-                let (session, _) = dial(factory, &profile, password, &memory, false).await?;
+                let (session, ..) = dial(factory, &profile, password, &memory, false).await?;
                 let session: Arc<dyn dexo_driver_api::Session> = Arc::from(session);
                 let mut request = dexo_driver_api::QueryRequest::read(sql, 1);
                 request.parameters = parameters;
@@ -1228,9 +1245,9 @@ impl WorkbenchRuntime {
         let memory = Arc::clone(&self.secrets.memory);
         tokio::spawn(async move {
             let action = match dial(factory, &profile, password, &memory, true).await {
-                Ok((session, secret)) => {
+                Ok((session, secret, effective)) => {
                     let printed = from_command.then_some(secret);
-                    *opening.lock().await = Some((token, profile, Arc::from(session), printed));
+                    *opening.lock().await = Some((token, effective, Arc::from(session), printed));
                     Action::SessionOpened { token }
                 }
                 Err(message) => Action::ConnectionFormError { message },

@@ -421,6 +421,7 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
             non_interactive,
             password_stdin,
             password_command,
+            pre_connect,
             test,
             no_test,
         } => {
@@ -431,10 +432,20 @@ fn run_connections(registry: DriverRegistry, command: ConnectionsCommand) -> any
             };
             let repo = ConnectionRepository::new(db.connection());
             // The path goes where a file profile keeps it.
-            let extra_config = match (path, password_command) {
-                (Some(path), _) => serde_json::json!({ "path": path }),
-                (None, Some(command)) => serde_json::json!({ "password_command": command }),
-                (None, None) => serde_json::Value::Null,
+            let mut extra = serde_json::Map::new();
+            if let Some(path) = path {
+                extra.insert("path".into(), path.into());
+            }
+            if let Some(command) = password_command {
+                extra.insert("password_command".into(), command.into());
+            }
+            if let Some(command) = pre_connect {
+                extra.insert("pre_connect".into(), command.into());
+            }
+            let extra_config = if extra.is_empty() {
+                serde_json::Value::Null
+            } else {
+                serde_json::Value::Object(extra)
             };
             let (profile, persist) = create_connection(
                 NewConnection {
@@ -901,8 +912,11 @@ pub(crate) async fn connect_session(
 ) -> anyhow::Result<Box<dyn dexo_driver_api::Session>> {
     let secret = profile_secret(profile).await?;
     let factory = registry.get(&profile.driver)?;
+    let (profile, process) =
+        dexo_app::pre_connect::prepare(profile, dexo_app::pre_connect::TIMEOUT).await?;
     let (connect, _) = profile.connect_request(secret)?;
-    Ok(factory.connect(connect).await.map_err(map_driver_error)?)
+    let session = factory.connect(connect).await.map_err(map_driver_error)?;
+    Ok(dexo_app::pre_connect::attach(session, process))
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -980,8 +994,11 @@ async fn execute_script(
         })?;
     let secret = profile_secret(&profile).await?;
     let factory = registry.get(&profile.driver)?;
+    let (profile, process) =
+        dexo_app::pre_connect::prepare(&profile, dexo_app::pre_connect::TIMEOUT).await?;
     let (connect, conn_policy) = profile.connect_request(secret)?;
     let session = factory.connect(connect).await.map_err(map_driver_error)?;
+    let session = dexo_app::pre_connect::attach(session, process);
     let service = QueryService::new(Arc::new(TaskRegistry::default()));
     let batches = service
         .execute_script(
