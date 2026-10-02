@@ -456,6 +456,11 @@ pub enum McpProfileCommand {
         #[arg(long)]
         name: String,
     },
+    /// Delete a profile, with its grants
+    Delete {
+        #[arg(long)]
+        name: String,
+    },
     /// Print a profile
     Show {
         #[arg(long)]

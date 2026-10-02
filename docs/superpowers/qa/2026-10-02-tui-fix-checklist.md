@@ -317,9 +317,9 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **MA-03** `MINOR` Palette shows hotkey `g` for "New MCP Grant…" but it only works inside MCP Profiles; help does not list it
 - [x] **MA-04** `MINOR` Agent Activity `r revoke all grants` closes Activity and opens the MCP Profiles screen with an unexplained pending "confirm revoke all grants"
 - [x] **MA-07** `MINOR` Inconsistent revoke-all keys between screens
-- [ ] **MA-08** `MINOR` CLI: `dexo mcp profile create` accepts any name, including `bad name!`, and there is no way to delete a profile
-- [ ] **MA-09** `MINOR` CLI: creating a profile with an existing name shows the raw SQLite error
-- [ ] **MA-10** `MINOR` CLI: `profile show`/`policy` print Rust Debug names; empty answers are silent
+- [x] **MA-08** `MINOR` CLI: `dexo mcp profile create` accepts any name, including `bad name!`, and there is no way to delete a profile
+- [x] **MA-09** `MINOR` CLI: creating a profile with an existing name shows the raw SQLite error
+- [x] **MA-10** `MINOR` CLI: `profile show`/`policy` print Rust Debug names; empty answers are silent
 - [x] **MA-12** `MINOR` MCP Profiles: key `r` is labelled "revoke" but revokes ALL grants of the selected profile (after a silent first press)
 - [x] **MA-13** `MINOR` MCP Profiles detail uses internal words and units: `diff pg-dev allow qa7.public.orders`, `grant data_write data_update 1796s asks (120s)`
 - [x] **MA-14** `MINOR` MCP Profiles: status line is sticky across openings and stale
@@ -340,7 +340,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-35** `MINOR` The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing
 - [x] **MA-36** `MINOR` Agent Activity: an admin request (`admin_terminate_session`) says nothing about what it would terminate
 - [x] **MA-37** `MINOR` `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
-- [ ] **MA-38** `MINOR` CLI messages and output of `dexo mcp grant` are raw
+- [x] **MA-38** `MINOR` CLI messages and output of `dexo mcp grant` are raw
 - [ ] **MA-39** `MINOR` Agent side: raw Rust/serde and Debug text in errors and results
 - [ ] **MA-40** `MINOR` `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
 - [ ] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids

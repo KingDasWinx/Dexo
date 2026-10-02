@@ -1497,17 +1497,35 @@ fn run_mcp_profile(command: McpProfileCommand) -> anyhow::Result<()> {
     let repo = McpProfileRepository::new(db.connection());
     match command {
         McpProfileCommand::List => {
-            for profile in repo.list()? {
-                println!(
-                    "{} enabled={} access=read_only",
-                    profile.name, profile.enabled
-                );
+            let profiles = repo.list()?;
+            if profiles.is_empty() {
+                println!("no MCP profiles yet: dexo mcp profile create --name NAME");
+            }
+            for profile in profiles {
+                println!("{}", profile_summary(&profile));
             }
         }
         McpProfileCommand::Create { name } => {
+            anyhow::ensure!(
+                valid_profile_name(&name),
+                "a profile name uses letters, digits, '-' and '_' only, since it goes into agents' configs: '{name}' does not"
+            );
+            anyhow::ensure!(
+                repo.get_by_name(&name)?.is_none(),
+                "profile '{name}' already exists"
+            );
             let profile = McpProfile::new(&name);
             repo.save(&profile)?;
-            println!("created {name} enabled=false access=read_only");
+            println!(
+                "created profile {name}: disabled, read-only. Next: dexo mcp profile set --name {name} --connection NAME"
+            );
+        }
+        McpProfileCommand::Delete { name } => {
+            load_profile(&repo, &name)?;
+            let ledger = SqliteGrantLedger::open(&paths.database)?;
+            ledger.revoke_profile(&name)?;
+            repo.delete(&name)?;
+            println!("deleted profile {name} and revoked its grants");
         }
         McpProfileCommand::Show { name } => mcp_policy(&name)?,
         McpProfileCommand::Enable { name, confirm } => {
@@ -1615,15 +1633,67 @@ fn mcp_allow(name: &str, selector: &str, deny: bool, remove: bool) -> anyhow::Re
     Ok(())
 }
 
+/// Letters, digits, `-` and `_`: the name goes into `--profile NAME` and client configs.
+fn valid_profile_name(name: &str) -> bool {
+    !name.is_empty()
+        && name.len() <= 64
+        && name
+            .chars()
+            .all(|ch| ch.is_ascii_alphanumeric() || ch == '-' || ch == '_')
+}
+
+/// A profile on one line, in words.
+fn profile_summary(profile: &McpProfile) -> String {
+    let connections = match profile.connections.len() {
+        0 => "no connection yet".to_string(),
+        1 => format!("connection {}", profile.connections[0]),
+        n => format!("{n} connections: {}", profile.connections.join(", ")),
+    };
+    format!(
+        "{}  {}  {connections}",
+        profile.name,
+        if profile.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    )
+}
+
+/// How a query mode is said to a person.
+fn query_mode_words(mode: QueryMode) -> &'static str {
+    match mode {
+        QueryMode::StructuredOnly => "structured tools only",
+        QueryMode::RawReadSql => "structured tools and raw read-only SQL (query_execute_read)",
+    }
+}
+
+/// A span in words: `45 s`, `29 min`, `3 h`.
+fn span_words(secs: i64) -> String {
+    match secs {
+        i64::MIN..=0 => "now".into(),
+        1..=89 => format!("{secs} s"),
+        90..=5399 => format!("{} min", (secs + 30) / 60),
+        _ => format!("{} h", (secs + 1800) / 3600),
+    }
+}
+
 fn mcp_policy(name: &str) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
     let profile = load_profile(&McpProfileRepository::new(db.connection()), name)?;
     println!(
-        "name={} enabled={} access=read_only query_mode={:?} max_rows={} max_bytes={} timeout_secs={} max_concurrency={} audit_retention_days={}",
+        "Profile {}: {}, read-only access",
         profile.name,
-        profile.enabled,
-        profile.query_mode,
+        if profile.enabled {
+            "enabled"
+        } else {
+            "disabled"
+        }
+    );
+    println!("Reads: {}", query_mode_words(profile.query_mode));
+    println!(
+        "Limits: {} rows, {} bytes, {} s timeout, {} calls at once; audit kept {} days",
         profile.limits.max_rows,
         profile.limits.max_bytes,
         profile.limits.timeout_secs,
@@ -1638,8 +1708,14 @@ fn mcp_policy(name: &str) -> anyhow::Result<()> {
     } else {
         println!("connections: {}", profile.connections.join(", "));
     }
+    if profile.selectors.is_empty() {
+        println!(
+            "objects: none allowed yet (dexo mcp allow --profile {} --selector db.schema.*)",
+            profile.name
+        );
+    }
     for rule in &profile.selectors {
-        println!("selector {rule}");
+        println!("objects: {rule}");
     }
     for rule in &profile.tool_rules {
         let effect = if rule.allowed { "allow" } else { "deny" };
@@ -1676,12 +1752,14 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
         println!("{report}");
         return Ok(());
     }
+    if profiles.is_empty() {
+        println!("no MCP profiles yet: dexo mcp profile create --name NAME");
+    }
     for profile in profiles {
         println!(
-            "{} enabled={} tools={}",
-            profile.name,
-            profile.enabled,
-            advertised_tools(&profile).join(",")
+            "{}  tools: {}",
+            profile_summary(&profile),
+            advertised_tools(&profile).join(", ")
         );
     }
     let Some(probed) = probed else {
@@ -2069,39 +2147,69 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
                 ask_secs: ask.then_some(approval_timeout),
             }
             .issue(&loaded, &saved, now)?;
+            let lasts = span_words(grant.expires_at - now);
             if grant.asks() {
                 println!(
-                    "grant {} expires_at={} asks: each write waits up to {}s for approval",
-                    grant.id, grant.expires_at, grant.ask_secs
+                    "granted {} {} on {}, ends in {lasts}: each write waits up to {} for your approval in Agent Activity (grant id {})",
+                    grant.capability.as_str(),
+                    grant.tools.join(", "),
+                    grant.connection,
+                    span_words(i64::from(grant.ask_secs)),
+                    grant.id
                 );
             } else {
-                println!("grant {} expires_at={} uses=1", grant.id, grant.expires_at);
+                println!(
+                    "granted {} {} on {}, ends in {lasts}: one write, then it is spent (grant id {})",
+                    grant.capability.as_str(),
+                    grant.tools.join(", "),
+                    grant.connection,
+                    grant.id
+                );
             }
             ledger.insert_grant(grant)?;
         }
         McpGrantCommand::List { profile } => {
-            for grant in ledger.active_grants(&profile, now) {
+            load_profile(&McpProfileRepository::new(db.connection()), &profile)?;
+            let grants = ledger.active_grants(&profile, now);
+            if grants.is_empty() {
+                println!("{profile} has no grants: agents cannot write through it");
+            }
+            for grant in grants {
                 let uses = if grant.asks() {
-                    format!("asks={}s", grant.ask_secs)
+                    format!(
+                        "asks before each write ({})",
+                        span_words(i64::from(grant.ask_secs))
+                    )
                 } else {
-                    format!("uses={}", grant.remaining_uses)
+                    "one write, then it is spent".to_string()
                 };
                 println!(
-                    "{} {} {} {uses} expires={}",
+                    "{}  {} on {}  {} {}: {uses}, ends in {}",
                     grant.id,
+                    grant.tools.join(", "),
+                    grant.connection,
                     capability_label(grant.capability),
-                    grant.tools.join(","),
-                    grant.expires_at - now
+                    grant
+                        .selectors
+                        .iter()
+                        .map(|rule| rule.selector.to_string())
+                        .collect::<Vec<_>>()
+                        .join(", "),
+                    span_words(grant.expires_at - now)
                 );
             }
         }
         McpGrantCommand::Revoke { id } => {
+            anyhow::ensure!(
+                id.len() == 36 && id.chars().all(|ch| ch.is_ascii_hexdigit() || ch == '-'),
+                "no grant has the id '{id}': `dexo mcp grant list --profile NAME` shows them"
+            );
             ledger.revoke_str(&id)?;
-            println!("revoked {id}");
+            println!("revoked the grant {id}");
         }
         McpGrantCommand::RevokeAll { profile } => {
             ledger.revoke_profile(&profile)?;
-            println!("revoked all grants for {profile}");
+            println!("revoked every grant of {profile}");
         }
     }
     Ok(())
@@ -2119,10 +2227,12 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let _db = Database::open(&paths.database)?;
     let ledger = SqliteGrantLedger::open(&paths.database)?;
+    let mut printed = 0;
     for event in ledger.audits() {
         if profile.is_some_and(|name| event.profile != name) {
             continue;
         }
+        printed += 1;
         let line = event.export_line();
         anyhow::ensure!(
             !line.contains("SUPER_SECRET_SENTINEL"),
@@ -2130,7 +2240,30 @@ fn mcp_audit(profile: Option<&str>) -> anyhow::Result<()> {
         );
         println!("{line}");
     }
+    if printed == 0 {
+        println!("no audit events yet: nothing an agent did has been recorded");
+    }
     Ok(())
+}
+
+#[cfg(test)]
+mod mcp_words_tests {
+    use super::{span_words, valid_profile_name};
+
+    #[test]
+    fn a_profile_name_is_what_fits_in_an_agents_config() {
+        assert!(valid_profile_name("pg-dev_2"));
+        for bad in ["", "bad name!", "a/b", "é"] {
+            assert!(!valid_profile_name(bad), "{bad:?}");
+        }
+    }
+
+    #[test]
+    fn spans_read_as_words() {
+        assert_eq!(span_words(45), "45 s");
+        assert_eq!(span_words(1796), "30 min");
+        assert_eq!(span_words(86_400), "24 h");
+    }
 }
 
 #[cfg(test)]
