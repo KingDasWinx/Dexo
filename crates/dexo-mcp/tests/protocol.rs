@@ -824,6 +824,48 @@ async fn a_cancelled_write_cannot_be_approved() {
     );
 }
 
+/// A write waiting for a person holds none of the profile's call permits: with room for
+/// one call, other calls still answer while it waits, and it runs once approved.
+#[tokio::test]
+async fn a_waiting_write_leaves_room_for_other_calls() {
+    use dexo_app::mcp::ApprovalDecision;
+    let mut single = profile();
+    single.limits.max_concurrency = 1;
+    let ledger = Arc::new(MemoryGrantLedger::default());
+    let mut client = Client::start(
+        single,
+        vec![connection("local")],
+        Arc::new(FakeBackend::with_session("local", users())),
+        Arc::clone(&ledger),
+    )
+    .await;
+    ledger.insert_grant(asking_grant(30)).unwrap();
+    assert!(
+        client
+            .saw_notification("notifications/tools/list_changed")
+            .await
+    );
+    let waiting = client
+        .send_request(
+            "tools/call",
+            json!({"name": "data_insert", "arguments":
+                {"operation_id": "op-room", "target": "users", "values": {"id": 9}}}),
+        )
+        .await;
+    let request = first_pending(&ledger).await;
+    let listed = client.call("list_connections", json!({})).await;
+    assert!(!is_error(&listed), "{listed}");
+    let now = dexo_mcp::tools_write::now_secs();
+    assert!(
+        ledger
+            .settle_approval(request.id, ApprovalDecision::Approved, now)
+            .unwrap()
+    );
+    let ran = client.response(waiting).await["result"].clone();
+    assert!(!text(&ran).contains("BUSY"), "{ran}");
+    assert!(!text(&ran).contains("approval"), "{ran}");
+}
+
 /// E2: notes say what a table and its columns mean -- the person's note, else the
 /// database's comment -- in object_describe and catalog_search, which also finds a
 /// table by its note; a hidden table's note is never found.

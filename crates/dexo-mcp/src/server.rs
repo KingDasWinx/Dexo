@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 
 use dexo_app::mcp::audit::{AuditEvent, SqlAuditMode};
 use dexo_app::mcp::ledger::GrantLedger;
-use dexo_app::mcp::{McpConnection, McpService, advertised_tools};
+use dexo_app::mcp::{McpConnection, McpService, WRITE_TOOLS, advertised_tools};
 use rmcp::ErrorData as McpError;
 use rmcp::handler::server::ServerHandler;
 use rmcp::handler::server::router::tool::ToolRouter;
@@ -20,7 +20,7 @@ use tokio::sync::Semaphore;
 use tokio_util::sync::CancellationToken;
 
 use crate::backend::McpBackend;
-use crate::error::{HIDDEN, tool_error};
+use crate::error::{HIDDEN, busy, tool_error};
 use crate::router::McpConnectionRouter;
 use crate::tools_write::{now_secs, write_tool_names};
 use crate::{prompts, resources};
@@ -40,7 +40,7 @@ pub(crate) struct Inner {
     pub router: McpConnectionRouter,
     pub ledger: Arc<dyn GrantLedger>,
     pub session_id: String,
-    calls: Semaphore,
+    pub calls: Semaphore,
     last_revision: Mutex<u64>,
     stop: CancellationToken,
 }
@@ -211,14 +211,17 @@ impl ServerHandler for DexoMcpServer {
             );
             return Ok(denied);
         }
-        let Ok(_permit) = self.inner.calls.try_acquire() else {
-            let busy: CallToolResponse = tool_error(
-                "BUSY",
-                "too many calls in flight for this profile; retry shortly",
-            )
-            .into();
-            self.audit(&tool, &arguments, &request_id, "deny", Some(&busy), started);
-            return Ok(busy);
+        // A write takes its permit itself, once it may run: one that waits for a person
+        // holds none meanwhile.
+        let _permit = if WRITE_TOOLS.contains(&tool.as_str()) {
+            None
+        } else {
+            let Ok(permit) = self.inner.calls.try_acquire() else {
+                let busy: CallToolResponse = busy().into();
+                self.audit(&tool, &arguments, &request_id, "deny", Some(&busy), started);
+                return Ok(busy);
+            };
+            Some(permit)
         };
         let response = self
             .tool_router

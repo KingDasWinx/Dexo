@@ -56,6 +56,20 @@ impl DexoMcpServer {
         if cancel.is_cancelled() {
             return crate::error::app_error(&cancelled_by_agent());
         }
+        // The profile's call permit is taken only now, to run: held while a person
+        // decided, two waiting writes answered BUSY to every other call. An approved
+        // write waits for its turn rather than make the person approve it again.
+        let _permit = if approved.is_some() {
+            tokio::select! {
+                permit = self.inner.calls.acquire() => permit.ok(),
+                () = cancel.cancelled() => return crate::error::app_error(&cancelled_by_agent()),
+            }
+        } else {
+            match self.inner.calls.try_acquire() {
+                Ok(permit) => Some(permit),
+                Err(_) => return crate::error::busy(),
+            }
+        };
         let mut lease = match self.open(connection.as_deref()).await {
             Ok(lease) => lease,
             Err(result) => return result,
