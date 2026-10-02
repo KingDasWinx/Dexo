@@ -1,6 +1,8 @@
 use std::ops::ControlFlow;
 
-use sqlparser::ast::{Expr, ObjectName, ObjectNamePart, Query, Select, Statement, Visit, Visitor};
+use sqlparser::ast::{
+    Expr, ObjectName, ObjectNamePart, Query, Select, Statement, TableFactor, Visit, Visitor,
+};
 use sqlparser::dialect::{MySqlDialect, PostgreSqlDialect, SQLiteDialect};
 use sqlparser::parser::Parser;
 
@@ -600,6 +602,21 @@ impl Visitor for Guard {
         ControlFlow::Continue(())
     }
 
+    /// A function called in FROM -- Postgres's `dblink(...)`, DuckDB's `query(...)` --
+    /// is checked like one called anywhere else.
+    fn pre_visit_table_factor(&mut self, factor: &TableFactor) -> ControlFlow<()> {
+        let name = match factor {
+            TableFactor::Table {
+                name,
+                args: Some(_),
+                ..
+            }
+            | TableFactor::Function { name, .. } => name,
+            _ => return ControlFlow::Continue(()),
+        };
+        self.deny_function(name)
+    }
+
     fn pre_visit_expr(&mut self, expr: &Expr) -> ControlFlow<()> {
         // MySQL's `@a := 1` sets a session variable from inside a SELECT.
         if let Expr::BinaryOp {
@@ -610,14 +627,21 @@ impl Visitor for Guard {
             return self.reject(GuardRejection::Assignment);
         }
         if let Expr::Function(function) = expr {
-            let name = self
-                .path(&function.name)
-                .last()
-                .map(|name| name.to_lowercase())
-                .unwrap_or_default();
-            if DENIED_FUNCTIONS.contains(&name.as_str()) {
-                return self.reject(GuardRejection::Function(name));
-            }
+            return self.deny_function(&function.name);
+        }
+        ControlFlow::Continue(())
+    }
+}
+
+impl Guard {
+    fn deny_function(&mut self, function: &ObjectName) -> ControlFlow<()> {
+        let name = self
+            .path(function)
+            .last()
+            .map(|name| name.to_lowercase())
+            .unwrap_or_default();
+        if DENIED_FUNCTIONS.contains(&name.as_str()) {
+            return self.reject(GuardRejection::Function(name));
         }
         ControlFlow::Continue(())
     }
@@ -649,6 +673,13 @@ mod tests {
         assert!(check("1=1; delete from t", "").is_err());
         assert!(check("", "id; drop table t").is_err());
         assert!(check("pg_terminate_backend(42)", "").is_err());
+        assert!(
+            check(
+                "id in (select id from dblink('db', 'delete from t') as d(id int))",
+                ""
+            )
+            .is_err()
+        );
         let index = super::inspect_index(
             "CREATE INDEX ON shop.orders (customer_id)",
             Dialect::Postgres,
