@@ -186,7 +186,13 @@ pub fn mode_from_settings(mode: dexo_app::settings::ModeId) -> Mode {
 /// The theme the user saved, read straight from the settings file.
 pub fn saved_theme(data_dir: &std::path::Path) -> Theme {
     let settings = dexo_app::settings::load_settings(data_dir);
-    theme_for(mode_from_settings(settings.mode), &settings.accent)
+    let (user, _) = user_themes(data_dir);
+    resolve(
+        &settings.color_theme,
+        mode_from_settings(settings.mode),
+        &settings.accent,
+        &user,
+    )
 }
 
 pub fn theme_for(mode: Mode, accent: &str) -> Theme {
@@ -472,6 +478,228 @@ pub fn parse_theme(src: &str) -> Result<Theme, ThemeError> {
         base.slots.insert(role, palette_from(color));
     }
     Ok(base)
+}
+
+/// The themes Dexo ships besides its own, as `(key, label, theme file)`: the same
+/// format a user's theme file takes.
+pub const PRESETS: &[(&str, &str, &str)] = &[
+    ("dracula", "Dracula", DRACULA),
+    ("gruvbox", "Gruvbox", GRUVBOX),
+    ("nord", "Nord", NORD),
+    ("catppuccin", "Catppuccin", CATPPUCCIN),
+    ("tokyo-night", "Tokyo Night", TOKYO_NIGHT),
+];
+
+const DRACULA: &str = r##"
+name = "Dracula"
+mode = "dark"
+[roles]
+background = "#282a36"
+foreground = "#f8f8f2"
+border = "#44475a"
+muted = "#6272a4"
+production = "#ff5555"
+staging = "#f1fa8c"
+development = "#8be9fd"
+error = "#ff5555"
+warning = "#ffb86c"
+success = "#50fa7b"
+selection = "#44475a"
+focus = "#bd93f9"
+zebra = "#2f3241"
+on-focus = "#282a36"
+on-selection = "#f8f8f2"
+"##;
+
+const GRUVBOX: &str = r##"
+name = "Gruvbox"
+mode = "dark"
+[roles]
+background = "#282828"
+foreground = "#ebdbb2"
+border = "#504945"
+muted = "#928374"
+production = "#fb4934"
+staging = "#fabd2f"
+development = "#83a598"
+error = "#fb4934"
+warning = "#fe8019"
+success = "#b8bb26"
+selection = "#504945"
+focus = "#fabd2f"
+zebra = "#32302f"
+on-focus = "#282828"
+on-selection = "#fbf1c7"
+"##;
+
+const NORD: &str = r##"
+name = "Nord"
+mode = "dark"
+[roles]
+background = "#2e3440"
+foreground = "#d8dee9"
+border = "#4c566a"
+muted = "#7b88a1"
+production = "#bf616a"
+staging = "#ebcb8b"
+development = "#88c0d0"
+error = "#bf616a"
+warning = "#d08770"
+success = "#a3be8c"
+selection = "#434c5e"
+focus = "#88c0d0"
+zebra = "#3b4252"
+on-focus = "#2e3440"
+on-selection = "#eceff4"
+"##;
+
+const CATPPUCCIN: &str = r##"
+name = "Catppuccin"
+mode = "dark"
+[roles]
+background = "#1e1e2e"
+foreground = "#cdd6f4"
+border = "#45475a"
+muted = "#7f849c"
+production = "#f38ba8"
+staging = "#f9e2af"
+development = "#89dceb"
+error = "#f38ba8"
+warning = "#fab387"
+success = "#a6e3a1"
+selection = "#45475a"
+focus = "#cba6f7"
+zebra = "#262637"
+on-focus = "#1e1e2e"
+on-selection = "#cdd6f4"
+"##;
+
+const TOKYO_NIGHT: &str = r##"
+name = "Tokyo Night"
+mode = "dark"
+[roles]
+background = "#1a1b26"
+foreground = "#c0caf5"
+border = "#3b4261"
+muted = "#565f89"
+production = "#f7768e"
+staging = "#e0af68"
+development = "#7dcfff"
+error = "#f7768e"
+warning = "#ff9e64"
+success = "#9ece6a"
+selection = "#283457"
+focus = "#7aa2f7"
+zebra = "#1f2335"
+on-focus = "#1a1b26"
+on-selection = "#c0caf5"
+"##;
+
+/// The key that names Dexo's own theme, composed from the mode and the accent.
+pub const DEXO_THEME: &str = "dexo";
+
+/// A theme file of the user's, `<data dir>/themes/<name>.toml`; it is chosen as
+/// `file:<name>`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct UserTheme {
+    pub name: String,
+    pub theme: Theme,
+}
+
+/// The user's theme files that parse, by name, and a line for each that does not --
+/// naming the file and the line in it.
+pub fn user_themes(data_dir: &Path) -> (Vec<UserTheme>, Vec<String>) {
+    let mut themes = Vec::new();
+    let mut errors = Vec::new();
+    let Ok(entries) = std::fs::read_dir(data_dir.join("themes")) else {
+        return (themes, errors);
+    };
+    let mut paths: Vec<std::path::PathBuf> = entries
+        .filter_map(Result::ok)
+        .map(|entry| entry.path())
+        .filter(|path| {
+            path.extension()
+                .is_some_and(|extension| extension == "toml")
+        })
+        .collect();
+    paths.sort();
+    for path in paths {
+        let name = path
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_default();
+        let Ok(src) = std::fs::read_to_string(&path) else {
+            errors.push(format!("{}: could not be read", path.display()));
+            continue;
+        };
+        match parse_theme(&src) {
+            Ok(theme) => themes.push(UserTheme { name, theme }),
+            Err(error) => errors.push(match error_line(&src, &error.field) {
+                Some(line) => format!("{} line {line}: {error}", path.display()),
+                None => format!("{}: {error}", path.display()),
+            }),
+        }
+    }
+    (themes, errors)
+}
+
+/// The theme `key` names -- Dexo's own (from `mode` and `accent`), a preset, or a
+/// user's file -- or Dexo's own when it names none of them.
+pub fn resolve(key: &str, mode: Mode, accent: &str, user: &[UserTheme]) -> Theme {
+    if let Some((_, _, src)) = PRESETS.iter().find(|(preset, ..)| *preset == key)
+        && let Ok(theme) = parse_theme(src)
+    {
+        return theme;
+    }
+    if let Some(theme) = key
+        .strip_prefix("file:")
+        .and_then(|name| user.iter().find(|theme| theme.name == name))
+    {
+        return theme.theme.clone();
+    }
+    theme_for(mode, accent)
+}
+
+/// The themes Settings steps through, as `(key, label)`: Dexo's own, the presets, then
+/// the user's files.
+pub fn choices(user: &[UserTheme]) -> Vec<(String, String)> {
+    std::iter::once((DEXO_THEME.to_string(), "Dexo".to_string()))
+        .chain(
+            PRESETS
+                .iter()
+                .map(|(key, label, _)| (key.to_string(), label.to_string())),
+        )
+        .chain(
+            user.iter()
+                .map(|theme| (format!("file:{}", theme.name), theme.name.clone())),
+        )
+        .collect()
+}
+
+/// The 1-based line a parse error points at: a TOML error's span, or the line that
+/// names the field.
+pub fn error_line(src: &str, field: &str) -> Option<usize> {
+    let line_at = |offset: usize| {
+        src.get(..offset)
+            .map(|before| before.matches('\n').count() + 1)
+    };
+    if let Some(span) = field
+        .strip_prefix("toml[")
+        .and_then(|rest| rest.split_once(".."))
+    {
+        return span.0.parse().ok().and_then(line_at);
+    }
+    // The key the field ends in, as a line starts with it: `focus = …`, `"ctrl+p" = …`.
+    let key = field.rsplit_once('.').map_or(field, |(_, key)| key);
+    src.lines()
+        .position(|line| {
+            let line = line.trim_start();
+            let rest = line
+                .strip_prefix(&format!("\"{key}\""))
+                .or_else(|| line.strip_prefix(key));
+            rest.is_some_and(|rest| rest.trim_start().starts_with('='))
+        })
+        .map(|index| index + 1)
 }
 
 pub fn load_theme_file(path: &Path, fallback: Theme) -> LoadedTheme {
@@ -822,5 +1050,48 @@ mod tests {
             theme.pane_border(false, caps)
         );
         assert_ne!(theme.pane_title(true, caps), theme.pane_title(false, caps));
+    }
+
+    /// The presets parse, each its own; a user's file is a choice by its name, and one
+    /// that does not parse is left out with its file and line.
+    #[test]
+    fn presets_and_user_files_are_themes_and_broken_files_say_where() {
+        for (key, label, _) in super::PRESETS {
+            let theme = super::resolve(key, Mode::Dark, "cyan", &[]);
+            assert_eq!(theme.name, *label);
+            assert_ne!(theme, theme_for(Mode::Dark, "cyan"), "{key}");
+        }
+        let dir = tempfile::tempdir().unwrap();
+        let themes = dir.path().join("themes");
+        std::fs::create_dir_all(&themes).unwrap();
+        std::fs::write(
+            themes.join("ocean.toml"),
+            "name = \"Ocean\"\nmode = \"dark\"\n[roles]\nfocus = \"#00aaff\"\n",
+        )
+        .unwrap();
+        std::fs::write(
+            themes.join("broken.toml"),
+            "name = \"Broken\"\n[roles]\nforeground = \"#ffffff\"\nfocus = \"teal-ish\"\n",
+        )
+        .unwrap();
+        let (user, problems) = super::user_themes(dir.path());
+        assert_eq!(user.len(), 1);
+        assert_eq!(problems.len(), 1);
+        assert!(problems[0].contains("broken.toml line 4"), "{problems:?}");
+        let keys: Vec<String> = super::choices(&user)
+            .into_iter()
+            .map(|(key, _)| key)
+            .collect();
+        assert_eq!(keys.first().map(String::as_str), Some("dexo"));
+        assert_eq!(keys.last().map(String::as_str), Some("file:ocean"));
+        assert_eq!(
+            super::resolve("file:ocean", Mode::Light, "rose", &user).name,
+            "Ocean"
+        );
+        // A name that is gone is Dexo's own.
+        assert_eq!(
+            super::resolve("file:gone", Mode::Light, "rose", &user),
+            theme_for(Mode::Light, "rose")
+        );
     }
 }

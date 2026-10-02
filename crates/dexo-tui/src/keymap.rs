@@ -273,6 +273,89 @@ pub fn parse_keymap(src: &str) -> Result<Keymap, KeymapError> {
     Ok(keymap)
 }
 
+/// `profile` with the user's overlay, `<data dir>/keymap.toml`, merged over it, and
+/// what was wrong with the overlay when it could not be used -- naming the file and the
+/// line; the profile is then used as it is.
+pub fn load(profile: &str, data_dir: &std::path::Path) -> (Keymap, Option<String>) {
+    let base = Keymap::named(profile);
+    let path = data_dir.join("keymap.toml");
+    let Ok(src) = std::fs::read_to_string(&path) else {
+        return (base, None);
+    };
+    match merge_overlay(&base, &src) {
+        Ok(keymap) => (keymap, None),
+        Err(error) => {
+            let place = match crate::theme::error_line(&src, &error.field) {
+                Some(line) => format!("{} line {line}", path.display()),
+                None => path.display().to_string(),
+            };
+            let message = format!(
+                "{place}: {error}; the {} keymap is used as it is",
+                base.name
+            );
+            (base, Some(message))
+        }
+    }
+}
+
+/// An overlay in the profiles' format over `base`: a chord it binds replaces the
+/// profile's binding of that chord in that context, and `""` unbinds it.
+pub fn merge_overlay(base: &Keymap, src: &str) -> Result<Keymap, KeymapError> {
+    let table: toml::Table = src.parse().map_err(|err: toml::de::Error| KeymapError {
+        field: err.span().map_or("keymap".into(), |span| {
+            format!("toml[{}..{}]", span.start, span.end)
+        }),
+        reason: err.message().to_string(),
+    })?;
+    let mut keymap = base.clone();
+    for (key, value) in &table {
+        if key == "profile" {
+            continue;
+        }
+        let context = parse_context(key)?;
+        let Some(map) = value.as_table() else {
+            return Err(KeymapError {
+                field: key.clone(),
+                reason: "context must be a table of chord = command".into(),
+            });
+        };
+        for (spec, command) in map {
+            let field = format!("{key}.{spec}");
+            let command = command.as_str().ok_or_else(|| KeymapError {
+                field: field.clone(),
+                reason: "command id must be a string".into(),
+            })?;
+            let chord = parse_chord(spec).map_err(|reason| KeymapError {
+                field: field.clone(),
+                reason,
+            })?;
+            if !command.is_empty() && crate::palette::command_spec(command).is_none() {
+                return Err(KeymapError {
+                    field,
+                    reason: format!("no command is called `{command}`"),
+                });
+            }
+            keymap
+                .bindings
+                .retain(|binding| binding.context != context || binding.chord != chord);
+            if !command.is_empty() {
+                keymap.bindings.push(Binding {
+                    chord,
+                    command: command.to_string(),
+                    context,
+                });
+            }
+        }
+    }
+    if let Some(conflict) = keymap.conflicts().into_iter().next() {
+        return Err(KeymapError {
+            field: format!("{:?}.{}", conflict.context, conflict.chord),
+            reason: format!("ambiguous commands {}", conflict.commands.join(" / ")),
+        });
+    }
+    Ok(keymap)
+}
+
 pub fn parse_chord(spec: &str) -> Result<Chord, String> {
     let keys = spec
         .split_whitespace()
@@ -1041,5 +1124,33 @@ profile = "overlap"
     fn chord_from_single_key_event() {
         let chord = chord_from_event(KeyEvent::new(KeyCode::Char('p'), KeyModifiers::CONTROL));
         assert_eq!(super::chord_label(&chord), "ctrl+p");
+    }
+
+    /// The user's keymap.toml rebinds and unbinds over the profile; one that names a
+    /// command Dexo does not have is not used, and says so with its file and line.
+    #[test]
+    fn a_keymap_overlay_rebinds_unbinds_and_reports_by_line() {
+        let base = Keymap::default_profile();
+        let overlay = "[editor]\n\"ctrl+r\" = \"query.execute_document\"\n\"ctrl+/\" = \"\"\n";
+        let merged = super::merge_overlay(&base, overlay).unwrap();
+        assert_eq!(
+            merged.resolve(&parse_chord("ctrl+r").unwrap(), KeyContext::Editor),
+            Ok(Some("query.execute_document"))
+        );
+        assert_eq!(
+            merged.resolve(&parse_chord("ctrl+/").unwrap(), KeyContext::Editor),
+            Ok(None)
+        );
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("keymap.toml"),
+            "[editor]\n\"ctrl+r\" = \"query.execute_document\"\n\"ctrl+k\" = \"no.such\"\n",
+        )
+        .unwrap();
+        let (keymap, problem) = super::load("vim", dir.path());
+        assert_eq!(keymap, Keymap::vim_profile());
+        let problem = problem.unwrap();
+        assert!(problem.contains("keymap.toml line 3"), "{problem}");
+        assert!(problem.contains("no.such"), "{problem}");
     }
 }

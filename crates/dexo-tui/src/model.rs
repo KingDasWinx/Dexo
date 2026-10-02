@@ -1739,6 +1739,8 @@ pub struct Model {
     pub find: crate::screens::find::FindState,
     pub theme: Theme,
     pub capabilities: TerminalCapabilities,
+    /// The user's theme files, `<data dir>/themes/*.toml`, read at start.
+    pub user_themes: Vec<crate::theme::UserTheme>,
     pub keymap: Keymap,
     pub pending_chord: Chord,
     pub panes: PaneLayout,
@@ -1780,6 +1782,7 @@ impl Default for Model {
                 mouse: true,
             },
             keymap: Keymap::default_profile(),
+            user_themes: Vec::new(),
             pending_chord: Chord { keys: Vec::new() },
             help: HelpState::default(),
             onboarding: OnboardingState::default(),

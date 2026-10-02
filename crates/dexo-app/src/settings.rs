@@ -70,6 +70,14 @@ pub struct SettingsFile {
     /// The once-a-day look for a newer release; the only request Dexo makes on its own.
     #[serde(default = "default_update_check")]
     pub update_check: bool,
+    /// `dexo` (composed from `mode` and `accent`), a preset such as `nord`, or
+    /// `file:<name>` for `<data dir>/themes/<name>.toml`.
+    #[serde(default = "default_color_theme")]
+    pub color_theme: String,
+}
+
+fn default_color_theme() -> String {
+    "dexo".into()
 }
 
 fn default_update_check() -> bool {
@@ -89,6 +97,7 @@ impl Default for SettingsFile {
             unicode: UnicodeMode::Unicode,
             recovery_interval_secs: 5,
             update_check: true,
+            color_theme: default_color_theme(),
         }
     }
 }

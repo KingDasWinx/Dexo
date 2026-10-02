@@ -1909,7 +1909,8 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 }
 
 fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let popup = centered(frame.area(), 64, 12);
+    // The eight rows, a blank line, the reset button and the hint, inside the borders.
+    let popup = centered(frame.area(), 64, 13);
     let wide = popup_inner(popup).width >= crate::screens::settings::WIDE_MIN_WIDTH;
     let lines = model.settings.lines(wide);
     let body = if wide {

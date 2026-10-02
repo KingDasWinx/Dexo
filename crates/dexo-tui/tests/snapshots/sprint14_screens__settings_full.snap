@@ -15,7 +15,8 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                   ┌Settings──────────────────────────────────────────────────────┐                                               │
-│                          ││                   │> Mode       [Dark]  Light   Low color                        │                                               │
+│                          ││                   │> Theme      [Dexo  1/6]                                      │                                               │
+│                          ││                   │  Mode       [Dark]  Light   Low color                        │                                               │
 │                          ││                   │  Accent     [Cyan]  Blue   Violet   Green   Amber   Rose     │                                               │
 │                          ││                   │  Keymap     [Default]  Vim   Emacs                           │                                               │
 │                          ││                   │  Mouse      [On]  Off                                        │                                               │
@@ -26,7 +27,6 @@ default  no connection  —
 │                          ││                   │  [Reset to defaults]                                         │                                               │
 │                          ││                   │  up/down field  left/right change  r reset  esc close        │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
-│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

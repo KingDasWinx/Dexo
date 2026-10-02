@@ -1474,6 +1474,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.settings.open = true;
             model.settings.focus = 0;
             model.settings.confirm_reset = false;
+            // A theme file dropped in since the start shows up without one.
+            if let Ok(paths) = dexo_storage::AppPaths::discover() {
+                let (themes, _) = crate::theme::user_themes(&paths.data_dir);
+                model.settings.themes = crate::theme::choices(&themes);
+                model.user_themes = themes;
+            }
             sync_settings_screen(model);
             Vec::new()
         }
@@ -7506,46 +7512,83 @@ fn remove_document(model: &mut Model, index: usize) {
     model.focus = Focus::Editor;
 }
 
+/// Steps through Dexo's own theme, the presets and the user's files; each applies the
+/// moment it is shown, so the app itself is the preview.
+fn cycle_theme(model: &mut Model, delta: i32) -> Vec<Effect> {
+    let choices = &model.settings.themes;
+    if !choices.is_empty() {
+        let current = choices
+            .iter()
+            .position(|(key, _)| *key == model.settings.theme)
+            .unwrap_or(0) as i32;
+        let next = (current + delta).rem_euclid(choices.len() as i32) as usize;
+        model.settings.theme = choices[next].0.clone();
+    }
+    rebuild_theme(model);
+    Vec::new()
+}
+
+/// Mode and accent are the Dexo theme's: changing either goes back to it.
 fn cycle_mode(model: &mut Model, delta: i32) -> Vec<Effect> {
     let next = crate::theme::Mode::from_key(&model.settings.mode).step(delta);
     model.settings.mode = next.as_key().into();
+    model.settings.theme = crate::theme::DEXO_THEME.into();
     rebuild_theme(model);
     Vec::new()
 }
 
 fn cycle_accent(model: &mut Model, delta: i32) -> Vec<Effect> {
     model.settings.accent = crate::theme::step_accent(&model.settings.accent, delta).into();
+    model.settings.theme = crate::theme::DEXO_THEME.into();
     rebuild_theme(model);
     Vec::new()
 }
 
-/// The surface and the primary color are picked separately, then composed here.
+/// The theme chosen: a preset, a file of the user's, or Dexo's own composed from the
+/// surface and the primary color.
 fn rebuild_theme(model: &mut Model) {
-    model.theme = crate::theme::theme_for(
+    model.theme = crate::theme::resolve(
+        &model.settings.theme,
         crate::theme::Mode::from_key(&model.settings.mode),
         &model.settings.accent,
+        &model.user_themes,
     );
     persist_settings(model);
 }
 
 fn cycle_keymap(model: &mut Model, delta: i32) -> Vec<Effect> {
     let next = crate::keymap::step_profile(&model.keymap.name, delta);
-    model.keymap = crate::keymap::Keymap::named(next);
+    set_keymap(model, next);
     model.settings.keymap = model.keymap.name.clone();
     persist_settings(model);
     Vec::new()
 }
 
+/// The profile `name` with the user's `keymap.toml` over it, saying what was wrong with
+/// the file when it could not be used.
+fn set_keymap(model: &mut Model, name: &str) {
+    let Ok(paths) = dexo_storage::AppPaths::discover() else {
+        model.keymap = crate::keymap::Keymap::named(name);
+        return;
+    };
+    let (keymap, problem) = crate::keymap::load(name, &paths.data_dir);
+    model.keymap = keymap;
+    if let Some(problem) = problem {
+        model.messages.warn(problem);
+    }
+}
+
 /// `delta` is the arrow direction; the two-value rows ignore it because they toggle.
 fn step_focused_setting(model: &mut Model, delta: i32) -> Vec<Effect> {
     match model.settings.focus {
-        0 => cycle_mode(model, delta),
-        1 => cycle_accent(model, delta),
-        2 => cycle_keymap(model, delta),
-        3 => update(model, Action::ToggleMouse),
-        4 => update(model, Action::ToggleAnimation),
-        5 => update(model, Action::ToggleUnicode),
-        6 => update(model, Action::ToggleUpdateCheck),
+        0 => cycle_theme(model, delta),
+        1 => cycle_mode(model, delta),
+        2 => cycle_accent(model, delta),
+        3 => cycle_keymap(model, delta),
+        4 => update(model, Action::ToggleMouse),
+        5 => update(model, Action::ToggleAnimation),
+        6 => update(model, Action::ToggleUnicode),
+        7 => update(model, Action::ToggleUpdateCheck),
         _ => update(model, Action::ConfirmResetSettings),
     }
 }
@@ -7557,7 +7600,7 @@ fn reset_settings_to_defaults(model: &mut Model) {
     model.animation = true;
     model.capabilities.unicode = true;
     model.theme = crate::theme::builtin_dark();
-    model.keymap = crate::keymap::Keymap::default_profile();
+    set_keymap(model, "default");
     model.settings.reset();
     sync_settings_screen(model);
 }
@@ -7595,6 +7638,7 @@ fn persist_settings(model: &Model) {
         },
         completion_trigger: model.settings.completion_trigger,
         update_check: model.settings.updates,
+        color_theme: model.settings.theme.clone(),
         ..manager.active.clone()
     };
     let _ = manager.save(&paths.data_dir, next);
@@ -7611,13 +7655,42 @@ fn apply_saved_settings(model: &mut Model) {
         manager.active.unicode,
         dexo_app::settings::UnicodeMode::Unicode
     );
-    model.keymap = crate::keymap::Keymap::named(&manager.active.keymap.profile);
+    set_keymap(model, &manager.active.keymap.profile);
     let mode = crate::theme::mode_from_settings(manager.active.mode);
     model.settings.mode = mode.as_key().into();
     model.settings.accent = manager.active.accent.clone();
     model.settings.completion_trigger = manager.active.completion_trigger;
     model.settings.updates = manager.active.update_check;
-    model.theme = crate::theme::theme_for(mode, &model.settings.accent);
+    // The user's theme files, each one that does not parse said by file and line.
+    let (themes, problems) = crate::theme::user_themes(&paths.data_dir);
+    for problem in problems {
+        model
+            .messages
+            .warn(format!("{problem}; that theme is left out"));
+    }
+    model.settings.themes = crate::theme::choices(&themes);
+    model.user_themes = themes;
+    model.settings.theme = manager.active.color_theme.clone();
+    if !model
+        .settings
+        .themes
+        .iter()
+        .any(|(key, _)| *key == model.settings.theme)
+    {
+        if model.settings.theme != crate::theme::DEXO_THEME {
+            model.messages.warn(format!(
+                "There is no theme {}; Dexo's own is used.",
+                model.settings.theme.trim_start_matches("file:")
+            ));
+        }
+        model.settings.theme = crate::theme::DEXO_THEME.into();
+    }
+    model.theme = crate::theme::resolve(
+        &model.settings.theme,
+        mode,
+        &model.settings.accent,
+        &model.user_themes,
+    );
     sync_settings_screen(model);
 }
 
