@@ -1121,7 +1121,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if catalog_generation_matches(model, &session, generation) {
                 model.data.apply();
                 model.data.row_changes.clear();
-                return load_table_document(model, model.active_document);
+                // The rows changed: a count of them no longer holds.
+                let mut effects = drop_count(model);
+                effects.extend(load_table_document(model, model.active_document));
+                return effects;
             }
             Vec::new()
         }
@@ -5655,6 +5658,7 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         .collect();
     model.editor.server_diagnostic = None;
     model.data.bars = crate::screens::data::ClauseBars::default();
+    let dropped = drop_count(model);
     model.results.tabs = statements
         .iter()
         .enumerate()
@@ -5678,6 +5682,7 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
     model.active_query = Some(request.id);
     model.active_operation = Some(operation);
     let mut effects = checkpoint_dirty(model);
+    effects.extend(dropped);
     effects.push(Effect::StartScript(crate::action::ScriptRequest {
         key,
         statements,
@@ -6487,7 +6492,10 @@ fn refresh_table_data(model: &mut Model) -> Vec<Effect> {
             .warn("connect a session to browse table data".into());
         return Vec::new();
     }
-    change_data_page(model, model.data.page_offset)
+    // Read again, the rows may be others: a count of the old ones no longer holds.
+    let mut effects = drop_count(model);
+    effects.extend(change_data_page(model, model.data.page_offset));
+    effects
 }
 
 /// Row edits are keyed by row index and a page load leaves them in place, so loading
@@ -10483,6 +10491,32 @@ mod tests {
                 Some(&action)
             );
         }
+    }
+
+    /// Refreshing the rows lets go of their count, stopping it if it still runs.
+    #[test]
+    fn a_refresh_lets_go_of_the_count() {
+        let mut model = Model {
+            active_session: Some(crate::runtime::SessionId(uuid::Uuid::from_u128(1))),
+            session_generation: 1,
+            ..Model::default()
+        };
+        model.documents = vec![crate::model::EditorDocument::new_table(
+            dexo_driver_api::QualifiedName::new(None::<String>, Some("public"), "orders"),
+            None,
+        )];
+        model.active_document = 0;
+        super::load_table_document(&mut model, 0);
+        let operation = crate::runtime::OperationId::new();
+        model.data.count = Some(crate::screens::data::RowCount {
+            key: super::count_key(&model).unwrap(),
+            state: crate::screens::data::CountState::Running(operation),
+        });
+        let effects = update(&mut model, Action::RefreshTableData);
+        assert!(model.data.count.is_none());
+        assert!(effects.iter().any(
+            |effect| matches!(effect, Effect::CancelCount { operation: o } if *o == operation)
+        ));
     }
 
     /// A statement that is not a plain read keeps no statement to run again: no bars,
