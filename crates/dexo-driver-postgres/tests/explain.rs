@@ -193,3 +193,111 @@ async fn analyze_rolls_back_a_statement_that_ends_in_a_line_comment() {
     let open = run(&*session, "select txid_current_if_assigned() is not null").await;
     assert!(open.iter().any(|value| value.contains("false")), "{open:?}");
 }
+
+/// A plan asked inside the user's transaction -- begun from Dexo or typed -- of a
+/// statement with parameters used to abort it: every statement after failed with
+/// "current transaction is aborted", and Postgres 16 reported that instead of the
+/// parameters. The transaction now goes on as it was.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn a_plan_with_parameters_leaves_the_transaction_usable() {
+    use dexo_driver_api::{
+        ConnectRequest, ConnectionFactory, DriverErrorCategory, ExplainRequest, QueryRequest,
+        TransactionMode,
+    };
+    use dexo_driver_postgres::PostgresFactory;
+    use dexo_test_support::DatabasePair;
+    use futures_util::StreamExt;
+    use secrecy::SecretString;
+
+    async fn run(session: &dyn dexo_driver_api::Session, sql: &str) -> Vec<String> {
+        let mut stream = session.execute(QueryRequest::write(sql)).await.unwrap();
+        let mut values = Vec::new();
+        while let Some(event) = stream.next().await {
+            if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+                for row in batch.rows {
+                    values.extend(row.into_iter().map(|value| format!("{value:?}")));
+                }
+            }
+        }
+        values
+    }
+
+    let pair = DatabasePair::start().await.unwrap();
+    let session = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    run(
+        &*session,
+        "create table plan_orders (id int, customer_id int)",
+    )
+    .await;
+    let version = run(
+        &*session,
+        "select current_setting('server_version_num')::int",
+    )
+    .await;
+    let generic = version[0]
+        .trim_start_matches("I64(")
+        .trim_end_matches(')')
+        .parse::<i64>()
+        .unwrap()
+        >= 160_000;
+    for typed in [false, true] {
+        if typed {
+            run(&*session, "begin").await;
+        } else {
+            session
+                .transactions()
+                .unwrap()
+                .begin(TransactionMode::ReadWrite)
+                .await
+                .unwrap();
+        }
+        run(&*session, "insert into plan_orders values (1, 1)").await;
+        let planned = session
+            .explain()
+            .unwrap()
+            .explain(ExplainRequest::estimated(
+                "select * from plan_orders where customer_id = $1",
+            ))
+            .await;
+        if generic {
+            assert!(planned.unwrap().raw.contains("Plan"));
+        } else {
+            let refused = planned.unwrap_err();
+            assert_eq!(refused.category(), DriverErrorCategory::Capability);
+        }
+        // No type to plan with: the extended protocol refuses it before 16, and 16 plans
+        // it for any value.
+        let untyped = session
+            .explain()
+            .unwrap()
+            .explain(ExplainRequest::estimated(
+                "select * from plan_orders where $1 is null",
+            ))
+            .await;
+        if generic {
+            assert!(untyped.unwrap().raw.contains("Plan"));
+        } else {
+            let refused = untyped.unwrap_err();
+            assert_eq!(refused.category(), DriverErrorCategory::Capability);
+            assert!(refused.to_string().contains("parameters"), "{refused}");
+        }
+        // The transaction is alive, and holds the user's row.
+        let count = run(&*session, "select count(*) from plan_orders").await;
+        assert_eq!(count, ["I64(1)"], "typed: {typed}");
+        if typed {
+            run(&*session, "rollback").await;
+        } else {
+            session.transactions().unwrap().rollback().await.unwrap();
+        }
+    }
+}

@@ -24,6 +24,8 @@ pub struct PostgresSession {
     tx_state: Mutex<TransactionState>,
     notices: tokio::sync::Mutex<Option<mpsc::UnboundedReceiver<SessionEvent>>>,
     cancel: PostgresCancelContext,
+    /// `server_version_num`, asked once, the first time something depends on it.
+    server_version: tokio::sync::OnceCell<i32>,
     _lease: Option<dexo_transport::TransportLease>,
 }
 
@@ -40,12 +42,28 @@ impl PostgresSession {
             tx_state: Mutex::new(TransactionState::Idle),
             notices: tokio::sync::Mutex::new(Some(notices)),
             cancel,
+            server_version: tokio::sync::OnceCell::new(),
             _lease: lease,
         }
     }
 
     fn set_state(&self, state: TransactionState) {
         *self.tx_state.lock().expect("postgres tx state poisoned") = state;
+    }
+
+    /// The server's version as a number, `160009` for 16.9.
+    pub(crate) async fn server_version(&self) -> Result<i32, DriverError> {
+        self.server_version
+            .get_or_try_init(|| async {
+                let row = self
+                    .client
+                    .query_one("SELECT current_setting('server_version_num')::int", &[])
+                    .await
+                    .map_err(map_error)?;
+                Ok(row.get::<_, i32>(0))
+            })
+            .await
+            .copied()
     }
 }
 

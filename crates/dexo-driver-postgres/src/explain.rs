@@ -183,21 +183,47 @@ fn first_text(messages: &[SimpleQueryMessage]) -> Result<String, DriverError> {
 
 impl PostgresSession {
     /// A statement with parameters has no values to plan with. Postgres 16 plans it for
-    /// any value (`GENERIC_PLAN`); an older server knows no such option.
+    /// any value (`GENERIC_PLAN`); the caller asks only a server that knows the option.
     async fn explain_generic(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
         let inner = sql.trim().trim_end_matches(';');
         let explain = format!("EXPLAIN (GENERIC_PLAN, FORMAT JSON)\n{inner}\n");
         match self.client.simple_query(&explain).await {
             Ok(messages) => parse_json(&first_text(&messages)?),
-            // Before 16 the option is unknown, or the parameter is reported first.
-            Err(error)
-                if parameter_error(&error)
-                    || error.code().is_some_and(|code| code.code() == "42601") =>
-            {
-                Err(dexo_driver_api::parameters_unsupported())
-            }
+            // A parameter whose type nothing tells has no generic plan either.
+            Err(error) if parameter_error(&error) => Err(dexo_driver_api::parameters_unsupported()),
             Err(error) => Err(map_error(error)),
         }
+    }
+
+    /// Runs `step` inside a savepoint when the session is in a transaction -- begun from
+    /// Dexo or typed -- and rolls back to it after. A failed statement aborts the user's
+    /// transaction, and everything after it fails with it: a plan asked of a statement
+    /// with parameters used to leave them "current transaction is aborted". A plan
+    /// changes nothing, so rolling back always is safe.
+    async fn fenced<T>(
+        &self,
+        step: impl std::future::Future<Output = Result<T, DriverError>>,
+    ) -> Result<T, DriverError> {
+        let fenced = match self.client.batch_execute("SAVEPOINT dexo_plan").await {
+            Ok(()) => true,
+            Err(error)
+                if error.code()
+                    == Some(&tokio_postgres::error::SqlState::NO_ACTIVE_SQL_TRANSACTION) =>
+            {
+                false
+            }
+            Err(error) => return Err(map_error(error)),
+        };
+        let outcome = step.await;
+        if fenced
+            && let Err(error) = self
+                .client
+                .batch_execute("ROLLBACK TO SAVEPOINT dexo_plan; RELEASE SAVEPOINT dexo_plan")
+                .await
+        {
+            return Err(outcome.err().unwrap_or_else(|| map_error(error)));
+        }
+        outcome
     }
 
     async fn explain_analyzed(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
@@ -239,23 +265,36 @@ impl ExplainProvider for PostgresSession {
 
 impl PostgresSession {
     async fn explain_estimated(&self, sql: &str) -> Result<ExplainPlan, DriverError> {
+        if let Some(plan) = self.fenced(self.explain_valued(sql)).await? {
+            return Ok(plan);
+        }
+        // Before 16 the server knows no GENERIC_PLAN, and asking it would be one more
+        // error for nothing.
+        if self.server_version().await? >= 160_000 {
+            return self.fenced(self.explain_generic(sql)).await;
+        }
+        Err(dexo_driver_api::parameters_unsupported())
+    }
+
+    /// The plan of a statement without parameters, or `None` for one with them.
+    async fn explain_valued(&self, sql: &str) -> Result<Option<ExplainPlan>, DriverError> {
         let statement = match self.client.prepare(&wrap_explain(sql, false)).await {
             Ok(statement) if statement.params().is_empty() => statement,
-            Ok(_) => return self.explain_generic(sql).await,
-            Err(error) if parameter_error(&error) => return self.explain_generic(sql).await,
+            Ok(_) => return Ok(None),
+            Err(error) if parameter_error(&error) => return Ok(None),
             Err(error) => return Err(map_error(error)),
         };
         // An EXPLAIN is not planned until it runs, so a parameter can show only then.
         let row = match self.client.query_one(&statement, &[]).await {
             Ok(row) => row,
-            Err(error) if parameter_error(&error) => return self.explain_generic(sql).await,
+            Err(error) if parameter_error(&error) => return Ok(None),
             Err(error) => return Err(map_error(error)),
         };
         if let Ok(value) = row.try_get::<_, serde_json::Value>(0) {
-            return parse_value(&value, &value.to_string());
+            return parse_value(&value, &value.to_string()).map(Some);
         }
         let text: String = row.try_get(0).map_err(map_error)?;
-        parse_json(&text)
+        parse_json(&text).map(Some)
     }
 
     /// The estimated plan with `indexes` as hypopg's hypothetical ones: made on this
