@@ -47,20 +47,39 @@ pub fn statements_for_dialect(
     selection: Option<Range<usize>>,
     dialect: Dialect,
 ) -> Vec<String> {
-    let fragment = match target {
-        ExecutionTarget::Document => sql.to_string(),
-        ExecutionTarget::CurrentStatement => statement_at_in(sql, cursor, dialect)
-            .map(|span| sql[span.byte_range].to_string())
-            .unwrap_or_default(),
-        ExecutionTarget::Selection => selection
-            .and_then(|range| sql.get(range))
-            .unwrap_or("")
-            .to_string(),
-    };
-    split_statements_in(&fragment, dialect)
+    statement_spans_for_dialect(sql, target, cursor, selection, dialect)
         .into_iter()
-        .map(|span| fragment[span.byte_range].trim().to_string())
-        .filter(|item| !item.is_empty())
+        .map(|(_, statement)| statement)
+        .collect()
+}
+
+/// [`statements_for_dialect`], each with the byte offset in `sql` it starts at.
+pub fn statement_spans_for_dialect(
+    sql: &str,
+    target: ExecutionTarget,
+    cursor: usize,
+    selection: Option<Range<usize>>,
+    dialect: Dialect,
+) -> Vec<(usize, String)> {
+    let fragment = match target {
+        ExecutionTarget::Document => Some(0..sql.len()),
+        ExecutionTarget::CurrentStatement => {
+            statement_at_in(sql, cursor, dialect).map(|span| span.byte_range)
+        }
+        ExecutionTarget::Selection => selection.filter(|range| sql.get(range.clone()).is_some()),
+    }
+    .unwrap_or(0..0);
+    let base = fragment.start;
+    let fragment = &sql[fragment];
+    split_statements_in(fragment, dialect)
+        .into_iter()
+        .filter_map(|span| {
+            let text = &fragment[span.byte_range.clone()];
+            let trimmed = text.trim();
+            let leading = text.len() - text.trim_start().len();
+            (!trimmed.is_empty())
+                .then(|| (base + span.byte_range.start + leading, trimmed.to_string()))
+        })
         .collect()
 }
 

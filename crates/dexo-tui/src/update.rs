@@ -5061,18 +5061,18 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
         document.clone(),
         model.session_generation.max(1),
     );
-    // Where each statement sits in the document, found in order, so a failure the server
-    // places can be shown in the text. A statement not in it (from history) has none.
-    let text = model.active_document().text();
+    // Where each statement sits in the document, so a failure the server places can be
+    // shown in the text: where the run planned them from, when it planned these. A
+    // statement not in it (from history) has none.
     let revision = model.active_document().sql.revision();
-    let mut from = 0;
-    let offsets: Vec<Option<(usize, u64)>> = statements
-        .iter()
-        .map(|sql| {
-            let at = text.get(from..)?.find(sql.as_str())? + from;
-            from = at + sql.len();
-            Some((at, revision))
-        })
+    let planned = crate::screens::workbench::planned_statement_spans(model);
+    let from_document = planned.len() == statements.len()
+        && planned
+            .iter()
+            .zip(&statements)
+            .all(|((_, planned), statement)| planned == statement);
+    let offsets: Vec<Option<(usize, u64)>> = (0..statements.len())
+        .map(|index| from_document.then(|| (planned[index].0, revision)))
         .collect();
     model.editor.server_diagnostic = None;
     model.data.bars = crate::screens::data::ClauseBars::default();

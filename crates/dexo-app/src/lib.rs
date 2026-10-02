@@ -41,7 +41,8 @@ pub use error::{AppError, ErrorCategory};
 pub use project::{Project, ProjectId};
 pub use query_service::{QueryService, QueryTask, map_driver_error};
 pub use script::{
-    ExecutionTarget, ScriptPolicy, dialect_for_driver, statements_for, statements_for_dialect,
+    ExecutionTarget, ScriptPolicy, dialect_for_driver, statement_spans_for_dialect, statements_for,
+    statements_for_dialect,
 };
 pub use search_service::{SearchHit, SearchService, UsageHint, search_with_usage};
 pub use session_manager::{SessionManager, SessionState};
