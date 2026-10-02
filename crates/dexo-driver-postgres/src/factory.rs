@@ -193,9 +193,15 @@ async fn bind_route(
             Ok((endpoint.ip().to_string(), endpoint.port(), Some(lease)))
         }
         RouteRequest::Ssh(ssh) => {
-            let auth = match request.secrets.get("ssh_password") {
-                Some(password) => SshAuth::Password(password.clone()),
-                None => SshAuth::Agent,
+            // A key file is the key to use, with its passphrase when it has one; without
+            // one, the password, and failing that the agent.
+            let auth = match (&ssh.key_file, request.secrets.get("ssh_password")) {
+                (Some(path), _) => {
+                    SshAuth::from_key_file(path, request.secrets.get("ssh_passphrase").cloned())
+                        .map_err(map_transport)?
+                }
+                (None, Some(password)) => SshAuth::Password(password.clone()),
+                (None, None) => SshAuth::Agent,
             };
             let lease = TransportLease::ssh(
                 SshTunnelRequest {

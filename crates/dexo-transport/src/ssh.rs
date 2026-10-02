@@ -104,6 +104,38 @@ impl AsyncWrite for SshTunnel {
     }
 }
 
+impl SshAuth {
+    /// The key in `path`, to authenticate with: its text is read now, so an unreadable or
+    /// unparseable file is told at connect time, and an encrypted one needs `passphrase`.
+    pub fn from_key_file(
+        path: &std::path::Path,
+        passphrase: Option<SecretString>,
+    ) -> Result<Self, TransportError> {
+        let pem = std::fs::read_to_string(path).map_err(|error| {
+            TransportError::Ssh(format!(
+                "cannot read the SSH key {}: {error}",
+                path.display()
+            ))
+        })?;
+        // Parsed here too, so a wrong passphrase or a format russh cannot read says so
+        // before the tunnel is dialled.
+        load_private_key(&pem, passphrase.as_ref())?;
+        Ok(Self::PrivateKey {
+            pem: SecretString::from(pem),
+            passphrase,
+        })
+    }
+}
+
+/// Whether the key file is encrypted, and so needs its passphrase asked for. A file that
+/// cannot be read or parsed is not: the error comes when it is used.
+pub fn key_needs_passphrase(path: &std::path::Path) -> bool {
+    std::fs::read_to_string(path)
+        .ok()
+        .and_then(|pem| russh::keys::PrivateKey::from_openssh(pem).ok())
+        .is_some_and(|key| key.is_encrypted())
+}
+
 pub async fn open_ssh_tunnel(
     request: SshTunnelRequest,
     known: Option<&KnownHost>,

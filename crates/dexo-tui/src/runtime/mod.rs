@@ -144,8 +144,13 @@ fn copy_secrets(
             ))
         })
         .collect();
-    if let (Some(old), Some(new)) = (from.ssh_password_key(), to.ssh_password_key()) {
-        pairs.push((old, new));
+    for (old, new) in [
+        (from.ssh_password_key(), to.ssh_password_key()),
+        (from.ssh_passphrase_key(), to.ssh_passphrase_key()),
+    ] {
+        if let (Some(old), Some(new)) = (old, new) {
+            pairs.push((old, new));
+        }
     }
     let mut kept_all = true;
     for (old, new) in pairs {
@@ -267,11 +272,55 @@ impl From<String> for DialError {
     }
 }
 
+/// What an SSH tunnel is given to authenticate with, besides the key file's path.
+#[derive(Default)]
+struct SshSecrets {
+    password: Option<SecretString>,
+    passphrase: Option<SecretString>,
+}
+
+impl From<Option<SecretString>> for SshSecrets {
+    fn from(password: Option<SecretString>) -> Self {
+        Self {
+            password,
+            passphrase: None,
+        }
+    }
+}
+
+impl WorkbenchRuntime {
+    /// The SSH secrets this connection has kept. `Err` is the one that is missing, as the
+    /// prompt that asks for it: the key's passphrase when the key file is encrypted, the
+    /// password when there is no key file.
+    fn ssh_secrets(
+        &self,
+        profile: &ConnectionProfile,
+    ) -> Result<SshSecrets, crate::screens::secret_prompt::SecretPurpose> {
+        use crate::screens::secret_prompt::SecretPurpose;
+        let mut found = SshSecrets::default();
+        if let Some(key) = profile.ssh_password_key() {
+            match self.secrets.get(&key) {
+                Ok(Some(secret)) => found.password = Some(secret),
+                _ => return Err(SecretPurpose::SshPassword),
+            }
+        }
+        if let (Some(path), Some(key)) = (profile.ssh_key_file(), profile.ssh_passphrase_key())
+            && dexo_transport::key_needs_passphrase(&path)
+        {
+            match self.secrets.get(&key) {
+                Ok(Some(secret)) => found.passphrase = Some(secret),
+                _ => return Err(SecretPurpose::SshPassphrase),
+            }
+        }
+        Ok(found)
+    }
+}
+
 async fn dial(
     factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
     profile: &ConnectionProfile,
     password: Password,
-    ssh_password: Option<SecretString>,
+    ssh: impl Into<SshSecrets>,
     memory: &MemorySecretStore,
     forget: bool,
 ) -> Result<
@@ -287,8 +336,12 @@ async fn dial(
     let mut secrets = dexo_driver_api::ConnectionSecrets::database_password(SecretString::from(
         secret.expose_secret().to_string(),
     ));
-    if let Some(ssh) = ssh_password {
-        secrets.insert("ssh_password", ssh);
+    let ssh = ssh.into();
+    if let Some(password) = ssh.password {
+        secrets.insert("ssh_password", password);
+    }
+    if let Some(passphrase) = ssh.passphrase {
+        secrets.insert("ssh_passphrase", passphrase);
     }
     // A pre-connect command opens the way first; the session keeps it running, and the
     // profile it hands back dials that way, for the connections that follow.
@@ -1186,9 +1239,7 @@ impl WorkbenchRuntime {
             },
         };
         // The tunnel the session went through needs the password it was opened with.
-        let ssh = profile
-            .ssh_password_key()
-            .and_then(|key| self.secrets.get(&key).ok().flatten());
+        let ssh = self.ssh_secrets(&profile).unwrap_or_default();
         let factory = match self.drivers.get(&profile.driver) {
             Ok(factory) => factory,
             Err(error) => return self.emit(fail(error.to_string())).await,
@@ -1399,6 +1450,7 @@ impl WorkbenchRuntime {
         use crate::screens::secret_prompt::{SecretChoiceKind, SecretPurpose};
         let key = match purpose {
             SecretPurpose::SshPassword => profile.ssh_password_key(),
+            SecretPurpose::SshPassphrase => profile.ssh_passphrase_key(),
             _ => Some(profile.secret_ref.as_str().to_string()),
         };
         let Some(key) = key else { return };
@@ -1473,20 +1525,17 @@ impl WorkbenchRuntime {
         let from_command = matches!(password, Password::Command(_));
         // A tunnel through SSH without a key file needs the SSH password too: asked for
         // here, like the database's, rather than refused with the name of its key.
-        let ssh_password = match profile.ssh_password_key() {
-            None => None,
-            Some(key) => match self.secrets.get(&key) {
-                Ok(Some(secret)) => Some(secret),
-                _ => {
-                    return self
-                        .emit(Action::SecretRequired {
-                            purpose: crate::screens::secret_prompt::SecretPurpose::SshPassword,
-                            profile,
-                            buffer: crate::screens::secret_prompt::SecretBuffer::new(String::new()),
-                        })
-                        .await;
-                }
-            },
+        let ssh_password = match self.ssh_secrets(&profile) {
+            Ok(secrets) => secrets,
+            Err(purpose) => {
+                return self
+                    .emit(Action::SecretRequired {
+                        purpose,
+                        profile,
+                        buffer: crate::screens::secret_prompt::SecretBuffer::new(String::new()),
+                    })
+                    .await;
+            }
         };
         let factory = match self.drivers.get(&profile.driver) {
             Ok(factory) => factory,
@@ -1523,12 +1572,16 @@ impl WorkbenchRuntime {
                 }
                 Err(error) => {
                     // The SSH password that was just typed did not get a session either.
-                    if let Some(typed) = &typed
-                        && typed.purpose
-                            == crate::screens::secret_prompt::SecretPurpose::SshPassword
-                        && let Some(key) = profile.ssh_password_key()
-                    {
-                        let _ = memory.delete(&key);
+                    use crate::screens::secret_prompt::SecretPurpose;
+                    if let Some(typed) = &typed {
+                        let key = match typed.purpose {
+                            SecretPurpose::SshPassword => profile.ssh_password_key(),
+                            SecretPurpose::SshPassphrase => profile.ssh_passphrase_key(),
+                            _ => None,
+                        };
+                        if let Some(key) = key {
+                            let _ = memory.delete(&key);
+                        }
                     }
                     Action::ConnectionFormError {
                         message: format!("{}: {error}", profile.name),
@@ -1702,8 +1755,13 @@ impl WorkbenchRuntime {
                 self.secrets.delete(profile.secret_ref.as_str()),
                 Err(SecretError::Unavailable) | Err(SecretError::Internal)
             );
-        if delete_secrets && let Some(key) = profile.ssh_password_key() {
-            let _ = self.secrets.delete(&key);
+        if delete_secrets {
+            for key in [profile.ssh_password_key(), profile.ssh_passphrase_key()]
+                .into_iter()
+                .flatten()
+            {
+                let _ = self.secrets.delete(&key);
+            }
         }
         match self.with_repo(|repo| repo.delete(profile.id).map_err(|error| error.to_string())) {
             Ok(()) => {
@@ -1768,18 +1826,12 @@ impl WorkbenchRuntime {
                 }),
         }
         .and_then(|password| {
-            // A test cannot ask: the SSH password is the one kept, or none.
-            let ssh = match profile.ssh_password_key() {
-                None => Ok(None),
-                Some(key) => match self.secrets.get(&key) {
-                    Ok(Some(secret)) => Ok(Some(secret)),
-                    _ => Err(
-                        "the SSH tunnel needs a password: connect the connection once, \
-                         and it asks for it"
-                            .to_string(),
-                    ),
-                },
-            };
+            // A test cannot ask: the SSH secrets are the ones kept, or none.
+            let ssh = self.ssh_secrets(&profile).map_err(|_| {
+                "the SSH tunnel needs a password or a key passphrase: connect the connection \
+                 once, and it asks for it"
+                    .to_string()
+            });
             ssh.map(|ssh| (password, ssh))
         })
         .and_then(|(password, ssh)| {

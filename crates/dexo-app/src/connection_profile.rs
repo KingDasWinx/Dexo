@@ -107,6 +107,20 @@ impl ConnectionProfile {
         config_str(&self.config, &["username", "user"])
     }
 
+    /// The key file the SSH tunnel authenticates with, when it has one.
+    pub fn ssh_key_file(&self) -> Option<std::path::PathBuf> {
+        match parse_route(&self.config) {
+            Ok(RouteRequest::Ssh(ssh)) => ssh.key_file,
+            _ => None,
+        }
+    }
+
+    /// Where the passphrase of the SSH key is kept, next to the database password's entry.
+    pub fn ssh_passphrase_key(&self) -> Option<String> {
+        self.ssh_key_file()
+            .map(|_| format!("{}:ssh_passphrase", self.secret_ref.as_str()))
+    }
+
     /// Where the connection dials, as `host:port` -- or the file it opens -- for a message
     /// that says what did not answer.
     pub fn target(&self) -> String {

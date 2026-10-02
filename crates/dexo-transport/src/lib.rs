@@ -10,7 +10,7 @@ pub use config::{ClientCertificate, ProxyConfig, TlsConfig, TlsMode, TransportEr
 pub use forward::TransportLease;
 pub use host_key::{HostKeyDecision, KnownHost, ssh_fingerprint, verify_host_key};
 pub use proxy::{ProxyCredentials, connect_proxy};
-pub use ssh::{SshAuth, SshTunnelRequest, open_ssh_tunnel};
+pub use ssh::{SshAuth, SshTunnelRequest, key_needs_passphrase, open_ssh_tunnel};
 pub use tcp::connect_direct;
 pub use tls::connect_tls;
 pub use tls::rustls_client_config;
