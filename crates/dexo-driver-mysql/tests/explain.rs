@@ -140,24 +140,52 @@ async fn subqueries_derived_tables_and_ctes_keep_their_tables() {
             event.unwrap();
         }
     }
-    for sql in [
+    let queries = [
         "select c.id, (select count(*) from o where o.customer_id = c.id) n from c",
         "select * from (select customer_id, sum(total) s from o group by customer_id) t \
          join c on c.id = t.customer_id",
         "with t as (select customer_id, sum(total) s from o group by customer_id) \
          select * from t join c on c.id = t.customer_id",
-    ] {
-        let plan = session
-            .explain()
-            .unwrap()
-            .explain(ExplainRequest::estimated(sql))
-            .await
-            .unwrap();
+    ];
+    let check = |plan: dexo_driver_api::ExplainPlan, sql: &str| {
         let mut found = Vec::new();
         relations(&plan.root, &mut found);
         assert!(
             found.iter().any(|name| name == "o") && found.iter().any(|name| name == "c"),
             "{sql}: {found:?}"
         );
+    };
+    for sql in queries {
+        let plan = session
+            .explain()
+            .unwrap()
+            .explain(ExplainRequest::estimated(sql))
+            .await
+            .unwrap();
+        check(plan, sql);
+    }
+    // MySQL 8.3 on can answer in its second JSON format, which came out empty.
+    // MariaDB has no such setting.
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::write(
+            "set explain_json_format_version = 2",
+        ))
+        .await
+        .unwrap();
+    let mut second_format = true;
+    while let Some(event) = stream.next().await {
+        second_format &= event.is_ok();
+    }
+    if second_format {
+        for sql in queries {
+            let plan = session
+                .explain()
+                .unwrap()
+                .explain(ExplainRequest::estimated(sql))
+                .await
+                .unwrap();
+            assert!(plan.raw.contains("\"operation\""), "{}", plan.raw);
+            check(plan, sql);
+        }
     }
 }

@@ -86,11 +86,23 @@ pub fn parse_json(raw: &str) -> Result<ExplainPlan, DriverError> {
             format!("explain json: {error}"),
         )
     })?;
-    let root = parse_value(&value);
-    // MariaDB's ANALYZE reports the whole run on the query block.
-    let execution_ms = value
-        .pointer("/query_block/r_total_time_ms")
-        .and_then(json_f64);
+    // MySQL's `explain_json_format_version = 2` has no query block: read as the first
+    // format, its plan came out empty.
+    let iterators = value.get("query_block").is_none() && value.get("operation").is_some();
+    let root = if iterators {
+        parse_iterator(&value)
+    } else {
+        parse_value(&value)
+    };
+    // MariaDB's ANALYZE reports the whole run on the query block; the second format,
+    // like TREE, on the root's last row.
+    let execution_ms = if iterators {
+        root.actual.time_ms
+    } else {
+        value
+            .pointer("/query_block/r_total_time_ms")
+            .and_then(json_f64)
+    };
     Ok(ExplainPlan {
         planning_ms: None,
         execution_ms,
@@ -104,6 +116,52 @@ fn parse_value(value: &serde_json::Value) -> PlanNode {
         return parse_block(block);
     }
     parse_block(value)
+}
+
+/// A step of the second JSON format: the iterator the TREE format draws, its
+/// `operation` labelled the same way, with what it reads under `inputs` -- and a
+/// subquery's under `inputs_from_select_list` and the like.
+fn parse_iterator(value: &serde_json::Value) -> PlanNode {
+    let operation = value
+        .get("operation")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or("");
+    let (kind, relation, detail) = split_tree_label(operation);
+    PlanNode {
+        kind,
+        relation: value
+            .get("table_name")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_string)
+            .or(relation),
+        detail,
+        estimates: PlanMetrics {
+            cost: value.get("estimated_total_cost").and_then(json_f64),
+            rows: value.get("estimated_rows").and_then(json_f64),
+            width: None,
+            time_ms: None,
+        },
+        actual: PlanMetrics {
+            cost: None,
+            rows: value.get("actual_rows").and_then(json_f64),
+            width: None,
+            time_ms: value.get("actual_last_row_ms").and_then(json_f64),
+        },
+        loops: value
+            .get("actual_loops")
+            .and_then(json_f64)
+            .map(|loops| loops as u64),
+        children: value
+            .as_object()
+            .into_iter()
+            .flatten()
+            .filter(|(key, _)| key.starts_with("inputs"))
+            .filter_map(|(_, inputs)| inputs.as_array())
+            .flatten()
+            .map(parse_iterator)
+            .collect(),
+        native: value.clone(),
+    }
 }
 
 /// The steps [`parse_step`] draws by name, in the order it looks for them.
@@ -728,6 +786,24 @@ mod tests {
             let plan = parse_json(fixture).unwrap();
             assert_eq!(relations(&plan.root), tables, "{fixture}");
         }
+        // MySQL's second JSON format (`explain_json_format_version = 2`) is the
+        // iterator tree: it came out as an empty plan.
+        let plan = parse_json(include_str!(
+            "../tests/fixtures/mysql-explain-v2-select-subquery.json"
+        ))
+        .unwrap();
+        assert_eq!(plan.root.kind, "Covering index scan");
+        assert_eq!(plan.root.detail.as_deref(), Some("using PRIMARY"));
+        assert_eq!(plan.root.estimates.rows, Some(3.0));
+        assert_eq!(plan.root.estimates.cost, Some(0.55));
+        assert_eq!(plan.root.children[0].kind, "Aggregate");
+        assert_eq!(relations(&plan.root), ["c", "o"]);
+        let plan = parse_json(include_str!(
+            "../tests/fixtures/mysql-explain-v2-derived.json"
+        ))
+        .unwrap();
+        assert_eq!(plan.root.kind, "Nested loop inner join");
+        assert_eq!(relations(&plan.root), ["c", "t", "o"]);
         // An unknown wrapper is descended into, not left empty.
         let wrapped =
             parse_json(r#"{"query_block": {"some_new_step": {"table": {"table_name": "t"}}}}"#)
