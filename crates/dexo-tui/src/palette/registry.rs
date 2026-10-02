@@ -1416,12 +1416,21 @@ pub(crate) fn shortcut_for(
         })
         .collect()
     });
-    // The active keymap first: keymap.toml may bind a command no built-in one does.
-    let bound_here = model
+    // The active keymap first: keymap.toml may bind a command no built-in one does. Of
+    // its keys, the one that works everywhere, then the one that works where the palette
+    // was opened: Help is F1, not the `?` only the explorer reads.
+    let bindings: Vec<&crate::keymap::Binding> = model
         .keymap
         .bindings
         .iter()
-        .find(|binding| binding.command == id)
+        .filter(|binding| binding.command == id)
+        .collect();
+    let here = crate::update::active_key_context(model);
+    let bound_here = bindings
+        .iter()
+        .find(|binding| binding.context == crate::keymap::KeyContext::Global)
+        .or_else(|| bindings.iter().find(|binding| binding.context == here))
+        .or_else(|| bindings.first())
         .map(|binding| pretty_chord(&crate::keymap::chord_label(&binding.chord)));
     if bound_here.is_none() && !bound.contains(id) {
         return fallback.map(str::to_string);
@@ -1429,15 +1438,18 @@ pub(crate) fn shortcut_for(
     bound_here
 }
 
-/// `ctrl+shift+d` as `Ctrl+Shift+D`, `ctrl+x ctrl+e` as `Ctrl+X Ctrl+E`.
+/// `ctrl+shift+d` as `Ctrl+Shift+D`, `ctrl+x ctrl+e` as `Ctrl+X Ctrl+E`. A bare letter
+/// stays as it is typed -- `s`, not an `S` that reads as Shift+S next to it.
 fn pretty_chord(label: &str) -> String {
     label
         .split(' ')
         .map(|key| {
+            let bare = !key.contains('+');
             key.split('+')
                 .map(|part| match part {
                     "pageup" => "PageUp".to_string(),
                     "pagedown" => "PageDown".to_string(),
+                    letter if bare && letter.chars().count() == 1 => letter.to_string(),
                     _ => {
                         let mut chars = part.chars();
                         match chars.next() {

@@ -4100,7 +4100,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     Vec::new()
 }
 
-fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
+pub(crate) fn active_key_context(model: &Model) -> crate::keymap::KeyContext {
     use crate::keymap::KeyContext;
     if model.palette.open {
         return KeyContext::Palette;

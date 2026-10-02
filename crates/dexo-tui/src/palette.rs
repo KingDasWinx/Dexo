@@ -363,6 +363,23 @@ mod tests {
     use crate::model::Model;
     use dexo_driver_api::TransactionState;
 
+    /// The key shown is the one that works everywhere -- Help is F1, not the explorer's
+    /// `?` -- and a bare letter reads as typed, apart from Shift and the letter.
+    #[test]
+    fn the_palette_shows_the_key_that_works_and_letters_as_typed() {
+        let model = Model::default();
+        let entries = crate::palette::registry::all_entries(&model);
+        let key = |id: &str| {
+            entries
+                .iter()
+                .find(|entry| entry.id == id)
+                .and_then(|entry| entry.shortcut.clone())
+        };
+        assert_eq!(key("help.open").as_deref(), Some("F1"));
+        assert_eq!(key("results.sort_column").as_deref(), Some("s"));
+        assert_eq!(key("results.sort_add_column").as_deref(), Some("Shift+S"));
+    }
+
     /// A key keymap.toml gives a command no built-in keymap binds shows in the palette.
     #[test]
     fn an_overlay_only_binding_shows_its_key() {
