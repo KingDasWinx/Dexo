@@ -5636,6 +5636,9 @@ fn execute_on_document_connection(model: &mut Model, action: Action) -> Vec<Effe
 
 fn start_query(model: &mut Model) -> Vec<Effect> {
     crate::screens::editor::end_typing(model);
+    // A run takes the keys from here on: a completion list left open sat over the
+    // confirmation it might bring up, and over the results.
+    crate::screens::editor::close_completion(model);
     if model.active_document().text().trim().is_empty() {
         return Vec::new();
     }
@@ -8202,6 +8205,7 @@ fn explain_effect(
     statement: Option<String>,
     indexes: Vec<String>,
 ) -> Vec<Effect> {
+    crate::screens::editor::close_completion(model);
     let Some(session) = model.active_session else {
         return Vec::new();
     };
@@ -9723,6 +9727,27 @@ mod tests {
     use crate::action::{Action, Effect};
     use crate::model::{Focus, Model};
     use crate::runtime::{OperationId, OperationKey};
+
+    /// A completion list open when a statement ran stayed on screen, over the
+    /// production confirmation the run brought up.
+    #[test]
+    fn running_a_statement_closes_the_completion_list() {
+        let mut model = Model {
+            focus: Focus::Editor,
+            ..Model::default()
+        };
+        model
+            .active_document_mut()
+            .sql
+            .insert(0, "select 1")
+            .unwrap();
+        model.editor.completion_open = true;
+        update(&mut model, Action::ExecuteStatement);
+        assert!(!model.editor.completion_open);
+        model.editor.completion_open = true;
+        update(&mut model, Action::OpenExplain);
+        assert!(!model.editor.completion_open);
+    }
 
     /// A closed or renamed document left a number that counting the documents gave
     /// out again, to a name still open.
