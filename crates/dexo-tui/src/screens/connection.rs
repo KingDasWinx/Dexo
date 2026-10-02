@@ -414,11 +414,15 @@ fn drivers() -> Vec<&'static str> {
     drivers
 }
 
+/// A driver this build lists, or one Dexo knows that it left out -- a DuckDB connection
+/// edited in a build without DuckDB keeps its driver and its path, where it used to
+/// turn into a Postgres form asking for a host.
 fn normalize_driver(driver: &str) -> &'static str {
     let id = driver.trim();
     drivers()
         .into_iter()
         .find(|known| *known == id)
+        .or_else(|| DriverDescriptor::for_id(id).map(|descriptor| descriptor.id))
         .unwrap_or(DriverDescriptor::postgres().id)
 }
 
@@ -848,6 +852,27 @@ mod tests {
         assert_eq!(input.driver, "sqlite");
         assert_eq!(input.extra_config["path"], "/data/shop.db");
         assert!(password.is_empty());
+    }
+
+    /// A DuckDB connection edited in a build without DuckDB stays a DuckDB file: it used
+    /// to become a Postgres form asking for a host, whose Submit said "path is required".
+    #[test]
+    fn a_connection_to_a_driver_left_out_of_the_build_keeps_its_form() {
+        let profile = dexo_app::ConnectionProfile::new(
+            dexo_app::ConnectionId(uuid::Uuid::new_v4()),
+            None,
+            "warehouse",
+            "duckdb",
+            "local",
+            serde_json::json!({ "path": "/data/warehouse.duckdb" }),
+            dexo_app::SecretRef::new("unused".to_string()),
+        );
+        let mut form = ConnectionForm::open_edit(&profile);
+        let dump = form.lines().join("\n");
+        assert!(dump.contains("< DuckDB >"), "{dump}");
+        assert!(dump.contains("/data/warehouse.duckdb") && !dump.contains("host:"));
+        let (input, _) = form.submit().expect("submits");
+        assert_eq!(input.driver, "duckdb");
     }
 
     /// A password manager's command stands in for the password, and comes back when the
