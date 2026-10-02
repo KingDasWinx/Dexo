@@ -16,8 +16,6 @@ pub enum ConfigTransferMode {
 pub enum ConfigStage {
     /// Nothing chosen yet: Export, Import, Close.
     Start,
-    /// An export would replace a file that is there.
-    ConfirmOverwrite,
     /// A file was read: what importing it would do, to be confirmed.
     Preview,
 }
@@ -34,8 +32,6 @@ pub struct ConfigTransferScreen {
     pub commands: Vec<String>,
     /// What the last export or import did, in a sentence.
     pub message: Option<String>,
-    /// The export file that exists already, waiting for the answer to "replace it?".
-    pub overwrite: Option<PathBuf>,
     /// The conflicting connection picked in the preview.
     pub selected: usize,
     /// Lines the preview's body is scrolled down past the picked clash: Down on the last
@@ -69,9 +65,7 @@ impl ConfigTransferScreen {
     }
 
     pub fn stage(&self) -> ConfigStage {
-        if self.overwrite.is_some() {
-            ConfigStage::ConfirmOverwrite
-        } else if self.preview.is_some() {
+        if self.preview.is_some() {
             ConfigStage::Preview
         } else {
             ConfigStage::Start
@@ -82,7 +76,6 @@ impl ConfigTransferScreen {
     pub fn buttons(&self) -> &'static [&'static str] {
         match self.stage() {
             ConfigStage::Start => &["Export", "Import", "Close"],
-            ConfigStage::ConfirmOverwrite => &["Overwrite", "Cancel"],
             ConfigStage::Preview => &["Import", "Cancel"],
         }
     }
@@ -342,18 +335,6 @@ impl ConfigTransferScreen {
                 lines.push(String::new());
                 lines.push(button_row(self.focus, self.buttons()));
                 lines.push("e export  i import  Left/Right pick  Enter run  Esc close".into());
-            }
-            ConfigStage::ConfirmOverwrite => {
-                let path = self
-                    .overwrite
-                    .as_ref()
-                    .map(|path| path.display().to_string())
-                    .unwrap_or_default();
-                push_wrapped(&mut lines, &format!("{path} already exists."));
-                push_wrapped(&mut lines, "Exporting there replaces what it holds.");
-                lines.push(String::new());
-                lines.push(button_row(self.focus, self.buttons()));
-                lines.push("Left/Right pick  Enter run  Esc cancel".into());
             }
             ConfigStage::Preview => {
                 push_wrapped(&mut lines, &format!("Import from {}", self.path.display()));

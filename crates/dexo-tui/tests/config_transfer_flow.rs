@@ -84,34 +84,14 @@ fn every_clash_is_shown_in_words_with_the_commands_that_would_run() {
     assert!(screen(&model).contains("conn-14: keep both, import it as conn-14-2"));
 }
 
-/// An export over a file that is there asks first; Cancel leaves it alone.
+/// The file picker asks before it replaces a file; the dialog does not ask a second time.
 #[test]
-fn an_export_over_an_existing_file_asks_before_it_replaces_it() {
+fn an_export_over_an_existing_file_is_asked_about_once() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("config.toml");
     std::fs::write(&path, "kept").unwrap();
     let mut model = opened();
     let effects = update(&mut model, Action::ExportConfig { path: path.clone() });
-    assert!(effects.is_empty(), "nothing is written yet: {effects:?}");
-    let asking = screen(&model);
-    // The path is as long as the temporary folder's, so the sentence may wrap anywhere.
-    assert!(
-        asking.contains("already") && asking.contains("exists."),
-        "{asking}"
-    );
-    assert!(
-        asking.contains("[Overwrite]") && asking.contains("[Cancel]"),
-        "{asking}"
-    );
-    // Cancel has the focus, so an Enter out of habit replaces nothing.
-    let effects = press(&mut model, KeyCode::Enter);
-    assert!(effects.is_empty());
-    assert!(model.config_transfer.overwrite.is_none());
-    assert_eq!(std::fs::read_to_string(&path).unwrap(), "kept");
-    // Asked again, and answered Overwrite.
-    update(&mut model, Action::ExportConfig { path: path.clone() });
-    press(&mut model, KeyCode::Left);
-    let effects = press(&mut model, KeyCode::Enter);
     assert!(
         matches!(effects.as_slice(), [Effect::ExportConfig { path: given }] if *given == path),
         "{effects:?}"

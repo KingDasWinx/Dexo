@@ -2869,13 +2869,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ExportConfig { path } => {
-            // A file that is there is only replaced when the person says so.
-            if path.exists() && model.config_transfer.overwrite.as_ref() != Some(&path) {
-                model.config_transfer.overwrite = Some(path);
-                model.config_transfer.focus = 1;
-                return Vec::new();
-            }
-            model.config_transfer.overwrite = None;
+            // The picker has asked before replacing a file; asking again here is a second
+            // question about the same file.
             model.config_transfer.focus = 0;
             model.config_transfer.message = None;
             model.config_transfer.path = path.clone();
@@ -3398,7 +3393,6 @@ fn mouse_config_transfer(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
         Some(HitTarget::Button(HitButton::Export)) => press(model, "Export"),
         Some(HitTarget::Button(HitButton::Apply)) => press(model, "Import"),
         Some(HitTarget::Button(HitButton::Close)) => press(model, "Close"),
-        Some(HitTarget::Button(HitButton::Confirm)) => press(model, "Overwrite"),
         Some(HitTarget::Button(HitButton::Cancel)) => press(model, "Cancel"),
         _ => Vec::new(),
     }
@@ -11661,7 +11655,7 @@ fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 screen.open = false;
                 Vec::new()
             }
-            ConfigStage::ConfirmOverwrite | ConfigStage::Preview => {
+            ConfigStage::Preview => {
                 cancel_config_step(model);
                 Vec::new()
             }
@@ -11729,7 +11723,6 @@ fn handle_config_transfer_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 /// preview of an import. Nothing was changed by either.
 fn cancel_config_step(model: &mut Model) {
     let screen = &mut model.config_transfer;
-    screen.overwrite = None;
     screen.preview = None;
     screen.resolutions.clear();
     screen.focus = 0;
@@ -11760,10 +11753,6 @@ fn press_config_button(model: &mut Model) -> Vec<Effect> {
         (ConfigStage::Start, _) => {
             model.config_transfer.open = false;
             Vec::new()
-        }
-        (ConfigStage::ConfirmOverwrite, "Overwrite") => {
-            let path = model.config_transfer.overwrite.clone().unwrap_or_default();
-            update(model, Action::ExportConfig { path })
         }
         (ConfigStage::Preview, "Import") => update(model, Action::ApplyConfigImport),
         _ => {

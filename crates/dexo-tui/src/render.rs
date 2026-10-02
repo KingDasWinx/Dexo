@@ -2377,7 +2377,6 @@ fn render_config_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 "Export" => HitButton::Export,
                 "Import" => HitButton::Apply,
                 "Close" => HitButton::Close,
-                "Overwrite" => HitButton::Confirm,
                 _ => HitButton::Cancel,
             };
             register_label(
