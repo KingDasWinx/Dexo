@@ -1,5 +1,4 @@
 <div align="center">
-  <img src="assets/dexo_icon.png" width="128" alt="Dexo">
   <h1>Dexo</h1>
   <p>A terminal database workbench with guardrails for AI agents.</p>
 
