@@ -1930,26 +1930,59 @@ fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if area.width < 10 || area.height < 5 {
         return;
     }
-    let popup = centered(area, 72, 14);
-    let lines = model.mcp_profiles.lines();
-    paint_popup(
-        frame,
-        model,
-        popup,
-        Block::bordered().title("MCP profiles"),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    if let Some(form) = &model.mcp_profiles.grant_form {
+    let screen = &model.mcp_profiles;
+    if let Some(form) = &screen.grant_form {
         render_grant_form(frame, model, form, hits);
         return;
     }
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if i < model.mcp_profiles.profiles.len() {
-            hits.register(HitTarget::ListRow(i), rect);
-        }
-        if line.contains("revoke") {
-            hits.register(HitTarget::Button(HitButton::Revoke), rect);
+    if let Some(confirm) = &screen.confirm {
+        let lines = confirm.lines(&screen.connections);
+        let popup = centered(area, 84, lines.len() as u16 + 2);
+        paint_popup(
+            frame,
+            model,
+            popup,
+            overlay_block(model, confirm.title()),
+            lines.join("\n"),
+        );
+        register_overlay(hits, popup);
+        for_popup_lines(popup, &lines, |_, line, rect| {
+            if line.contains("[Cancel]") {
+                crate::widgets::form::register_footer(hits, rect, line, confirm.submit_label());
+            }
+        });
+        return;
+    }
+    let width = area.width.min(100);
+    let height = area.height.saturating_sub(2).clamp(8, 26);
+    let popup = centered(area, width, height);
+    let inner = popup_inner(popup);
+    let view = screen.view(inner.width as usize, inner.height as usize);
+    // The picked row in reverse video, so it reads at a glance and without colour.
+    let body: Vec<Line> = view
+        .lines
+        .iter()
+        .enumerate()
+        .map(|(index, text)| {
+            if view.picked == Some(index) {
+                Line::styled(
+                    text.clone(),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                )
+            } else {
+                Line::raw(text.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Clear, popup);
+    frame.render_widget(
+        Paragraph::new(body).block(overlay_block(model, "MCP profiles")),
+        popup,
+    );
+    register_overlay(hits, popup);
+    for_popup_lines(popup, &view.lines, |i, _, rect| {
+        if let Some((_, profile)) = view.rows.iter().find(|(line, _)| *line == i) {
+            hits.register(HitTarget::ListRow(*profile), rect);
         }
     });
 }
@@ -1962,8 +1995,8 @@ fn render_grant_form(
     hits: &mut HitMap,
 ) {
     let area = frame.area();
-    let lines = form.lines(&model.mcp_profiles.name);
-    let popup = centered(area, 84, lines.len() as u16 + 2);
+    let lines = form.lines();
+    let popup = centered(area, 92, (lines.len() as u16 + 2).min(area.height));
     paint_popup(
         frame,
         model,
@@ -1972,13 +2005,33 @@ fn render_grant_form(
         lines.join("\n"),
     );
     register_overlay(hits, popup);
+    // The rows drawn are the fields that are shown, from the second line.
+    let mut shown: Vec<usize> = (0..form.fields.len())
+        .filter(|index| *index != crate::screens::mcp_profiles::GRANT_ASK_SECS || form.ask)
+        .collect();
+    shown.truncate(form.fields.len());
     for_popup_lines(popup, &lines, |index, line, rect| {
-        // The fields start on the second line.
-        if (1..=form.fields.len()).contains(&index) {
-            if index - 1 == form.focus && form.focus != crate::screens::mcp_profiles::GRANT_ASK {
-                show_form_field(frame, rect, &form.fields[index - 1]);
+        if let Some(field) = index.checked_sub(1).and_then(|row| shown.get(row)).copied()
+            && index <= shown.len()
+        {
+            if field == form.focus
+                && !form.is_choice(field)
+                && field != crate::screens::mcp_profiles::GRANT_ASK
+            {
+                show_form_field(frame, rect, &form.fields[field]);
             }
-            hits.register(HitTarget::FormField(index - 1), rect);
+            hits.register(HitTarget::FormField(field), rect);
+            if form.is_choice(field) {
+                for (needle, step) in [("< ", -1), (" >", 1)] {
+                    crate::mouse::register_label(
+                        hits,
+                        rect,
+                        line,
+                        needle,
+                        HitTarget::FormChoice { index: field, step },
+                    );
+                }
+            }
         } else if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, "Create");
         }

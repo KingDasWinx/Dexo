@@ -10,12 +10,12 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││               ┌MCP profiles──────────────────────────────────────────────────────────┐                                           │
-│                          ││               │mcp profile=assistant enabled=false confirm=false                     │                                           │
+│                          ││ ┌MCP profiles──────────────────────────────────────────────────────────────────────────────────────┐                             │
+│                          ││ │> assistant  disabled  1 grant                                                                    │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │assistant is disabled: agents cannot use it yet.                                                  │                             │
+│                          ││ │Connections: local                                                                                │                             │
+│                          ││ │Reads: structured tools only                                                                      │                             │
 │                          ││ ┌Agent activity────────────────────────────────────────────────────────────────────────────────────┐                             │
 │                          ││ │No agent's write is waiting for approval.                                                         │                             │
 │                          ││ │                                                                                                  │                             │
@@ -23,19 +23,19 @@ default  no connection  —
 │                          ││ │  assistant tools/call catalog_search allow db.public.items                                       │                             │
 │                          ││ │a approve  d deny  up/down pick  PgDn scroll  r revoke all grants  esc close                      │                             │
 │                          ││ └──────────────────────────────────────────────────────────────────────────────────────────────────┘                             │
-│                          ││               │enable requires local confirmation                                    │                                           │
-│                          ││               │e enable/disable  g new grant  r revoke  R revoke all  esc close      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               │                                                                      │                                           │
-│                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │e enable/disable  g new grant  r revoke grants  R revoke all  x delete  Up/Down pick  PgUp/PgDn   │                             │
+│                          ││ │details  Esc close                                                                                │                             │
+│                          ││ └──────────────────────────────────────────────────────────────────────────────────────────────────┘                             │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘

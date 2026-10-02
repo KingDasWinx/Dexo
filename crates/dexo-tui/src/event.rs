@@ -175,7 +175,7 @@ async fn run_loop(
             _ = toast_tick.tick(), if model.messages.expires() => {
                 let _ = crate::update::update(&mut model, Action::ToastTick);
             }
-            _ = agent_tick.tick(), if model.mcp_audit.open => {
+            _ = agent_tick.tick(), if model.mcp_audit.open || model.mcp_profiles.open => {
                 let effects = crate::update::update(&mut model, Action::AgentActivityTick);
                 if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
                     return Ok(());

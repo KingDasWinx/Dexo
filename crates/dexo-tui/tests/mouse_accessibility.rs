@@ -537,16 +537,11 @@ fn mcp_profile_rows_match_the_profile_index() {
         dexo_tui::screens::mcp_profiles::McpProfileSummary {
             name: "reader".into(),
             enabled: true,
-            scopes: vec![],
-            tools: vec![],
-            grants: vec![],
+            ..Default::default()
         },
         dexo_tui::screens::mcp_profiles::McpProfileSummary {
             name: "writer".into(),
-            enabled: false,
-            scopes: vec![],
-            tools: vec![],
-            grants: vec![],
+            ..Default::default()
         },
     ]);
     paint(&mut model);

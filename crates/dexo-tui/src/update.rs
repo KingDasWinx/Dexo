@@ -1696,23 +1696,33 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             load_admin_sessions(model)
         }
         Action::OpenMcpProfiles => {
-            model.mcp_profiles.open = true;
+            let screen = &mut model.mcp_profiles;
+            screen.open = true;
+            screen.status.clear();
+            screen.confirm = None;
+            screen.detail_scroll = 0;
+            screen.grant_from_palette = false;
             vec![Effect::LoadMcpProfiles]
         }
         Action::OpenMcpGrantForm => {
-            let effects = if model.mcp_profiles.open {
-                Vec::new()
-            } else {
-                update(model, Action::OpenMcpProfiles)
-            };
-            model.mcp_profiles.grant_form = Some(crate::screens::mcp_profiles::GrantForm::new(
-                &model.connection.name,
-            ));
-            effects
+            // Asked for from the palette, with the profiles not read yet: they are read,
+            // and the form opens when they arrive.
+            if !model.mcp_profiles.open {
+                model.mcp_profiles.grant_from_palette = true;
+                model.mcp_profiles.grant_when_loaded = true;
+                model.mcp_profiles.open = true;
+                return vec![Effect::LoadMcpProfiles];
+            }
+            open_grant_form(model);
+            Vec::new()
         }
         Action::McpGrantCreated { message } => {
             model.mcp_profiles.grant_form = None;
-            model.mcp_profiles.preview = message.clone();
+            model.mcp_profiles.status = message.clone();
+            if model.mcp_profiles.grant_from_palette {
+                model.mcp_profiles.open = false;
+                model.mcp_profiles.grant_from_palette = false;
+            }
             model.messages.info(message);
             vec![Effect::LoadMcpProfiles]
         }
@@ -1730,26 +1740,34 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }],
             None => Vec::new(),
         },
-        Action::RevokeProfileGrants => match model.mcp_profiles.revoke_profile() {
-            Some(profile) => vec![Effect::RevokeMcpGrants { profile }],
-            None => Vec::new(),
-        },
-        Action::RevokeAllMcpGrants => {
-            model.mcp_audit.open = false;
-            model.mcp_profiles.open = true;
-            model.mcp_profiles.confirm_revoke =
-                Some(crate::screens::mcp_profiles::RevokeScope::All);
-            model.mcp_profiles.preview = "confirm revoke all grants".into();
+        Action::RevokeProfileGrants => {
+            model.mcp_profiles.ask_revoke_profile();
             Vec::new()
         }
+        Action::RevokeAllMcpGrants => {
+            // From the palette or Agent Activity: the profiles, read again, with the
+            // question of how many grants go.
+            model.mcp_audit.open = false;
+            model.mcp_profiles.open = true;
+            model.mcp_profiles.grant_from_palette = false;
+            model.mcp_profiles.revoke_all_when_loaded = true;
+            vec![Effect::LoadMcpProfiles]
+        }
         Action::McpGrantsRevoked { count } => {
-            model.mcp_profiles.grants.clear();
-            model.mcp_profiles.confirm_revoke = None;
-            model.mcp_profiles.preview = format!("revoked {count} grants");
+            model.mcp_profiles.confirm = None;
+            model.mcp_profiles.status = match count {
+                0 => "There was nothing to revoke.".to_string(),
+                1 => "Revoked 1 grant.".to_string(),
+                n => format!("Revoked {n} grants."),
+            };
             Vec::new()
         }
         Action::McpRevokeFailed { message } => {
-            model.mcp_profiles.preview = message;
+            model.mcp_profiles.status = message;
+            Vec::new()
+        }
+        Action::McpProfileDeleted { name } => {
+            model.mcp_profiles.status = format!("Deleted the profile {name}.");
             Vec::new()
         }
         Action::OpenSettings => {
@@ -2120,6 +2138,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::McpProfilesLoaded { profiles } => {
             model.mcp_profiles.load_profiles(profiles);
+            if std::mem::take(&mut model.mcp_profiles.grant_when_loaded) {
+                open_grant_form(model);
+            }
+            if std::mem::take(&mut model.mcp_profiles.revoke_all_when_loaded) {
+                model.mcp_profiles.ask_revoke_all();
+            }
             Vec::new()
         }
         Action::McpAuditLoaded {
@@ -2138,11 +2162,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::AgentActivityTick => {
+            let mut effects = Vec::new();
             if model.mcp_audit.open {
-                vec![Effect::LoadMcpAudit]
-            } else {
-                Vec::new()
+                effects.push(Effect::LoadMcpAudit);
             }
+            // The profiles follow what `dexo mcp` changes while the screen is open, but
+            // not under a form or a question being answered.
+            let profiles = &model.mcp_profiles;
+            if profiles.open && profiles.grant_form.is_none() && profiles.confirm.is_none() {
+                effects.push(Effect::LoadMcpProfiles);
+            }
+            effects
         }
         Action::ApprovalsWaiting(pending) => {
             // Said once per request, and not while the screen that lists them is open.
@@ -3547,8 +3577,8 @@ fn grant_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     };
     let footer = form.footer_focus();
     match key.code {
-        KeyCode::Esc => model.mcp_profiles.grant_form = None,
-        KeyCode::Enter if footer == FooterFocus::Cancel => model.mcp_profiles.grant_form = None,
+        KeyCode::Esc => close_grant_form(model),
+        KeyCode::Enter if footer == FooterFocus::Cancel => close_grant_form(model),
         KeyCode::Enter => return submit_grant_form(model),
         KeyCode::Down | KeyCode::Tab => form.focus_next(),
         KeyCode::Up | KeyCode::BackTab => form.focus_prev(),
@@ -3560,12 +3590,13 @@ fn grant_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
-    let profile = model.mcp_profiles.name.clone();
     let Some(form) = model.mcp_profiles.grant_form.as_mut() else {
         return Vec::new();
     };
+    let profile = form.profile_name();
     if profile.is_empty() {
-        form.error = Some("no MCP profile is selected".into());
+        form.error =
+            Some("there is no profile to grant to: create one with dexo mcp profile create".into());
         return Vec::new();
     }
     match form.request() {
@@ -3581,15 +3612,38 @@ fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
 }
 
 fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
+    if model.mcp_profiles.grant_form.is_some() {
         return match hit {
             Some(HitTarget::FormField(index)) => {
-                form.focus = index;
+                if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
+                    form.focus = index;
+                    // A click on the checkbox flips it, as Space does.
+                    if index == crate::screens::mcp_profiles::GRANT_ASK {
+                        form.toggle_ask();
+                    }
+                }
+                Vec::new()
+            }
+            Some(HitTarget::FormChoice { index, step }) => {
+                if let Some(form) = model.mcp_profiles.grant_form.as_mut() {
+                    form.focus = index;
+                    form.step(isize::from(step));
+                }
                 Vec::new()
             }
             Some(HitTarget::FooterSubmit) => submit_grant_form(model),
             Some(HitTarget::FooterCancel) => {
-                model.mcp_profiles.grant_form = None;
+                close_grant_form(model);
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
+    if model.mcp_profiles.confirm.is_some() {
+        return match hit {
+            Some(HitTarget::FooterSubmit) => commit_mcp_confirm(model),
+            Some(HitTarget::FooterCancel) => {
+                model.mcp_profiles.confirm = None;
                 Vec::new()
             }
             _ => Vec::new(),
@@ -3597,24 +3651,65 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
     }
     match hit {
         Some(HitTarget::ListRow(index)) => {
-            while model.mcp_profiles.selected > index {
-                model.mcp_profiles.select_previous();
-            }
-            while model.mcp_profiles.selected < index
-                && model.mcp_profiles.selected + 1 < model.mcp_profiles.profiles.len()
-            {
-                model.mcp_profiles.select_next();
-            }
+            model.mcp_profiles.select_index(index);
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::Revoke)) => {
-            if model.mcp_profiles.revoke_all() {
-                vec![Effect::RevokeAllMcpGrants]
-            } else {
-                Vec::new()
-            }
-        }
         _ => Vec::new(),
+    }
+}
+
+/// The New MCP Grant form, for the profile picked -- or the first, from the palette.
+fn open_grant_form(model: &mut Model) {
+    let screen = &mut model.mcp_profiles;
+    if screen.profiles.is_empty() {
+        // A form for nobody cannot succeed; the screen says how to make a profile.
+        screen.grant_from_palette = false;
+        screen.status = "Create a profile first: dexo mcp profile create --name NAME.".into();
+        return;
+    }
+    let choices = screen
+        .profiles
+        .iter()
+        .map(|profile| crate::screens::mcp_profiles::ProfileChoice {
+            name: profile.name.clone(),
+            connections: profile.connections.clone(),
+        })
+        .collect();
+    screen.grant_form = Some(crate::screens::mcp_profiles::GrantForm::new(
+        choices,
+        screen.selected,
+    ));
+}
+
+/// Cancel or Esc on the grant form: back to the profiles, or out, when the palette asked.
+fn close_grant_form(model: &mut Model) {
+    model.mcp_profiles.grant_form = None;
+    if model.mcp_profiles.grant_from_palette {
+        model.mcp_profiles.open = false;
+        model.mcp_profiles.grant_from_palette = false;
+    }
+}
+
+/// What the confirmation asked is done.
+fn commit_mcp_confirm(model: &mut Model) -> Vec<Effect> {
+    use crate::screens::mcp_profiles::McpConfirmKind;
+    let Some(confirm) = model.mcp_profiles.confirm.take() else {
+        return Vec::new();
+    };
+    match confirm.kind {
+        McpConfirmKind::Enable(name) => {
+            model.mcp_profiles.status =
+                format!("Enabled {name}: agents can now use what it allows.");
+            vec![Effect::SetMcpProfileEnabled {
+                name,
+                enabled: true,
+            }]
+        }
+        McpConfirmKind::RevokeProfile { name, .. } => {
+            vec![Effect::RevokeMcpGrants { profile: name }]
+        }
+        McpConfirmKind::RevokeAll { .. } => vec![Effect::RevokeAllMcpGrants],
+        McpConfirmKind::DeleteProfile(name) => vec![Effect::DeleteMcpProfile { name }],
     }
 }
 
@@ -4580,10 +4675,30 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         if model.mcp_profiles.grant_form.is_some() {
             return grant_form_key(model, key);
         }
+        // A confirmation takes the keys: Enter on the focused button, Esc cancels, and no
+        // letter confirms, so typing at the screen cannot enable or revoke anything.
+        if let Some(confirm) = model.mcp_profiles.confirm.as_mut() {
+            return match crate::widgets::form::confirm_key(&mut confirm.focus, &key) {
+                crate::widgets::form::FooterKey::Submit => commit_mcp_confirm(model),
+                crate::widgets::form::FooterKey::Cancel => {
+                    model.mcp_profiles.confirm = None;
+                    Vec::new()
+                }
+                _ => Vec::new(),
+            };
+        }
+        // Ctrl and Alt chords are not this screen's letters.
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        {
+            return Vec::new();
+        }
+        let page = (model.height / 3).max(1) as isize;
         return match key.code {
             KeyCode::Esc => {
                 model.mcp_profiles.open = false;
-                model.mcp_profiles.confirm_revoke = None;
+                model.mcp_profiles.confirm = None;
                 Vec::new()
             }
             KeyCode::Char('g') => update(model, Action::OpenMcpGrantForm),
@@ -4595,23 +4710,33 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 model.mcp_profiles.select_next();
                 Vec::new()
             }
-            KeyCode::Enter => match model.mcp_profiles.confirm_pending_revoke() {
-                Some(crate::screens::mcp_profiles::RevokeScope::Profile(profile)) => {
-                    vec![Effect::RevokeMcpGrants { profile }]
-                }
-                Some(crate::screens::mcp_profiles::RevokeScope::All) => {
-                    vec![Effect::RevokeAllMcpGrants]
-                }
-                None => Vec::new(),
-            },
+            KeyCode::Home => {
+                model.mcp_profiles.select_index(0);
+                Vec::new()
+            }
+            KeyCode::End => {
+                model.mcp_profiles.select_index(usize::MAX);
+                Vec::new()
+            }
+            KeyCode::PageDown => {
+                let screen = &mut model.mcp_profiles;
+                screen.detail_scroll = screen.detail_scroll.saturating_add(page as usize);
+                Vec::new()
+            }
+            KeyCode::PageUp => {
+                let screen = &mut model.mcp_profiles;
+                screen.detail_scroll = screen.detail_scroll.saturating_sub(page as usize);
+                Vec::new()
+            }
             KeyCode::Char('e') => update(model, Action::ToggleMcpProfile),
             KeyCode::Char('r') => update(model, Action::RevokeProfileGrants),
             KeyCode::Char('R') => {
-                if model.mcp_profiles.revoke_all() {
-                    vec![Effect::RevokeAllMcpGrants]
-                } else {
-                    Vec::new()
-                }
+                model.mcp_profiles.ask_revoke_all();
+                Vec::new()
+            }
+            KeyCode::Char('x') => {
+                model.mcp_profiles.ask_delete();
+                Vec::new()
             }
             _ => Vec::new(),
         };
@@ -12475,9 +12600,7 @@ mod tests {
                 profiles: vec![crate::screens::mcp_profiles::McpProfileSummary {
                     name: "assistant".into(),
                     enabled: true,
-                    scopes: Vec::new(),
-                    tools: Vec::new(),
-                    grants: Vec::new(),
+                    ..Default::default()
                 }],
             },
         );
@@ -12489,10 +12612,16 @@ mod tests {
             }
             update(model, key(KeyCode::Down));
         };
+        // profile, then connection (free text: the profile lists none), then capability.
+        update(&mut model, key(KeyCode::Down));
+        typed(&mut model, "local");
+        update(&mut model, key(KeyCode::Down));
         typed(&mut model, "data_insert");
         typed(&mut model, "db.public.items");
-        typed(&mut model, "");
-        typed(&mut model, " ");
+        update(&mut model, key(KeyCode::Down));
+        // "ask before each write", then its timeout, then the confirmation.
+        update(&mut model, key(KeyCode::Char(' ')));
+        update(&mut model, key(KeyCode::Down));
         for _ in 0..3 {
             update(&mut model, key(KeyCode::Backspace));
         }
@@ -12503,7 +12632,7 @@ mod tests {
             .grant_form
             .as_ref()
             .unwrap()
-            .lines("assistant")
+            .lines()
             .join("\n");
         assert!(lines.contains("[x] each write waits for you"), "{lines}");
         let effects = update(&mut model, key(KeyCode::Enter));
@@ -12531,7 +12660,7 @@ mod tests {
             },
         );
         let form = model.mcp_profiles.grant_form.as_ref().expect("stays open");
-        assert!(form.lines("assistant").join("\n").contains("not allowed"));
+        assert!(form.lines().join("\n").contains("not allowed"));
         update(&mut model, key(KeyCode::Esc));
         assert!(model.mcp_profiles.grant_form.is_none() && model.mcp_profiles.open);
         let entry = crate::palette::palette_entries(&model)

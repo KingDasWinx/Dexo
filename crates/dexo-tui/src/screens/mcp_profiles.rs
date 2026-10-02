@@ -1,11 +1,22 @@
-#[derive(Clone, Debug, PartialEq)]
+//! MCP Profiles: the profiles agents connect through, what each allows, and the grants
+//! that let one write for a while. A profile's rules are made with `dexo mcp`; this
+//! screen enables, disables and deletes profiles, makes grants and takes them back.
+
+use crate::screens::schema_editor::FormField;
+use crate::widgets::form::{FooterFocus, footer_line};
+
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpProfileSummary {
     pub name: String,
     pub enabled: bool,
+    /// The connections the profile may use; none listed means any.
+    pub connections: Vec<String>,
+    /// The profile offers `query_execute_read`, a raw read-only SQL statement.
+    pub raw_read: bool,
     pub scopes: Vec<String>,
     pub tools: Vec<String>,
     /// Live grants for this profile. The screen shows the selected profile's, which
-    /// is what makes `r` (revoke the selected profile) mean something on screen.
+    /// is what makes `r` (revoke the selected profile's grants) mean something on screen.
     pub grants: Vec<GrantLine>,
 }
 
@@ -15,29 +26,85 @@ pub struct GrantLine {
     pub capability: String,
     pub tools: String,
     pub expires_in_secs: i64,
-    pub diff: String,
+    pub connection: String,
+    pub selectors: String,
     /// Above zero, each write the grant covers waits this long for a person.
     pub ask_secs: u32,
 }
 
-use crate::screens::schema_editor::FormField;
-use crate::widgets::form::{FooterFocus, footer_line};
+/// A span of seconds in words: `45 s`, `29 min`, `3 h`.
+pub fn duration_words(secs: i64) -> String {
+    match secs {
+        i64::MIN..=0 => "now".into(),
+        1..=89 => format!("{secs} s"),
+        90..=5399 => format!("{} min", (secs + 30) / 60),
+        _ => format!("{} h", (secs + 1800) / 3600),
+    }
+}
+
+impl GrantLine {
+    /// What the grant allows, where and for how long, in a sentence.
+    pub fn words(&self) -> String {
+        let how = if self.ask_secs > 0 {
+            format!(
+                "asks before each write ({})",
+                duration_words(i64::from(self.ask_secs))
+            )
+        } else {
+            "one write, then it is spent".into()
+        };
+        let objects = if self.selectors.is_empty() {
+            String::new()
+        } else {
+            format!(" on {}", self.selectors)
+        };
+        format!(
+            "{}{objects} ({}): {how}, ends in {}",
+            self.tools.replace(',', ", "),
+            self.connection,
+            duration_words(self.expires_in_secs)
+        )
+    }
+}
 
 /// The grant form's rows, in the order they are walked.
-pub const GRANT_CONNECTION: usize = 0;
-pub const GRANT_CAPABILITY: usize = 1;
-pub const GRANT_TOOLS: usize = 2;
-pub const GRANT_SELECTOR: usize = 3;
-pub const GRANT_EXPIRES: usize = 4;
-pub const GRANT_ASK: usize = 5;
-pub const GRANT_ASK_SECS: usize = 6;
-pub const GRANT_CONFIRM: usize = 7;
+pub const GRANT_PROFILE: usize = 0;
+pub const GRANT_CONNECTION: usize = 1;
+pub const GRANT_CAPABILITY: usize = 2;
+pub const GRANT_TOOLS: usize = 3;
+pub const GRANT_SELECTOR: usize = 4;
+pub const GRANT_EXPIRES: usize = 5;
+pub const GRANT_ASK: usize = 6;
+pub const GRANT_ASK_SECS: usize = 7;
+pub const GRANT_CONFIRM: usize = 8;
 
-/// New MCP Grant, for the profile picked: what `dexo mcp grant create` asks, "ask before
-/// each write" included, so the TUI can make the grant Agent Activity then decides on.
+const CAPABILITIES: [(&str, &str); 3] = [
+    (
+        "data_write",
+        "data_insert data_update data_delete data_execute_sql",
+    ),
+    ("ddl", "schema_apply_ddl"),
+    ("admin", "admin_cancel_query admin_terminate_session"),
+];
+
+/// The profiles a grant can be for, with the connections each may use.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ProfileChoice {
+    pub name: String,
+    pub connections: Vec<String>,
+}
+
+/// New MCP Grant: what `dexo mcp grant create` asks, "ask before each write" included, so
+/// the TUI can make the grant Agent Activity then decides on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrantForm {
+    pub profiles: Vec<ProfileChoice>,
+    pub profile: usize,
+    /// The text fields, indexed by the row constants; the choices and the checkbox keep
+    /// their value elsewhere and leave their slot empty.
     pub fields: Vec<FormField>,
+    pub connection: usize,
+    pub capability: usize,
     /// A field, then Create, then Cancel.
     pub focus: usize,
     pub ask: bool,
@@ -45,39 +112,80 @@ pub struct GrantForm {
 }
 
 impl GrantForm {
-    pub fn new(connection: &str) -> Self {
+    pub fn new(profiles: Vec<ProfileChoice>, profile: usize) -> Self {
         let field = |label: &str, value: &str| FormField {
             label: label.into(),
             value: value.into(),
             secret: false,
         };
-        Self {
+        let mut form = Self {
+            profiles,
+            profile: 0,
             fields: vec![
-                field("connection", connection),
-                field("capability", "data_write"),
+                field("profile", ""),
+                field("connection", ""),
+                field("capability", ""),
                 field("tools", ""),
                 field("selector", ""),
                 field("expires", "15m"),
                 field("ask before each write", ""),
-                field("approval timeout (s)", "120"),
+                field("approval timeout", "120"),
                 field("confirm", ""),
             ],
-            focus: GRANT_TOOLS,
+            connection: 0,
+            capability: 0,
+            focus: 0,
             ask: false,
             error: None,
-        }
+        };
+        form.set_profile(profile);
+        form
+    }
+
+    fn set_profile(&mut self, index: usize) {
+        self.profile = index.min(self.profiles.len().saturating_sub(1));
+        self.connection = 0;
+    }
+
+    /// The connections the profile may use, or none listed when it may use any.
+    fn connections(&self) -> &[String] {
+        self.profiles
+            .get(self.profile)
+            .map_or(&[], |profile| profile.connections.as_slice())
+    }
+
+    pub fn profile_name(&self) -> String {
+        self.profiles
+            .get(self.profile)
+            .map(|profile| profile.name.clone())
+            .unwrap_or_default()
     }
 
     fn slots(&self) -> usize {
         self.fields.len() + 2
     }
 
+    /// Whether a row is drawn: the approval timeout means nothing unless the grant asks.
+    fn shown(&self, index: usize) -> bool {
+        index != GRANT_ASK_SECS || self.ask
+    }
+
     pub fn focus_next(&mut self) {
-        self.focus = (self.focus + 1) % self.slots();
+        loop {
+            self.focus = (self.focus + 1) % self.slots();
+            if self.focus >= self.fields.len() || self.shown(self.focus) {
+                return;
+            }
+        }
     }
 
     pub fn focus_prev(&mut self) {
-        self.focus = (self.focus + self.slots() - 1) % self.slots();
+        loop {
+            self.focus = (self.focus + self.slots() - 1) % self.slots();
+            if self.focus >= self.fields.len() || self.shown(self.focus) {
+                return;
+            }
+        }
     }
 
     /// Left and Right step between the two buttons once one of them has the focus.
@@ -97,24 +205,82 @@ impl GrantForm {
         }
     }
 
-    /// A key for the focused row: an edit for a field, or on the ask row Space flips
-    /// it and `y`/`n` set it.
+    /// Whether the focused row is picked with Left and Right.
+    pub fn on_choice(&self) -> bool {
+        self.is_choice(self.focus)
+    }
+
+    pub fn is_choice(&self, index: usize) -> bool {
+        match index {
+            GRANT_PROFILE | GRANT_CAPABILITY => true,
+            GRANT_CONNECTION => !self.connections().is_empty(),
+            _ => false,
+        }
+    }
+
+    /// Steps the focused choice.
+    pub fn step(&mut self, delta: isize) {
+        let wrap = |at: usize, len: usize| (at as isize + delta).rem_euclid(len as isize) as usize;
+        match self.focus {
+            GRANT_PROFILE if !self.profiles.is_empty() => {
+                self.set_profile(wrap(self.profile, self.profiles.len()));
+            }
+            GRANT_CAPABILITY => self.capability = wrap(self.capability, CAPABILITIES.len()),
+            GRANT_CONNECTION if !self.connections().is_empty() => {
+                self.connection = wrap(self.connection, self.connections().len());
+            }
+            _ => {}
+        }
+    }
+
+    /// A key for the focused row: an edit for a field, Left and Right for a choice, and
+    /// on the ask row Space flips it and `y`/`n` set it.
     pub fn edit(&mut self, key: crossterm::event::KeyEvent) {
         use crossterm::event::{KeyCode, KeyModifiers};
+        if self.is_choice(self.focus) {
+            match key.code {
+                KeyCode::Left => self.step(-1),
+                KeyCode::Right | KeyCode::Char(' ') => self.step(1),
+                _ => {}
+            }
+            return;
+        }
         if self.focus != GRANT_ASK {
             if let Some(field) = self.fields.get_mut(self.focus) {
                 field.value.handle_key(key);
             }
+            // What was wrong is for the next Create to say again.
+            self.error = None;
             return;
         }
         if !(key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) {
             return;
         }
         match key.code {
-            KeyCode::Char(' ') => self.ask = !self.ask,
-            KeyCode::Char('y' | 'Y') => self.ask = true,
-            KeyCode::Char('n' | 'N') => self.ask = false,
+            KeyCode::Char(' ') => self.toggle_ask(),
+            KeyCode::Char('y' | 'Y') => self.set_ask(true),
+            KeyCode::Char('n' | 'N') => self.set_ask(false),
             _ => {}
+        }
+    }
+
+    pub fn toggle_ask(&mut self) {
+        self.set_ask(!self.ask);
+    }
+
+    fn set_ask(&mut self, ask: bool) {
+        self.ask = ask;
+        self.error = None;
+    }
+
+    fn capability_name(&self) -> &'static str {
+        CAPABILITIES[self.capability].0
+    }
+
+    fn connection_name(&self) -> String {
+        match self.connections().get(self.connection) {
+            Some(name) => name.clone(),
+            None => self.fields[GRANT_CONNECTION].value.trim().to_string(),
         }
     }
 
@@ -127,21 +293,33 @@ impl GrantForm {
             .map(str::to_string)
             .collect();
         if tools.is_empty() {
-            return Err("name the tools the grant allows".into());
+            return Err(format!(
+                "tools: name what the grant allows, from {}",
+                CAPABILITIES[self.capability].1
+            ));
+        }
+        if self.profiles.is_empty() {
+            return Err(
+                "there is no profile to grant to: create one with dexo mcp profile create".into(),
+            );
         }
         let ask_secs = if self.ask {
             match value(GRANT_ASK_SECS).parse::<u32>() {
                 Ok(secs) if (1..=dexo_app::mcp::approval::MAX_TIMEOUT_SECS).contains(&secs) => {
                     Some(secs)
                 }
-                _ => return Err("the approval timeout is 1 to 3600 seconds".into()),
+                _ => {
+                    return Err(
+                        "approval timeout: a whole number of seconds, from 1 to 3600".into(),
+                    );
+                }
             }
         } else {
             None
         };
         Ok(dexo_app::mcp::GrantRequest {
-            connection: value(GRANT_CONNECTION),
-            capability: value(GRANT_CAPABILITY),
+            connection: self.connection_name(),
+            capability: self.capability_name().to_string(),
             tools,
             selector: value(GRANT_SELECTOR),
             expires: value(GRANT_EXPIRES),
@@ -151,36 +329,125 @@ impl GrantForm {
     }
 
     /// The form's lines; the first field is on the second line.
-    pub fn lines(&self, profile: &str) -> Vec<String> {
-        let mut lines = vec![format!("For MCP profile {profile}")];
+    pub fn lines(&self) -> Vec<String> {
+        let mut lines = vec![
+            "Left/Right pick a profile, connection or capability; Space flips the checkbox.".into(),
+        ];
         for (index, field) in self.fields.iter().enumerate() {
+            if !self.shown(index) {
+                continue;
+            }
             let marker = if index == self.focus { ">" } else { " " };
             let value = match index {
-                GRANT_ASK if self.ask => "[x] each write waits for you in Agent Activity",
-                GRANT_ASK => "[ ] one write, then the grant is spent",
-                _ => field.value.as_str(),
+                GRANT_PROFILE => format!("< {} >", self.profile_name()),
+                GRANT_CONNECTION if !self.connections().is_empty() => {
+                    format!("< {} >", self.connection_name())
+                }
+                GRANT_CAPABILITY => format!("< {} >", self.capability_name()),
+                GRANT_ASK if self.ask => "[x] each write waits for you in Agent Activity".into(),
+                GRANT_ASK => "[ ] one write, then the grant is spent".into(),
+                _ => field.value.as_str().to_string(),
             };
             lines.push(format!("{marker} {}: {value}", field.label));
         }
-        lines.push(
-            "  tools: data_insert data_update data_delete data_execute_sql · schema_apply_ddl"
-                .into(),
-        );
+        lines.push(format!(
+            "  tools for {}: {}",
+            self.capability_name(),
+            CAPABILITIES[self.capability].1
+        ));
+        lines.push("  expires: 90s, 15m, 2h, 1h30m (up to 24h)".into());
         lines.push("  confirm: type the connection or the selector again".into());
-        if let Some(error) = &self.error {
-            lines.push(format!("  {error}"));
-        }
+        // The row is always there, so the buttons do not move when a message comes.
+        lines.push(match &self.error {
+            Some(error) => format!("  {error}"),
+            None => String::new(),
+        });
         lines.push(footer_line("Create", self.footer_focus()));
         lines
     }
 }
 
-/// What a pending revoke confirmation applies to. One shared bool let a confirmation
-/// armed for a single profile commit the global sweep instead.
+/// What a person is asked to confirm in MCP Profiles.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub enum RevokeScope {
-    Profile(String),
-    All,
+pub enum McpConfirmKind {
+    Enable(String),
+    RevokeProfile { name: String, grants: usize },
+    RevokeAll { profiles: usize, grants: usize },
+    DeleteProfile(String),
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct McpConfirm {
+    pub kind: McpConfirmKind,
+    pub focus: FooterFocus,
+}
+
+impl McpConfirm {
+    /// Cancel has the focus, so an Enter out of habit changes nothing.
+    pub fn new(kind: McpConfirmKind) -> Self {
+        Self {
+            kind,
+            focus: FooterFocus::Cancel,
+        }
+    }
+
+    pub fn title(&self) -> &'static str {
+        match self.kind {
+            McpConfirmKind::Enable(_) => "Enable MCP profile",
+            McpConfirmKind::RevokeProfile { .. } | McpConfirmKind::RevokeAll { .. } => {
+                "Revoke MCP grants"
+            }
+            McpConfirmKind::DeleteProfile(_) => "Delete MCP profile",
+        }
+    }
+
+    pub fn submit_label(&self) -> &'static str {
+        match self.kind {
+            McpConfirmKind::Enable(_) => "Enable",
+            McpConfirmKind::RevokeProfile { .. } | McpConfirmKind::RevokeAll { .. } => "Revoke",
+            McpConfirmKind::DeleteProfile(_) => "Delete",
+        }
+    }
+
+    pub fn lines(&self, connections: &[String]) -> Vec<String> {
+        let plural =
+            |n: usize, one: &str, many: &str| format!("{n} {}", if n == 1 { one } else { many });
+        let mut lines = match &self.kind {
+            McpConfirmKind::Enable(name) => vec![
+                format!("Enable {name}?"),
+                "Agents that connect through it can then use what it allows.".into(),
+                if connections.is_empty() {
+                    "It lists no connection, so it may use any of yours.".into()
+                } else {
+                    format!("Connections: {}.", connections.join(", "))
+                },
+            ],
+            McpConfirmKind::RevokeProfile { name, grants } => vec![
+                format!(
+                    "Revoke the {} of {name}?",
+                    plural(*grants, "grant", "grants")
+                ),
+                "Agents lose the writes they allow; a write waiting for approval is refused."
+                    .into(),
+            ],
+            McpConfirmKind::RevokeAll { profiles, grants } => vec![
+                format!(
+                    "Revoke every grant: {} in {}?",
+                    plural(*grants, "grant", "grants"),
+                    plural(*profiles, "profile", "profiles")
+                ),
+                "Agents lose the writes they allow; a write waiting for approval is refused."
+                    .into(),
+            ],
+            McpConfirmKind::DeleteProfile(name) => vec![
+                format!("Delete the profile {name}?"),
+                "Its grants go with it, and agents using it stop working.".into(),
+            ],
+        };
+        lines.push(String::new());
+        lines.push(footer_line(self.submit_label(), self.focus));
+        lines
+    }
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -188,89 +455,135 @@ pub struct McpProfilesScreen {
     pub open: bool,
     pub name: String,
     pub enabled: bool,
-    pub confirm_enable: bool,
-    pub confirm_revoke: Option<RevokeScope>,
     pub scopes: Vec<String>,
     pub tools: Vec<String>,
     pub resources: Vec<String>,
     pub grants: Vec<GrantLine>,
-    pub preview: String,
+    pub connections: Vec<String>,
+    pub raw_read: bool,
+    /// What the last action did, until the selection moves or the screen is opened again.
+    pub status: String,
     pub profiles: Vec<McpProfileSummary>,
     pub selected: usize,
-    /// `g`: a new grant for the selected profile, being filled in.
+    /// Lines the picked profile's details are scrolled down.
+    pub detail_scroll: usize,
+    pub confirm: Option<McpConfirm>,
+    /// `g`: a new grant, being filled in.
     pub grant_form: Option<GrantForm>,
+    /// The grant form was asked for from the palette: with the screen closed behind it,
+    /// closing the form leaves nothing of it open.
+    pub grant_from_palette: bool,
+    /// The grant form was asked for before the profiles were read.
+    pub grant_when_loaded: bool,
+    /// "Revoke all" was asked for before the profiles were read: it names how many go.
+    pub revoke_all_when_loaded: bool,
+}
+
+/// The screen laid out for a size: the list, the picked profile's details, then the
+/// status and the keys, which stay in sight.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct ProfilesView {
+    pub lines: Vec<String>,
+    /// Each profile row drawn: its line and which profile it is.
+    pub rows: Vec<(usize, usize)>,
+    /// The line of the picked profile, to be highlighted.
+    pub picked: Option<usize>,
+    /// How far the details can be scrolled.
+    pub scroll_max: usize,
 }
 
 impl McpProfilesScreen {
     pub fn fixture() -> Self {
-        Self {
+        let mut screen = Self {
             open: true,
-            name: "assistant".into(),
-            enabled: false,
-            confirm_enable: false,
-            confirm_revoke: None,
-            scopes: vec!["allow db.public.*".into(), "deny db.public.secrets".into()],
-            tools: vec!["catalog_search".into(), "object_describe".into()],
-            resources: vec!["db.public.items".into()],
-            grants: vec![GrantLine {
-                id: "g1".into(),
-                capability: "data_write".into(),
-                tools: "data_insert".into(),
-                expires_in_secs: 900,
-                diff: "profile db.public.* -> grant db.public.items".into(),
-                ask_secs: 0,
+            profiles: vec![McpProfileSummary {
+                name: "assistant".into(),
+                enabled: false,
+                connections: vec!["local".into()],
+                scopes: vec!["allow db.public.*".into(), "deny db.public.secrets".into()],
+                tools: vec!["catalog_search".into(), "object_describe".into()],
+                grants: vec![GrantLine {
+                    id: "g1".into(),
+                    capability: "data_write".into(),
+                    tools: "data_insert".into(),
+                    expires_in_secs: 900,
+                    connection: "local".into(),
+                    selectors: "db.public.items".into(),
+                    ask_secs: 0,
+                }],
+                ..McpProfileSummary::default()
             }],
-            preview: "enable requires local confirmation".into(),
             ..Self::default()
-        }
+        };
+        screen.apply_selected();
+        screen
     }
 
-    /// Flips the selected profile, asymmetrically on purpose: enabling hands an MCP
-    /// client tool access to the database and arms before it commits, while disabling
-    /// only takes access away and should not make you ask twice. Returns the new state
-    /// once it actually changed.
+    pub fn selected_profile(&self) -> Option<&McpProfileSummary> {
+        self.profiles.get(self.selected)
+    }
+
+    /// Flips the selected profile. Enabling hands an MCP client tool access to the
+    /// database, so it asks first; disabling only takes access away and does not.
+    /// Returns the new state once it changed.
     pub fn toggle_selected(&mut self) -> Option<bool> {
         if self.name.is_empty() {
-            self.preview = "no MCP profile selected".into();
+            self.status = "Create a profile first: dexo mcp profile create --name NAME.".into();
             return None;
         }
         if self.enabled {
             self.enabled = false;
-            self.confirm_enable = false;
-            self.preview = format!("disabled {}", self.name);
+            self.status = format!("Disabled {}: agents can no longer use it.", self.name);
             return Some(false);
         }
-        if !self.confirm_enable {
-            self.confirm_enable = true;
-            self.preview = format!("confirm enable {}", self.name);
-            return None;
-        }
-        self.confirm_enable = false;
-        self.enabled = true;
-        self.preview = format!(
-            "enabled {} scopes={} tools={}",
-            self.name,
-            self.scopes.len(),
-            self.tools.len()
-        );
-        Some(true)
+        self.confirm = Some(McpConfirm::new(McpConfirmKind::Enable(self.name.clone())));
+        None
     }
 
-    /// Same two-step shape as [`Self::revoke_all`], scoped to the selected profile.
-    /// Returns its name once the confirmation is spent.
-    pub fn revoke_profile(&mut self) -> Option<String> {
+    /// Asks to revoke the picked profile's grants, when it has any.
+    pub fn ask_revoke_profile(&mut self) {
         if self.name.is_empty() {
-            self.preview = "no MCP profile selected".into();
-            return None;
+            self.status = "Create a profile first: dexo mcp profile create --name NAME.".into();
+        } else if self.grants.is_empty() {
+            self.status = format!("{} has no grants to revoke.", self.name);
+        } else {
+            self.confirm = Some(McpConfirm::new(McpConfirmKind::RevokeProfile {
+                name: self.name.clone(),
+                grants: self.grants.len(),
+            }));
         }
-        let armed = RevokeScope::Profile(self.name.clone());
-        if self.confirm_revoke.as_ref() != Some(&armed) {
-            self.preview = format!("confirm revoke grants for {}", self.name);
-            self.confirm_revoke = Some(armed);
-            return None;
+    }
+
+    /// Asks to revoke every grant of every profile, when there are any.
+    pub fn ask_revoke_all(&mut self) {
+        let grants: usize = self
+            .profiles
+            .iter()
+            .map(|profile| profile.grants.len())
+            .sum();
+        if grants == 0 {
+            self.status = "No profile has a grant to revoke.".into();
+        } else {
+            let profiles = self
+                .profiles
+                .iter()
+                .filter(|profile| !profile.grants.is_empty())
+                .count();
+            self.confirm = Some(McpConfirm::new(McpConfirmKind::RevokeAll {
+                profiles,
+                grants,
+            }));
         }
-        self.confirm_revoke = None;
-        Some(self.name.clone())
+    }
+
+    pub fn ask_delete(&mut self) {
+        if self.name.is_empty() {
+            self.status = "There is no profile to delete.".into();
+        } else {
+            self.confirm = Some(McpConfirm::new(McpConfirmKind::DeleteProfile(
+                self.name.clone(),
+            )));
+        }
     }
 
     pub fn tick(&mut self) {
@@ -279,51 +592,71 @@ impl McpProfilesScreen {
         }
     }
 
-    /// Arms on the first call and commits on the second. Returns true once the
-    /// confirmation is spent, so the caller knows to emit the effect.
-    pub fn revoke_all(&mut self) -> bool {
-        if self.confirm_revoke != Some(RevokeScope::All) {
-            self.confirm_revoke = Some(RevokeScope::All);
-            self.preview = "confirm revoke all grants".into();
-            return false;
-        }
-        self.grants.clear();
-        self.confirm_revoke = None;
-        self.preview = "revoked all grants".into();
-        true
-    }
-
-    /// Commits whatever is armed, for the Enter key and the palette's arm-then-confirm
-    /// path. `None` means nothing was armed.
-    pub fn confirm_pending_revoke(&mut self) -> Option<RevokeScope> {
-        match self.confirm_revoke.clone()? {
-            RevokeScope::Profile(_) => self.revoke_profile().map(RevokeScope::Profile),
-            RevokeScope::All => self.revoke_all().then_some(RevokeScope::All),
-        }
-    }
-
+    /// Takes the profiles as read again. The pick stays on its profile by name, so what
+    /// was just made -- a grant, a change -- is still on screen.
     pub fn load_profiles(&mut self, profiles: Vec<McpProfileSummary>) {
+        let keep = self.name.clone();
         self.profiles = profiles;
-        self.selected = 0;
+        self.selected = self
+            .profiles
+            .iter()
+            .position(|profile| profile.name == keep)
+            .unwrap_or_else(|| self.selected.min(self.profiles.len().saturating_sub(1)));
+        // A confirmation belongs to what it was asked about.
+        if self
+            .confirm
+            .as_ref()
+            .is_some_and(|confirm| !self.confirm_still_applies(&confirm.kind))
+        {
+            self.confirm = None;
+        }
         self.apply_selected();
+    }
+
+    fn confirm_still_applies(&self, kind: &McpConfirmKind) -> bool {
+        match kind {
+            McpConfirmKind::Enable(name) | McpConfirmKind::DeleteProfile(name) => {
+                self.profiles.iter().any(|profile| &profile.name == name)
+            }
+            McpConfirmKind::RevokeProfile { name, .. } => self
+                .profiles
+                .iter()
+                .any(|profile| &profile.name == name && !profile.grants.is_empty()),
+            McpConfirmKind::RevokeAll { .. } => self.profiles.iter().any(|p| !p.grants.is_empty()),
+        }
     }
 
     pub fn select_previous(&mut self) {
-        self.selected = self.selected.saturating_sub(1);
-        self.apply_selected();
+        self.move_selection(-1);
     }
 
     pub fn select_next(&mut self) {
-        if self.selected + 1 < self.profiles.len() {
-            self.selected += 1;
+        self.move_selection(1);
+    }
+
+    fn move_selection(&mut self, delta: isize) {
+        let last = self.profiles.len().saturating_sub(1);
+        let moved = self.selected.saturating_add_signed(delta).min(last);
+        if moved != self.selected {
+            // What the last action said was about the profile it was done to.
+            self.status.clear();
+            self.detail_scroll = 0;
         }
+        self.selected = moved;
+        self.apply_selected();
+    }
+
+    pub fn select_index(&mut self, index: usize) {
+        let moved = index.min(self.profiles.len().saturating_sub(1));
+        if moved != self.selected {
+            self.status.clear();
+            self.detail_scroll = 0;
+        }
+        self.selected = moved;
         self.apply_selected();
     }
 
     fn apply_selected(&mut self) {
-        // A pending confirmation belongs to the profile that armed it.
-        self.confirm_enable = false;
-        self.confirm_revoke = None;
         match self.profiles.get(self.selected).cloned() {
             Some(profile) => {
                 self.name = profile.name;
@@ -331,6 +664,8 @@ impl McpProfilesScreen {
                 self.scopes = profile.scopes;
                 self.tools = profile.tools;
                 self.grants = profile.grants;
+                self.connections = profile.connections;
+                self.raw_read = profile.raw_read;
             }
             None => {
                 self.name.clear();
@@ -338,87 +673,355 @@ impl McpProfilesScreen {
                 self.scopes.clear();
                 self.tools.clear();
                 self.grants.clear();
+                self.connections.clear();
+                self.raw_read = false;
             }
         }
     }
 
-    pub fn lines(&self) -> Vec<String> {
-        if self.profiles.is_empty() && self.name.is_empty() {
-            let mut lines = vec!["no MCP profiles".into()];
-            if !self.preview.is_empty() {
-                lines.push(self.preview.clone());
+    /// The picked profile's details, whole.
+    fn detail_lines(&self, width: usize) -> Vec<String> {
+        let mut lines = Vec::new();
+        let mut put = |text: String, first: &str, rest: &str| {
+            let room = width.saturating_sub(first.chars().count()).max(8);
+            for (index, part) in crate::model::wrap_words(&text, room)
+                .into_iter()
+                .enumerate()
+            {
+                lines.push(format!("{}{part}", if index == 0 { first } else { rest }));
             }
-            return lines;
+        };
+        put(
+            format!(
+                "{} is {}.",
+                self.name,
+                if self.enabled {
+                    "enabled: agents can use it"
+                } else {
+                    "disabled: agents cannot use it yet"
+                }
+            ),
+            "",
+            "",
+        );
+        if self.connections.is_empty() {
+            put(
+                format!(
+                    "Connections: none listed, so any (dexo mcp profile set --name {} --connection NAME)",
+                    self.name
+                ),
+                "",
+                "  ",
+            );
+        } else {
+            put(
+                format!("Connections: {}", self.connections.join(", ")),
+                "",
+                "  ",
+            );
         }
-        let mut lines = self
+        put(
+            if self.raw_read {
+                "Reads: structured tools, and raw read-only SQL (query_execute_read)".into()
+            } else {
+                "Reads: structured tools only".into()
+            },
+            "",
+            "  ",
+        );
+        let (mut sees, mut denies) = (Vec::new(), Vec::new());
+        for scope in &self.scopes {
+            match scope.strip_prefix("deny ") {
+                Some(denied) => denies.push(denied.to_string()),
+                None => sees.push(scope.strip_prefix("allow ").unwrap_or(scope).to_string()),
+            }
+        }
+        if sees.is_empty() {
+            put(
+                format!(
+                    "Objects: none allowed yet (dexo mcp allow --profile {} --selector db.schema.*)",
+                    self.name
+                ),
+                "",
+                "  ",
+            );
+        } else {
+            put(format!("Objects it can see: {}", sees.join(", ")), "", "  ");
+        }
+        for denied in denies {
+            put(format!("never: {denied}"), "  ", "    ");
+        }
+        if !self.tools.is_empty() {
+            put(
+                format!("Tools set by hand: {}", self.tools.join(", ")),
+                "",
+                "  ",
+            );
+        }
+        if self.grants.is_empty() {
+            put("No grants: agents cannot write.".into(), "", "");
+        } else {
+            put(
+                format!(
+                    "Grants ({}): agents may write while they last",
+                    self.grants.len()
+                ),
+                "",
+                "",
+            );
+            for grant in &self.grants {
+                put(grant.words(), "  ", "    ");
+            }
+        }
+        lines
+    }
+
+    pub fn hint(&self) -> &'static str {
+        if self.profiles.is_empty() {
+            "Esc close"
+        } else {
+            "e enable/disable  g new grant  r revoke grants  R revoke all  x delete  Up/Down pick  PgUp/PgDn details  Esc close"
+        }
+    }
+
+    /// The screen at `width` by `rows`. The list and the details scroll in their own
+    /// areas; the status and the keys have rows of their own at the bottom.
+    pub fn view(&self, width: usize, rows: usize) -> ProfilesView {
+        let mut view = ProfilesView::default();
+        if self.profiles.is_empty() {
+            let wrap = |text: &str| crate::model::wrap_words(text, width.max(8));
+            for text in [
+                "No MCP profiles yet.",
+                "Agents connect through a profile, which says what they may see. Make one in a terminal:",
+                "  dexo mcp profile create --name assistant",
+                "  dexo mcp profile set --name assistant --connection NAME",
+                "  dexo mcp allow --profile assistant --selector db.schema.*",
+                "Then come back here to enable it and give it writes.",
+            ] {
+                view.lines.extend(wrap(text));
+            }
+            if !self.status.is_empty() {
+                view.lines.push(String::new());
+                view.lines.extend(wrap(&self.status));
+            }
+            view.lines.push(String::new());
+            view.lines.push(self.hint().into());
+            return view;
+        }
+        let hint = crate::model::wrap_words(self.hint(), width.max(8));
+        // Status, and the keys on as many lines as they need.
+        let footer = 1 + hint.len();
+        let body = rows.saturating_sub(footer).max(2);
+        let list_rows = self.profiles.len().clamp(1, (body / 2).clamp(1, 8));
+        let detail_rows = body.saturating_sub(list_rows + 1).max(1);
+        let offset =
+            crate::palette::scroll_to_selection(self.selected, 0, self.profiles.len(), list_rows);
+        for (index, profile) in self
             .profiles
             .iter()
             .enumerate()
-            .map(|(index, profile)| {
-                let marker = if index == self.selected { ">" } else { " " };
-                format!(
-                    "{marker} profile {} enabled={}",
-                    profile.name, profile.enabled
-                )
-            })
-            .collect::<Vec<_>>();
-        lines.push(format!(
-            "mcp profile={} enabled={} confirm={}",
-            self.name, self.enabled, self.confirm_enable
-        ));
-        for scope in &self.scopes {
-            lines.push(format!("scope {scope}"));
-        }
-        for tool in &self.tools {
-            lines.push(format!("tool {tool}"));
-        }
-        for resource in &self.resources {
-            lines.push(format!("resource {resource}"));
-        }
-        for grant in &self.grants {
-            let asks = if grant.ask_secs > 0 {
-                format!(" asks ({}s)", grant.ask_secs)
+            .skip(offset)
+            .take(list_rows)
+        {
+            let marker = if index == self.selected { ">" } else { " " };
+            let state = if profile.enabled {
+                "enabled "
             } else {
-                String::new()
+                "disabled"
             };
-            lines.push(format!(
-                "grant {} {} {}s{asks}",
-                grant.capability, grant.tools, grant.expires_in_secs
-            ));
-            lines.push(format!("diff {}", grant.diff));
+            let grants = match profile.grants.len() {
+                0 => String::new(),
+                1 => "  1 grant".into(),
+                n => format!("  {n} grants"),
+            };
+            if index == self.selected {
+                view.picked = Some(view.lines.len());
+            }
+            view.rows.push((view.lines.len(), index));
+            view.lines
+                .push(format!("{marker} {}  {state}{grants}", profile.name));
         }
-        if !self.preview.is_empty() {
-            lines.push(self.preview.clone());
+        while view.lines.len() < list_rows {
+            view.lines.push(String::new());
         }
-        lines.push("e enable/disable  g new grant  r revoke  R revoke all  esc close".into());
-        lines
+        let more = self.profiles.len().saturating_sub(offset + list_rows);
+        view.lines.push(if more > 0 {
+            format!("  ... {more} more below")
+        } else {
+            String::new()
+        });
+        let details = self.detail_lines(width);
+        view.scroll_max = details.len().saturating_sub(detail_rows);
+        let from = self.detail_scroll.min(view.scroll_max);
+        let mut shown: Vec<String> = details
+            .iter()
+            .skip(from)
+            .take(detail_rows)
+            .cloned()
+            .collect();
+        if from + detail_rows < details.len()
+            && let Some(last) = shown.last_mut()
+        {
+            *last = "  ... PgDn for more".into();
+        }
+        shown.resize(detail_rows, String::new());
+        view.lines.extend(shown);
+        view.lines.push(self.status.clone());
+        view.lines.extend(hint);
+        view
+    }
+
+    pub fn lines(&self) -> Vec<String> {
+        self.view(100, 40).lines
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use super::McpProfilesScreen;
+    use super::*;
+
+    fn profile(name: &str, grants: usize) -> McpProfileSummary {
+        McpProfileSummary {
+            name: name.into(),
+            connections: vec!["pg-dev".into()],
+            scopes: vec![
+                "allow qa7.public.*".into(),
+                "deny qa7.public.customers".into(),
+            ],
+            grants: (0..grants)
+                .map(|n| GrantLine {
+                    id: format!("g{n}"),
+                    capability: "data_write".into(),
+                    tools: "data_update".into(),
+                    expires_in_secs: 1796,
+                    connection: "pg-dev".into(),
+                    selectors: "qa7.public.orders".into(),
+                    ask_secs: if n == 0 { 120 } else { 0 },
+                })
+                .collect(),
+            ..McpProfileSummary::default()
+        }
+    }
 
     #[test]
-    fn sample_starts_disabled_until_confirmed() {
+    fn enabling_asks_first_and_disabling_does_not() {
         let mut screen = McpProfilesScreen::fixture();
         assert!(!screen.enabled);
-        assert_eq!(screen.toggle_selected(), None, "first press must only arm");
-        assert!(!screen.enabled);
-        assert!(screen.preview.contains("confirm enable"));
-        assert_eq!(screen.toggle_selected(), Some(true), "second press commits");
-        assert!(screen.enabled);
-        // Disabling is the safe direction, so it commits straight away.
+        assert_eq!(screen.toggle_selected(), None, "enabling only asks");
+        assert!(matches!(
+            screen.confirm.as_ref().map(|confirm| &confirm.kind),
+            Some(McpConfirmKind::Enable(name)) if name == "assistant"
+        ));
+        assert_eq!(
+            screen.confirm.as_ref().unwrap().focus,
+            FooterFocus::Cancel,
+            "an Enter out of habit enables nothing"
+        );
+        screen.enabled = true;
+        screen.confirm = None;
         assert_eq!(screen.toggle_selected(), Some(false));
-        assert!(!screen.enabled);
-        assert!(screen.lines().join("\n").contains("deny db.public.secrets"));
-        assert!(screen.lines().join("\n").contains("grant data_write"));
-        screen.tick();
-        assert_eq!(screen.grants[0].expires_in_secs, 899);
-        assert!(!screen.revoke_all(), "first press arms");
-        assert!(screen.preview.contains("confirm revoke"));
-        assert!(screen.revoke_all(), "second press commits");
-        assert!(screen.grants.is_empty());
-        assert!(screen.preview.contains("revoked all"));
+        assert!(screen.status.contains("Disabled assistant"));
+    }
+
+    #[test]
+    fn the_screen_says_it_in_words_not_in_key_value_dumps() {
+        let mut screen = McpProfilesScreen::default();
+        screen.load_profiles(vec![profile("pg-dev", 2)]);
+        let text = screen.lines().join("\n");
+        for raw in ["enabled=", "confirm=", "diff ", "scopes=", "profile pg-dev"] {
+            assert!(!text.contains(raw), "{raw}: {text}");
+        }
+        assert!(text.contains("never: qa7.public.customers"), "{text}");
+        assert!(
+            text.contains("asks before each write (2 min), ends in 30 min"),
+            "{text}"
+        );
+        assert!(text.contains("one write, then it is spent"), "{text}");
+    }
+
+    /// With more profiles than rows, the pick stays on screen, and so do the status and
+    /// the keys under it.
+    #[test]
+    fn the_pick_scrolls_into_view_and_the_footer_stays() {
+        let mut screen = McpProfilesScreen::default();
+        screen.load_profiles((0..17).map(|n| profile(&format!("p-{n:02}"), 1)).collect());
+        for _ in 0..14 {
+            screen.select_next();
+        }
+        screen.status = "disabled p-14".into();
+        let view = screen.view(80, 16);
+        assert_eq!(view.lines.len(), 16, "{:?}", view.lines);
+        let picked = view.picked.expect("the pick is drawn");
+        assert!(view.lines[picked].contains("p-14"), "{:?}", view.lines);
+        let text = view.lines.join("\n");
+        assert!(text.contains("disabled p-14"), "{text}");
+        assert!(text.contains("Esc close"), "{text}");
+    }
+
+    #[test]
+    fn the_status_does_not_follow_the_pick_to_another_profile() {
+        let mut screen = McpProfilesScreen::default();
+        screen.load_profiles(vec![profile("a", 0), profile("b", 0)]);
+        screen.status = "Disabled a: agents can no longer use it.".into();
+        screen.load_profiles(vec![profile("a", 0), profile("b", 0)]);
+        assert!(!screen.status.is_empty(), "a reload keeps what was said");
+        screen.select_next();
+        assert!(screen.status.is_empty());
+        assert_eq!(screen.name, "b");
+    }
+
+    #[test]
+    fn an_empty_screen_says_how_to_make_a_profile() {
+        let screen = McpProfilesScreen::default();
+        let text = screen.lines().join("\n");
+        assert!(text.contains("dexo mcp profile create"), "{text}");
+        assert!(text.contains("Esc close"), "{text}");
+    }
+
+    #[test]
+    fn revoking_names_what_goes_and_has_nothing_to_ask_when_nothing_is_there() {
+        let mut screen = McpProfilesScreen::default();
+        screen.load_profiles(vec![profile("a", 0), profile("b", 3)]);
+        screen.ask_revoke_profile();
+        assert!(screen.confirm.is_none());
+        assert!(screen.status.contains("no grants"));
+        screen.ask_revoke_all();
+        let confirm = screen.confirm.clone().expect("asks");
+        let text = confirm.lines(&[]).join("\n");
+        assert!(text.contains("3 grants in 1 profile"), "{text}");
+        assert!(text.contains("[Revoke]"), "{text}");
+    }
+
+    #[test]
+    fn the_grant_form_picks_its_profile_and_starts_on_it() {
+        let choices = vec![
+            ProfileChoice {
+                name: "a".into(),
+                connections: vec!["pg-dev".into()],
+            },
+            ProfileChoice {
+                name: "b".into(),
+                connections: Vec::new(),
+            },
+        ];
+        let mut form = GrantForm::new(choices, 1);
+        assert_eq!(form.focus, GRANT_PROFILE);
+        assert_eq!(form.profile_name(), "b");
+        form.step(-1);
+        assert_eq!(form.profile_name(), "a");
+        // The connection is the profile's own, not free text to leave empty.
+        form.fields[GRANT_TOOLS].value = "data_insert".into();
+        form.fields[GRANT_SELECTOR].value = "db.public.t".into();
+        let request = form.request().unwrap();
+        assert_eq!(request.connection, "pg-dev");
+        assert_eq!(request.capability, "data_write");
+        let lines = form.lines().join("\n");
+        assert!(lines.contains("profile: < a >"), "{lines}");
+        assert!(
+            !lines.contains("approval timeout"),
+            "only when it asks: {lines}"
+        );
+        form.toggle_ask();
+        assert!(form.lines().join("\n").contains("approval timeout"));
     }
 }

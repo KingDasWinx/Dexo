@@ -785,6 +785,7 @@ impl WorkbenchRuntime {
                 self.set_mcp_profile_enabled(name, enabled).await
             }
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
+            crate::Effect::DeleteMcpProfile { name } => self.delete_mcp_profile(name).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
             crate::Effect::CreateMcpGrant { profile, request } => {
                 let action_tx = self.action_tx.clone();
@@ -2337,6 +2338,8 @@ impl WorkbenchRuntime {
         let profiles = profiles
             .into_iter()
             .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
+                connections: profile.connections.clone(),
+                raw_read: profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql,
                 scopes: profile.selectors.iter().map(ToString::to_string).collect(),
                 tools: profile
                     .tool_rules
@@ -2465,6 +2468,32 @@ impl WorkbenchRuntime {
         }
     }
 
+    async fn delete_mcp_profile(&self, name: String) {
+        let Ok(paths) = AppPaths::discover() else {
+            return;
+        };
+        let (Ok(db), Ok(ledger)) = (
+            Database::open(&paths.database),
+            dexo_storage::SqliteGrantLedger::open(&paths.database),
+        ) else {
+            return;
+        };
+        use dexo_app::mcp::GrantLedger;
+        let _ = ledger.revoke_profile(&name);
+        match dexo_storage::McpProfileRepository::new(db.connection()).delete(&name) {
+            Ok(_) => {
+                self.emit(Action::McpProfileDeleted { name }).await;
+                self.load_mcp_profiles().await;
+            }
+            Err(error) => {
+                self.emit(Action::McpRevokeFailed {
+                    message: error.to_string(),
+                })
+                .await;
+            }
+        }
+    }
+
     async fn revoke_all_mcp(&self) {
         let Ok(paths) = AppPaths::discover() else {
             self.emit(Action::McpRevokeFailed {
@@ -2522,18 +2551,13 @@ fn grant_lines(
             capability: grant.capability.as_str().into(),
             tools: grant.tools.join(","),
             expires_in_secs: grant.expires_at.saturating_sub(now),
-            // What the grant narrowed the profile down to, which is the only part
-            // of a grant the profile rows do not already show.
-            diff: format!(
-                "{} {}",
-                grant.connection,
-                grant
-                    .selectors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join(" ")
-            ),
+            connection: grant.connection.clone(),
+            selectors: grant
+                .selectors
+                .iter()
+                .map(|rule| rule.selector.to_string())
+                .collect::<Vec<_>>()
+                .join(", "),
             ask_secs: grant.ask_secs,
         })
         .collect()

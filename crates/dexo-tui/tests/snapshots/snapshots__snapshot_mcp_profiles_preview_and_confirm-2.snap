@@ -4,20 +4,20 @@ expression: "render_to_string(&model, 60, 20)"
 ---
 demo  local  public          1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
-┌MCP profiles──────────────────────────────────────────────┐
-│mcp profile=assistant enabled=true confirm=false          │
-│scope allow db.public.*                                   │
-│scope deny db.public.secrets                              │
-│tool catalog_search                                       │
-│tool object_describe                                      │
-│resource db.public.items                                  │
-│grant data_write data_insert 900s                         │
-│diff profile db.public.* -> grant db.public.items         │
-│confirm revoke all grants                                 │
-│e enable/disable  g new grant  r revoke  R revoke all  esc│
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
+│   1▸select 1                                             │
+┌Enable MCP profile────────────────────────────────────────┐
+│Enable assistant?                                         │
+│Agents that connect through it can then use what it allows│
+│Connections: local.                                       │
 │                                                          │
-│                                                          │
+│ [Enable]  >[Cancel]                                      │
 └──────────────────────────────────────────────────────────┘
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘

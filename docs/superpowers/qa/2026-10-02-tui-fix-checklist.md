@@ -305,32 +305,32 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 
 ## MA: MCP and agents
 
-- [ ] **MA-02** `MAJOR` `g` (New MCP Grant) in the empty MCP Profiles screen opens a form that cannot succeed
-- [ ] **MA-05** `MAJOR` MCP Profiles shows raw debug lines (`profile NAME enabled=false`, `mcp profile=... enabled=false confirm=true`)
-- [ ] **MA-11** `MAJOR` MCP Profiles popup is fixed-height: with a few grants the status line and the hint line are cut off, so a pending confirmation is invisible
-- [ ] **MA-22** `MAJOR` New MCP Grant from the palette silently targets the first profile; the form cannot choose a profile
+- [x] **MA-02** `MAJOR` `g` (New MCP Grant) in the empty MCP Profiles screen opens a form that cannot succeed
+- [x] **MA-05** `MAJOR` MCP Profiles shows raw debug lines (`profile NAME enabled=false`, `mcp profile=... enabled=false confirm=true`)
+- [x] **MA-11** `MAJOR` MCP Profiles popup is fixed-height: with a few grants the status line and the hint line are cut off, so a pending confirmation is invisible
+- [x] **MA-22** `MAJOR` New MCP Grant from the palette silently targets the first profile; the form cannot choose a profile
 - [ ] **MA-25** `MAJOR` Revoking grants denies the waiting request with the reason "a person denied this write"
 - [ ] **MA-26** `MAJOR` Agent Activity: with nothing waiting, PgDn scrolls for half a second and snaps back; only the newest 20 events can ever be seen
-- [ ] **MA-34** `MAJOR` MCP Profiles: with more than 11 profiles the selection scrolls out of sight, and `e`/`r` act on rows you cannot see
+- [x] **MA-34** `MAJOR` MCP Profiles: with more than 11 profiles the selection scrolls out of sight, and `e`/`r` act on rows you cannot see
 - [ ] **MA-41** `MAJOR` (layout, found while testing popups) After the terminal is made 20 rows high and back to 120x36, the Sidebar and the Results pane stay hidden
-- [ ] **MA-01** `MINOR` MCP Profiles with no profile: empty state gives no way forward
+- [x] **MA-01** `MINOR` MCP Profiles with no profile: empty state gives no way forward
 - [ ] **MA-03** `MINOR` Palette shows hotkey `g` for "New MCP Grant…" but it only works inside MCP Profiles; help does not list it
 - [ ] **MA-04** `MINOR` Agent Activity `r revoke all grants` closes Activity and opens the MCP Profiles screen with an unexplained pending "confirm revoke all grants"
 - [ ] **MA-07** `MINOR` Inconsistent revoke-all keys between screens
 - [ ] **MA-08** `MINOR` CLI: `dexo mcp profile create` accepts any name, including `bad name!`, and there is no way to delete a profile
 - [ ] **MA-09** `MINOR` CLI: creating a profile with an existing name shows the raw SQLite error
 - [ ] **MA-10** `MINOR` CLI: `profile show`/`policy` print Rust Debug names; empty answers are silent
-- [ ] **MA-12** `MINOR` MCP Profiles: key `r` is labelled "revoke" but revokes ALL grants of the selected profile (after a silent first press)
-- [ ] **MA-13** `MINOR` MCP Profiles detail uses internal words and units: `diff pg-dev allow qa7.public.orders`, `grant data_write data_update 1796s asks (120s)`
-- [ ] **MA-14** `MINOR` MCP Profiles: status line is sticky across openings and stale
-- [ ] **MA-15** `MINOR` MCP Profiles: list is a snapshot, it does not follow changes made by `dexo mcp` while it is open
-- [ ] **MA-16** `MINOR` Enabling in MCP Profiles needs a second `e`, but the prompt does not say so; selection resets after actions
-- [ ] **MA-17** `MINOR` New MCP Grant: first focus is `tools:`, not `connection:`; the connection is not prefilled even when the profile has one connection
-- [ ] **MA-18** `MINOR` New MCP Grant: clicking the "ask before each write" checkbox only moves focus, it does not toggle it
+- [x] **MA-12** `MINOR` MCP Profiles: key `r` is labelled "revoke" but revokes ALL grants of the selected profile (after a silent first press)
+- [x] **MA-13** `MINOR` MCP Profiles detail uses internal words and units: `diff pg-dev allow qa7.public.orders`, `grant data_write data_update 1796s asks (120s)`
+- [x] **MA-14** `MINOR` MCP Profiles: status line is sticky across openings and stale
+- [x] **MA-15** `MINOR` MCP Profiles: list is a snapshot, it does not follow changes made by `dexo mcp` while it is open
+- [x] **MA-16** `MINOR` Enabling in MCP Profiles needs a second `e`, but the prompt does not say so; selection resets after actions
+- [x] **MA-17** `MINOR` New MCP Grant: first focus is `tools:`, not `connection:`; the connection is not prefilled even when the profile has one connection
+- [x] **MA-18** `MINOR` New MCP Grant: clicking the "ask before each write" checkbox only moves focus, it does not toggle it
 - [x] **MA-19** `MINOR` New MCP Grant: validation messages are terse, stale or misleading
 - [ ] **MA-21** `MINOR` Form allows several tools in one grant, the TUI success message names only the tool and selector
-- [ ] **MA-23** `MINOR` Ctrl+P (palette) is swallowed inside MCP Profiles; typed text acts as hotkeys there
-- [ ] **MA-24** `MINOR` "Revoke All MCP Grants" (palette) only opens MCP Profiles with a pending confirmation, shows a stale snapshot, and says `1 grants`
+- [x] **MA-23** `MINOR` Ctrl+P (palette) is swallowed inside MCP Profiles; typed text acts as hotkeys there
+- [x] **MA-24** `MINOR` "Revoke All MCP Grants" (palette) only opens MCP Profiles with a pending confirmation, shows a stale snapshot, and says `1 grants`
 - [ ] **MA-27** `MINOR` Agent Activity: mouse is not supported
 - [ ] **MA-28** `MINOR` Agent Activity rows are raw, contradictory and carry no time
 - [ ] **MA-29** `MINOR` Agent Activity: waiting requests - only the selected one shows its SQL, the confirm line does not repeat it
@@ -344,8 +344,8 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [ ] **MA-39** `MINOR` Agent side: raw Rust/serde and Debug text in errors and results
 - [ ] **MA-40** `MINOR` `list_connections` and the tool list disagree after a connection becomes production; the refusal reason is TLS, not the production rule
 - [ ] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids
-- [ ] **MA-06** `COSMETIC` MCP Profiles selected row has no highlight
-- [ ] **MA-20** `COSMETIC` New MCP Grant: the checkbox label describes the unchecked state as a feature
+- [x] **MA-06** `COSMETIC` MCP Profiles selected row has no highlight
+- [x] **MA-20** `COSMETIC` New MCP Grant: the checkbox label describes the unchecked state as a feature
 - [ ] **MA-33** `COSMETIC` Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`)
 
 ## SL: Settings, layout, mouse

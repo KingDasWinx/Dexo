@@ -589,6 +589,9 @@ pub enum Action {
     DiagnosticsReady {
         preview: String,
     },
+    McpProfileDeleted {
+        name: String,
+    },
     McpProfilesLoaded {
         profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
     },
@@ -1014,6 +1017,9 @@ pub enum Effect {
     SetMcpProfileEnabled {
         name: String,
         enabled: bool,
+    },
+    DeleteMcpProfile {
+        name: String,
     },
     RevokeMcpGrants {
         profile: String,

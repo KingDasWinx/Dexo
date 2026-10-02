@@ -76,8 +76,16 @@ fn fields() -> Vec<Field> {
             name: "new MCP grant form",
             open: |m| {
                 m.mcp_profiles.open = true;
-                m.mcp_profiles.grant_form =
-                    Some(dexo_tui::screens::mcp_profiles::GrantForm::new("local"));
+                let mut form = dexo_tui::screens::mcp_profiles::GrantForm::new(
+                    vec![dexo_tui::screens::mcp_profiles::ProfileChoice {
+                        name: "assistant".into(),
+                        connections: Vec::new(),
+                    }],
+                    0,
+                );
+                // A text row: the profile row is a choice.
+                form.focus = dexo_tui::screens::mcp_profiles::GRANT_TOOLS;
+                m.mcp_profiles.grant_form = Some(form);
             },
             text: |m| {
                 let form = m.mcp_profiles.grant_form.as_ref().unwrap();
