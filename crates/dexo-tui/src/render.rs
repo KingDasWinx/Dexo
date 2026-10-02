@@ -2076,6 +2076,20 @@ fn render_delete_connection(frame: &mut Frame, model: &Model, hits: &mut HitMap)
     if model.connections.session_for(&target.name).is_some() {
         notes.push("Its open session is closed.".to_string());
     }
+    // Its documents stay open, and run on whatever connection is active afterwards.
+    let id = target.id.0.to_string();
+    let open = model
+        .documents
+        .iter()
+        .filter(|document| document.connection_id.as_deref() == Some(id.as_str()))
+        .count();
+    if open > 0 {
+        notes.push(format!(
+            "{open} open document{} lose{} it and run on the active connection.",
+            if open == 1 { "" } else { "s" },
+            if open == 1 { "s" } else { "" }
+        ));
+    }
     let mut lines = vec![format!("Delete \"{name}\"? This cannot be undone.")];
     lines.extend(notes.iter().cloned());
     lines.push(String::new());

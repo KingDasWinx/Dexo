@@ -60,3 +60,42 @@ fn only_the_connection_showing_a_snapshot_is_marked_offline() {
     assert!(!row("beta").contains("[offline]"), "{}", row("beta"));
     assert!(!row("gamma").contains("[offline]"), "{}", row("gamma"));
 }
+
+/// A connection in a group shows its folder in the sidebar, as Browse Connections does.
+#[test]
+fn a_grouped_connection_shows_its_group() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    let mut grouped = profile("duck-new", 5);
+    grouped.group_path = Some("grp-a".into());
+    model.connections.load_profiles(vec![grouped]);
+    let profiles = model.connections.profiles.clone();
+    model.explorer.sync_connection_roots(&profiles, "");
+    let rows = sidebar_rows(&model);
+    assert!(
+        rows.iter().any(|line| line.contains("grp-a/duck-new")),
+        "{rows:?}"
+    );
+}
+
+/// Deleting a connection says how many open documents lose it.
+#[test]
+fn the_delete_dialog_counts_the_documents_that_lose_the_connection() {
+    let mut model = Model::default();
+    model.apply_size(100, 30);
+    let target = profile("sqlite-shop", 6);
+    model.connections.load_profiles(vec![target.clone()]);
+    let mut document = dexo_tui::model::EditorDocument::new_unique(
+        "second.sql",
+        None,
+        Some(target.id.0.to_string()),
+    );
+    document.sql.insert(0, "select 1").unwrap();
+    model.documents = vec![document];
+    model.connections.ask_delete(Some(target));
+    let screen = render_to_string(&model, 100, 30);
+    assert!(
+        screen.contains("1 open document loses it"),
+        "the dialog is silent about the open document:\n{screen}"
+    );
+}

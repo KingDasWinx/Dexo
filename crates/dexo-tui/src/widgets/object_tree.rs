@@ -258,7 +258,18 @@ fn collect(
                 } else {
                     offline
                 };
-                format!("{marker} {label}{twistie}{fav}{badge}", label = node.label)
+                // A connection in a group is shown under its folder's name, as Browse
+                // Connections shows it; the sidebar is flat and had no trace of groups.
+                let group = profiles
+                    .iter()
+                    .find(|row| row.profile.name == node.label)
+                    .and_then(|row| row.profile.group_path.as_deref())
+                    .map(|group| format!("{group}/"))
+                    .unwrap_or_default();
+                format!(
+                    "{marker} {group}{label}{twistie}{fav}{badge}",
+                    label = node.label
+                )
             } else {
                 format!("{twistie}{fav}{}{detail}{badge}", node.label)
             };
