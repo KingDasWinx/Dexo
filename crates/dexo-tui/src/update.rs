@@ -9686,28 +9686,42 @@ fn find_qualified(
     explorer: &crate::screens::explorer::ExplorerState,
     qualified: &str,
 ) -> Option<dexo_driver_api::ObjectId> {
-    fn walk(
-        nodes: &[crate::screens::explorer::ExplorerNode],
+    // The object itself, else one named like it, else the deepest container of it the tree
+    // has read: the first match from the top was the database, whose name prefixes its
+    // table's.
+    fn walk<'a>(
+        nodes: &'a [crate::screens::explorer::ExplorerNode],
         qualified: &str,
-    ) -> Option<dexo_driver_api::ObjectId> {
+        best: &mut Option<((u8, usize), &'a dexo_driver_api::ObjectId)>,
+    ) {
         for node in nodes {
             // A folder's `qualified` is just its label ("Tables"), which would
             // shadow a real object that happens to share the name.
-            if !crate::screens::explorer::is_folder_node(node)
-                && (node.qualified == qualified
-                    || qualified.starts_with(&format!("{}.", node.qualified))
-                    || node.qualified.ends_with(&format!(".{qualified}"))
-                    || qualified.ends_with(&format!(".{}", node.label)))
-            {
-                return Some(node.id.clone());
+            if !crate::screens::explorer::is_folder_node(node) {
+                let class = if node.qualified == qualified {
+                    Some(2)
+                } else if node.qualified.ends_with(&format!(".{qualified}"))
+                    || qualified.ends_with(&format!(".{}", node.label))
+                {
+                    Some(1)
+                } else if qualified.starts_with(&format!("{}.", node.qualified)) {
+                    Some(0)
+                } else {
+                    None
+                };
+                if let Some(class) = class {
+                    let rank = (class, node.qualified.len());
+                    if best.is_none_or(|(kept, _)| rank > kept) {
+                        *best = Some((rank, &node.id));
+                    }
+                }
             }
-            if let Some(found) = walk(&node.children, qualified) {
-                return Some(found);
-            }
+            walk(&node.children, qualified, best);
         }
-        None
     }
-    walk(&explorer.roots, qualified)
+    let mut best = None;
+    walk(&explorer.roots, qualified, &mut best);
+    best.map(|(_, id)| id.clone())
 }
 
 fn copy_selected(model: &mut Model, qualified: bool) -> Vec<Effect> {
