@@ -351,9 +351,11 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 } else {
                     Role::Warning
                 };
-                for part in crate::model::wrap_words(line, usize::from(width).max(8) - 1) {
-                    lines.push((None, Line::styled(format!(" {part}"), style(role))));
-                }
+                // One line each, its middle left out: they name paths, which wrapped
+                // left a mark alone on its line.
+                let line =
+                    crate::widgets::document_tabs::cut_middle(line, usize::from(width).max(8) - 1);
+                lines.push((None, Line::styled(format!(" {line}"), style(role))));
             }
         }
         (Some(Err(why)), _) => {

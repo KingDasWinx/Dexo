@@ -350,3 +350,23 @@ fn a_long_path_keeps_to_one_line() {
     assert!(writes.contains("(this folder)"), "{writes}");
     assert!(writes.contains("project/.mcp.json"), "{writes}");
 }
+
+/// What Set up did is a line per thing done, a long path cut in its middle: wrapped, the
+/// mark stood alone on its line.
+#[test]
+fn what_set_up_did_is_a_line_each() {
+    let mut model = setup();
+    let path = format!("/tmp/{}/project/.mcp.json", "x".repeat(120));
+    update(
+        &mut model,
+        Action::McpClientSetUp {
+            result: Ok(vec![format!("✓ {path} written")]),
+        },
+    );
+    let screen = dexo_tui::render::render_to_string(&model, 140, 40);
+    let done = screen
+        .lines()
+        .find(|line| line.contains("✓ /tmp/"))
+        .expect("the mark and the path on one line");
+    assert!(done.contains("written"), "{done}");
+}
