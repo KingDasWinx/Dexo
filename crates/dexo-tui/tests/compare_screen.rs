@@ -134,3 +134,18 @@ fn schemas_that_match_say_so() {
     let frame = paint(&mut model);
     assert!(frame.contains("✓ The schemas match."), "{frame}");
 }
+
+/// The toolbar's Compare compares from the pickers too, where it did nothing.
+#[test]
+fn e_compares_while_the_sources_are_picked() {
+    let mut model = compared();
+    press(&mut model, KeyCode::Char('p'));
+    assert!(model.schema_diff.source_prompt);
+    let effects = press(&mut model, KeyCode::Char('e'));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadSchemaDiff { .. })),
+        "{effects:?}"
+    );
+}

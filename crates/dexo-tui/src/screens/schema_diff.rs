@@ -452,10 +452,15 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     if model.schema_diff.source_prompt {
         let rows = model.schema_diff.rows();
         let row = model.schema_diff.row;
-        // `s` exchanges the sides from anywhere but the file's path, which it is typed in.
-        if key.code == KeyCode::Char('s') && !(on_rows && row == 2) {
+        // `s` exchanges the sides and `e` compares them, from anywhere but the file's
+        // path, which they are typed in.
+        let typing = on_rows && row == 2;
+        if key.code == KeyCode::Char('s') && !typing {
             model.schema_diff.swap();
             return Some(Vec::new());
+        }
+        if key.code == KeyCode::Char('e') && !typing {
+            return Some(request(model));
         }
         if on_rows {
             match key.code {
