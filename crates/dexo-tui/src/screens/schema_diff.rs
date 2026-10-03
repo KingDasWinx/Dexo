@@ -376,7 +376,7 @@ impl SchemaDiffScreen {
         use crate::model::truncate_cell;
         let mut lines = Vec::new();
         if self.source_prompt {
-            lines.push("Compare two schemas; the script makes From like To.".into());
+            lines.push("The script makes From like To.".into());
             lines.push(String::new());
             let on_rows = self.footer == FooterFocus::Input;
             for (side, name) in ["From", "To  "].into_iter().enumerate() {

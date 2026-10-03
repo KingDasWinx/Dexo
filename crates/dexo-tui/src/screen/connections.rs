@@ -47,8 +47,13 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                     .map(|database| database.container.clone())
             })
             .unwrap_or_default();
-        // What can be done to the pick, each one a click, under its details.
-        let actions = screen.footer_lines(usize::from(detail.width.saturating_sub(2)));
+        // What can be done to the pick, each one a click, under its details -- on a
+        // short terminal the status line says them, and the details keep the rows.
+        let actions = if model.height >= TALL {
+            screen.footer_lines(usize::from(detail.width.saturating_sub(2)))
+        } else {
+            screen.error.clone().into_iter().collect()
+        };
         let (footer, _, _) =
             super::text_pane(frame, detail, model, hits, &title, &lines, 0, &actions);
         let buttons = [
@@ -181,10 +186,18 @@ fn form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 }
 
+/// The height from which the actions are drawn under the details.
+const TALL: u16 = 24;
+
 pub fn hints(model: &Model) -> String {
     if model.connection_form.open {
         "Tab next  Left/Right pick a value  Enter save  Esc cancel".into()
-    } else {
+    } else if model.height >= TALL {
         "Up/Down pick  Esc back".into()
+    } else {
+        format!(
+            "{}  Esc back",
+            crate::screens::connections::HINTS.join("  ")
+        )
     }
 }
