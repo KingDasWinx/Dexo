@@ -5901,6 +5901,15 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.connection_form.toggle_advanced();
             Vec::new()
         }
+        // Enter opens the advanced options and goes on into them, as it goes on from a
+        // field; on them open, it folds them.
+        KeyCode::Enter if model.connection_form.on_advanced() => {
+            model.connection_form.toggle_advanced();
+            if model.connection_form.advanced {
+                model.connection_form.focus_next();
+            }
+            Vec::new()
+        }
 
         KeyCode::Left if model.connection_form.on_advanced() => {
             model.connection_form.set_advanced(false);

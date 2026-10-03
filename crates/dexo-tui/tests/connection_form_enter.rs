@@ -95,3 +95,22 @@ fn enter_on_cancel_closes_without_saving() {
     assert!(!saves(&effects));
     assert!(!model.connection_form.open);
 }
+
+#[test]
+fn enter_on_advanced_options_opens_them_and_goes_in() {
+    let mut model = filled_form();
+    while !model.connection_form.on_advanced() {
+        model.connection_form.focus_next();
+    }
+
+    enter(&mut model);
+
+    assert!(model.connection_form.advanced);
+    let lines = model.connection_form.lines().join("\n");
+    assert!(lines.contains("> environment:"), "{lines}");
+
+    // Back on the row, Enter folds them.
+    model.connection_form.focus_prev();
+    enter(&mut model);
+    assert!(!model.connection_form.advanced);
+}
