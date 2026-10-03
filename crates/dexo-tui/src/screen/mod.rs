@@ -528,34 +528,6 @@ pub fn list_pane(
     frame.render_widget(Paragraph::new(lines), inner);
 }
 
-/// A bordered pane of text, scrolled `scroll` lines, with `footer` pinned to its bottom
-/// rows. Returns the inner rect of the footer, how far the text can scroll and how many
-/// of its lines show at once.
-#[allow(clippy::too_many_arguments)]
-pub fn text_pane(
-    frame: &mut Frame,
-    area: Rect,
-    model: &Model,
-    hits: &mut HitMap,
-    title: &str,
-    lines: &[String],
-    scroll: usize,
-    footer: &[String],
-) -> (Rect, usize, u16) {
-    let drawn = detail_pane(
-        frame,
-        area,
-        model,
-        hits,
-        title,
-        &[],
-        Text::raw(lines.join("\n")),
-        scroll,
-        footer,
-    );
-    (drawn.footer, drawn.max_scroll, drawn.page)
-}
-
 /// Where [`detail_pane`] drew: its text and its footer, how far the text scrolls, and how
 /// many of its lines show at once.
 #[derive(Clone, Copy, Debug, Default)]
@@ -566,8 +538,9 @@ pub struct Drawn {
     pub page: u16,
 }
 
-/// [`text_pane`] with the screen's buttons for the picked item on its first rows, where
-/// the item is: the actions were a run of text at the bottom of the pane.
+/// A bordered pane of `text`, scrolled `scroll` lines, the screen's buttons for the picked
+/// item on its first rows -- the actions were a run of text at the bottom of the pane --
+/// and `footer` pinned to its bottom rows.
 #[allow(clippy::too_many_arguments)]
 pub fn detail_pane(
     frame: &mut Frame,
