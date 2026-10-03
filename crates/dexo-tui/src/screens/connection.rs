@@ -10,7 +10,7 @@ const STATUS_ROWS: usize = 2;
 const ENVIRONMENTS: &[&str] = &["local", "development", "staging", "production"];
 
 const BASIC_FIELDS: &[&str] = &[
-    "name", "driver", "path", "host", "port", "database", "username", "password",
+    "url", "name", "driver", "path", "host", "port", "database", "username", "password",
 ];
 
 /// The advanced fields under their headings, in the order they are shown. They were
@@ -83,11 +83,14 @@ impl Default for ConnectionForm {
 }
 
 impl ConnectionForm {
+    /// A new connection's form, on its name: the URL above it is there to paste one.
     pub fn open() -> Self {
-        Self {
+        let mut form = Self {
             open: true,
             ..Self::default()
-        }
+        };
+        form.focus_on("name");
+        form
     }
 
     pub fn open_edit(profile: &ConnectionProfile) -> Self {
@@ -100,55 +103,79 @@ impl ConnectionForm {
             ..Self::default()
         };
         set_field(&mut form.fields, "name", &profile.name);
-        set_field(&mut form.fields, "driver", &profile.driver);
-        set_field(
-            &mut form.fields,
-            "host",
-            profile
-                .config
-                .get("host")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-        );
-        if let Some(port) = profile.config.get("port") {
-            let port = port.to_string();
-            set_field(&mut form.fields, "port", port.trim_matches('"'));
-        }
-        set_field(
-            &mut form.fields,
-            "database",
-            profile
-                .config
-                .get("database")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-        );
-        set_field(
-            &mut form.fields,
-            "username",
-            profile
-                .config
-                .get("username")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-        );
-        set_field(
-            &mut form.fields,
-            "path",
-            profile
-                .config
-                .get("path")
-                .and_then(|v| v.as_str())
-                .unwrap_or(""),
-        );
+        form.fill(profile);
         set_field(&mut form.fields, "environment", &profile.environment);
         if let Some(group) = &profile.group_path {
             set_field(&mut form.fields, "group", group);
         }
-        form.sync_descriptor_fields();
-        populate_advanced_fields(&mut form.fields, profile);
+        form.focus_on("name");
         form.advanced = has_advanced_values(&form.fields);
         form
+    }
+
+    /// The focus on the field `label`, where the form has one.
+    pub fn focus_on(&mut self, label: &str) {
+        if let Some(index) = self.fields.iter().position(|field| field.label == label) {
+            self.focus = index;
+        }
+    }
+
+    /// Whether the focus is on the URL field.
+    pub fn on_url(&self) -> bool {
+        self.focused_label() == Some("url")
+    }
+
+    /// Where `profile` goes, how and under which rules: its driver first, as that
+    /// decides the fields there are.
+    fn fill(&mut self, profile: &ConnectionProfile) {
+        set_field(&mut self.fields, "driver", &profile.driver);
+        self.sync_descriptor_fields();
+        let text = |key: &str| match profile.config.get(key) {
+            Some(serde_json::Value::String(text)) => text.clone(),
+            Some(serde_json::Value::Null) | None => String::new(),
+            Some(other) => other.to_string(),
+        };
+        for label in ["host", "port", "database", "username", "path"] {
+            set_field(&mut self.fields, label, &text(label));
+        }
+        populate_advanced_fields(&mut self.fields, profile);
+    }
+
+    /// Reads the URL typed or pasted into the form into its fields, then forgets it: it
+    /// may hold the password. A name already typed is kept. False, with the reason
+    /// where the errors are, when it is not a connection URL; true when it filled the
+    /// form or there was none.
+    pub fn apply_url(&mut self) -> bool {
+        let url = field(&self.fields, "url");
+        if url.trim().is_empty() {
+            return true;
+        }
+        let parsed = match dexo_app::connection_url::parse(url.trim()) {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                self.set_error(error.to_string());
+                return false;
+            }
+        };
+        let name = field(&self.fields, "name");
+        self.fill(&parsed.profile);
+        if name.trim().is_empty() {
+            set_field(&mut self.fields, "name", &parsed.profile.name);
+        }
+        if let Some(password) = &parsed.password {
+            set_field(
+                &mut self.fields,
+                "password",
+                secrecy::ExposeSecret::expose_secret(password),
+            );
+        }
+        if let Some(url) = self.fields.iter_mut().find(|field| field.label == "url") {
+            url.value.wipe();
+        }
+        self.advanced |= has_advanced_values(&self.fields);
+        self.clear_status();
+        self.focus_on("name");
+        true
     }
 
     pub fn close(&mut self) {
@@ -653,8 +680,10 @@ impl ConnectionForm {
 
 /// How a field is named on screen: `ssh_host` reads as "SSH host", next to "name".
 fn shown_label(label: &str) -> String {
-    if label == "pre_connect" {
-        return "pre-connect command".into();
+    match label {
+        "pre_connect" => return "pre-connect command".into(),
+        "url" => return "URL".into(),
+        _ => {}
     }
     label
         .split('_')
@@ -678,6 +707,7 @@ fn is_basic(label: &str) -> bool {
 /// field has the focus. None of the advanced fields said what its values were.
 fn field_hint(label: &str) -> Option<&'static str> {
     Some(match label {
+        "url" => "paste one, as postgres://user:password@host:5432/db, to fill the rest",
         "environment" => {
             "local and development are free; staging and production require verified TLS and confirm writes"
         }
@@ -893,6 +923,7 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
         .is_some_and(|descriptor| descriptor.file)
     {
         return vec![
+            field_of("url", false),
             field_of("name", false),
             driver_field,
             field_of("path", false),
@@ -905,6 +936,7 @@ fn blank_fields(driver: &str) -> Vec<FormField> {
         ];
     }
     let mut fields = vec![
+        field_of("url", false),
         field_of("name", false),
         driver_field,
         field_of("host", false),
@@ -1257,7 +1289,7 @@ mod tests {
     #[test]
     fn a_sqlite_connection_submits_a_path_without_a_password() {
         let mut form = ConnectionForm::open();
-        form.focus = 1;
+        form.focus_on("driver");
         form.cycle_choice(3);
         for (label, value) in [("name", "shop"), ("path", "/data/shop.db")] {
             let field = form

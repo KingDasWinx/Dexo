@@ -884,6 +884,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
                 ));
             }
+            // A URL pasted into the connection form fills it at once: it is never drawn
+            // with its password.
+            if model.connection_form.open && model.connection_form.on_url() {
+                model.connection_form.apply_url();
+            }
             effects
         }
         Action::PasteFromClipboard => vec![Effect::ReadClipboard],
@@ -6228,6 +6233,15 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         }
         KeyCode::Enter if model.connection_form.on_test() => test_connection(model),
         KeyCode::Enter if model.connection_form.on_submit() => save_connection(model),
+        // A URL is read into the fields as the focus leaves it, or it stays with the
+        // reason it is not one.
+        KeyCode::Enter | KeyCode::Tab | KeyCode::Down if model.connection_form.on_url() => {
+            // Filled, the focus is on the name already; empty, it goes on.
+            if model.connection_form.apply_url() && model.connection_form.on_url() {
+                model.connection_form.focus_next();
+            }
+            Vec::new()
+        }
         // On a field, Enter goes on to the next one: it saved from any field, half
         // filled in.
         KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
@@ -6465,6 +6479,11 @@ fn connections_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         KeyCode::Char('r') => vec![Effect::DiscoverDocker],
         KeyCode::Char('n') => update(model, Action::OpenConnectionForm),
+        KeyCode::Char('u') => {
+            update(model, Action::OpenConnectionForm);
+            model.connection_form.focus_on("url");
+            Vec::new()
+        }
         // The rest act on a connection: on a heading, or with nothing shown, on none.
         KeyCode::Enter | KeyCode::Char('e' | 'd' | 't' | 'x' | 'c') | KeyCode::Delete
             if !on_row =>

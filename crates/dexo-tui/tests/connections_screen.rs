@@ -303,3 +303,80 @@ fn narrow_the_address_goes_first_then_the_driver() {
     assert!(narrower.contains("NAME"), "{narrower}");
     assert!(narrower.contains("○ pg-prod"), "{narrower}");
 }
+
+fn form_value(model: &Model, label: &str) -> String {
+    model
+        .connection_form
+        .fields
+        .iter()
+        .find(|field| field.label == label)
+        .map(|field| field.value.as_str().to_string())
+        .unwrap_or_default()
+}
+
+#[test]
+fn a_url_fills_the_form() {
+    let mut model = four_connections();
+    let frame = paint(&mut model);
+    assert!(frame.contains("[u From URL]"), "{frame}");
+    press(&mut model, KeyCode::Char('u'));
+    assert!(model.connection_form.open);
+    for ch in "postgres://ana:s3cret@db.local:5433/shop".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    press(&mut model, KeyCode::Enter);
+    assert_eq!(form_value(&model, "driver"), "postgres");
+    assert_eq!(form_value(&model, "host"), "db.local");
+    assert_eq!(form_value(&model, "port"), "5433");
+    assert_eq!(form_value(&model, "database"), "shop");
+    assert_eq!(form_value(&model, "username"), "ana");
+    assert_eq!(form_value(&model, "password"), "s3cret");
+    assert_eq!(form_value(&model, "name"), "ana@db.local/shop");
+    // The URL, password and all, is not kept once read.
+    assert_eq!(form_value(&model, "url"), "");
+    assert!(model.connection_form.errors.is_empty());
+}
+
+#[test]
+fn a_pasted_url_fills_the_form_at_once() {
+    let mut model = four_connections();
+    press(&mut model, KeyCode::Char('u'));
+    update(
+        &mut model,
+        Action::Paste("mysql://root:pw@127.0.0.1:3307/app".into()),
+    );
+    assert_eq!(form_value(&model, "driver"), "mysql");
+    assert_eq!(form_value(&model, "port"), "3307");
+    assert_eq!(form_value(&model, "url"), "");
+    let frame = paint(&mut model);
+    assert!(!frame.contains("root:pw"), "{frame}");
+}
+
+#[test]
+fn a_bad_url_stays_with_its_reason() {
+    let mut model = four_connections();
+    press(&mut model, KeyCode::Char('u'));
+    for ch in "nonsense".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    press(&mut model, KeyCode::Enter);
+    assert!(model.connection_form.open);
+    assert_eq!(
+        form_value(&model, "url"),
+        "nonsense",
+        "the focus stays on it"
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("not a connection URL"), "{frame}");
+}
+
+#[test]
+fn new_starts_on_the_name_with_the_url_above() {
+    let mut model = four_connections();
+    press(&mut model, KeyCode::Char('n'));
+    let focused = &model.connection_form.fields[model.connection_form.focus];
+    assert_eq!(focused.label, "name");
+    press(&mut model, KeyCode::Up);
+    let focused = &model.connection_form.fields[model.connection_form.focus];
+    assert_eq!(focused.label, "url");
+}

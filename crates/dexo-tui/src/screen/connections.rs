@@ -120,7 +120,10 @@ fn picked_fields(model: &Model) -> (String, Vec<FieldRow>) {
 
 /// What acts on the whole screen rather than the pick.
 fn toolbar_buttons() -> Vec<Button> {
-    vec![Button::new(KeyCode::Char('n'), "New")]
+    vec![
+        Button::new(KeyCode::Char('u'), "From URL"),
+        Button::new(KeyCode::Char('n'), "New"),
+    ]
 }
 
 /// The filters over the list.
@@ -527,7 +530,7 @@ pub fn hints(model: &Model) -> String {
     } else if model.connections.search.typing {
         "Type to search  Up/Down pick  Enter keep  Esc clear".into()
     } else {
-        "Up/Down pick  / search  o connected  v env  Left/Right fold  n new  r Docker  Esc back"
+        "Up/Down pick  / search  o connected  v env  Left/Right fold  n new  u from URL  r Docker  Esc back"
             .into()
     }
 }
