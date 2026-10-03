@@ -192,9 +192,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.admin.open {
         render_admin(frame, model, hits);
     }
-    if model.mcp_profiles.open {
-        render_mcp_profiles(frame, model, hits);
-    }
     // A dialog opened over another is drawn alone: the one under it, taller, showed its
     // bottom border as a second box edge under the new one.
     if model.connections.open && !model.connection_form.open && !model.secret_prompt.open {
@@ -273,9 +270,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     if model.diagnostics.open {
         render_diagnostics(frame, model, hits);
-    }
-    if model.mcp_audit.open {
-        render_mcp_audit(frame, model, hits);
     }
     if model.file_picker.open {
         render_file_picker(frame, model, hits);
@@ -1322,7 +1316,7 @@ fn paint_selection(
 /// A field drawn as plain text, with no cursor of its own: the terminal's cursor goes
 /// where the input's is, and a selection shows in reverse. `before` is what precedes the
 /// value on `line`; a `masked` value is drawn as one mark per character.
-fn show_input(
+pub(crate) fn show_input(
     frame: &mut Frame,
     line: Rect,
     before: &str,
@@ -1368,7 +1362,7 @@ fn show_windowed_input(
 }
 
 /// The focused field of a form, drawn `> label: value` on `line`.
-fn show_form_field(
+pub(crate) fn show_form_field(
     frame: &mut Frame,
     line: Rect,
     field: &crate::screens::schema_editor::FormField,
@@ -2287,119 +2281,6 @@ fn render_admin(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             }
         });
     }
-}
-
-fn render_mcp_profiles(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    if area.width < 10 || area.height < 5 {
-        return;
-    }
-    let screen = &model.mcp_profiles;
-    if let Some(form) = &screen.grant_form {
-        render_grant_form(frame, model, form, hits);
-        return;
-    }
-    if let Some(confirm) = &screen.confirm {
-        let lines = confirm.lines(&screen.connections);
-        let popup = centered(area, 84, lines.len() as u16 + 2);
-        paint_popup(
-            frame,
-            model,
-            popup,
-            overlay_block(model, confirm.title()),
-            lines.join("\n"),
-        );
-        register_overlay(hits, popup);
-        for_popup_lines(popup, &lines, |_, line, rect| {
-            if line.contains("[Cancel]") {
-                crate::widgets::form::register_footer(hits, rect, line, confirm.submit_label());
-            }
-        });
-        return;
-    }
-    let width = area.width.min(100);
-    let height = area.height.saturating_sub(2).clamp(8, 26);
-    let popup = centered(area, width, height);
-    let inner = popup_inner(popup);
-    let view = screen.view(inner.width as usize, inner.height as usize);
-    // The picked row in reverse video, so it reads at a glance and without colour.
-    let body: Vec<Line> = view
-        .lines
-        .iter()
-        .enumerate()
-        .map(|(index, text)| {
-            if view.picked == Some(index) {
-                Line::styled(
-                    text.clone(),
-                    Style::default().add_modifier(Modifier::REVERSED),
-                )
-            } else {
-                Line::raw(text.clone())
-            }
-        })
-        .collect();
-    frame.render_widget(Clear, popup);
-    frame.render_widget(
-        Paragraph::new(body).block(overlay_block(model, "MCP profiles")),
-        popup,
-    );
-    register_overlay(hits, popup);
-    for_popup_lines(popup, &view.lines, |i, _, rect| {
-        if let Some((_, profile)) = view.rows.iter().find(|(line, _)| *line == i) {
-            hits.register(HitTarget::ListRow(*profile), rect);
-        }
-    });
-}
-
-/// New MCP Grant, over MCP profiles.
-fn render_grant_form(
-    frame: &mut Frame,
-    model: &Model,
-    form: &crate::screens::mcp_profiles::GrantForm,
-    hits: &mut HitMap,
-) {
-    let area = frame.area();
-    let lines = form.lines();
-    let popup = centered(area, 92, (lines.len() as u16 + 2).min(area.height));
-    paint_popup(
-        frame,
-        model,
-        popup,
-        overlay_block(model, "New MCP grant"),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    // The rows drawn are the fields that are shown, from the second line.
-    let mut shown: Vec<usize> = (0..form.fields.len())
-        .filter(|index| *index != crate::screens::mcp_profiles::GRANT_ASK_SECS || form.ask)
-        .collect();
-    shown.truncate(form.fields.len());
-    for_popup_lines(popup, &lines, |index, line, rect| {
-        if let Some(field) = index.checked_sub(1).and_then(|row| shown.get(row)).copied()
-            && index <= shown.len()
-        {
-            if field == form.focus
-                && !form.is_choice(field)
-                && field != crate::screens::mcp_profiles::GRANT_ASK
-            {
-                show_form_field(frame, rect, &form.fields[field]);
-            }
-            hits.register(HitTarget::FormField(field), rect);
-            if form.is_choice(field) {
-                for (needle, step) in [("< ", -1), (" >", 1)] {
-                    crate::mouse::register_label(
-                        hits,
-                        rect,
-                        line,
-                        needle,
-                        HitTarget::FormChoice { index: field, step },
-                    );
-                }
-            }
-        } else if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Create");
-        }
-    });
 }
 
 /// The saved connections, sized to them: the list scrolls to keep the selection in
@@ -3382,87 +3263,6 @@ fn render_diagnostics(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             HitTarget::Button(HitButton::Export),
         );
     });
-}
-
-/// The list scrolls and the confirmation does not: with many requests, a tall statement
-/// or a short terminal, [Approve]/[Cancel] fell off the bottom of the popup.
-fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    let screen = &model.mcp_audit;
-    let view = screen.view(area.width.min(100).saturating_sub(2) as usize);
-    let wanted = view.body.len() + view.footer.len() + 2;
-    let popup = centered(
-        area,
-        100,
-        u16::try_from(wanted)
-            .unwrap_or(u16::MAX)
-            // Two rows short of the screen's, so it clears the tab bar and the status line.
-            .min(area.height.saturating_sub(4)),
-    );
-    let inner = crate::mouse::popup_inner(popup);
-    let footer_rows = (view.footer.len() as u16).min(inner.height);
-    let body_rows = inner.height - footer_rows;
-    let max_scroll = view.body.len().saturating_sub(body_rows as usize);
-    // The picked request starts one line from the top, the line above it for context,
-    // and the view scrolls on down through its statement and the recent calls.
-    let base = view
-        .picked
-        .map_or(0, |(first, _)| first.saturating_sub(1))
-        .min(max_scroll);
-    hits.set_scroll_limit(crate::mouse::ScrollArea::McpAudit, max_scroll - base);
-    let top = (base + screen.scroll as usize).min(max_scroll);
-    let title = if top < max_scroll {
-        "Agent activity · PgDn for more"
-    } else {
-        "Agent activity"
-    };
-    paint_popup(
-        frame,
-        model,
-        popup,
-        overlay_block(model, title),
-        String::new(),
-    );
-    let style = model.theme.base(model.capabilities);
-    frame.render_widget(
-        Paragraph::new(view.body.join("\n"))
-            .style(style)
-            .scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
-        Rect::new(inner.x, inner.y, inner.width, body_rows),
-    );
-    let footer = Rect::new(inner.x, inner.y + body_rows, inner.width, footer_rows);
-    frame.render_widget(Paragraph::new(view.footer.join("\n")).style(style), footer);
-    register_overlay(hits, popup);
-    // Each waiting request answers a click, and the wheel reads the list.
-    let body_area = Rect::new(inner.x, inner.y, inner.width, body_rows);
-    for (line, index) in &view.rows {
-        if *line >= top && line - top < body_rows as usize {
-            hits.register(
-                HitTarget::ListRow(*index),
-                crate::mouse::line_rect(body_area, line - top),
-            );
-        }
-    }
-    let deciding = screen.deciding.as_ref();
-    for (index, line) in view.footer.iter().enumerate().take(footer_rows as usize) {
-        let rect = crate::mouse::line_rect(footer, index);
-        if line.contains("[Cancel]") {
-            let label = if deciding.is_some_and(|deciding| deciding.approve) {
-                "Approve"
-            } else {
-                "Deny"
-            };
-            crate::widgets::form::register_footer(hits, rect, line, label);
-        } else if line.contains("revoke all grants") {
-            register_label(
-                hits,
-                rect,
-                line,
-                "R revoke all grants",
-                HitTarget::Button(HitButton::Revoke),
-            );
-        }
-    }
 }
 
 fn render_completion(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

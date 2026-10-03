@@ -2,14 +2,17 @@
 //! its status line says. The state each one shows lives in `screens`, where the dialogs
 //! they grew out of kept it.
 
-use crossterm::event::KeyEvent;
-use ratatui::Frame;
-use ratatui::layout::{Alignment, Rect};
-use ratatui::widgets::Paragraph;
+pub mod agents;
 
-use crate::action::Effect;
+use ratatui::Frame;
+use ratatui::layout::{Alignment, Constraint, Layout, Rect};
+use ratatui::style::{Modifier, Style};
+use ratatui::text::{Line, Span};
+use ratatui::widgets::{Block, Paragraph};
+
 use crate::model::{Model, Screen};
 use crate::mouse::{HitMap, HitTarget};
+use crate::theme::Role;
 
 /// Commands a key may run while a screen other than the workbench is up. The rest act on
 /// the documents, the editor or the panes, none of which is on screen: Ctrl+W closed a
@@ -93,38 +96,197 @@ pub fn strip(model: &Model, room: usize) -> Vec<StripItem> {
 
 /// Draws the current screen in `area`, everything between the header and the status line.
 pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
-    let _ = hits;
     if area.width == 0 || area.height == 0 {
         return;
     }
-    let muted = model
-        .theme
-        .style(crate::theme::Role::Muted, model.capabilities);
-    let text = format!("{} is on its way.", model.screen.title());
-    let middle = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
-    frame.render_widget(
-        Paragraph::new(text)
-            .alignment(Alignment::Center)
-            .style(muted),
-        middle,
-    );
-}
-
-/// The current screen's own keys, before the keymap's. None leaves the key to the
-/// keymap, and Esc to going back.
-pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
-    let _ = (model, key);
-    None
-}
-
-/// A click on the current screen.
-pub fn mouse(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
-    let _ = (model, hit, doubled);
-    Vec::new()
+    match model.screen {
+        Screen::Agents => agents::render(frame, area, model, hits),
+        Screen::Workbench => {}
+        _ => {
+            let muted = model.theme.style(Role::Muted, model.capabilities);
+            let text = format!("{} is on its way.", model.screen.title());
+            let middle = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
+            frame.render_widget(
+                Paragraph::new(text)
+                    .alignment(Alignment::Center)
+                    .style(muted),
+                middle,
+            );
+        }
+    }
 }
 
 /// What the status line says on the current screen, after its name.
 pub fn hints(model: &Model) -> String {
-    let _ = model;
-    "Esc back".into()
+    match model.screen {
+        Screen::Agents => agents::hints(model),
+        _ => "Esc back".into(),
+    }
+}
+
+/// A screen's views on one row, the current one bracketed so it reads without colour,
+/// each answering a click. Returns the row below it.
+pub fn views_bar(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    views: &[(String, bool)],
+) -> Rect {
+    let row = Rect::new(area.x, area.y, area.width, 1.min(area.height));
+    let current = model.theme.style(Role::Focus, model.capabilities);
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let mut spans = Vec::new();
+    let mut x = row.x;
+    for (index, (label, active)) in views.iter().enumerate() {
+        let text = if *active {
+            format!("[{} {label}]", index + 1)
+        } else {
+            format!(" {} {label} ", index + 1)
+        };
+        let width = text.chars().count() as u16;
+        if x < row.right() {
+            hits.register(
+                HitTarget::ScreenView(index),
+                Rect::new(x, row.y, width.min(row.right() - x), 1),
+            );
+        }
+        x = x.saturating_add(width + 1);
+        spans.push(Span::styled(text, if *active { current } else { muted }));
+        spans.push(Span::raw(" "));
+    }
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
+    Rect::new(
+        area.x,
+        area.y + row.height,
+        area.width,
+        area.height.saturating_sub(row.height),
+    )
+}
+
+/// A list beside its detail on a wide screen, above it on a narrow one.
+pub fn list_and_detail(area: Rect, list_rows: usize) -> (Rect, Rect) {
+    if area.width >= 100 {
+        let [list, detail] =
+            Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
+                .areas(area);
+        (list, detail)
+    } else {
+        // Its rows and borders, at most half the height, at least three rows of list.
+        let wanted = (list_rows as u16 + 2).clamp(5, (area.height / 2).max(5));
+        let [list, detail] =
+            Layout::vertical([Constraint::Length(wanted), Constraint::Min(0)]).areas(area);
+        (list, detail)
+    }
+}
+
+/// A bordered list with the picked row reversed and kept in sight, under an optional
+/// pinned header of column names; every row drawn answers a click as `ListRow(index)`.
+#[allow(clippy::too_many_arguments)]
+pub fn list_pane(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    title: &str,
+    header: Option<&str>,
+    rows: &[String],
+    picked: Option<usize>,
+) {
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let block = crate::render::pane_block(model, title, true);
+    let mut inner = block.inner(area);
+    frame.render_widget(block, area);
+    let width = usize::from(inner.width);
+    if let Some(header) = header
+        && inner.height > 1
+    {
+        let muted = model
+            .theme
+            .style(Role::Muted, model.capabilities)
+            .add_modifier(Modifier::BOLD);
+        frame.render_widget(
+            Paragraph::new(crate::model::truncate_cell(&format!("  {header}"), width)).style(muted),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        inner = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+    }
+    let visible = usize::from(inner.height);
+    let offset = crate::palette::scroll_to_selection(picked.unwrap_or(0), 0, rows.len(), visible);
+    let lines: Vec<Line> = rows
+        .iter()
+        .enumerate()
+        .skip(offset)
+        .take(visible)
+        .map(|(index, row)| {
+            // The pick is marked as well as reversed, so it reads without colour.
+            let marker = if Some(index) == picked { "> " } else { "  " };
+            let text = crate::model::truncate_cell(&format!("{marker}{row}"), width);
+            if Some(index) == picked {
+                Line::styled(
+                    format!("{text:<width$}"),
+                    Style::default().add_modifier(Modifier::REVERSED),
+                )
+            } else {
+                Line::raw(text)
+            }
+        })
+        .collect();
+    for (line, index) in (offset..rows.len()).take(visible).enumerate() {
+        hits.register(
+            HitTarget::ListRow(index),
+            crate::mouse::line_rect(inner, line),
+        );
+    }
+    frame.render_widget(Paragraph::new(lines), inner);
+}
+
+/// A bordered pane of text, scrolled `scroll` lines, with `footer` pinned to its bottom
+/// rows. Returns the inner rect of the footer, how far the text can scroll and how many
+/// of its lines show at once.
+pub fn text_pane(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    title: &str,
+    lines: &[String],
+    scroll: usize,
+    footer: &[String],
+) -> (Rect, usize, u16) {
+    if area.width < 2 || area.height < 2 {
+        return (Rect::default(), 0, 0);
+    }
+    let block: Block = crate::render::pane_block(model, title, false);
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    let footer_rows = (footer.len() as u16).min(inner.height);
+    let body = Rect::new(inner.x, inner.y, inner.width, inner.height - footer_rows);
+    let max_scroll = lines.len().saturating_sub(usize::from(body.height));
+    let top = scroll.min(max_scroll);
+    frame.render_widget(
+        Paragraph::new(lines.join("\n")).scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
+        body,
+    );
+    let footer_area = Rect::new(inner.x, body.bottom(), inner.width, footer_rows);
+    frame.render_widget(Paragraph::new(footer.join("\n")), footer_area);
+    (footer_area, max_scroll, body.height)
+}
+
+/// Sentences shown in the middle of an empty screen.
+pub fn empty_state(frame: &mut Frame, area: Rect, model: &Model, lines: &[String]) {
+    let width = usize::from(area.width.saturating_sub(4)).max(8);
+    let wrapped: Vec<String> = lines
+        .iter()
+        .flat_map(|line| crate::model::wrap_words(line, width))
+        .collect();
+    let top = area.y + area.height.saturating_sub(wrapped.len() as u16) / 3;
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    frame.render_widget(
+        Paragraph::new(wrapped.join("\n"))
+            .alignment(Alignment::Center)
+            .style(muted),
+        Rect::new(area.x, top, area.width, area.bottom().saturating_sub(top)),
+    );
 }

@@ -13,12 +13,40 @@ pub struct Deciding {
     pub focus: FooterFocus,
 }
 
+/// One call from the MCP audit log, as the Activity view lists it.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct AuditLine {
+    /// Local time of day, `HH:MM:SS`.
+    pub time: String,
+    pub profile: String,
+    pub client: String,
+    pub tool: String,
+    pub target: String,
+    /// What came of it, in words: `ok`, `waiting for approval`, `refused: …`.
+    pub outcome: String,
+    pub duration_ms: u64,
+    pub rows: u64,
+}
+
+impl AuditLine {
+    /// The call in one sentence, as the log reads aloud.
+    pub fn sentence(&self) -> String {
+        let on = if self.target.is_empty() {
+            String::new()
+        } else {
+            format!(" on {}", self.target)
+        };
+        format!(
+            "{} {}: {}{on} -- {}",
+            self.time, self.profile, self.tool, self.outcome
+        )
+    }
+}
+
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpAuditScreen {
-    pub open: bool,
-    /// Newest first, already written as lines.
-    pub events: Vec<String>,
-    pub confirm_revoke_all: bool,
+    /// Newest first.
+    pub events: Vec<AuditLine>,
     /// Writes waiting for a decision, oldest first.
     pub pending: Vec<Approval>,
     /// The request picked, by id: the list is read again every second, and a position
@@ -27,26 +55,19 @@ pub struct McpAuditScreen {
     pub deciding: Option<Deciding>,
     /// When the list was read, in Unix seconds, for the time each request has left.
     pub now: i64,
-    /// Requests already announced while the screen was closed.
+    /// Requests already announced while the screen was elsewhere.
     pub announced: Vec<uuid::Uuid>,
     /// What the screen has to say about the last thing that happened to it, until a key is
     /// pressed: a toast was the only word that a question had lost its request.
     pub notice: Option<String>,
-    /// Lines scrolled down from the picked request's first: PgUp/PgDn and the wheel read
-    /// a statement taller than the popup.
+    /// Lines scrolled down the picked request's statement.
     pub scroll: u16,
-}
-
-/// Agent Activity laid out for a width: the list and the recent calls scroll, while the
-/// confirmation and the keys stay at the bottom, where they cannot fall off the popup.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct AuditView {
-    pub body: Vec<String>,
-    pub footer: Vec<String>,
-    /// The picked request's first and last lines in `body`.
-    pub picked: Option<(usize, usize)>,
-    /// The first line of each waiting request in `body`, and which one it is.
-    pub rows: Vec<(usize, usize)>,
+    /// The call picked in the Activity view, among those the filter shows.
+    pub event_selected: usize,
+    /// Narrows the Activity view to the calls whose sentence holds it.
+    pub filter: crate::widgets::text_input::TextInput,
+    /// The filter has the keys.
+    pub filtering: bool,
 }
 
 /// `text` wrapped to `width`, its first line after `first` and the rest after `rest`.
@@ -63,7 +84,7 @@ fn push_wrapped(lines: &mut Vec<String>, first: &str, rest: &str, text: &str, wi
 
 /// What a request would do, for a person: its SQL as it is, a structured write as the
 /// fields it sets -- not the call's JSON.
-fn readable_statement(request: &Approval) -> String {
+pub fn readable_statement(request: &Approval) -> String {
     let Ok(serde_json::Value::Object(arguments)) =
         serde_json::from_str::<serde_json::Value>(&request.statement)
     else {
@@ -94,18 +115,18 @@ fn readable_statement(request: &Approval) -> String {
 impl McpAuditScreen {
     pub fn fixture() -> Self {
         Self {
-            open: true,
-            events: vec!["assistant tools/call catalog_search allow db.public.items".into()],
+            events: vec![AuditLine {
+                time: "12:00:00".into(),
+                profile: "assistant".into(),
+                client: "claude-code".into(),
+                tool: "catalog_search".into(),
+                target: "db.public.items".into(),
+                outcome: "ok".into(),
+                duration_ms: 12,
+                rows: 3,
+            }],
             ..Self::default()
         }
-    }
-
-    pub fn revoke_all(&mut self) {
-        if !self.confirm_revoke_all {
-            self.confirm_revoke_all = true;
-            return;
-        }
-        self.confirm_revoke_all = false;
     }
 
     pub fn current(&self) -> Option<&Approval> {
@@ -113,7 +134,8 @@ impl McpAuditScreen {
         self.pending.iter().find(|request| request.id == id)
     }
 
-    fn position(&self) -> Option<usize> {
+    /// The picked request's place in the list.
+    pub fn position(&self) -> Option<usize> {
         let id = self.selected?;
         self.pending.iter().position(|request| request.id == id)
     }
@@ -146,7 +168,7 @@ impl McpAuditScreen {
                 .map(|request| request.id);
             // Only a different pick starts from the top: the list is read again every
             // second, and a reading that left the pick where it was snapped a scrolled
-            // list back to its first line.
+            // statement back to its first line.
             if self.selected != before {
                 self.scroll = 0;
             }
@@ -165,112 +187,85 @@ impl McpAuditScreen {
         gone
     }
 
-    /// Every line, at any width: the view without a viewport.
-    pub fn lines(&self) -> Vec<String> {
-        let view = self.view(usize::MAX);
-        let mut lines = view.body;
-        lines.extend(view.footer);
+    /// A waiting request in one row of the list, ending with what it would do: only the
+    /// picked one said so, and the others had to be picked to be read.
+    pub fn row(&self, request: &Approval) -> String {
+        let statement = readable_statement(request);
+        format!(
+            "{}  {}  {}  {}  {}",
+            clock(request.created_at),
+            request.profile,
+            request.tool,
+            request.connection,
+            statement.lines().next().unwrap_or_default()
+        )
+    }
+
+    /// The picked request in full, `width` cells wide: what it would run, wrapped and
+    /// whole -- a statement cut at a popup's edge was approved unseen.
+    pub fn request_lines(&self, width: usize) -> Vec<String> {
+        let Some(request) = self.current() else {
+            return Vec::new();
+        };
+        let asked = format!(
+            "asked by {} at {}",
+            request.profile,
+            clock(request.created_at)
+        );
+        let mut lines: Vec<String> = [self.summary(request), asked]
+            .iter()
+            .flat_map(|text| crate::model::wrap_words(text, width.max(8)))
+            .collect();
+        lines.push(String::new());
+        for line in readable_statement(request).lines() {
+            push_wrapped(&mut lines, "", "  ", line, width);
+        }
         lines
     }
 
-    /// The screen laid out `width` cells wide. The picked request's statement is shown
-    /// whole and wrapped -- it used to stop at six lines and at the popup's edge, so an
-    /// `OR TRUE` on the seventh line, or at the end of a long one, was approved unseen.
-    pub fn view(&self, width: usize) -> AuditView {
-        let mut body = Vec::new();
-        let mut picked = None;
-        let mut rows = Vec::new();
-        if self.pending.is_empty() {
-            body.push("No agent's write is waiting for approval.".into());
-        } else {
-            body.push(format!("Waiting for you ({})", self.pending.len()));
-            for (index, request) in self.pending.iter().enumerate() {
-                let is_picked = self.selected == Some(request.id);
-                let first = body.len();
-                rows.push((first, index));
-                let marker = if is_picked { "> " } else { "  " };
-                // Every request says what it would do, the picked one in full below it.
-                let mut line = self.summary(request);
-                if !is_picked && let Some(first_line) = readable_statement(request).lines().next() {
-                    line.push_str(" -- ");
-                    line.push_str(&crate::model::truncate_cell(first_line, 48));
-                }
-                push_wrapped(&mut body, marker, "  ", &line, width);
-                if is_picked {
-                    for line in readable_statement(request).lines() {
-                        push_wrapped(&mut body, "    ", "    ", line, width);
-                    }
-                    picked = Some((first, body.len() - 1));
-                }
-            }
-        }
-        body.push(String::new());
-        body.push("Recent activity".into());
-        if self.events.is_empty() {
-            body.push("  nothing yet".into());
-        }
-        for event in &self.events {
-            push_wrapped(&mut body, "  ", "    ", event, width);
-        }
-        let mut footer = Vec::new();
+    /// The question an approve or a deny waits on, with its buttons, or the keys that ask
+    /// it; and what the screen last had to say.
+    pub fn decision_lines(&self, width: usize) -> Vec<String> {
+        let mut lines = Vec::new();
         if let Some(notice) = &self.notice {
-            push_wrapped(&mut footer, "", "", notice, width);
+            push_wrapped(&mut lines, "", "", notice, width);
         }
-        if let Some(deciding) = &self.deciding {
-            let question = if deciding.approve {
-                "Run this write now?"
-            } else {
-                "Refuse this write?"
-            };
-            let label = if deciding.approve { "Approve" } else { "Deny" };
-            // The question names its own request, the one the answer settles.
-            let asked = match self
-                .pending
-                .iter()
-                .find(|request| request.id == deciding.id)
-            {
-                Some(request) => format!("{question} {}", self.summary(request)),
-                None => question.into(),
-            };
-            push_wrapped(&mut footer, "", "", &asked, width);
-            // The statement that would run is in the question, where it is answered.
-            if let Some(request) = self
-                .pending
-                .iter()
-                .find(|request| request.id == deciding.id)
-            {
-                // Its first line, here beside the buttons; the rest is in the list above,
-                // which scrolls, so the buttons never leave a short popup.
-                let statement = readable_statement(request);
-                let mut lines = statement.lines();
-                if let Some(first) = lines.next() {
-                    let more = lines.count();
-                    let tail = if more > 0 {
-                        format!("  (+{more} more lines above)")
-                    } else {
-                        String::new()
-                    };
-                    footer.push(format!(
-                        "    {}{tail}",
-                        crate::model::truncate_cell(first, width.saturating_sub(40).max(20))
-                    ));
-                }
+        let Some(deciding) = &self.deciding else {
+            if self.current().is_some() {
+                lines.push("a approve  d deny".into());
             }
-            footer.push(footer_line(label, deciding.focus));
-        }
-        footer.push(
-            "a approve  d deny  Up/Down pick  PgUp/PgDn scroll  R revoke all grants  Esc close"
-                .into(),
-        );
-        AuditView {
-            body,
-            footer,
-            picked,
-            rows,
-        }
+            return lines;
+        };
+        let question = if deciding.approve {
+            "Run this write now?"
+        } else {
+            "Refuse this write?"
+        };
+        // The request it settles is the one right above it, in the same pane.
+        push_wrapped(&mut lines, "", "", question, width);
+        lines.push(footer_line(
+            if deciding.approve { "Approve" } else { "Deny" },
+            deciding.focus,
+        ));
+        lines
     }
 
-    fn summary(&self, request: &Approval) -> String {
+    /// The calls the filter lets through, newest first.
+    pub fn visible_events(&self) -> Vec<&AuditLine> {
+        let needle = self.filter.as_str().trim().to_lowercase();
+        self.events
+            .iter()
+            .filter(|event| needle.is_empty() || event.sentence().to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    /// Moves the Activity view's pick, kept on the calls shown.
+    pub fn select_event(&mut self, delta: isize) {
+        let last = self.visible_events().len().saturating_sub(1);
+        self.event_selected = self.event_selected.saturating_add_signed(delta).min(last);
+    }
+
+    pub fn summary(&self, request: &Approval) -> String {
         let gone = if request.seems_gone(self.now) {
             " (the agent has stopped answering)"
         } else {
@@ -284,6 +279,17 @@ impl McpAuditScreen {
             crate::screens::mcp_profiles::duration_words(request.seconds_left(self.now))
         )
     }
+}
+
+/// Unix seconds as the local time of day.
+fn clock(seconds: i64) -> String {
+    chrono::DateTime::from_timestamp(seconds, 0)
+        .map(|utc| {
+            utc.with_timezone(&chrono::Local)
+                .format("%H:%M:%S")
+                .to_string()
+        })
+        .unwrap_or_default()
 }
 
 #[cfg(test)]
@@ -325,11 +331,11 @@ mod tests {
         });
         assert!(!screen.load(vec![b.clone(), c.clone()], 1002));
         assert_eq!(screen.current().map(|request| request.id), Some(b.id));
-        let lines = screen.lines().join("\n");
-        assert!(lines.contains("> data_execute_sql"), "{lines}");
+        let lines = screen.request_lines(100).join("\n");
+        assert!(lines.contains("data_execute_sql"), "{lines}");
         assert!(lines.contains("UPDATE b SET x = 1"), "{lines}");
-        // The one not picked says what it is in a line; only the picked one in full.
-        assert!(lines.contains("-- UPDATE c SET x = 1"), "{lines}");
+        // The one not picked says what it is in its row; only the picked one in full.
+        assert!(screen.row(&c).contains("UPDATE c SET x = 1"));
 
         assert!(
             screen.load(vec![c.clone()], 1003),
@@ -357,15 +363,15 @@ mod tests {
     }
 
     /// Every waiting request says what it would do, not only the picked one, and the
-    /// question that settles it repeats the statement.
+    /// question that settles it has its buttons.
     #[test]
     fn every_request_says_what_it_does_and_the_question_repeats_it() {
         let (a, b) = (request("UPDATE a SET x = 1"), request("UPDATE b SET x = 1"));
         let mut screen = McpAuditScreen::default();
         screen.load(vec![a.clone(), b.clone()], 1001);
-        let lines = screen.lines().join("\n");
-        assert!(lines.contains("UPDATE a SET x = 1"), "{lines}");
-        assert!(lines.contains("UPDATE b SET x = 1"), "{lines}");
+        assert!(screen.row(&a).contains("UPDATE a SET x = 1"));
+        assert!(screen.row(&b).contains("UPDATE b SET x = 1"));
+        let lines = screen.request_lines(100).join("\n");
         assert!(
             lines.contains("2 min left"),
             "times are not raw seconds: {lines}"
@@ -375,10 +381,9 @@ mod tests {
             approve: true,
             focus: FooterFocus::Cancel,
         });
-        let view = screen.view(100);
-        let footer = view.footer.join("\n");
-        assert!(footer.contains("Run this write now?"), "{footer}");
-        assert!(footer.contains("UPDATE a SET x = 1"), "{footer}");
+        let question = screen.decision_lines(100).join("\n");
+        assert!(question.contains("Run this write now?"), "{question}");
+        assert!(question.contains("[Approve]"), "{question}");
     }
 
     /// A structured write is shown as the fields it sets, not as the call's JSON.
@@ -400,7 +405,7 @@ mod tests {
         );
         let mut screen = McpAuditScreen::default();
         screen.load(vec![request], 1001);
-        let lines = screen.lines().join("\n");
+        let lines = screen.request_lines(100).join("\n");
         assert!(lines.contains("values: note = small-term"), "{lines}");
         assert!(!lines.contains("{\""), "no raw JSON: {lines}");
     }
@@ -417,7 +422,7 @@ mod tests {
             focus: FooterFocus::Cancel,
         });
         assert!(screen.load(Vec::new(), 1002));
-        let lines = screen.lines().join("\n");
+        let lines = screen.decision_lines(100).join("\n");
         assert!(lines.contains("ran out of time"), "{lines}");
     }
 }

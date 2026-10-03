@@ -346,9 +346,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::CheckpointTick => {
             let mut effects = checkpoint_session(model);
-            // An agent's write waiting for approval is said even with Agent Activity
-            // closed; open, the screen reads the database on its own clock.
-            if !model.mcp_audit.open {
+            // An agent's write waiting for approval is said from every screen; on Agents
+            // the screen reads the database on its own clock.
+            if model.screen != crate::model::Screen::Agents {
                 effects.push(Effect::CheckApprovals);
             }
             effects
@@ -1915,21 +1915,19 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::OpenMcpProfiles => {
             let screen = &mut model.mcp_profiles;
-            screen.open = true;
             screen.status.clear();
             screen.confirm = None;
             screen.detail_scroll = 0;
-            screen.grant_from_palette = false;
-            vec![Effect::LoadMcpProfiles]
+            model.agents_view = crate::screen::agents::AgentsView::Profiles;
+            go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::OpenMcpGrantForm => {
-            // Asked for from the palette, with the profiles not read yet: they are read,
-            // and the form opens when they arrive.
-            if !model.mcp_profiles.open {
-                model.mcp_profiles.grant_from_palette = true;
+            model.agents_view = crate::screen::agents::AgentsView::Profiles;
+            // Asked for from elsewhere, the profiles are read again first, and the form
+            // opens when they arrive.
+            if model.screen != crate::model::Screen::Agents {
                 model.mcp_profiles.grant_when_loaded = true;
-                model.mcp_profiles.open = true;
-                return vec![Effect::LoadMcpProfiles];
+                return go_to_screen(model, crate::model::Screen::Agents);
             }
             open_grant_form(model);
             Vec::new()
@@ -1937,10 +1935,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::McpGrantCreated { message } => {
             model.mcp_profiles.grant_form = None;
             model.mcp_profiles.status = message.clone();
-            if model.mcp_profiles.grant_from_palette {
-                model.mcp_profiles.open = false;
-                model.mcp_profiles.grant_from_palette = false;
-            }
             model.messages.info(message);
             vec![Effect::LoadMcpProfiles]
         }
@@ -1966,13 +1960,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::RevokeAllMcpGrants => {
-            // From the palette or Agent Activity: the profiles, read again, with the
+            // From the palette or the approvals: the profiles, read again, with the
             // question of how many grants go.
-            model.mcp_audit.open = false;
-            model.mcp_profiles.open = true;
-            model.mcp_profiles.grant_from_palette = false;
+            model.agents_view = crate::screen::agents::AgentsView::Profiles;
             model.mcp_profiles.revoke_all_when_loaded = true;
-            vec![Effect::LoadMcpProfiles]
+            go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::McpGrantsRevoked { count } => {
             model.mcp_profiles.confirm = None;
@@ -2047,8 +2039,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::OpenMcpAudit => {
-            model.mcp_audit.open = true;
-            vec![Effect::LoadMcpAudit]
+            model.agents_view = crate::screen::agents::AgentsView::Approvals;
+            go_to_screen(model, crate::model::Screen::Agents)
         }
         Action::OpenDiagnostics => {
             let bundle = diagnostics_bundle(model);
@@ -2447,13 +2439,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::AgentActivityTick => {
             let mut effects = Vec::new();
-            if model.mcp_audit.open {
+            if model.screen == crate::model::Screen::Agents {
                 effects.push(Effect::LoadMcpAudit);
             }
-            // The profiles follow what `dexo mcp` changes while the screen is open, but
-            // not under a form or a question being answered.
+            // The profiles follow what `dexo mcp` changes while they are shown, but not
+            // under a form or a question being answered.
             let profiles = &model.mcp_profiles;
-            if profiles.open && profiles.grant_form.is_none() && profiles.confirm.is_none() {
+            if model.screen == crate::model::Screen::Agents
+                && model.agents_view == crate::screen::agents::AgentsView::Profiles
+                && profiles.grant_form.is_none()
+                && profiles.confirm.is_none()
+            {
                 effects.push(Effect::LoadMcpProfiles);
             }
             effects
@@ -2464,12 +2460,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 .iter()
                 .filter(|request| !model.mcp_audit.announced.contains(&request.id))
                 .count();
-            if new > 0 && !model.mcp_audit.open {
-                let key = crate::palette::shortcut_for(model, "mcp.audit", None)
+            if new > 0 && model.screen != crate::model::Screen::Agents {
+                let key = crate::palette::shortcut_for(model, "screen.agents", None)
                     .map(|key| format!(" ({key})"))
                     .unwrap_or_default();
                 model.messages.warn(format!(
-                    "An agent's write is waiting for your approval in Agent Activity{key}."
+                    "An agent's write is waiting for your approval on Agents{key}."
                 ));
             }
             model.mcp_audit.announced = pending.iter().map(|request| request.id).collect();
@@ -3221,7 +3217,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Transfer) => mouse_transfer(model, hit),
         Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
         Some(OverlayKind::Admin) => mouse_admin(model, hit),
-        Some(OverlayKind::McpProfiles) => mouse_mcp_profiles(model, hit),
         Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
         Some(OverlayKind::SchemaForm) => match hit {
             Some(HitTarget::FormField(index))
@@ -3257,7 +3252,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Settings) => mouse_settings(model, hit),
         Some(OverlayKind::Recovery) => mouse_recovery(model, hit),
         Some(OverlayKind::Diagnostics) => mouse_diagnostics(model, hit),
-        Some(OverlayKind::McpAudit) => mouse_mcp_audit(model, hit),
         Some(OverlayKind::FilePicker) => mouse_file_picker(model, hit, doubled),
         // A click away from the popup dismisses it and still lands where it was aimed,
         // the way clicking elsewhere in a code editor does.
@@ -3331,9 +3325,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         },
         None => match hit {
             Some(HitTarget::ScreenTab(screen)) => update(model, Action::GoToScreen(screen)),
-            _ if model.screen != crate::model::Screen::Workbench => {
-                crate::screen::mouse(model, hit, doubled)
-            }
+            _ if model.screen != crate::model::Screen::Workbench => mouse_screen(model, hit),
             _ => mouse_workbench(model, mouse, hit, doubled),
         },
     }
@@ -4013,7 +4005,6 @@ fn open_grant_form(model: &mut Model) {
     let screen = &mut model.mcp_profiles;
     if screen.profiles.is_empty() {
         // A form for nobody cannot succeed; the screen says how to make a profile.
-        screen.grant_from_palette = false;
         screen.status = "Create a profile first: dexo mcp profile create --name NAME.".into();
         return;
     }
@@ -4034,10 +4025,6 @@ fn open_grant_form(model: &mut Model) {
 /// Cancel or Esc on the grant form: back to the profiles, or out, when the palette asked.
 fn close_grant_form(model: &mut Model) {
     model.mcp_profiles.grant_form = None;
-    if model.mcp_profiles.grant_from_palette {
-        model.mcp_profiles.open = false;
-        model.mcp_profiles.grant_from_palette = false;
-    }
 }
 
 /// What the confirmation asked is done.
@@ -4121,6 +4108,38 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             Vec::new()
         }
         _ => Vec::new(),
+    }
+}
+
+/// A click on a screen other than the workbench.
+fn mouse_screen(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    match model.screen {
+        crate::model::Screen::Agents => mouse_agents(model, hit),
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_agents(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::screen::agents::AgentsView;
+    if let Some(HitTarget::ScreenView(index)) = hit
+        && let Some(view) = AgentsView::ALL.get(index).copied()
+    {
+        model.agents_view = view;
+        return if view == AgentsView::Profiles {
+            vec![Effect::LoadMcpProfiles]
+        } else {
+            Vec::new()
+        };
+    }
+    match model.agents_view {
+        AgentsView::Approvals => mouse_mcp_audit(model, hit),
+        AgentsView::Activity => {
+            if let Some(HitTarget::ListRow(index)) = hit {
+                model.mcp_audit.event_selected = index;
+            }
+            Vec::new()
+        }
+        AgentsView::Profiles => mouse_mcp_profiles(model, hit),
     }
 }
 
@@ -4630,23 +4649,40 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         };
         return Vec::new();
     }
-    if overlay == Some(OverlayKind::McpAudit) {
-        model.mcp_audit.scroll = model.hits.scroll(
-            crate::mouse::ScrollArea::McpAudit,
-            model.mcp_audit.scroll,
-            delta,
+    if overlay.is_none() && model.screen == crate::model::Screen::Agents {
+        use crate::screen::agents::AgentsView;
+        let over_list = matches!(
+            model.hits.at(mouse.column, mouse.row),
+            Some(HitTarget::ListRow(_))
         );
-        return Vec::new();
-    }
-    if overlay == Some(OverlayKind::McpProfiles) {
-        // The new grant is for the profile picked when it was opened.
-        if model.mcp_profiles.grant_form.is_some() {
-            return Vec::new();
-        }
-        if delta < 0 {
-            model.mcp_profiles.select_previous();
-        } else {
-            model.mcp_profiles.select_next();
+        match model.agents_view {
+            // The wheel over the list picks; over the request it reads on.
+            AgentsView::Approvals if over_list => model.mcp_audit.select(delta.signum() as isize),
+            AgentsView::Approvals => {
+                model.mcp_audit.scroll = model.hits.scroll(
+                    crate::mouse::ScrollArea::McpAudit,
+                    model.mcp_audit.scroll,
+                    delta,
+                );
+            }
+            AgentsView::Activity => model.mcp_audit.select_event(delta.signum() as isize),
+            // The new grant is for the profile picked when it was opened.
+            AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => {}
+            AgentsView::Profiles if over_list => {
+                if delta < 0 {
+                    model.mcp_profiles.select_previous();
+                } else {
+                    model.mcp_profiles.select_next();
+                }
+            }
+            AgentsView::Profiles => {
+                let scroll = u16::try_from(model.mcp_profiles.detail_scroll).unwrap_or(u16::MAX);
+                model.mcp_profiles.detail_scroll = usize::from(model.hits.scroll(
+                    crate::mouse::ScrollArea::McpProfiles,
+                    scroll,
+                    delta,
+                ));
+            }
         }
         return Vec::new();
     }
@@ -4739,7 +4775,11 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
 /// keymap's global chords -- only those that do not act on the hidden workbench.
 fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.pending_chord.keys.is_empty() {
-        if let Some(effects) = crate::screen::handle_key(model, key) {
+        let own = match model.screen {
+            crate::model::Screen::Agents => agents_key(model, key),
+            _ => None,
+        };
+        if let Some(effects) = own {
             return effects;
         }
         if key.code == KeyCode::Esc && key.modifiers.is_empty() {
@@ -4788,6 +4828,197 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
 }
 
+/// The Agents screen's keys. None leaves the key to the keymap and Esc to going back.
+fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
+    use crate::screen::agents::AgentsView;
+    use crate::widgets::form::{FooterFocus, FooterKey};
+    model.mcp_audit.notice = None;
+    // A statement taller than its pane is read page by page, the question open or not.
+    if model.agents_view == AgentsView::Approvals
+        && matches!(key.code, KeyCode::PageUp | KeyCode::PageDown)
+    {
+        let fallback = (model.height / 3).max(1);
+        let page = i32::from(
+            model
+                .hits
+                .page(crate::mouse::ScrollArea::McpAudit, fallback),
+        );
+        let delta = if key.code == KeyCode::PageDown {
+            page
+        } else {
+            -page
+        };
+        model.mcp_audit.scroll = model.hits.scroll(
+            crate::mouse::ScrollArea::McpAudit,
+            model.mcp_audit.scroll,
+            delta,
+        );
+        return Some(Vec::new());
+    }
+    // A question or a form takes the keys first: Enter on the focused button, Esc
+    // cancels, and no letter answers, so typing at the screen cannot enable, revoke or
+    // approve anything.
+    match model.agents_view {
+        AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => {
+            return Some(grant_form_key(model, key));
+        }
+        AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
+            let confirm = model.mcp_profiles.confirm.as_mut()?;
+            return Some(
+                match crate::widgets::form::confirm_key(&mut confirm.focus, &key) {
+                    FooterKey::Submit => commit_mcp_confirm(model),
+                    FooterKey::Cancel => {
+                        model.mcp_profiles.confirm = None;
+                        Vec::new()
+                    }
+                    _ => Vec::new(),
+                },
+            );
+        }
+        AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
+            let screen = &mut model.mcp_audit;
+            let deciding = screen.deciding.as_mut()?;
+            return Some(
+                match crate::widgets::form::confirm_key(&mut deciding.focus, &key) {
+                    FooterKey::Submit => {
+                        let (id, approve) = (deciding.id, deciding.approve);
+                        screen.deciding = None;
+                        vec![Effect::SettleApproval { id, approve }]
+                    }
+                    FooterKey::Cancel => {
+                        screen.deciding = None;
+                        Vec::new()
+                    }
+                    FooterKey::Moved | FooterKey::Pass => Vec::new(),
+                },
+            );
+        }
+        AgentsView::Activity if model.mcp_audit.filtering => {
+            let screen = &mut model.mcp_audit;
+            match key.code {
+                KeyCode::Esc => {
+                    screen.filter.clear();
+                    screen.filtering = false;
+                }
+                KeyCode::Enter => screen.filtering = false,
+                KeyCode::Up | KeyCode::Down => {
+                    screen.select_event(if key.code == KeyCode::Up { -1 } else { 1 })
+                }
+                _ => {
+                    screen.filter.handle_key(key);
+                    screen.event_selected = 0;
+                }
+            }
+            return Some(Vec::new());
+        }
+        _ => {}
+    }
+    // Ctrl and Alt chords are the keymap's: Ctrl+G and Ctrl+P work here too.
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    // The views: their digits, and the brackets to step through them.
+    let view = match key.code {
+        KeyCode::Char(digit @ '1'..='3') => Some(AgentsView::ALL[usize::from(digit as u8 - b'1')]),
+        KeyCode::Char(']') => Some(model.agents_view.step(1)),
+        KeyCode::Char('[') => Some(model.agents_view.step(-1)),
+        _ => None,
+    };
+    if let Some(view) = view {
+        model.agents_view = view;
+        return Some(if view == AgentsView::Profiles {
+            vec![Effect::LoadMcpProfiles]
+        } else {
+            Vec::new()
+        });
+    }
+    let page = (model.height / 3).max(1);
+    match model.agents_view {
+        AgentsView::Approvals => {
+            let screen = &mut model.mcp_audit;
+            match key.code {
+                KeyCode::Up => screen.select(-1),
+                KeyCode::Down => screen.select(1),
+                KeyCode::Home => screen.select(-(screen.pending.len() as isize)),
+                KeyCode::End => screen.select(screen.pending.len() as isize),
+                // Approving runs a write: Cancel holds the focus, so an Enter out of habit
+                // decides nothing. Denying is safe, and is one Enter away.
+                KeyCode::Char(answer @ ('a' | 'd')) => {
+                    if let Some(request) = screen.current() {
+                        let approve = answer == 'a';
+                        screen.deciding = Some(crate::screens::mcp_audit::Deciding {
+                            id: request.id,
+                            approve,
+                            focus: if approve {
+                                FooterFocus::Cancel
+                            } else {
+                                FooterFocus::Submit
+                            },
+                        });
+                    }
+                }
+                KeyCode::Char('R') => return Some(update(model, Action::RevokeAllMcpGrants)),
+                _ => return None,
+            }
+            Some(Vec::new())
+        }
+        AgentsView::Activity => {
+            let screen = &mut model.mcp_audit;
+            let shown = screen.visible_events().len() as isize;
+            match key.code {
+                KeyCode::Char('/') => screen.filtering = true,
+                // Esc clears a filter kept from before, then goes back.
+                KeyCode::Esc if !screen.filter.is_empty() => screen.filter.clear(),
+                KeyCode::Up => screen.select_event(-1),
+                KeyCode::Down => screen.select_event(1),
+                KeyCode::PageUp => screen.select_event(-(page as isize)),
+                KeyCode::PageDown => screen.select_event(page as isize),
+                KeyCode::Home => screen.select_event(-shown),
+                KeyCode::End => screen.select_event(shown),
+                _ => return None,
+            }
+            Some(Vec::new())
+        }
+        AgentsView::Profiles => {
+            let screen = &mut model.mcp_profiles;
+            let page = usize::from(page);
+            match key.code {
+                KeyCode::Char('g') => return Some(update(model, Action::OpenMcpGrantForm)),
+                KeyCode::Char('e') => return Some(update(model, Action::ToggleMcpProfile)),
+                KeyCode::Char('r') => return Some(update(model, Action::RevokeProfileGrants)),
+                KeyCode::Char('R') => screen.ask_revoke_all(),
+                KeyCode::Char('x') => screen.ask_delete(),
+                KeyCode::Up => screen.select_previous(),
+                KeyCode::Down => screen.select_next(),
+                KeyCode::Home => screen.select_index(0),
+                KeyCode::End => screen.select_index(usize::MAX),
+                KeyCode::PageDown | KeyCode::PageUp => {
+                    let page = i32::from(model.hits.page(
+                        crate::mouse::ScrollArea::McpProfiles,
+                        u16::try_from(page).unwrap_or(1),
+                    ));
+                    let delta = if key.code == KeyCode::PageDown {
+                        page
+                    } else {
+                        -page
+                    };
+                    let scroll = u16::try_from(screen.detail_scroll).unwrap_or(u16::MAX);
+                    screen.detail_scroll = usize::from(model.hits.scroll(
+                        crate::mouse::ScrollArea::McpProfiles,
+                        scroll,
+                        delta,
+                    ));
+                }
+                _ => return None,
+            }
+            Some(Vec::new())
+        }
+    }
+}
+
 /// The context a pending chord's next key is looked up in.
 pub(crate) fn chord_context(model: &Model) -> crate::keymap::KeyContext {
     if model.screen == crate::model::Screen::Workbench {
@@ -4811,9 +5042,9 @@ fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
 /// data under it is read again.
 fn enter_screen(_model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
     match screen {
+        crate::model::Screen::Agents => vec![Effect::LoadMcpAudit, Effect::LoadMcpProfiles],
         crate::model::Screen::Workbench
         | crate::model::Screen::Connections
-        | crate::model::Screen::Agents
         | crate::model::Screen::Server
         | crate::model::Screen::Compare
         | crate::model::Screen::History => Vec::new(),
@@ -5082,76 +5313,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.data.review.is_some() {
         return review_key(model, key);
     }
-    if model.mcp_profiles.open {
-        if model.mcp_profiles.grant_form.is_some() {
-            return grant_form_key(model, key);
-        }
-        // A confirmation takes the keys: Enter on the focused button, Esc cancels, and no
-        // letter confirms, so typing at the screen cannot enable or revoke anything.
-        if let Some(confirm) = model.mcp_profiles.confirm.as_mut() {
-            return match crate::widgets::form::confirm_key(&mut confirm.focus, &key) {
-                crate::widgets::form::FooterKey::Submit => commit_mcp_confirm(model),
-                crate::widgets::form::FooterKey::Cancel => {
-                    model.mcp_profiles.confirm = None;
-                    Vec::new()
-                }
-                _ => Vec::new(),
-            };
-        }
-        // Ctrl and Alt chords are not this screen's letters.
-        if key
-            .modifiers
-            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
-        {
-            return Vec::new();
-        }
-        let page = (model.height / 3).max(1) as isize;
-        return match key.code {
-            KeyCode::Esc => {
-                model.mcp_profiles.open = false;
-                model.mcp_profiles.confirm = None;
-                Vec::new()
-            }
-            KeyCode::Char('g') => update(model, Action::OpenMcpGrantForm),
-            KeyCode::Up => {
-                model.mcp_profiles.select_previous();
-                Vec::new()
-            }
-            KeyCode::Down => {
-                model.mcp_profiles.select_next();
-                Vec::new()
-            }
-            KeyCode::Home => {
-                model.mcp_profiles.select_index(0);
-                Vec::new()
-            }
-            KeyCode::End => {
-                model.mcp_profiles.select_index(usize::MAX);
-                Vec::new()
-            }
-            KeyCode::PageDown => {
-                let screen = &mut model.mcp_profiles;
-                screen.detail_scroll = screen.detail_scroll.saturating_add(page as usize);
-                Vec::new()
-            }
-            KeyCode::PageUp => {
-                let screen = &mut model.mcp_profiles;
-                screen.detail_scroll = screen.detail_scroll.saturating_sub(page as usize);
-                Vec::new()
-            }
-            KeyCode::Char('e') => update(model, Action::ToggleMcpProfile),
-            KeyCode::Char('r') => update(model, Action::RevokeProfileGrants),
-            KeyCode::Char('R') => {
-                model.mcp_profiles.ask_revoke_all();
-                Vec::new()
-            }
-            KeyCode::Char('x') => {
-                model.mcp_profiles.ask_delete();
-                Vec::new()
-            }
-            _ => Vec::new(),
-        };
-    }
     if model.settings.open {
         return match key.code {
             KeyCode::Esc => {
@@ -5192,90 +5353,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             }
             KeyCode::Enter | KeyCode::Char('y') => update(model, Action::ConfirmRecover),
             KeyCode::Char('n') => update(model, Action::ConfirmDiscardRecovery),
-            _ => Vec::new(),
-        };
-    }
-    if model.mcp_audit.open {
-        use crate::widgets::form::{FooterFocus, FooterKey};
-        model.mcp_audit.notice = None;
-        // A statement taller than the popup is read page by page, the confirmation open
-        // or not.
-        let page = i32::from((model.height / 3).max(1));
-        let paged = match key.code {
-            KeyCode::PageDown => Some(page),
-            KeyCode::PageUp => Some(-page),
-            _ => None,
-        };
-        if let Some(delta) = paged {
-            model.mcp_audit.scroll = model.hits.scroll(
-                crate::mouse::ScrollArea::McpAudit,
-                model.mcp_audit.scroll,
-                delta,
-            );
-            return Vec::new();
-        }
-        let screen = &mut model.mcp_audit;
-        if let Some(deciding) = screen.deciding.as_mut() {
-            return match crate::widgets::form::confirm_key(&mut deciding.focus, &key) {
-                FooterKey::Submit => {
-                    let (id, approve) = (deciding.id, deciding.approve);
-                    screen.deciding = None;
-                    vec![Effect::SettleApproval { id, approve }]
-                }
-                FooterKey::Cancel => {
-                    screen.deciding = None;
-                    Vec::new()
-                }
-                FooterKey::Moved | FooterKey::Pass => Vec::new(),
-            };
-        }
-        return match key.code {
-            KeyCode::Esc => {
-                screen.open = false;
-                Vec::new()
-            }
-            // With nothing waiting, the arrows read the recent calls instead.
-            KeyCode::Up | KeyCode::Down | KeyCode::Home | KeyCode::End
-                if screen.pending.is_empty() =>
-            {
-                let delta = match key.code {
-                    KeyCode::Up => -1,
-                    KeyCode::Down => 1,
-                    KeyCode::Home => -100_000,
-                    _ => 100_000,
-                };
-                screen.scroll =
-                    model
-                        .hits
-                        .scroll(crate::mouse::ScrollArea::McpAudit, screen.scroll, delta);
-                Vec::new()
-            }
-            KeyCode::Up => {
-                screen.select(-1);
-                Vec::new()
-            }
-            KeyCode::Down => {
-                screen.select(1);
-                Vec::new()
-            }
-            // Approving runs a write: Cancel holds the focus, so an Enter out of habit
-            // decides nothing. Denying is safe, and is one Enter away.
-            KeyCode::Char(answer @ ('a' | 'd')) => {
-                if let Some(request) = screen.current() {
-                    let approve = answer == 'a';
-                    screen.deciding = Some(crate::screens::mcp_audit::Deciding {
-                        id: request.id,
-                        approve,
-                        focus: if approve {
-                            FooterFocus::Cancel
-                        } else {
-                            FooterFocus::Submit
-                        },
-                    });
-                }
-                Vec::new()
-            }
-            KeyCode::Char('R' | 'r') => update(model, Action::RevokeAllMcpGrants),
             _ => Vec::new(),
         };
     }
@@ -13746,21 +13823,20 @@ mod tests {
         update(&mut model, Action::ApprovalsWaiting(vec![request.clone()]));
         assert_eq!(model.messages.len(), shown, "said twice");
 
-        assert!(matches!(
-            update(&mut model, Action::OpenMcpAudit).as_slice(),
-            [Effect::LoadMcpAudit]
-        ));
+        assert!(
+            update(&mut model, Action::OpenMcpAudit)
+                .iter()
+                .any(|effect| matches!(effect, Effect::LoadMcpAudit))
+        );
         update(
             &mut model,
             Action::McpAuditLoaded {
-                events: vec![
-                    "assistant grant data_execute_sql ask db.public.orders waiting".into(),
-                ],
+                events: Vec::new(),
                 pending: vec![request.clone()],
                 now: 1010,
             },
         );
-        let lines = model.mcp_audit.lines().join("\n");
+        let lines = model.mcp_audit.request_lines(100).join("\n");
         assert!(lines.contains("DELETE FROM orders WHERE id = 7"), "{lines}");
         assert!(lines.contains("2 min left"), "{lines}");
         update(&mut model, key(KeyCode::Char('a')));
@@ -13861,7 +13937,9 @@ mod tests {
         let form = model.mcp_profiles.grant_form.as_ref().expect("stays open");
         assert!(form.lines().join("\n").contains("not allowed"));
         update(&mut model, key(KeyCode::Esc));
-        assert!(model.mcp_profiles.grant_form.is_none() && model.mcp_profiles.open);
+        assert!(
+            model.mcp_profiles.grant_form.is_none() && model.screen == crate::model::Screen::Agents
+        );
         let entry = crate::palette::palette_entries(&model)
             .into_iter()
             .find(|entry| entry.id == "mcp.grant")
@@ -13906,7 +13984,7 @@ mod tests {
                 height: 16,
             },
         );
-        model.mcp_audit.open = true;
+        update(&mut model, Action::OpenMcpAudit);
         update(
             &mut model,
             Action::McpAuditLoaded {

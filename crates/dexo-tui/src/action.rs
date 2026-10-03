@@ -647,13 +647,13 @@ pub enum Action {
         profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
     },
     McpAuditLoaded {
-        events: Vec<String>,
+        events: Vec<crate::screens::mcp_audit::AuditLine>,
         pending: Vec<dexo_app::mcp::Approval>,
         now: i64,
     },
-    /// Agent Activity reads the database again while it is open.
+    /// The Agents screen reads the database again while it is on screen.
     AgentActivityTick,
-    /// The writes waiting for approval, looked at while Agent Activity is closed.
+    /// The writes waiting for approval, looked at from the other screens.
     ApprovalsWaiting(Vec<dexo_app::mcp::Approval>),
     DocumentLoaded {
         document: String,

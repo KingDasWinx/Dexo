@@ -7,31 +7,31 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 
 ## 1. Frame
 
-- [ ] F1 `Screen` enum (Workbench, Connections, Agents, Server, Compare, History) on the model, with
+- [x] F1 `Screen` enum (Workbench, Connections, Agents, Server, Compare, History) on the model, with
       `previous_screen`; actions `GoToScreen(Screen)` and `ScreenBack`.
-- [ ] F2 Header strip in row 1: screens on the left (current reversed + brackets without colour,
+- [x] F2 Header strip in row 1: screens on the left (current reversed + brackets without colour,
       waiting counts), context on the right; narrow widths keep the current screen and screens with
       work; a click on a name switches.
-- [ ] F3 Key routing: true overlays first, then the current screen's handler, then the keymap. On a
+- [x] F3 Key routing: true overlays first, then the current screen's handler, then the keymap. On a
       screen other than the workbench only screen-safe commands run from keys (palette, quit, help,
       settings, screens); a workbench command from the palette goes to the workbench and runs there.
       Esc with nothing left to clear goes back.
-- [ ] F4 `ctrl+g w/c/a/s/d/h` and `ctrl+g ctrl+g` in the three keymaps; palette commands `screen.*`;
+- [x] F4 `ctrl+g w/c/a/s/d/h` and `ctrl+g ctrl+g` in the three keymaps; palette commands `screen.*`;
       a which-key popup listing what can follow a pending chord (also helps Emacs' `ctrl+x`).
-- [ ] F5 Status bar per screen (its name and its keys); F1 help gets a Screens section.
-- [ ] F6 Too-small guard: below 20x8 every screen says so (the smallest size the tests already cover).
+- [x] F5 Status bar per screen (its name and its keys); F1 help gets a Screens section.
+- [x] F6 Too-small guard: below 20x8 every screen says so (the smallest size the tests already cover).
 
 ## 2. Agents
 
-- [ ] A1 `mcp_audit` and `mcp_profiles` lose `open`; the Agents screen owns them, with a view
+- [x] A1 `mcp_audit` and `mcp_profiles` lose `open`; the Agents screen owns them, with a view
       (Approvals, Activity, Profiles) switched by `[`/`]` and `1`-`3`. Old commands (`mcp.audit`,
       `mcp.profiles`, `mcp.grant`, `mcp.revoke_all`, `Ctrl+Alt+A`) open the screen on the right view.
-- [ ] A2 Approvals: list on the left, the picked request in full on the right, approve/deny confirm
+- [x] A2 Approvals: list on the left, the picked request in full on the right, approve/deny confirm
       in the detail pane.
-- [ ] A3 Activity: structured audit events (time, profile, tool, target, outcome, duration, rows) as a
+- [x] A3 Activity: structured audit events (time, profile, tool, target, outcome, duration, rows) as a
       table; `/` filter; detail of the picked call.
-- [ ] A4 Profiles: list left, detail right; the grant form in the right pane instead of a dialog.
-- [ ] A5 Waiting requests: count on the strip, one toast naming `Ctrl+G a`; polling only while useful.
+- [x] A4 Profiles: list left, detail right; the grant form in the right pane instead of a dialog.
+- [x] A5 Waiting requests: count on the strip, one toast naming `Ctrl+G a`; polling only while useful.
 
 ## 3. Server
 

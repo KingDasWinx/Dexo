@@ -490,7 +490,6 @@ impl McpConfirm {
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct McpProfilesScreen {
-    pub open: bool,
     pub name: String,
     pub enabled: bool,
     pub scopes: Vec<String>,
@@ -508,32 +507,15 @@ pub struct McpProfilesScreen {
     pub confirm: Option<McpConfirm>,
     /// `g`: a new grant, being filled in.
     pub grant_form: Option<GrantForm>,
-    /// The grant form was asked for from the palette: with the screen closed behind it,
-    /// closing the form leaves nothing of it open.
-    pub grant_from_palette: bool,
     /// The grant form was asked for before the profiles were read.
     pub grant_when_loaded: bool,
     /// "Revoke all" was asked for before the profiles were read: it names how many go.
     pub revoke_all_when_loaded: bool,
 }
 
-/// The screen laid out for a size: the list, the picked profile's details, then the
-/// status and the keys, which stay in sight.
-#[derive(Clone, Debug, Default, PartialEq)]
-pub struct ProfilesView {
-    pub lines: Vec<String>,
-    /// Each profile row drawn: its line and which profile it is.
-    pub rows: Vec<(usize, usize)>,
-    /// The line of the picked profile, to be highlighted.
-    pub picked: Option<usize>,
-    /// How far the details can be scrolled.
-    pub scroll_max: usize,
-}
-
 impl McpProfilesScreen {
     pub fn fixture() -> Self {
         let mut screen = Self {
-            open: true,
             profiles: vec![McpProfileSummary {
                 name: "assistant".into(),
                 enabled: false,
@@ -718,7 +700,7 @@ impl McpProfilesScreen {
     }
 
     /// The picked profile's details, whole.
-    fn detail_lines(&self, width: usize) -> Vec<String> {
+    pub fn detail_lines(&self, width: usize) -> Vec<String> {
         let mut lines = Vec::new();
         let mut put = |text: String, first: &str, rest: &str| {
             let room = width.saturating_sub(first.chars().count()).max(8);
@@ -814,103 +796,43 @@ impl McpProfilesScreen {
         lines
     }
 
-    pub fn hint(&self) -> &'static str {
-        if self.profiles.is_empty() {
-            "Esc close"
+    /// A profile in one row of the list.
+    pub fn row(profile: &McpProfileSummary) -> String {
+        let state = if profile.enabled {
+            "enabled "
         } else {
-            "e enable/disable  g new grant  r revoke grants  R revoke all  x delete  Up/Down pick  PgUp/PgDn details  Esc close"
-        }
+            "disabled"
+        };
+        let grants = match profile.grants.len() {
+            0 => String::new(),
+            1 => "  1 grant".into(),
+            n => format!("  {n} grants"),
+        };
+        format!("{}  {state}{grants}", profile.name)
     }
 
-    /// The screen at `width` by `rows`. The list and the details scroll in their own
-    /// areas; the status and the keys have rows of their own at the bottom.
-    pub fn view(&self, width: usize, rows: usize) -> ProfilesView {
-        let mut view = ProfilesView::default();
-        if self.profiles.is_empty() {
-            let wrap = |text: &str| crate::model::wrap_words(text, width.max(8));
-            for text in [
-                "No MCP profiles yet.",
-                "Agents connect through a profile, which says what they may see. Make one in a terminal:",
-                "  dexo mcp profile create --name assistant",
-                "  dexo mcp profile set --name assistant --connection NAME",
-                "  dexo mcp allow --profile assistant --selector db.schema.*",
-                "Then come back here to enable it and give it writes.",
-            ] {
-                view.lines.extend(wrap(text));
-            }
-            if !self.status.is_empty() {
-                view.lines.push(String::new());
-                view.lines.extend(wrap(&self.status));
-            }
-            view.lines.push(String::new());
-            view.lines.push(self.hint().into());
-            return view;
-        }
-        let hint = crate::model::wrap_words(self.hint(), width.max(8));
-        // Status, and the keys on as many lines as they need.
-        let footer = 1 + hint.len();
-        let body = rows.saturating_sub(footer).max(2);
-        let list_rows = self.profiles.len().clamp(1, (body / 2).clamp(1, 8));
-        let detail_rows = body.saturating_sub(list_rows + 1).max(1);
-        let offset =
-            crate::palette::scroll_to_selection(self.selected, 0, self.profiles.len(), list_rows);
-        for (index, profile) in self
-            .profiles
-            .iter()
-            .enumerate()
-            .skip(offset)
-            .take(list_rows)
-        {
-            let marker = if index == self.selected { ">" } else { " " };
-            let state = if profile.enabled {
-                "enabled "
-            } else {
-                "disabled"
-            };
-            let grants = match profile.grants.len() {
-                0 => String::new(),
-                1 => "  1 grant".into(),
-                n => format!("  {n} grants"),
-            };
-            if index == self.selected {
-                view.picked = Some(view.lines.len());
-            }
-            view.rows.push((view.lines.len(), index));
-            view.lines
-                .push(format!("{marker} {}  {state}{grants}", profile.name));
-        }
-        while view.lines.len() < list_rows {
-            view.lines.push(String::new());
-        }
-        let more = self.profiles.len().saturating_sub(offset + list_rows);
-        view.lines.push(if more > 0 {
-            format!("  ... {more} more below")
-        } else {
-            String::new()
-        });
-        let details = self.detail_lines(width);
-        view.scroll_max = details.len().saturating_sub(detail_rows);
-        let from = self.detail_scroll.min(view.scroll_max);
-        let mut shown: Vec<String> = details
-            .iter()
-            .skip(from)
-            .take(detail_rows)
-            .cloned()
-            .collect();
-        if from + detail_rows < details.len()
-            && let Some(last) = shown.last_mut()
-        {
-            *last = "  ... PgDn for more".into();
-        }
-        shown.resize(detail_rows, String::new());
-        view.lines.extend(shown);
-        view.lines.push(self.status.clone());
-        view.lines.extend(hint);
-        view
-    }
+    /// What the screen says with no profile to show: how to make one.
+    pub const EMPTY: [&'static str; 6] = [
+        "No MCP profiles yet.",
+        "Agents connect through a profile, which says what they may see. Make one in a terminal:",
+        "  dexo mcp profile create --name assistant",
+        "  dexo mcp profile set --name assistant --connection NAME",
+        "  dexo mcp allow --profile assistant --selector db.schema.*",
+        "Then come back here to enable it and give it writes.",
+    ];
 
+    /// The list and the picked profile's details as text, the way they read on screen.
     pub fn lines(&self) -> Vec<String> {
-        self.view(100, 40).lines
+        if self.profiles.is_empty() {
+            return Self::EMPTY.iter().map(|line| line.to_string()).collect();
+        }
+        let mut lines: Vec<String> = self.profiles.iter().map(Self::row).collect();
+        lines.push(String::new());
+        lines.extend(self.detail_lines(100));
+        if !self.status.is_empty() {
+            lines.push(self.status.clone());
+        }
+        lines
     }
 }
 
@@ -977,25 +899,6 @@ mod tests {
         assert!(text.contains("one write, then it is spent"), "{text}");
     }
 
-    /// With more profiles than rows, the pick stays on screen, and so do the status and
-    /// the keys under it.
-    #[test]
-    fn the_pick_scrolls_into_view_and_the_footer_stays() {
-        let mut screen = McpProfilesScreen::default();
-        screen.load_profiles((0..17).map(|n| profile(&format!("p-{n:02}"), 1)).collect());
-        for _ in 0..14 {
-            screen.select_next();
-        }
-        screen.status = "disabled p-14".into();
-        let view = screen.view(80, 16);
-        assert_eq!(view.lines.len(), 16, "{:?}", view.lines);
-        let picked = view.picked.expect("the pick is drawn");
-        assert!(view.lines[picked].contains("p-14"), "{:?}", view.lines);
-        let text = view.lines.join("\n");
-        assert!(text.contains("disabled p-14"), "{text}");
-        assert!(text.contains("Esc close"), "{text}");
-    }
-
     #[test]
     fn the_status_does_not_follow_the_pick_to_another_profile() {
         let mut screen = McpProfilesScreen::default();
@@ -1013,7 +916,6 @@ mod tests {
         let screen = McpProfilesScreen::default();
         let text = screen.lines().join("\n");
         assert!(text.contains("dexo mcp profile create"), "{text}");
-        assert!(text.contains("Esc close"), "{text}");
     }
 
     #[test]

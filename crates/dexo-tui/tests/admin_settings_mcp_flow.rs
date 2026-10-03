@@ -389,6 +389,8 @@ fn press(model: &mut Model, ch: char) {
 fn enabling_an_mcp_profile_asks_in_a_dialog() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     assert!(!model.mcp_profiles.enabled);
@@ -441,10 +443,7 @@ fn selecting_a_profile_shows_its_own_grants() {
         ..Default::default()
     };
 
-    let mut screen = McpProfilesScreen {
-        open: true,
-        ..Default::default()
-    };
+    let mut screen = McpProfilesScreen::default();
     screen.load_profiles(vec![
         profile("assistant", vec![line("g1", "data_insert")]),
         profile(
@@ -473,6 +472,8 @@ fn selecting_a_profile_shows_its_own_grants() {
 fn disabling_a_profile_takes_one_press_while_enabling_asks() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     update(&mut model, Action::Key(key('e')));
@@ -506,6 +507,8 @@ fn disabling_a_profile_takes_one_press_while_enabling_asks() {
 fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     let armed = update(&mut model, Action::Key(key('r')));
@@ -525,6 +528,8 @@ fn revoke_targets_the_selected_profile_and_shift_revokes_everything() {
 
     let mut model = Model {
         mcp_profiles: dexo_tui::screens::mcp_profiles::McpProfilesScreen::fixture(),
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
     update(&mut model, Action::Key(key('R')));
@@ -548,14 +553,13 @@ fn moving_off_a_profile_clears_what_was_said_about_it() {
         name: name.into(),
         ..Default::default()
     };
-    let mut screen = dexo_tui::screens::mcp_profiles::McpProfilesScreen {
-        open: true,
-        ..Default::default()
-    };
+    let mut screen = dexo_tui::screens::mcp_profiles::McpProfilesScreen::default();
     screen.load_profiles(vec![summary("assistant"), summary("reviewer")]);
     screen.status = "Disabled assistant: agents can no longer use it.".into();
     let mut model = Model {
         mcp_profiles: screen,
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
         ..Model::default()
     };
 

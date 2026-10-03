@@ -75,7 +75,8 @@ fn fields() -> Vec<Field> {
         Field {
             name: "new MCP grant form",
             open: |m| {
-                m.mcp_profiles.open = true;
+                m.screen = dexo_tui::model::Screen::Agents;
+                m.agents_view = dexo_tui::screen::agents::AgentsView::Profiles;
                 let mut form = dexo_tui::screens::mcp_profiles::GrantForm::new(
                     vec![dexo_tui::screens::mcp_profiles::ProfileChoice {
                         name: "assistant".into(),

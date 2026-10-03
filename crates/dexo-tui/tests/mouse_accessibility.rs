@@ -531,8 +531,11 @@ fn clicking_parameter_field_only_focuses_it() {
 
 #[test]
 fn mcp_profile_rows_match_the_profile_index() {
-    let mut model = Model::default();
-    model.mcp_profiles.open = true;
+    let mut model = Model {
+        screen: dexo_tui::model::Screen::Agents,
+        agents_view: dexo_tui::screen::agents::AgentsView::Profiles,
+        ..Model::default()
+    };
     model.mcp_profiles.load_profiles(vec![
         dexo_tui::screens::mcp_profiles::McpProfileSummary {
             name: "reader".into(),

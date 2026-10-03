@@ -3,23 +3,23 @@ source: crates/dexo-tui/tests/snapshots.rs
 assertion_line: 291
 expression: "render_to_string(&model, 60, 20)"
 ---
-demo  local  public          1 Sidebar  [2 SQL]  3 Results  
- scratch.sql ×  +                                           
-┌▸ SQL · scratch.sql───────────────────────────────────────┐
-┌Enable MCP profile────────────────────────────────────────┐
+[Agents]  demo  local  public                               
+ 1 Approvals   2 Activity  [3 Profiles]                     
+┌▸ Profiles (1)────────────────────────────────────────────┐
+│> assistant  disabled  1 grant                            │
+│                                                          │
+│                                                          │
+└──────────────────────────────────────────────────────────┘
+┌  assistant───────────────────────────────────────────────┐
+│assistant is disabled: agents cannot use it yet.          │
+│Connections: local                                        │
+│Reads: structured tools only                              │
+│Objects it can see: db.public.*                           │
+│  never: db.public.secrets                                │
 │Enable assistant?                                         │
 │Agents that connect through it can then use what it allows│
 │Connections: local.                                       │
 │                                                          │
 │ [Enable]  >[Cancel]                                      │
 └──────────────────────────────────────────────────────────┘
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-local                                             Ctrl+P  F1
+Agents  Left/Right pick  Enter answer             Ctrl+P  F1

@@ -2534,7 +2534,7 @@ impl WorkbenchRuntime {
         let events = ledger
             .recent_audits(200)
             .into_iter()
-            .map(|event| describe_audit(&event))
+            .map(|event| audit_line(&event))
             .collect();
         let pending = ledger.pending_approvals(now);
         self.emit(Action::McpAuditLoaded {
@@ -2689,8 +2689,15 @@ impl WorkbenchRuntime {
 
 /// One audit event as a line a person reads: when, which profile, what it tried, and how
 /// it ended in words -- not the columns of the table joined by spaces.
+/// The call in one sentence, as the log reads aloud.
 pub fn describe_audit(event: &dexo_app::mcp::AuditEvent) -> String {
-    let when = chrono::DateTime::from_timestamp(event.timestamp, 0)
+    audit_line(event).sentence()
+}
+
+/// A call from the audit log as the Activity view lists it: the time of day, the tool by
+/// its own name, and what came of it in words.
+pub fn audit_line(event: &dexo_app::mcp::AuditEvent) -> crate::screens::mcp_audit::AuditLine {
+    let time = chrono::DateTime::from_timestamp(event.timestamp, 0)
         .map(|utc| {
             utc.with_timezone(&chrono::Local)
                 .format("%H:%M:%S")
@@ -2704,11 +2711,6 @@ pub fn describe_audit(event: &dexo_app::mcp::AuditEvent) -> String {
         .next()
         .unwrap_or(&event.request)
         .to_string();
-    let on = if event.target.is_empty() {
-        String::new()
-    } else {
-        format!(" on {}", event.target)
-    };
     // A status that is an error code (`POLICY_DENIED`) reads as the words it is.
     let code = !event.status.is_empty()
         && event
@@ -2724,7 +2726,16 @@ pub fn describe_audit(event: &dexo_app::mcp::AuditEvent) -> String {
         _ if event.status.is_empty() || event.status == "ok" => "ok".to_string(),
         _ => event.status.clone(),
     };
-    format!("{when} {}: {tool}{on} -- {outcome}", event.profile)
+    crate::screens::mcp_audit::AuditLine {
+        time,
+        profile: event.profile.clone(),
+        client: event.client.clone(),
+        tool,
+        target: event.target.clone(),
+        outcome,
+        duration_ms: event.duration_ms,
+        rows: event.rows,
+    }
 }
 
 fn unix_seconds() -> i64 {

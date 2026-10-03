@@ -14,6 +14,8 @@ pub enum PaneEdge {
 pub enum HitTarget {
     /// A name on the header's strip of screens.
     ScreenTab(crate::model::Screen),
+    /// One of a screen's views, on the row under the header.
+    ScreenView(usize),
     ResultTab(usize),
     ResultsView(usize),
     DocumentTab(usize),
@@ -116,7 +118,6 @@ pub enum OverlayKind {
     Transfer,
     Security,
     Admin,
-    McpProfiles,
     ValueViewer,
     ObjectOverlay,
     SchemaForm,
@@ -132,7 +133,6 @@ pub enum OverlayKind {
     Settings,
     Recovery,
     Diagnostics,
-    McpAudit,
     FilePicker,
     Completion,
     Parameters,
@@ -167,12 +167,14 @@ pub enum ScrollArea {
     Review,
     Messages,
     DdlPreview,
+    McpProfiles,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct HitMap {
     targets: Vec<(HitTarget, Rect)>,
     scroll_limits: Vec<(ScrollArea, u16)>,
+    pages: Vec<(ScrollArea, u16)>,
 }
 
 impl HitMap {
@@ -183,6 +185,21 @@ impl HitMap {
         let max = u16::try_from(max).unwrap_or(u16::MAX);
         self.scroll_limits.retain(|(known, _)| *known != area);
         self.scroll_limits.push((area, max));
+    }
+
+    /// How many lines a view showed, as last drawn: a page of it.
+    pub fn set_page(&mut self, area: ScrollArea, rows: u16) {
+        self.pages.retain(|(known, _)| *known != area);
+        self.pages.push((area, rows.max(1)));
+    }
+
+    /// A page of `area`, or `fallback` before it is drawn. A page taller than the view
+    /// skipped lines nobody saw.
+    pub fn page(&self, area: ScrollArea, fallback: u16) -> u16 {
+        self.pages
+            .iter()
+            .find(|(known, _)| *known == area)
+            .map_or(fallback, |(_, rows)| *rows)
     }
 
     /// Moves `scroll` by `delta` lines, within the bound the last frame recorded. A view
@@ -267,7 +284,6 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.data.viewer.is_some(), OverlayKind::ValueViewer),
         (model.editor.completion_open, OverlayKind::Completion),
         (model.file_picker.open, OverlayKind::FilePicker),
-        (model.mcp_audit.open, OverlayKind::McpAudit),
         (model.diagnostics.open, OverlayKind::Diagnostics),
         (model.recovery.open, OverlayKind::Recovery),
         (model.settings.open, OverlayKind::Settings),
@@ -286,7 +302,6 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.config_transfer.open, OverlayKind::ConfigTransfer),
         (model.projects.open, OverlayKind::Projects),
         (model.connections.open, OverlayKind::Connections),
-        (model.mcp_profiles.open, OverlayKind::McpProfiles),
         (model.admin.open, OverlayKind::Admin),
         (model.security.open, OverlayKind::Security),
         (model.transfer.open, OverlayKind::Transfer),

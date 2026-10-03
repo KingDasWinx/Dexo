@@ -1974,6 +1974,7 @@ pub struct Model {
     pub screen: Screen,
     /// Where Esc and `Ctrl+G Ctrl+G` go back to.
     pub previous_screen: Screen,
+    pub agents_view: crate::screen::agents::AgentsView,
     pub focus: Focus,
     pub width: u16,
     pub height: u16,
@@ -2133,6 +2134,7 @@ impl Default for Model {
         Self {
             screen: Screen::Workbench,
             previous_screen: Screen::Workbench,
+            agents_view: Default::default(),
             focus: Focus::Editor,
             width: 160,
             height: 50,

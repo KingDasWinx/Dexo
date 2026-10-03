@@ -306,7 +306,7 @@ async fn run_loop(
                 let _ = crate::update::update(&mut model, Action::DiagnosticsTick);
             }
             _ = running_tick.tick(), if model.active_operation.is_some() || model.transfer.running => {}
-            _ = agent_tick.tick(), if model.mcp_audit.open || model.mcp_profiles.open => {
+            _ = agent_tick.tick(), if model.screen == crate::model::Screen::Agents => {
                 let effects = crate::update::update(&mut model, Action::AgentActivityTick);
                 if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
                     return Ok(());
