@@ -433,3 +433,149 @@ async fn postgres_bulk_insert_batch() {
         .unwrap();
     assert_eq!(page.rows.len(), 1);
 }
+
+async fn texts(session: &dyn Session, sql: &str) -> Vec<String> {
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::read(sql, 100))
+        .await
+        .unwrap();
+    let mut texts = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            for row in batch.rows {
+                match &row[0] {
+                    DbValue::Text(text) => texts.push(text.clone()),
+                    other => panic!("{other:?}"),
+                }
+            }
+        }
+    }
+    texts
+}
+
+/// A batch goes in as one statement: NULL and the empty text stay apart, bytes, JSON
+/// and booleans read as themselves, text goes into any column that reads it, and a bad
+/// row names its place in the batch, which goes in whole or not at all. A statement the
+/// server refuses leaves the session usable.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_bulk_insert_is_one_statement_and_names_the_bad_row() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    run(
+        session,
+        "create table bulk (id int primary key, t text, b bytea, j jsonb, f boolean)",
+    )
+    .await;
+    let writer = session.bulk().unwrap();
+    let table = QualifiedName::new(None::<String>, Some("public"), "bulk");
+    let columns: Vec<String> = ["id", "t", "b", "j", "f"].map(String::from).to_vec();
+    let written = writer
+        .insert_batch(
+            &table,
+            &columns,
+            &[
+                vec![
+                    DbValue::I64(1),
+                    DbValue::Text(String::new()),
+                    DbValue::Bytes(vec![0xde, 0xad]),
+                    DbValue::Json("{\"a\": 1}".into()),
+                    DbValue::Bool(true),
+                ],
+                vec![
+                    DbValue::I64(2),
+                    DbValue::Null,
+                    DbValue::Null,
+                    DbValue::Null,
+                    DbValue::Null,
+                ],
+                vec![
+                    DbValue::Text("3".into()),
+                    DbValue::Text("say \"hi\", ok\nnext".into()),
+                    DbValue::Text("\\x00ff".into()),
+                    DbValue::Text("[1,2]".into()),
+                    DbValue::Text("false".into()),
+                ],
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(written, 3);
+    let read = "select concat_ws('|', id, coalesce(t, '-'), coalesce(encode(b, 'hex'), '-'),
+                                 coalesce(j::text, '-'), coalesce(f::text, '-'))
+                from bulk order by id";
+    assert_eq!(
+        texts(session, read).await,
+        [
+            "1||dead|{\"a\": 1}|true",
+            "2|-|-|-|-",
+            "3|say \"hi\", ok\nnext|00ff|[1, 2]|false"
+        ]
+    );
+    let error = writer
+        .insert_batch(
+            &table,
+            &columns[..1],
+            &[vec![DbValue::I64(4)], vec![DbValue::Text("x".into())]],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.row(), Some(2), "{error}");
+    assert!(
+        writer
+            .insert_batch(&table, &["nope".to_string()], &[vec![DbValue::I64(5)]])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        texts(session, "select count(*)::text from bulk").await,
+        ["3"]
+    );
+}
+
+/// A batch goes into a view and into a table under row-level security, which COPY
+/// would refuse.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn postgres_bulk_insert_writes_into_views_and_guarded_tables() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    for sql in [
+        "create table guarded (id int primary key)",
+        "create view guarded_view as select * from guarded",
+        "create role bulk_writer",
+        "grant all on guarded, guarded_view to bulk_writer",
+        "alter table guarded enable row level security",
+        "create policy anyone on guarded using (true) with check (true)",
+    ] {
+        run(session, sql).await;
+    }
+    let writer = session.bulk().unwrap();
+    let id = vec!["id".to_string()];
+    writer
+        .insert_batch(
+            &QualifiedName::new(None::<String>, Some("public"), "guarded_view"),
+            &id,
+            &[vec![DbValue::I64(1)]],
+        )
+        .await
+        .unwrap();
+    run(session, "set role bulk_writer").await;
+    writer
+        .insert_batch(
+            &QualifiedName::new(None::<String>, Some("public"), "guarded"),
+            &id,
+            &[vec![DbValue::I64(2)], vec![DbValue::I64(3)]],
+        )
+        .await
+        .unwrap();
+    run(session, "reset role").await;
+    assert_eq!(
+        texts(
+            session,
+            "select string_agg(id::text, ',' order by id) from guarded"
+        )
+        .await,
+        ["1,2,3"]
+    );
+}

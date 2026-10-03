@@ -451,6 +451,12 @@ impl DataMutator for PostgresSession {
     }
 }
 
+/// A batch goes in as INSERTs of many rows each -- a round trip for up to `MAX_PARAMS`
+/// values, not one for each row -- in a transaction of its own: all of it or none.
+/// ponytail: COPY is faster still, but tokio-postgres 0.7 loses the connection when the
+/// server refuses a COPY before reading its data -- no such column, a view, row-level
+/// security -- as it sends Sync twice and the second answer has no request to go to.
+/// Take COPY once its `copy_in` sends one.
 #[async_trait::async_trait]
 impl dexo_driver_api::BulkWriter for PostgresSession {
     async fn insert_batch(
@@ -459,17 +465,86 @@ impl dexo_driver_api::BulkWriter for PostgresSession {
         columns: &[String],
         rows: &[Vec<DbValue>],
     ) -> Result<u64, DriverError> {
-        let mutations: Vec<Mutation> = rows
-            .iter()
-            .map(|values| Mutation::Insert {
-                table: table.clone(),
-                columns: columns.iter().cloned().map(ColumnId).collect(),
-                values: values.clone(),
-            })
-            .collect();
-        self.apply(&mutations).await?;
-        Ok(rows.len() as u64)
+        self.client
+            .batch_execute("BEGIN")
+            .await
+            .map_err(map_error)?;
+        match insert_rows(self, table, columns, rows).await {
+            Ok(written) => {
+                self.client
+                    .batch_execute("COMMIT")
+                    .await
+                    .map_err(map_error)?;
+                Ok(written)
+            }
+            Err(error) => {
+                let _ = self.client.batch_execute("ROLLBACK").await;
+                Err(error)
+            }
+        }
     }
+}
+
+/// The most values one statement binds: the protocol counts them in 16 bits.
+const MAX_PARAMS: usize = i16::MAX as usize;
+
+async fn insert_rows(
+    session: &PostgresSession,
+    table: &dexo_driver_api::QualifiedName,
+    columns: &[String],
+    rows: &[Vec<DbValue>],
+) -> Result<u64, DriverError> {
+    let width = columns.len().max(1);
+    let per_statement = (MAX_PARAMS / width).max(1);
+    let names = columns
+        .iter()
+        .map(|column| quote(column))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let mut written = 0;
+    for (index, chunk) in rows.chunks(per_statement).enumerate() {
+        let mut binder = Binder::new();
+        let values = chunk
+            .iter()
+            .map(|row| {
+                let slots = row
+                    .iter()
+                    .map(|value| binder.push(value.clone()))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                format!("({slots})")
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let sql = format!("INSERT INTO {} ({names}) VALUES {values}", qualify(table));
+        let boxed = binder.boxed();
+        let refs: Vec<&(dyn ToSql + Sync)> =
+            boxed.iter().map(|value| value.as_ref() as _).collect();
+        let before = index * per_statement;
+        written += session.client.execute(&sql, &refs).await.map_err(|error| {
+            // A value the server could not read is a parameter of a row: the row an
+            // import names by its line.
+            let row = parameter(&error).map(|number| before + (number - 1) / width + 1);
+            let mapped = map_error(error);
+            match row.and_then(|row| u32::try_from(row).ok()) {
+                Some(row) => mapped.with_row(row),
+                None => mapped,
+            }
+        })?;
+    }
+    Ok(written)
+}
+
+/// The parameter whose value the server could not read, from where it says it was:
+/// `unnamed portal parameter $3 = '...'`.
+fn parameter(error: &tokio_postgres::Error) -> Option<usize> {
+    let place = error.as_db_error()?.where_()?;
+    let (_, rest) = place.split_once("parameter $")?;
+    rest.split(|ch: char| !ch.is_ascii_digit())
+        .next()?
+        .parse()
+        .ok()
+        .filter(|number| *number > 0)
 }
 
 async fn apply_inner(session: &PostgresSession, mutations: &[Mutation]) -> Result<(), DriverError> {
