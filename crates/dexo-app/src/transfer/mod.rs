@@ -12,7 +12,7 @@ pub use export::{ExportError, ExportProgress, RecordingSink, export_row_batches,
 pub use import::{
     ErrorStrategy, ImportReport, TargetColumn, fit_to_table, import_rows, target_columns,
 };
-pub use map::{ColumnMapping, map_columns};
+pub use map::{ColumnMapping, map_columns, parse_mapping};
 pub use native_tool::{
     NativeHandle, NativeRunResult, NativeStatus, NativeToolError, NativeToolKind,
     NativeToolRequest, NativeToolRunner, PostgresBackup, ProcessRunner, ProcessSpec,

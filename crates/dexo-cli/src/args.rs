@@ -180,6 +180,8 @@ pub enum Command {
         format: TransferCliFormat,
         #[arg(long = "on-error", value_enum, default_value_t = OnError::Stop)]
         on_error: OnError,
+        /// The file's column into the table's, as source=target, matched by name;
+        /// source= leaves it out. Repeat for several.
         #[arg(long)]
         mapping: Vec<String>,
         #[arg(long)]

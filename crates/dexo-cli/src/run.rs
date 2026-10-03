@@ -360,18 +360,10 @@ fn run_import(
     let (columns, decoded) =
         dexo_app::transfer::decode_document(to_transfer_format(format), &options, &bytes)
             .map_err(|error| anyhow::anyhow!(error))?;
-    let mapped = if mapping.is_empty() {
-        columns.clone()
-    } else {
-        mapping
-            .into_iter()
-            .map(|item| {
-                item.split_once('=')
-                    .map(|(_, target)| target.to_string())
-                    .ok_or_else(|| anyhow::anyhow!("--mapping must be source=target"))
-            })
-            .collect::<Result<Vec<_>, _>>()?
-    };
+    let mapping =
+        dexo_app::transfer::parse_mapping(&mapping).map_err(|error| anyhow::anyhow!(error))?;
+    let (mapped, sources) = dexo_app::transfer::map_columns(&columns, &mapping)
+        .map_err(|error| anyhow::anyhow!(error))?;
     let strategy = match on_error {
         OnError::Stop => dexo_app::transfer::ErrorStrategy::Stop,
         OnError::Skip => dexo_app::transfer::ErrorStrategy::Skip,
@@ -381,6 +373,15 @@ fn run_import(
         .into_iter()
         .enumerate()
         .map(|(index, values)| {
+            let values: Vec<_> = sources
+                .iter()
+                .map(|&source| {
+                    values
+                        .get(source)
+                        .cloned()
+                        .unwrap_or(dexo_driver_api::DbValue::Null)
+                })
+                .collect();
             let original = values.iter().map(|value| format!("{value:?}")).collect();
             (index + 2, values, original)
         })
