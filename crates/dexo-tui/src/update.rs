@@ -10956,6 +10956,18 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         KeyCode::End => picker.selected = count.saturating_sub(1),
         KeyCode::Enter => return Some(open_saved_query(model)),
         KeyCode::Char('r') => {
+            // A query whose connection is gone is not run on the one in use instead.
+            let query = picker
+                .current()
+                .map(|query| (query.name.clone(), query.connection_id.clone()));
+            if let Some((name, connection)) = query
+                && profile_by_uuid(model, &connection).is_none()
+            {
+                model.messages.warn(format!(
+                    "The connection {name} was saved for is gone: nothing ran."
+                ));
+                return Some(Vec::new());
+            }
             let opened = open_saved_query(model);
             return Some(run_opened(model, opened));
         }
@@ -14429,9 +14441,32 @@ fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
 
 /// `r` in History: the statement opens on its connection and runs, once the connection
 /// is up when it has to be dialled.
+/// `r` in History: the statement opens on its connection and runs, once the connection
+/// is up when it has to be dialled. One whose connection is gone is not run: the
+/// document would fall back to the connection in use, which it never ran on.
 fn run_history_entry(model: &mut Model) -> Vec<Effect> {
+    let Some(row) = crate::screens::editor::picked_history(model) else {
+        return Vec::new();
+    };
+    if let Some(gone) = gone_connection(model, &row) {
+        model.messages.warn(format!(
+            "{gone} is not a connection any more: nothing ran. Enter opens the statement, to run where you choose."
+        ));
+        return Vec::new();
+    }
     let effects = open_history_entry(model);
     run_opened(model, effects)
+}
+
+/// The connection a run was on, when no connection goes by its name now.
+fn gone_connection(model: &Model, row: &dexo_storage::HistoryRow) -> Option<String> {
+    row.connection_id.clone().filter(|name| {
+        !model
+            .connections
+            .profiles
+            .iter()
+            .any(|profile| &profile.profile.name == name)
+    })
 }
 
 /// Runs the document just opened, after `opened` -- what opening it took. A connection it
@@ -14530,7 +14565,13 @@ fn open_history_entry(model: &mut Model) -> Vec<Effect> {
     let Some(row) = crate::screens::editor::picked_history(model) else {
         return Vec::new();
     };
-    // The document is on the workbench, where it is read, on the connection it ran on.
+    // The document is on the workbench, where it is read, on the connection it ran on;
+    // one gone, on the connection in use, and said so.
+    if let Some(gone) = gone_connection(model, &row) {
+        model.messages.info(format!(
+            "{gone} is not a connection any more: the statement opens on the one in use."
+        ));
+    }
     let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
     let name = suggested_document_name(model);
     effects.extend(open_text_document(

@@ -384,3 +384,29 @@ fn saved_queries_search_after_slash_filter_by_connection_and_take_letters() {
     press(&mut model, KeyCode::Char('x'));
     assert!(model.saved_queries.deleting.is_some());
 }
+
+/// A statement whose connection is gone -- renamed, deleted, a temporary one -- is not run:
+/// it would have run on the connection in use instead.
+#[test]
+fn run_again_refuses_a_statement_whose_connection_is_gone() {
+    let mut model = history_with_connections();
+    // my-dev's statement: no connection goes by that name.
+    press(&mut model, KeyCode::Down);
+    press(&mut model, KeyCode::Down);
+    let effects = press(&mut model, KeyCode::Char('r'));
+    assert!(
+        !effects.iter().any(|effect| matches!(
+            effect,
+            Effect::StartScript(_) | Effect::ConnectProfile { .. }
+        )),
+        "{effects:?}"
+    );
+    assert!(model.pending_execute.is_none());
+    assert_eq!(model.screen, dexo_tui::model::Screen::History);
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.message.contains("not a connection any more"))
+    );
+}
