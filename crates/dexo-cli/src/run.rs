@@ -1783,9 +1783,7 @@ fn mcp_doctor(name: Option<&str>, json: bool, probe: bool) -> anyhow::Result<()>
 /// `dexo mcp setup`: Dexo's server merged into the client's config file, the old file
 /// backed up first; with `--skill`, the skill file beside it.
 fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Result<()> {
-    use dexo_app::mcp::clients::{
-        McpClient, Places, dexo_command, read_config, skill_text, write_with_backup,
-    };
+    use dexo_app::mcp::clients::{McpClient, Places, dexo_command, read_config, skill_text};
     let client =
         McpClient::parse(client).ok_or_else(|| anyhow::anyhow!("unknown client {client}"))?;
     let paths = AppPaths::discover()?;
@@ -1818,17 +1816,16 @@ fn mcp_setup(client: &str, name: &str, dry_run: bool, skill: bool) -> anyhow::Re
             );
         }
     } else {
-        let backup = write_with_backup(&path, &merged)?;
-        match backup {
+        let done = client.set_up(&places, &exe, name, skill)?;
+        match done.backup {
             Some(backup) => println!(
                 "wrote {} (the old one is {})",
-                path.display(),
+                done.config.display(),
                 backup.display()
             ),
-            None => println!("wrote {}", path.display()),
+            None => println!("wrote {}", done.config.display()),
         }
-        if let Some(skill_path) = &skill_file {
-            write_with_backup(skill_path, &skill_text(client, name))?;
+        if let Some(skill_path) = &done.skill {
             println!("wrote {}", skill_path.display());
         }
     }

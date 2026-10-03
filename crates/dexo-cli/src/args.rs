@@ -414,7 +414,7 @@ pub enum McpCommand {
     },
     /// Write Dexo's server into an agent's MCP config, merged with what is there.
     Setup {
-        #[arg(long, value_parser = ["claude-code", "codex", "cursor", "claude-desktop"])]
+        #[arg(long, value_parser = ["claude-code", "codex", "cursor", "claude-desktop", "gemini-cli", "windsurf", "vscode"])]
         client: String,
         #[arg(long)]
         profile: String,

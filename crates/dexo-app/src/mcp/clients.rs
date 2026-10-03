@@ -1,6 +1,6 @@
-//! The agents Dexo's MCP server is set up for -- Claude Code, Codex, Cursor and Claude
-//! Desktop -- each with its config file, the one `dexo` entry merged into it, and the
-//! skill file that tells the agent how Dexo behaves.
+//! The agents Dexo's MCP server is set up for -- Claude Code, Codex, Cursor, Claude
+//! Desktop, Gemini CLI, Windsurf and VS Code -- each with its config file, the one `dexo`
+//! entry merged into it, and the skill file that tells the agent how Dexo behaves.
 
 use std::path::{Path, PathBuf};
 
@@ -12,6 +12,33 @@ pub enum McpClient {
     Codex,
     Cursor,
     ClaudeDesktop,
+    GeminiCli,
+    Windsurf,
+    VsCode,
+}
+
+/// What a client's file says of Dexo.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ClientState {
+    /// No file yet: setting the client up writes one.
+    NoFile,
+    /// A file without a `dexo` entry.
+    NotSetUp,
+    /// Set up to run `command`, for `profile` when its arguments name one.
+    SetUp {
+        command: String,
+        profile: Option<String>,
+    },
+    /// The file cannot be read or parsed, and setup leaves it alone.
+    Unusable(String),
+}
+
+/// What setting a client up wrote: its config, the copy of the old one, the skill.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SetUp {
+    pub config: PathBuf,
+    pub backup: Option<PathBuf>,
+    pub skill: Option<PathBuf>,
 }
 
 /// Where the user's files are: the project (the current directory) and the home and
@@ -61,11 +88,14 @@ impl Places {
 }
 
 impl McpClient {
-    pub const ALL: [McpClient; 4] = [
+    pub const ALL: [McpClient; 7] = [
         McpClient::ClaudeCode,
         McpClient::Codex,
         McpClient::Cursor,
         McpClient::ClaudeDesktop,
+        McpClient::GeminiCli,
+        McpClient::Windsurf,
+        McpClient::VsCode,
     ];
 
     pub fn id(self) -> &'static str {
@@ -74,7 +104,89 @@ impl McpClient {
             Self::Codex => "codex",
             Self::Cursor => "cursor",
             Self::ClaudeDesktop => "claude-desktop",
+            Self::GeminiCli => "gemini-cli",
+            Self::Windsurf => "windsurf",
+            Self::VsCode => "vscode",
         }
+    }
+
+    /// The client as people call it.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::ClaudeCode => "Claude Code",
+            Self::Codex => "Codex",
+            Self::Cursor => "Cursor",
+            Self::ClaudeDesktop => "Claude Desktop",
+            Self::GeminiCli => "Gemini CLI",
+            Self::Windsurf => "Windsurf",
+            Self::VsCode => "VS Code",
+        }
+    }
+
+    /// Whether its file is the project's -- the folder Dexo was started in -- rather than
+    /// the user's.
+    pub fn per_project(self) -> bool {
+        matches!(self, Self::ClaudeCode | Self::VsCode)
+    }
+
+    /// The client's own command that adds the same server, for those that have one.
+    pub fn by_hand(self, command: &str, profile: &str) -> Option<String> {
+        let serve = format!("{command} mcp serve --profile {profile}");
+        match self {
+            Self::ClaudeCode => Some(format!("claude mcp add dexo -- {serve}")),
+            Self::Codex => Some(format!("codex mcp add dexo -- {serve}")),
+            Self::GeminiCli => Some(format!("gemini mcp add dexo {serve}")),
+            _ => None,
+        }
+    }
+
+    /// What its file says of Dexo.
+    pub fn state(self, places: &Places) -> ClientState {
+        match read_config(&self.config_path(places)) {
+            Err(error) => ClientState::Unusable(error.to_string()),
+            Ok(None) => ClientState::NoFile,
+            Ok(Some(contents)) => match self.configured(&contents) {
+                Err(error) => ClientState::Unusable(error.to_string()),
+                Ok(None) => ClientState::NotSetUp,
+                Ok(Some((command, profile))) => ClientState::SetUp { command, profile },
+            },
+        }
+    }
+
+    /// Points the client at Dexo's server for `profile`, started with `command`: the
+    /// entry merged into its file, the old file kept beside it, and with `skill` the skill
+    /// file where the client has a place for one.
+    pub fn set_up(
+        self,
+        places: &Places,
+        command: &str,
+        profile: &str,
+        skill: bool,
+    ) -> Result<SetUp, AppError> {
+        let args: Vec<String> = ["mcp", "serve", "--profile", profile]
+            .map(String::from)
+            .to_vec();
+        let config = self.config_path(places);
+        let in_file = |error: AppError| {
+            AppError::new(error.category(), format!("{}: {error}", config.display()))
+        };
+        let existing = read_config(&config).map_err(in_file)?;
+        let merged = self
+            .merged(existing.as_deref(), command, &args)
+            .map_err(in_file)?;
+        let backup = write_with_backup(&config, &merged).map_err(in_file)?;
+        let skill = match skill.then(|| self.skill_path(places)).flatten() {
+            Some(path) => {
+                write_with_backup(&path, &skill_text(self, profile))?;
+                Some(path)
+            }
+            None => None,
+        };
+        Ok(SetUp {
+            config,
+            backup,
+            skill,
+        })
     }
 
     pub fn parse(id: &str) -> Option<Self> {
@@ -88,6 +200,9 @@ impl McpClient {
             Self::Codex => places.home.join(".codex/config.toml"),
             Self::Cursor => places.home.join(".cursor/mcp.json"),
             Self::ClaudeDesktop => places.config.join("Claude/claude_desktop_config.json"),
+            Self::GeminiCli => places.home.join(".gemini/settings.json"),
+            Self::Windsurf => places.home.join(".codeium/windsurf/mcp_config.json"),
+            Self::VsCode => places.project.join(".vscode/mcp.json"),
         }
     }
 
@@ -97,7 +212,7 @@ impl McpClient {
             Self::ClaudeCode => Some(places.project.join(".claude/skills/dexo/SKILL.md")),
             Self::Codex => Some(places.home.join(".codex/skills/dexo/SKILL.md")),
             Self::Cursor => Some(places.project.join(".cursor/rules/dexo.mdc")),
-            Self::ClaudeDesktop => None,
+            Self::ClaudeDesktop | Self::GeminiCli | Self::Windsurf | Self::VsCode => None,
         }
     }
 
@@ -116,7 +231,9 @@ impl McpClient {
         };
         let merged = match self {
             Self::Codex => merged_toml(existing.unwrap_or(""), command, args)?,
-            _ => merged_json(existing, command, args)?,
+            // VS Code's servers sit under `servers`, each saying how it is reached.
+            Self::VsCode => merged_json(existing, "servers", Some("stdio"), command, args)?,
+            _ => merged_json(existing, "mcpServers", None, command, args)?,
         };
         Ok(format!("{bom}{merged}"))
     }
@@ -124,6 +241,11 @@ impl McpClient {
     /// Whether the file has a `dexo` entry, and the command it runs; an error when the
     /// file does not parse, which setup would leave alone.
     pub fn configured_command(self, contents: &str) -> Result<Option<String>, AppError> {
+        Ok(self.configured(contents)?.map(|(command, _)| command))
+    }
+
+    /// The `dexo` entry's command, and the profile its arguments name.
+    fn configured(self, contents: &str) -> Result<Option<(String, Option<String>)>, AppError> {
         let contents = contents.strip_prefix(BOM).unwrap_or(contents);
         let unparsed = |error: String| {
             AppError::new(
@@ -131,26 +253,55 @@ impl McpClient {
                 format!("it cannot be parsed ({error}), and dexo mcp setup leaves it alone"),
             )
         };
-        let command = match self {
+        // The profile is the word after `--profile` among the arguments.
+        let profile = |args: Vec<&str>| {
+            args.iter()
+                .position(|arg| *arg == "--profile")
+                .and_then(|at| args.get(at + 1))
+                .map(|name| name.to_string())
+        };
+        let entry = match self {
             Self::Codex => {
                 let table: toml::Table = contents
                     .parse()
                     .map_err(|error: toml::de::Error| unparsed(error.message().to_string()))?;
-                table
+                let dexo = table
                     .get("mcp_servers")
-                    .and_then(|servers| servers.get("dexo"))
-                    .and_then(|dexo| dexo.get("command"))
+                    .and_then(|servers| servers.get("dexo"));
+                dexo.and_then(|dexo| dexo.get("command"))
                     .and_then(toml::Value::as_str)
-                    .map(str::to_string)
+                    .map(|command| {
+                        let args = dexo
+                            .and_then(|dexo| dexo.get("args"))
+                            .and_then(toml::Value::as_array)
+                            .map(|args| args.iter().filter_map(toml::Value::as_str).collect())
+                            .unwrap_or_default();
+                        (command.to_string(), profile(args))
+                    })
             }
             _ if contents.trim().is_empty() => None,
-            _ => serde_json::from_str::<serde_json::Value>(contents)
-                .map_err(|error| unparsed(error.to_string()))?
-                .pointer("/mcpServers/dexo/command")
-                .and_then(serde_json::Value::as_str)
-                .map(str::to_string),
+            _ => {
+                let value = serde_json::from_str::<serde_json::Value>(contents)
+                    .map_err(|error| unparsed(error.to_string()))?;
+                let key = if self == Self::VsCode {
+                    "servers"
+                } else {
+                    "mcpServers"
+                };
+                let dexo = value.get(key).and_then(|servers| servers.get("dexo"));
+                dexo.and_then(|dexo| dexo.get("command"))
+                    .and_then(serde_json::Value::as_str)
+                    .map(|command| {
+                        let args = dexo
+                            .and_then(|dexo| dexo.get("args"))
+                            .and_then(serde_json::Value::as_array)
+                            .map(|args| args.iter().filter_map(serde_json::Value::as_str).collect())
+                            .unwrap_or_default();
+                        (command.to_string(), profile(args))
+                    })
+            }
         };
-        Ok(command)
+        Ok(entry)
     }
 }
 
@@ -259,7 +410,15 @@ pub fn read_config(path: &Path) -> Result<Option<String>, AppError> {
     }
 }
 
-fn merged_json(existing: Option<&str>, command: &str, args: &[String]) -> Result<String, AppError> {
+/// `existing` with `dexo` under `key`, run as `command args`; with `kind`, the entry also
+/// says how the server is reached (VS Code's `"type": "stdio"`).
+fn merged_json(
+    existing: Option<&str>,
+    key: &str,
+    kind: Option<&str>,
+    command: &str,
+    args: &[String],
+) -> Result<String, AppError> {
     let left = |what: String| {
         AppError::new(
             ErrorCategory::Configuration,
@@ -274,16 +433,19 @@ fn merged_json(existing: Option<&str>, command: &str, args: &[String]) -> Result
     let servers = root
         .as_object_mut()
         .ok_or_else(|| left("it is not a JSON object".into()))?
-        .entry("mcpServers".into())
+        .entry(key.into())
         .or_insert_with(Json::object)
         .as_object_mut()
-        .ok_or_else(|| left("its mcpServers is not an object".into()))?;
+        .ok_or_else(|| left(format!("its {key} is not an object")))?;
     // Only the keys Dexo writes change: the entry's env, cwd, timeouts and the rest stay.
     let entry = servers
         .entry("dexo".into())
         .or_insert_with(Json::object)
         .as_object_mut()
-        .ok_or_else(|| left("its mcpServers.dexo is not an object".into()))?;
+        .ok_or_else(|| left(format!("its {key}.dexo is not an object")))?;
+    if let Some(kind) = kind {
+        entry.insert("type".into(), Json::Other(serde_json::json!(kind)));
+    }
     entry.insert("command".into(), Json::Other(serde_json::json!(command)));
     entry.insert("args".into(), Json::Other(serde_json::json!(args)));
     let mut text = serde_json::to_string_pretty(&root)
@@ -786,5 +948,79 @@ mod tests {
         assert_eq!(super::stable_path(&exe, &path(&[&bin])), bin.join("dexo"));
         assert_eq!(super::stable_path(&exe, &path(&[&other, &bin])), exe);
         assert_eq!(super::stable_path(&exe, &path(&[])), exe);
+    }
+
+    fn places(dir: &std::path::Path) -> super::Places {
+        super::Places {
+            project: dir.join("project"),
+            home: dir.join("home"),
+            config: dir.join("config"),
+        }
+    }
+
+    /// VS Code keeps its servers under `servers`, each saying it is reached over stdio.
+    #[test]
+    fn vscode_gets_its_own_shape() {
+        let merged = McpClient::VsCode
+            .merged(
+                Some(r#"{"servers": {"other": {"type": "http"}}}"#),
+                "/bin/dexo",
+                &args(),
+            )
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_str(&merged).unwrap();
+        assert_eq!(value["servers"]["dexo"]["type"], "stdio");
+        assert_eq!(value["servers"]["dexo"]["command"], "/bin/dexo");
+        assert_eq!(value["servers"]["other"]["type"], "http");
+        assert!(value.get("mcpServers").is_none());
+    }
+
+    /// Setting a client up writes its file -- keeping the old one -- and its skill, and
+    /// the client then reads as set up for that profile.
+    #[test]
+    fn set_up_writes_the_entry_and_says_so_after() {
+        use super::ClientState;
+        let dir = tempfile::tempdir().unwrap();
+        let places = places(dir.path());
+        assert_eq!(McpClient::ClaudeCode.state(&places), ClientState::NoFile);
+        std::fs::create_dir_all(&places.project).unwrap();
+        std::fs::write(places.project.join(".mcp.json"), "{}").unwrap();
+        assert_eq!(McpClient::ClaudeCode.state(&places), ClientState::NotSetUp);
+
+        let done = McpClient::ClaudeCode
+            .set_up(&places, "/bin/dexo", "assistant", true)
+            .unwrap();
+
+        assert_eq!(done.config, places.project.join(".mcp.json"));
+        assert!(done.backup.is_some(), "the old file is kept");
+        assert!(done.skill.as_ref().is_some_and(|path| path.is_file()));
+        assert_eq!(
+            McpClient::ClaudeCode.state(&places),
+            ClientState::SetUp {
+                command: "/bin/dexo".into(),
+                profile: Some("assistant".into()),
+            }
+        );
+        std::fs::create_dir_all(places.home.join(".codex")).unwrap();
+        std::fs::write(places.home.join(".codex/config.toml"), "not = [toml").unwrap();
+        assert!(matches!(
+            McpClient::Codex.state(&places),
+            ClientState::Unusable(_)
+        ));
+        assert!(
+            McpClient::Codex
+                .set_up(&places, "/bin/dexo", "assistant", false)
+                .is_err(),
+            "a file it cannot read is left alone"
+        );
+    }
+
+    #[test]
+    fn some_clients_have_their_own_command_for_it() {
+        assert_eq!(
+            McpClient::ClaudeCode.by_hand("/bin/dexo", "a").as_deref(),
+            Some("claude mcp add dexo -- /bin/dexo mcp serve --profile a")
+        );
+        assert!(McpClient::Cursor.by_hand("/bin/dexo", "a").is_none());
     }
 }
