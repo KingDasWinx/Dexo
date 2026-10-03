@@ -129,6 +129,35 @@ impl McpClient {
         matches!(self, Self::ClaudeCode | Self::VsCode)
     }
 
+    /// The command the client is started with, for those that have one on PATH.
+    fn program(self) -> Option<&'static str> {
+        match self {
+            Self::ClaudeCode => Some("claude"),
+            Self::Codex => Some("codex"),
+            Self::Cursor => Some("cursor"),
+            Self::GeminiCli => Some("gemini"),
+            Self::Windsurf => Some("windsurf"),
+            Self::VsCode => Some("code"),
+            Self::ClaudeDesktop => None,
+        }
+    }
+
+    /// Whether the client is on this machine: its command on PATH, or the folder of its
+    /// own config there -- Claude Desktop has no command, and an editor's may be off PATH.
+    pub fn installed(self, places: &Places) -> bool {
+        self.installed_with(places, &std::env::var_os("PATH").unwrap_or_default())
+    }
+
+    fn installed_with(self, places: &Places, path: &std::ffi::OsStr) -> bool {
+        let on_path = self
+            .program()
+            .is_some_and(|program| find_on_path(program, path).is_some());
+        // A project's file sits in the project folder, which is there whatever is installed.
+        let folder =
+            !self.per_project() && self.config_path(places).parent().is_some_and(Path::is_dir);
+        on_path || folder
+    }
+
     /// The client's own command that adds the same server, for those that have one.
     pub fn by_hand(self, command: &str, profile: &str) -> Option<String> {
         let serve = format!("{command} mcp serve --profile {profile}");
@@ -629,7 +658,32 @@ a different statement to get around the decision; ask the person instead.
 
 #[cfg(test)]
 mod tests {
-    use super::McpClient;
+    use super::{McpClient, Places};
+
+    #[cfg(unix)]
+    #[test]
+    fn a_client_is_installed_when_its_command_is_on_path_or_its_folder_is_there() {
+        use std::os::unix::fs::PermissionsExt;
+        let bin = tempfile::tempdir().unwrap();
+        let home = tempfile::tempdir().unwrap();
+        let program = bin.path().join("codex");
+        std::fs::write(&program, "#!/bin/sh\n").unwrap();
+        std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
+        let places = Places {
+            project: home.path().join("project"),
+            home: home.path().to_path_buf(),
+            config: home.path().join(".config"),
+        };
+        let path = bin.path().as_os_str();
+        assert!(McpClient::Codex.installed_with(&places, path));
+        assert!(!McpClient::GeminiCli.installed_with(&places, path));
+        assert!(!McpClient::ClaudeDesktop.installed_with(&places, path));
+        std::fs::create_dir_all(home.path().join(".config/Claude")).unwrap();
+        assert!(McpClient::ClaudeDesktop.installed_with(&places, path));
+        // The project folder is no sign of Claude Code.
+        std::fs::create_dir_all(&places.project).unwrap();
+        assert!(!McpClient::ClaudeCode.installed_with(&places, path));
+    }
 
     fn args() -> Vec<String> {
         ["mcp", "serve", "--profile", "agent"]

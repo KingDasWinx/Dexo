@@ -2,12 +2,17 @@
 //! grants that let them. It was two dialogs, Agent Activity and MCP Profiles, the first a
 //! box of seven rows on a terminal of forty-five.
 
+use crossterm::event::KeyCode;
 use ratatui::Frame;
 use ratatui::layout::Rect;
+use ratatui::text::{Line, Span};
 
+use super::Button;
+use super::widgets::{self, Entry, FieldRow};
 use crate::model::Model;
 use crate::mouse::{HitMap, HitTarget};
 use crate::screens::mcp_profiles::McpProfilesScreen;
+use crate::theme::Role;
 
 #[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
 pub enum AgentsView {
@@ -85,27 +90,93 @@ fn setup(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         setup_form(frame, area, model, hits);
         return;
     }
-    let rows: Vec<String> = setup
-        .clients
-        .iter()
-        .map(|row| format!("{:<15} {}", row.client.name(), row.status()))
-        .collect();
-    let (list, detail) = super::list_and_detail(area, rows.len());
-    super::list_pane(
-        frame,
-        list,
-        model,
-        hits,
-        "Agents",
-        None,
-        &rows,
-        Some(setup.selected),
-    );
+    let (list, detail) = super::list_and_detail(area, setup.clients.len());
+    setup_list(frame, list, model, hits);
     setup_form(frame, detail, model, hits);
 }
 
+/// Each agent with where it stands: set up and with which profile, found on this machine,
+/// or not; one not found is dimmed and stays in its place.
+fn setup_list(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    use dexo_app::mcp::clients::ClientState;
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let setup = &model.mcp_setup;
+    let block = crate::render::pane_block(
+        model,
+        "Agents",
+        super::section(model) == super::Section::List,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenList, area);
+    let style = |role: Role| model.theme.style(role, model.capabilities);
+    let entries: Vec<Entry> = setup
+        .clients
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            let (glyph, role) = match &row.state {
+                ClientState::SetUp { .. } => ("✓", Role::Success),
+                ClientState::Unusable(_) => ("!", Role::Error),
+                _ => ("·", Role::Muted),
+            };
+            let name = format!(" {:<15} {}", row.client.name(), row.list_status());
+            Entry {
+                spans: vec![
+                    Span::styled(glyph, style(role)),
+                    if row.found || matches!(row.state, ClientState::SetUp { .. }) {
+                        Span::raw(name)
+                    } else {
+                        Span::styled(name, style(Role::Muted))
+                    },
+                ],
+                target: Some(HitTarget::ListRow(index)),
+                picked: index == setup.selected,
+                heading: false,
+            }
+        })
+        .collect();
+    widgets::entries(frame, inner, model, hits, &entries);
+}
+
+/// What can be done to the picked agent: set it up, or copy its own command for it.
+pub fn setup_buttons(model: &Model) -> Vec<Button> {
+    use dexo_app::mcp::clients::ClientState;
+    let setup = &model.mcp_setup;
+    let Some(row) = setup.current() else {
+        return Vec::new();
+    };
+    let set_up = match &row.state {
+        _ if setup.busy => {
+            Button::new(KeyCode::Char('s'), "Set up").disabled("It is being set up.")
+        }
+        ClientState::Unusable(why) => Button::new(KeyCode::Char('s'), "Set up")
+            .disabled(format!("{} is left as it is: {why}.", row.path)),
+        _ => Button::new(KeyCode::Char('s'), "Set up"),
+    };
+    let command = row
+        .client
+        .by_hand(&setup.command, &setup.profile_name())
+        .is_some();
+    vec![
+        set_up,
+        Button::new(KeyCode::Char('y'), "Copy command").enabled_if(
+            command,
+            format!(
+                "{} has no command of its own for it: s sets it up.",
+                row.client.name()
+            ),
+        ),
+    ]
+}
+
+/// The labels' column of the Setup detail, fields and form alike: as wide as Connections.
+const LABEL: usize = 11;
+
 fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
-    use crate::screens::mcp_setup::{Row, row_hint};
+    use crate::screens::mcp_setup::Row;
     use dexo_app::mcp::clients::ClientState;
     let setup = &model.mcp_setup;
     let Some(client) = setup.current() else {
@@ -115,129 +186,156 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         return;
     }
     let focused = super::section(model) == super::Section::Detail;
-    let block =
-        crate::render::pane_block(model, &format!("Set up {}", client.client.name()), focused);
-    let inner = block.inner(area);
+    let block = crate::render::pane_block(model, client.client.name(), focused);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenDetail, area);
-    let width = usize::from(inner.width).max(8);
-    let wrap = |text: &str| crate::model::wrap_words(text, width);
-    // (the form row it is, its text)
-    let mut lines: Vec<(Option<usize>, String)> = Vec::new();
-    let say = |lines: &mut Vec<(Option<usize>, String)>, text: &str| {
-        lines.extend(wrap(text).into_iter().map(|line| (None, line)));
-    };
-    let place = if client.client.per_project() {
-        format!(
-            "Writes Dexo's server into {} -- this project's, the folder Dexo started in -- and keeps the old file beside it.",
-            client.path
-        )
-    } else {
-        format!(
-            "Writes Dexo's server into {}, and keeps the old file beside it.",
-            client.path
-        )
-    };
-    say(&mut lines, &place);
-    say(
-        &mut lines,
-        &match &client.state {
-            ClientState::SetUp {
-                profile: Some(profile),
-                ..
-            } => format!("Set up now, with {profile}."),
-            ClientState::SetUp { .. } => "Set up now.".into(),
-            ClientState::NoFile | ClientState::NotSetUp => "Not set up yet.".into(),
-            ClientState::Unusable(why) => format!("Its file is left alone: {why}."),
-        },
+    let used = widgets::action_bar(frame, inner, model, hits, &setup_buttons(model), None);
+    let gap = u16::from(inner.height > used + 3);
+    inner = Rect::new(
+        inner.x,
+        inner.y + used + gap,
+        inner.width,
+        inner.height.saturating_sub(used + gap),
     );
-    lines.push((None, String::new()));
+    let style = |role: Role| model.theme.style(role, model.capabilities);
+    let width = inner.width;
+    // (the form row it is, the line)
+    let mut lines: Vec<(Option<usize>, Line)> = Vec::new();
+    let status = match &client.state {
+        ClientState::SetUp {
+            profile: Some(profile),
+            ..
+        } => format!("set up · {profile}"),
+        ClientState::SetUp { .. } => "set up".into(),
+        ClientState::NoFile | ClientState::NotSetUp => "not set up".into(),
+        ClientState::Unusable(why) => format!("its file cannot be read: {why}"),
+    };
+    let found = if client.found {
+        "installed"
+    } else {
+        "not found on this machine"
+    };
+    let mut writes = client.path.clone();
+    if client.client.per_project() {
+        writes.push_str(" (this folder)");
+    }
+    writes.push_str(if matches!(client.state, ClientState::NoFile) {
+        " · new file"
+    } else {
+        " · exists"
+    });
+    let mut fields = vec![
+        FieldRow::Field("Status", format!("{status} · {found}")),
+        FieldRow::Field("Writes", writes),
+    ];
+    if let Some(skill) = &client.skill {
+        fields.push(FieldRow::Field("Skill", skill.clone()));
+    }
+    // The labels line up with the form's under them.
+    lines.extend(
+        widgets::field_lines_with(model, &fields, width, LABEL)
+            .into_iter()
+            .map(|line| (None, line)),
+    );
+    lines.push((None, Line::default()));
     let on = |yes: bool| if yes { "yes" } else { "no" };
+    let muted = style(Role::Muted);
     for (index, row) in setup.rows().into_iter().enumerate() {
         let marker = if focused && setup.focused() == Some(row) {
             ">"
         } else {
             " "
         };
-        let text = match row {
-            Row::Profile => format!(
-                "profile:      < {} >",
-                setup.profile.as_deref().unwrap_or("a new one")
+        let (label, value) = match row {
+            Row::Profile => (
+                "Profile",
+                format!("< {} >", setup.profile.as_deref().unwrap_or("a new one")),
             ),
-            Row::Name => format!("name:         {}", setup.name.as_str()),
+            Row::Name => ("Name", setup.name.as_str().to_string()),
             Row::Connection(at) => {
                 let (name, checked) = &setup.connections[at];
-                let label = if at == 0 { "connections:" } else { "" };
-                format!("{label:<14}[{}] {name}", if *checked { "x" } else { " " })
+                (
+                    if at == 0 { "Connections" } else { "" },
+                    format!("[{}] {name}", if *checked { "x" } else { " " }),
+                )
             }
-            Row::Reads => format!("read SQL:     < {} >", on(setup.reads)),
-            Row::Skill => format!(
-                "skill file:   < {} >  {}",
-                on(setup.skill),
-                client.skill.as_deref().unwrap_or_default()
-            ),
+            Row::Reads => ("Read SQL", format!("< {} >", on(setup.reads))),
+            Row::Skill => ("Skill file", format!("< {} >", on(setup.skill))),
         };
-        lines.push((Some(index), format!("{marker} {text}")));
+        lines.push((
+            Some(index),
+            Line::from(vec![
+                Span::raw(marker),
+                Span::styled(format!("{label:<LABEL$}  "), muted),
+                Span::raw(value),
+            ]),
+        ));
+        // An existing profile is used as it is; what it lets the agent do is said.
+        if row == Row::Profile
+            && let Some(name) = &setup.profile
+            && let Some(found) = model
+                .mcp_profiles
+                .profiles
+                .iter()
+                .find(|profile| &profile.name == name)
+        {
+            let indent = 1 + LABEL + 2;
+            let uses = if found.connections.is_empty() {
+                "no connection yet".to_string()
+            } else {
+                found.connections.join(", ")
+            };
+            lines.push((
+                None,
+                Line::styled(
+                    format!(
+                        "{:indent$}uses {uses} · {} · {}",
+                        "",
+                        if found.raw_read { "read SQL" } else { "browse" },
+                        if found.enabled { "enabled" } else { "disabled" }
+                    ),
+                    muted,
+                ),
+            ));
+        }
     }
-    // An existing profile is used as it is; what it lets the agent do is said.
-    if let Some(name) = &setup.profile
-        && let Some(found) = model
-            .mcp_profiles
-            .profiles
-            .iter()
-            .find(|profile| &profile.name == name)
-    {
-        let uses = if found.connections.is_empty() {
-            "no connection yet".to_string()
-        } else {
-            found.connections.join(", ")
-        };
-        let state = if found.enabled {
-            "enabled"
-        } else {
-            "disabled: Set up enables it"
-        };
-        say(
-            &mut lines,
-            &format!(
-                "  uses {uses}; {}; {state}",
-                if found.raw_read {
-                    "reads SQL"
-                } else {
-                    "browses only"
-                }
-            ),
-        );
+    // The form's own buttons, while it has the keys.
+    let mut footer_row = None;
+    if focused {
+        lines.push((None, Line::default()));
+        footer_row = Some(lines.len());
+        lines.push((
+            None,
+            Line::raw(crate::widgets::form::footer_line("Set up", setup.footer)),
+        ));
     }
-    lines.push((None, String::new()));
-    let footer_row = lines.len();
-    let footer = crate::widgets::form::footer_line(
-        "Set up",
-        if focused {
-            setup.footer
-        } else {
-            crate::widgets::form::FooterFocus::Input
-        },
-    );
-    lines.push((None, footer.clone()));
-    lines.push((None, String::new()));
     match (&setup.outcome, setup.busy) {
-        (_, true) => say(&mut lines, "Setting it up..."),
+        (_, true) => {
+            lines.push((None, Line::default()));
+            lines.push((None, Line::styled("… setting it up", muted)));
+        }
         (Some(Ok(done)), _) => {
+            lines.push((None, Line::default()));
             for line in done {
-                say(&mut lines, line);
+                let role = if line.starts_with('✓') {
+                    Role::Success
+                } else {
+                    Role::Warning
+                };
+                for part in crate::model::wrap_words(line, usize::from(width).max(8) - 1) {
+                    lines.push((None, Line::styled(format!(" {part}"), style(role))));
+                }
             }
         }
-        (Some(Err(why)), _) => say(&mut lines, why),
-        (None, _) => {
-            if let Some(row) = setup.focused().filter(|_| focused) {
-                say(&mut lines, row_hint(row));
+        (Some(Err(why)), _) => {
+            lines.push((None, Line::default()));
+            for part in crate::model::wrap_words(&format!("✗ {why}"), usize::from(width).max(8) - 1)
+            {
+                lines.push((None, Line::styled(format!(" {part}"), style(Role::Error))));
             }
         }
-    }
-    if let Some(command) = client.client.by_hand(&setup.command, &setup.profile_name()) {
-        lines.push((None, String::new()));
-        say(&mut lines, &format!("By hand: {command}"));
+        (None, _) => {}
     }
     // Scrolled so the focused row, or the buttons, stay in sight.
     let height = usize::from(inner.height);
@@ -247,20 +345,25 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             .position(|(row, _)| *row == Some(setup.row))
             .unwrap_or(0)
     } else {
-        footer_row
+        footer_row.unwrap_or(0)
     };
     let offset = crate::palette::scroll_to_selection(focus_line, 0, lines.len(), height);
-    let shown: Vec<String> = lines
+    let shown: Vec<Line> = lines
         .iter()
         .skip(offset)
         .take(height)
-        .map(|(_, line)| crate::model::truncate_cell(line, width))
+        .map(|(_, line)| line.clone())
         .collect();
-    frame.render_widget(ratatui::widgets::Paragraph::new(shown.join("\n")), inner);
+    frame.render_widget(ratatui::widgets::Paragraph::new(shown), inner);
     for (line, (row, text)) in lines.iter().enumerate().skip(offset).take(height) {
         let rect = crate::mouse::line_rect(inner, line - offset);
-        if line == footer_row {
-            crate::widgets::form::register_footer(hits, rect, text, "Set up");
+        let text: String = text
+            .spans
+            .iter()
+            .map(|span| span.content.as_ref())
+            .collect();
+        if Some(line) == footer_row {
+            crate::widgets::form::register_footer(hits, rect, &text, "Set up");
             continue;
         }
         let Some(row) = row else {
@@ -271,7 +374,7 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             crate::mouse::register_label(
                 hits,
                 rect,
-                text,
+                &text,
                 needle,
                 HitTarget::FormChoice { index: *row, step },
             );
@@ -280,7 +383,8 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             && setup.rows().get(*row) == Some(&Row::Name)
             && setup.focused() == Some(Row::Name)
         {
-            crate::render::show_input(frame, rect, "> name:         ", &setup.name, false);
+            let before = format!(">{:<LABEL$}  ", "Name");
+            crate::render::show_input(frame, rect, &before, &setup.name, false);
         }
     }
 }
@@ -559,11 +663,15 @@ fn register_buttons(hits: &mut HitMap, area: Rect, lines: &[String], submit: &st
 pub fn hints(model: &Model) -> String {
     let views = "1-4 views";
     match model.agents_view {
+        // What the focused row is for, where the form's sentences were.
         AgentsView::Setup if super::section(model) == super::Section::Detail => {
-            "Up/Down move  Left/Right/Space change  Enter next  Esc the list".into()
+            match model.mcp_setup.focused() {
+                Some(row) => format!("{}  Esc the list", crate::screens::mcp_setup::row_hint(row)),
+                None => "Left/Right pick  Enter answer  Esc the list".into(),
+            }
         }
         AgentsView::Setup => {
-            format!("Up/Down pick  Enter set it up  c copy the command  {views}  Esc back")
+            format!("Up/Down pick  Enter the form  s set up  y copy the command  {views}  Esc back")
         }
         AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
             "Left/Right pick  Enter answer  Esc cancel".into()

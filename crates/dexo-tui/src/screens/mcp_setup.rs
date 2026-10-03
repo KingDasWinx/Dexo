@@ -16,9 +16,21 @@ pub struct ClientRow {
     /// Where its skill goes, when it has a place for one.
     pub skill: Option<String>,
     pub state: ClientState,
+    /// The agent is on this machine: its command on PATH, or its config's folder there.
+    pub found: bool,
 }
 
 impl ClientRow {
+    /// What the list says of it: set up and with what, else found here or not.
+    pub fn list_status(&self) -> String {
+        match &self.state {
+            ClientState::SetUp { .. } => self.status(),
+            ClientState::Unusable(_) => "unreadable".into(),
+            _ if self.found => "found".into(),
+            _ => "not found".into(),
+        }
+    }
+
     /// What its file says, in words.
     pub fn status(&self) -> String {
         match &self.state {

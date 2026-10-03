@@ -26,6 +26,9 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::buttons(model),
         Screen::History => history::buttons(model),
+        Screen::Agents if model.agents_view == agents::AgentsView::Setup => {
+            agents::setup_buttons(model)
+        }
         _ => Vec::new(),
     }
 }
@@ -42,8 +45,12 @@ pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
 /// The detail's focused button: one only while the detail has the keys.
 pub fn button_focus(model: &Model) -> Option<usize> {
     let count = buttons(model).len();
-    (count > 0 && section(model) == Section::Detail && held(model).is_none())
-        .then(|| model.screen_button.min(count - 1))
+    // A form's keys are its own: Left and Right change its values.
+    (count > 0
+        && section(model) == Section::Detail
+        && held(model).is_none()
+        && !detail_is_form(model))
+    .then(|| model.screen_button.min(count - 1))
 }
 
 /// Commands a key may run while a screen other than the workbench is up. The rest act on

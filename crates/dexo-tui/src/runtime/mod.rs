@@ -2860,6 +2860,7 @@ fn mcp_clients() -> Action {
                 .skill_path(&places)
                 .map(|path| home_relative(&path, &places.home)),
             state: client.state(&places),
+            found: client.installed(&places),
         })
         .collect();
     Action::McpClientsLoaded {
@@ -2950,26 +2951,25 @@ fn set_up_mcp_client(
     let shown = |path: &std::path::Path| home_relative(path, &places.home);
     let mut lines = vec![match &done.backup {
         Some(backup) => format!(
-            "Wrote {}; the file as it was is {}.",
+            "✓ {} written (the old one kept as {})",
             shown(&done.config),
             shown(backup)
         ),
-        None => format!("Wrote {}.", shown(&done.config)),
+        None => format!("✓ {} written", shown(&done.config)),
     }];
     if let Some(skill) = &done.skill {
-        lines.push(format!("Wrote {}.", shown(skill)));
+        lines.push(format!("✓ {} written", shown(skill)));
     }
     lines.push(format!(
-        "{name} is enabled: the agent uses {}, read-only.",
+        "✓ {name} enabled, on {}, read-only",
         connections.join(", ")
     ));
     lines.push(if client == McpClient::ClaudeCode {
-        "Restart Claude Code here; it asks to approve the project's servers the first time."
-            .to_string()
+        "→ restart Claude Code here, and approve the project's servers".to_string()
     } else {
-        format!("Restart {} to load it.", client.name())
+        format!("→ restart {}", client.name())
     });
-    lines.push("A write needs a grant: Profiles, then g.".into());
+    lines.push("→ a write needs a grant: Profiles, then g".into());
     Ok(lines)
 }
 

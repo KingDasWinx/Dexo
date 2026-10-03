@@ -389,8 +389,6 @@ pub enum FieldRow {
 /// `rows` as lines `width` columns wide: the labels dimmed in one column, a long value
 /// wrapped under itself, a section's heading styled as the connection form's.
 pub fn field_lines(model: &Model, rows: &[FieldRow], width: u16) -> Vec<Line<'static>> {
-    let muted = model.theme.style(Role::Muted, model.capabilities);
-    let heading = muted.add_modifier(Modifier::BOLD);
     let label_width = rows
         .iter()
         .filter_map(|row| match row {
@@ -399,6 +397,19 @@ pub fn field_lines(model: &Model, rows: &[FieldRow], width: u16) -> Vec<Line<'st
         })
         .max()
         .unwrap_or(0);
+    field_lines_with(model, rows, width, label_width)
+}
+
+/// [`field_lines`] with the labels' column `label_width` wide, to line up with rows drawn
+/// beside them: a form's.
+pub fn field_lines_with(
+    model: &Model,
+    rows: &[FieldRow],
+    width: u16,
+    label_width: usize,
+) -> Vec<Line<'static>> {
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let heading = muted.add_modifier(Modifier::BOLD);
     let indent = 1 + label_width + 2;
     let room = usize::from(width).saturating_sub(indent).max(8);
     let mut lines = Vec::new();

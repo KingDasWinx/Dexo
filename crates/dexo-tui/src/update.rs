@@ -4248,6 +4248,10 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
     crate::screen::stop_typing(model);
     // A button: its key, pressed. A form or a question holding the keys keeps them.
     if let Some(HitTarget::Press(code, shift)) = hit {
+        // Setup's form keeps what was typed into it; its buttons act from the list.
+        if crate::screen::detail_is_form(model) {
+            model.sections[model.shown_screen().index()] = crate::screen::Section::List;
+        }
         if crate::screen::held(model).is_some() {
             return Vec::new();
         }
@@ -5377,14 +5381,12 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                     model.sections[crate::model::Screen::Agents.index()] =
                         crate::screen::Section::Detail;
                 }
-                KeyCode::Char('c') => {
+                KeyCode::Char('s') => return Some(submit_mcp_setup(model)),
+                KeyCode::Char('y') => {
                     let Some(text) = setup
                         .current()
                         .and_then(|row| row.client.by_hand(&setup.command, &setup.profile_name()))
                     else {
-                        model.messages.info(
-                            "This agent has no command of its own for it: Enter sets it up.".into(),
-                        );
                         return Some(Vec::new());
                     };
                     model.messages.info("Copied the command.".into());

@@ -41,6 +41,7 @@ fn row(client: McpClient, state: ClientState) -> ClientRow {
         path: format!("/home/u/{}.json", client.id()),
         skill: (client == McpClient::ClaudeCode).then(|| "/p/.claude/skills/dexo/SKILL.md".into()),
         state,
+        found: client == McpClient::ClaudeCode,
     }
 }
 
@@ -102,7 +103,69 @@ fn a_new_profile_on_the_connection_in_use_is_the_default() {
     let screen = dexo_tui::render::render_to_string(&model, 140, 40);
     assert!(screen.contains("Claude Code"), "{screen}");
     assert!(screen.contains("not set up"), "{screen}");
-    assert!(screen.contains("By hand: claude mcp add dexo"), "{screen}");
+}
+
+/// The detail is fields and the form, no sentences: the command is a button to copy,
+/// not a line of a hundred and twenty characters.
+#[test]
+fn the_detail_is_fields_with_buttons_and_no_prose() {
+    let model = setup();
+    let screen = dexo_tui::render::render_to_string(&model, 140, 40);
+    for text in [
+        "[s Set up]",
+        "[y Copy command]",
+        " Status ",
+        " Writes ",
+        " Skill ",
+        "Profile",
+        "installed",
+    ] {
+        assert!(screen.contains(text), "{text}: {screen}");
+    }
+    assert!(!screen.contains("By hand"), "{screen}");
+    assert!(!screen.contains("Writes Dexo's server into"), "{screen}");
+    // Codex is not on this machine: the list says so.
+    assert!(screen.contains("unreadable"), "{screen}");
+}
+
+#[test]
+fn an_agent_not_on_this_machine_says_not_found() {
+    let mut model = setup();
+    update(
+        &mut model,
+        Action::McpClientsLoaded {
+            clients: vec![
+                row(McpClient::ClaudeCode, ClientState::NotSetUp),
+                row(McpClient::Cursor, ClientState::NoFile),
+            ],
+            command: "/usr/bin/dexo".into(),
+            project: "/p".into(),
+        },
+    );
+    let screen = dexo_tui::render::render_to_string(&model, 140, 40);
+    assert!(screen.contains("not found"), "{screen}");
+    assert!(screen.contains("found"), "{screen}");
+    press(&mut model, KeyCode::Down);
+    let screen = dexo_tui::render::render_to_string(&model, 140, 40);
+    assert!(screen.contains("not found on this machine"), "{screen}");
+    assert!(screen.contains("new file"), "{screen}");
+}
+
+/// `s` sets the picked agent up from the list, with what the form holds.
+#[test]
+fn s_sets_up_from_the_list() {
+    let mut model = setup();
+    let effects = press(&mut model, KeyCode::Char('s'));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SetUpMcpClient {
+                client: McpClient::ClaudeCode,
+                ..
+            }
+        )),
+        "{effects:?}"
+    );
 }
 
 #[test]
@@ -195,10 +258,10 @@ fn a_file_it_cannot_read_is_left_alone() {
 
 /// An agent's own command is copied from the list.
 #[test]
-fn c_copies_the_agents_own_command() {
+fn y_copies_the_agents_own_command() {
     let mut model = setup();
 
-    let effects = press(&mut model, KeyCode::Char('c'));
+    let effects = press(&mut model, KeyCode::Char('y'));
 
     assert!(
         effects.iter().any(|effect| matches!(
