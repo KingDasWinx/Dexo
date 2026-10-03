@@ -1472,7 +1472,12 @@ fn hidden(id: &str) -> bool {
             | "results.actions"
             | "explorer.up"
             | "explorer.down"
-            | "explorer.actions"
+            | "explorer.first"
+            | "explorer.last"
+            | "explorer.page_up"
+            | "explorer.page_down"
+            | "explorer.collapse"
+            | "explorer.open"
             // the document strip's own cursor: it only means something with the strip
             // focused, where the arrows and Enter are the keys
             | "document.activate_tab"

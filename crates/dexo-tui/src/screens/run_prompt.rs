@@ -118,7 +118,7 @@ mod tests {
         Flagged {
             index: 0,
             sql: sql.into(),
-            reason: why.describe(),
+            reason: why.describe().to_string(),
         }
     }
 

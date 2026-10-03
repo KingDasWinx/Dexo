@@ -326,15 +326,20 @@ fn every_write_path_asks_for_the_name_on_production() {
 
     // DDL from the schema form.
     let mut model = live("production", false, "");
+    let change = model.schema_editor.to_change().ok();
     model.schema_editor.preview = Some(dexo_tui::screens::schema_editor::DdlPreviewState {
         target: "public.items".into(),
         sql: "CREATE TABLE public.items (id integer)".into(),
         risk: String::new(),
+        warnings: Vec::new(),
         confirmation: dexo_app::schema::Confirmation::None,
         typed: Default::default(),
         confirmed: false,
         footer: dexo_tui::widgets::form::FooterFocus::Submit,
         error: None,
+        scroll: 0,
+        origin: dexo_tui::screens::schema_editor::PreviewOrigin::Form,
+        change,
     });
     let applied = |effects: &[Effect]| {
         effects

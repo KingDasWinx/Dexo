@@ -80,6 +80,11 @@ fn a_run_with_values_from_before_says_which_and_how_to_change_them() {
     press(&mut model, KeyCode::Enter);
     type_text(&mut model, "north");
     press(&mut model, KeyCode::Enter);
+    // The run the prompt started is over before the next one: a second run while one is
+    // going is refused.
+    model.active_task = None;
+    model.active_query = None;
+    model.active_operation = None;
     update(&mut model, Action::ExecuteStatement);
     let shown = model
         .messages

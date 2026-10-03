@@ -16,7 +16,10 @@ fn dependencies_are_named_not_numbered() {
     let screen = render_to_string(&model, 120, 36);
     assert!(!screen.contains("pg:schema:2200"), "{screen}");
     assert!(!screen.contains("17094"), "{screen}");
-    assert!(screen.contains("deps: a schema, a type"), "{screen}");
+    assert!(
+        screen.contains("depends on:") && screen.contains("a schema") && screen.contains("a type"),
+        "{screen}"
+    );
 }
 
 /// A request that waits for minutes is on the status line, not only in a toast that is
