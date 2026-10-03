@@ -930,10 +930,13 @@ impl WorkbenchRuntime {
                 }
             }
             crate::Effect::LoadSnippets => {
-                if let Some(storage) = &self.storage
-                    && let Ok(snippets) = storage.list_snippets().await
-                {
-                    self.emit(Action::SnippetsLoaded(snippets)).await;
+                if let Some(storage) = self.storage.clone() {
+                    let action_tx = self.action_tx.clone();
+                    tokio::spawn(async move {
+                        if let Ok(snippets) = storage.list_snippets().await {
+                            let _ = action_tx.send(Action::SnippetsLoaded(snippets)).await;
+                        }
+                    });
                 }
             }
             crate::Effect::CheckpointRecovery(request) => self.checkpoint_recovery(request).await,
@@ -1238,14 +1241,17 @@ impl WorkbenchRuntime {
     }
 
     async fn list_saved_queries(&self, project_id: String) {
-        let Some(storage) = &self.storage else {
+        let Some(storage) = self.storage.clone() else {
             return;
         };
-        let listed = storage
-            .list_saved_queries(project_id)
-            .await
-            .map_err(|error| error.to_string());
-        self.emit(Action::SavedQueriesLoaded(listed)).await;
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            let listed = storage
+                .list_saved_queries(project_id)
+                .await
+                .map_err(|error| error.to_string());
+            let _ = action_tx.send(Action::SavedQueriesLoaded(listed)).await;
+        });
     }
 
     /// Counts on a connection dialled for it with the session's profile: a count on the
@@ -2403,20 +2409,22 @@ impl WorkbenchRuntime {
         }
     }
 
+    /// Spawned, as every read the storage worker answers: see `check_approvals`.
     async fn load_history(&mut self, connection_id: Option<String>) {
-        let Some(storage) = &self.storage else {
+        let Some(storage) = self.storage.clone() else {
             return;
         };
-        match storage.list_history(connection_id).await {
-            Ok(entries) => self.emit(Action::HistoryLoaded(entries)).await,
-            Err(error) => {
-                self.emit(Action::OperationFailed {
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            let action = match storage.list_history(connection_id).await {
+                Ok(entries) => Action::HistoryLoaded(entries),
+                Err(error) => Action::OperationFailed {
                     key: OperationKey::new(OperationId::new(), "", "", 0),
                     message: error.to_string(),
-                })
-                .await;
-            }
-        }
+                },
+            };
+            let _ = action_tx.send(action).await;
+        });
     }
 
     async fn clear_history(&mut self, connection_id: String) {
@@ -2591,13 +2599,19 @@ impl WorkbenchRuntime {
 
     /// Asked every two seconds, on the storage worker's open connection: it opened a
     /// database and wrote to it each time, for people who never use MCP too.
+    /// Spawned, never awaited here: the worker answers after whatever it is doing, and a
+    /// write of its waits for a lock another process -- the MCP server -- holds on the
+    /// database. Every two seconds the screen froze with it.
     async fn check_approvals(&self) {
-        let Some(storage) = &self.storage else {
+        let Some(storage) = self.storage.clone() else {
             return;
         };
-        if let Ok(pending) = storage.waiting_approvals(unix_now()).await {
-            self.emit(Action::ApprovalsWaiting(pending)).await;
-        }
+        let action_tx = self.action_tx.clone();
+        tokio::spawn(async move {
+            if let Ok(pending) = storage.waiting_approvals(unix_now()).await {
+                let _ = action_tx.send(Action::ApprovalsWaiting(pending)).await;
+            }
+        });
     }
 
     async fn set_mcp_profile_enabled(&self, name: String, enabled: bool) {
