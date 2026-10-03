@@ -108,12 +108,11 @@ fn view_table(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         return;
     }
     let columns = view.columns();
-    let detail_rows = (columns.len() as u16 + 2).min(area.height / 3);
-    let table = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(detail_rows),
+    let (table, detail) = super::table_and_detail(
+        model,
+        hits,
+        area,
+        (columns.len() as u16 + 2).min(area.height / 3),
     );
     if table.width >= 2 && table.height >= 2 {
         let block = crate::render::pane_block(
@@ -180,10 +179,9 @@ fn view_table(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             .collect();
         widgets::entries(frame, inner, model, hits, &entries);
     }
-    if detail_rows >= 3
+    if detail.height >= 3
         && let Some(row) = cells.get(admin.view_selected)
     {
-        let detail = Rect::new(area.x, table.bottom(), area.width, detail_rows);
         let fields: Vec<FieldRow> = columns
             .iter()
             .zip(row)

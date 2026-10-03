@@ -594,13 +594,7 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     let picked = audit.event_selected.min(events.len() - 1);
     // The table above, the picked call in full below it.
-    let detail_rows = 5.min(area.height / 3);
-    let table = Rect::new(
-        area.x,
-        area.y,
-        area.width,
-        area.height.saturating_sub(detail_rows),
-    );
+    let (table, detail) = super::table_and_detail(model, hits, area, 5.min(area.height / 3));
     if table.width >= 2 && table.height >= 2 {
         let title = if audit.filtered() {
             format!("Recent calls ({} shown)", events.len())
@@ -667,9 +661,8 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             .collect();
         widgets::entries(frame, inner, model, hits, &entries);
     }
-    if detail_rows >= 3 {
+    if detail.height >= 3 {
         let event = events[picked];
-        let detail = Rect::new(area.x, table.bottom(), area.width, detail_rows);
         let on = if event.target.is_empty() {
             String::new()
         } else {

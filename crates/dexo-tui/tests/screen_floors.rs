@@ -135,3 +135,63 @@ fn under_80_columns_one_column_enter_for_the_detail_esc_back() {
         assert_eq!(model.screen.title(), name, "{name}: Esc left the screen");
     }
 }
+
+/// Activity's calls and Server's other views fold too: the table, Enter for the picked
+/// row's fields, Esc back.
+#[test]
+fn tables_with_a_detail_under_them_fold_as_well() {
+    use dexo_tui::screens::admin::{ServerView, ViewRows};
+    let mut activity = Model::default();
+    update(&mut activity, Action::OpenMcpAudit);
+    activity.agents_view = dexo_tui::screen::agents::AgentsView::Activity;
+    activity.mcp_audit.events = vec![dexo_tui::screens::mcp_audit::AuditLine {
+        time: "12:00:00".into(),
+        profile: "assistant".into(),
+        tool: "catalog_search".into(),
+        outcome: "ok".into(),
+        ..Default::default()
+    }];
+    let mut locks = server();
+    update(
+        &mut locks,
+        Action::Key(KeyEvent::new(KeyCode::Char('2'), KeyModifiers::NONE)),
+    );
+    let session = locks.admin.server.as_ref().unwrap().session;
+    update(
+        &mut locks,
+        Action::AdminViewLoaded {
+            session,
+            view: ServerView::Locks,
+            result: Ok((
+                ViewRows::Locks(vec![dexo_driver_api::LockInfo {
+                    lock_type: "relation".into(),
+                    relation: Some("public.orders".into()),
+                    mode: "RowExclusiveLock".into(),
+                    granted: true,
+                    session_id: "11".into(),
+                }]),
+                None,
+            )),
+        },
+    );
+    for (name, mut model, row, field) in [
+        ("Activity", activity, "catalog_search", " Result "),
+        ("Locks", locks, "public.orders", " Relation "),
+    ] {
+        let frame = paint(&mut model, 60, 20);
+        assert!(frame.contains(row), "{name}: {frame}");
+        assert!(
+            !frame.contains(field),
+            "{name}: the detail is drawn too: {frame}"
+        );
+        press(&mut model, KeyCode::Enter);
+        let frame = paint(&mut model, 60, 20);
+        assert!(frame.contains(field), "{name}: no detail: {frame}");
+        press(&mut model, KeyCode::Esc);
+        let frame = paint(&mut model, 60, 20);
+        assert!(
+            !frame.contains(field),
+            "{name}: Esc did not go back: {frame}"
+        );
+    }
+}

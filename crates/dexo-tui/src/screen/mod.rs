@@ -464,6 +464,33 @@ pub fn list_and_detail(
     }
 }
 
+/// A table over its detail, `detail_rows` tall; under [`FOLD_WIDTH`] one of them, the
+/// one with the keys, and the other an empty rect -- as [`list_and_detail`] folds.
+pub fn table_and_detail(
+    model: &Model,
+    hits: &mut HitMap,
+    area: Rect,
+    detail_rows: u16,
+) -> (Rect, Rect) {
+    if area.width < FOLD_WIDTH {
+        hits.fold();
+        let none = Rect::new(area.x, area.y, 0, 0);
+        return if section(model) == Section::Detail {
+            (none, area)
+        } else {
+            (area, none)
+        };
+    }
+    let table = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height.saturating_sub(detail_rows),
+    );
+    let detail = Rect::new(area.x, table.bottom(), area.width, detail_rows);
+    (table, detail)
+}
+
 /// A bordered list with the picked row reversed and kept in sight, under an optional
 /// pinned header of column names; every row drawn answers a click as `ListRow(index)`.
 #[allow(clippy::too_many_arguments)]
