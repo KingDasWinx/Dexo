@@ -166,7 +166,19 @@ pub fn with_accent(mut theme: Theme, accent: &str) -> Theme {
     let Ok(color) = parse_color(hex) else {
         return theme;
     };
-    let palette = palette_from(color);
+    let mut palette = palette_from(color);
+    // On a light surface the accent is darkened until it reads: Cyan was 2.5:1, so the
+    // focused border, the active option and the tab were faint.
+    if theme.mode == Mode::Light
+        && let Color::Rgb(mut r, mut g, mut b) = palette.truecolor
+    {
+        while relative_luminance(r, g, b) > 0.18 {
+            r = (u16::from(r) * 9 / 10) as u8;
+            g = (u16::from(g) * 9 / 10) as u8;
+            b = (u16::from(b) * 9 / 10) as u8;
+        }
+        palette.truecolor = Color::Rgb(r, g, b);
+    }
     theme.slots.insert(Role::Focus, palette);
     theme.slots.insert(Role::OnFocus, contrast_on(palette));
     theme
@@ -550,7 +562,7 @@ mode = "dark"
 background = "#282a36"
 foreground = "#f8f8f2"
 border = "#44475a"
-muted = "#6272a4"
+muted = "#8590bf"
 production = "#ff5555"
 staging = "#f1fa8c"
 development = "#8be9fd"
@@ -571,7 +583,7 @@ mode = "dark"
 background = "#282828"
 foreground = "#ebdbb2"
 border = "#504945"
-muted = "#928374"
+muted = "#a89984"
 production = "#fb4934"
 staging = "#fabd2f"
 development = "#83a598"
@@ -592,7 +604,7 @@ mode = "dark"
 background = "#2e3440"
 foreground = "#d8dee9"
 border = "#4c566a"
-muted = "#7b88a1"
+muted = "#94a0ba"
 production = "#bf616a"
 staging = "#ebcb8b"
 development = "#88c0d0"
@@ -634,7 +646,7 @@ mode = "dark"
 background = "#1a1b26"
 foreground = "#c0caf5"
 border = "#3b4261"
-muted = "#565f89"
+muted = "#8f9bc8"
 production = "#f7768e"
 staging = "#e0af68"
 development = "#7dcfff"
@@ -1038,12 +1050,20 @@ mod tests {
         );
         assert_eq!(dark_cyan.base(caps), dark_rose.base(caps));
 
-        // Mode alone: surface moves, primary color holds still.
+        // Mode alone: the surface moves, and the accent stays the same hue -- darker on
+        // the light surface, where the bright one was 2.5:1.
         assert_ne!(dark_cyan.base(caps), light_cyan.base(caps));
-        assert_eq!(
+        let (
+            Some(ratatui::style::Color::Rgb(dr, _, db)),
+            Some(ratatui::style::Color::Rgb(lr, _, lb)),
+        ) = (
             dark_cyan.color(Role::Focus, caps),
-            light_cyan.color(Role::Focus, caps)
-        );
+            light_cyan.color(Role::Focus, caps),
+        )
+        else {
+            panic!("no truecolor accent");
+        };
+        assert!(lr <= dr && lb < db, "the light accent is not darker");
     }
 
     #[test]
