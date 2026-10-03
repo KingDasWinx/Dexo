@@ -1,4 +1,4 @@
-//! Agent Activity: the writes agents are waiting to make under asking grants, to approve
+//! Agents' Approvals and Activity: the writes agents are waiting to make under asking grants, to approve
 //! or deny, and the latest tool calls from the MCP audit log as they arrive.
 
 use dexo_app::mcp::Approval;

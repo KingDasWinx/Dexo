@@ -255,7 +255,7 @@ async fn run_loop(
     pause_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     let mut checkpoint = tokio::time::interval(Duration::from_secs(2));
     checkpoint.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-    // Agent Activity is live: the requests and the calls are read again every second.
+    // Agents is live: the requests and the calls are read again every second.
     let mut agent_tick = tokio::time::interval(Duration::from_secs(1));
     agent_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     // A running statement shows how long it has run: the second hand needs a frame.

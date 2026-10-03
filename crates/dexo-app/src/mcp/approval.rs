@@ -1,5 +1,5 @@
 //! A write an agent asked to make under an asking grant, waiting for a person. The MCP
-//! server writes it and waits; the TUI's Agent Activity screen reads it and decides.
+//! server writes it and waits; the TUI's Agents screen, under Approvals, reads it and decides.
 //! The two processes meet only in the shared database.
 
 use serde::{Deserialize, Serialize};

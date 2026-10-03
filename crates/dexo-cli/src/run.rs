@@ -2131,7 +2131,7 @@ fn run_mcp_grant(command: McpGrantCommand) -> anyhow::Result<()> {
             let lasts = span_words(grant.expires_at - now);
             if grant.asks() {
                 println!(
-                    "granted {} {} on {}, ends in {lasts}: each write waits up to {} for your approval in Agent Activity (grant id {})",
+                    "granted {} {} on {}, ends in {lasts}: each write waits up to {} for your approval under Agents, Approvals, in the TUI (grant id {})",
                     grant.capability.as_str(),
                     grant.tools.join(", "),
                     grant.connection,

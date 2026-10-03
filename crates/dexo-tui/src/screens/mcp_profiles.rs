@@ -95,7 +95,7 @@ pub struct ProfileChoice {
 }
 
 /// New MCP Grant: what `dexo mcp grant create` asks, "ask before each write" included, so
-/// the TUI can make the grant Agent Activity then decides on.
+/// the TUI can make the grant Approvals then decides on.
 #[derive(Clone, Debug, PartialEq)]
 pub struct GrantForm {
     pub profiles: Vec<ProfileChoice>,
@@ -368,7 +368,7 @@ impl GrantForm {
                     format!("< {} >", self.connection_name())
                 }
                 GRANT_CAPABILITY => format!("< {} >", self.capability_name()),
-                GRANT_ASK if self.ask => "[x] each write waits for you in Agent Activity".into(),
+                GRANT_ASK if self.ask => "[x] each write waits for you under Approvals".into(),
                 GRANT_ASK => "[ ] one write, then the grant is spent".into(),
                 _ => field.value.as_str().to_string(),
             };

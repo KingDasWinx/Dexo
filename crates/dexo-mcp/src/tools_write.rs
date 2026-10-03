@@ -92,7 +92,7 @@ impl DexoMcpServer {
 
 impl DexoMcpServer {
     /// Waits for a person's decision when only an asking grant covers this write: the
-    /// request goes to the database, where Dexo's Agent Activity screen shows it, and the
+    /// request goes to the database, where Dexo's Agents screen shows it under Approvals, and the
     /// answer is read back every quarter second until the grant's time runs out, or the
     /// agent cancels the call, which takes the request away so no one can approve it.
     /// Any other write -- replayed, refused, or covered by a grant that does not ask --
@@ -207,7 +207,7 @@ impl DexoMcpServer {
                 }
             }
             let now = now_secs();
-            // Once a second the request says its call still waits; Agent Activity
+            // Once a second the request says its call still waits; Approvals
             // approves only a request that does.
             if now != beat {
                 ledger.touch_approval(approval.id, now);

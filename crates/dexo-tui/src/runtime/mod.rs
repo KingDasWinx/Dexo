@@ -2947,7 +2947,7 @@ fn create_mcp_grant(
     let lasts = crate::screens::mcp_profiles::duration_words(grant.expires_at - unix_seconds());
     let message = if grant.asks() {
         format!(
-            "Granted {} on {} ({}): each write waits up to {} for you in Agent Activity; the grant ends in {lasts}.",
+            "Granted {} on {} ({}): each write waits up to {} for you under Agents, Approvals; the grant ends in {lasts}.",
             grant.tools.join(", "),
             request.selector,
             request.connection,

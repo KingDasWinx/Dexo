@@ -57,7 +57,7 @@ impl DexoMcpServer {
         let retention = i64::from(service.profile.audit_retention_days).saturating_mul(86_400);
         ledger.prune_audits(now_secs().saturating_sub(retention));
         // Requests left by a server that was killed while it waited lose their SQL now,
-        // not when someone next opens Agent Activity.
+        // not when someone next opens Approvals.
         ledger.sweep_approvals(now_secs());
         Self {
             inner: Arc::new(Inner {
