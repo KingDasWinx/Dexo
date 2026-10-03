@@ -883,14 +883,13 @@ impl WorkbenchRuntime {
                 profile,
                 skill,
             } => {
-                let action_tx = self.action_tx.clone();
-                let _ = tokio::task::spawn_blocking(move || {
+                self.off_the_loop(move || {
                     let result = set_up_mcp_client(client, profile, skill);
-                    let _ = action_tx.blocking_send(Action::McpClientSetUp { result });
-                    let _ = action_tx.blocking_send(mcp_clients());
-                })
-                .await;
-                self.load_mcp_profiles().await;
+                    [Action::McpClientSetUp { result }, mcp_clients()]
+                        .into_iter()
+                        .chain(mcp_profiles_loaded())
+                        .collect()
+                });
             }
             crate::Effect::LoadConnectionProfiles => {
                 match self.with_repo(|repo| repo.list().map_err(|error| error.to_string())) {
@@ -2458,56 +2457,72 @@ impl WorkbenchRuntime {
         }
     }
 
+    /// Runs `work` -- reads and writes of Dexo's database -- on a thread of its own and
+    /// sends what it answers. SQLite waits out a lock another process holds, up to five
+    /// seconds, and the loop that draws the screen waited with it: Agents read its audit
+    /// every second, and the favorites were read after every catalog node.
+    fn off_the_loop(&self, work: impl FnOnce() -> Vec<Action> + Send + 'static) {
+        let action_tx = self.action_tx.clone();
+        tokio::task::spawn_blocking(move || {
+            for action in work() {
+                let _ = action_tx.blocking_send(action);
+            }
+        });
+    }
+
     async fn load_offline_catalog(
         &self,
         connection_id: String,
         database_name: String,
         generation: u64,
     ) {
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(db) = Database::open(&paths.database) else {
-            return;
-        };
-        let cache = dexo_storage::CatalogCache::new(db.connection());
-        let created_at = cache
-            .latest_metadata(&connection_id, &database_name)
-            .ok()
-            .flatten()
-            .map(|meta| meta.created_at);
-        let Ok(objects) = cache.load_latest(&connection_id, &database_name) else {
-            return;
-        };
-        self.emit(Action::OfflineCatalogLoaded {
-            generation,
-            list: dexo_driver_api::CatalogList {
-                objects,
-                restrictions: vec![],
-            },
-            created_at,
-        })
-        .await;
+        self.off_the_loop(move || {
+            let Ok(paths) = AppPaths::discover() else {
+                return Vec::new();
+            };
+            let Ok(db) = Database::open(&paths.database) else {
+                return Vec::new();
+            };
+            let cache = dexo_storage::CatalogCache::new(db.connection());
+            let created_at = cache
+                .latest_metadata(&connection_id, &database_name)
+                .ok()
+                .flatten()
+                .map(|meta| meta.created_at);
+            let Ok(objects) = cache.load_latest(&connection_id, &database_name) else {
+                return Vec::new();
+            };
+            vec![Action::OfflineCatalogLoaded {
+                generation,
+                list: dexo_driver_api::CatalogList {
+                    objects,
+                    restrictions: vec![],
+                },
+                created_at,
+            }]
+        });
     }
 
     async fn load_object_usage(&self, project_id: String, connection_id: String) {
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(db) = Database::open(&paths.database) else {
-            return;
-        };
-        let Ok(rows) = dexo_storage::ObjectUsageRepository::new(db.connection())
-            .list_for_connection(&project_id, &connection_id)
-        else {
-            return;
-        };
-        let ids = rows
-            .into_iter()
-            .filter(|row| row.favorite)
-            .map(|row| row.object_id)
-            .collect();
-        self.emit(Action::ApplyFavorites { ids }).await;
+        self.off_the_loop(move || {
+            let Ok(paths) = AppPaths::discover() else {
+                return Vec::new();
+            };
+            let Ok(db) = Database::open(&paths.database) else {
+                return Vec::new();
+            };
+            let Ok(rows) = dexo_storage::ObjectUsageRepository::new(db.connection())
+                .list_for_connection(&project_id, &connection_id)
+            else {
+                return Vec::new();
+            };
+            let ids = rows
+                .into_iter()
+                .filter(|row| row.favorite)
+                .map(|row| row.object_id)
+                .collect();
+            vec![Action::ApplyFavorites { ids }]
+        });
     }
 
     fn persist_favorite(
@@ -2518,108 +2533,61 @@ impl WorkbenchRuntime {
         favorite: bool,
     ) {
         // ponytail: second rusqlite handle; fold into StorageCommand if catalog writes contend.
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(db) = Database::open(&paths.database) else {
-            return;
-        };
-        let _ = dexo_storage::ObjectUsageRepository::new(db.connection()).set_favorite(
-            &project_id,
-            &connection_id,
-            &object_id,
-            favorite,
-        );
+        self.off_the_loop(move || {
+            if let Ok(paths) = AppPaths::discover()
+                && let Ok(db) = Database::open(&paths.database)
+            {
+                let _ = dexo_storage::ObjectUsageRepository::new(db.connection()).set_favorite(
+                    &project_id,
+                    &connection_id,
+                    &object_id,
+                    favorite,
+                );
+            }
+            Vec::new()
+        });
     }
 
     async fn load_mcp_profiles(&self) {
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(db) = Database::open(&paths.database) else {
-            return;
-        };
-        let Ok(profiles) = dexo_storage::McpProfileRepository::new(db.connection()).list() else {
-            return;
-        };
-        // The grants list used to be fixture-only: nothing read the ledger, so the
-        // screen showed a permanently empty section.
-        let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database).ok();
-        let now = unix_seconds();
-        let profiles = profiles
-            .into_iter()
-            .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
-                connections: profile.connections.clone(),
-                raw_read: profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql,
-                scopes: profile.selectors.iter().map(ToString::to_string).collect(),
-                tools: profile
-                    .tool_rules
-                    .iter()
-                    .map(|rule| rule.tool.clone())
-                    .collect(),
-                grants: ledger
-                    .as_ref()
-                    .map(|ledger| grant_lines(ledger, &profile.name, now))
-                    .unwrap_or_default(),
-                name: profile.name,
-                enabled: profile.enabled,
-            })
-            .collect();
-        self.emit(Action::McpProfilesLoaded { profiles }).await;
+        self.off_the_loop(|| mcp_profiles_loaded().into_iter().collect());
     }
 
     async fn load_mcp_audit(&self) {
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
-            return;
-        };
-        use dexo_app::mcp::GrantLedger;
-        let now = unix_now();
-        let events = ledger
-            .recent_audits(200)
-            .into_iter()
-            .map(|event| audit_line(&event))
-            .collect();
-        let pending = ledger.pending_approvals(now);
-        self.emit(Action::McpAuditLoaded {
-            events,
-            pending,
-            now,
-        })
-        .await;
+        self.off_the_loop(|| mcp_audit_loaded().into_iter().collect());
     }
 
     async fn settle_approval(&self, id: uuid::Uuid, approve: bool) {
-        use dexo_app::mcp::approval::{Answered, answer};
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
-            return;
-        };
-        let message = match answer(&ledger, id, approve, unix_now()) {
-            Ok(Answered::Taken) if approve => "Approved: the agent's write runs now.".into(),
-            Ok(Answered::Taken) => "Denied: the agent is told no.".into(),
-            Ok(Answered::AlreadyDecided) => {
-                "That request was already decided, or its grant was revoked.".into()
-            }
-            Ok(Answered::TimedOut) => "That request's time ran out; nothing runs.".into(),
-            Ok(Answered::NobodyWaiting) => {
-                "The agent is no longer waiting for this write; nothing runs.".into()
-            }
-            Err(error) => error.to_string(),
-        };
-        self.emit(Action::Notice(message)).await;
-        self.load_mcp_audit().await;
+        self.off_the_loop(move || {
+            use dexo_app::mcp::approval::{Answered, answer};
+            let Ok(paths) = AppPaths::discover() else {
+                return Vec::new();
+            };
+            let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+                return Vec::new();
+            };
+            let message = match answer(&ledger, id, approve, unix_now()) {
+                Ok(Answered::Taken) if approve => "Approved: the agent's write runs now.".into(),
+                Ok(Answered::Taken) => "Denied: the agent is told no.".into(),
+                Ok(Answered::AlreadyDecided) => {
+                    "That request was already decided, or its grant was revoked.".into()
+                }
+                Ok(Answered::TimedOut) => "That request's time ran out; nothing runs.".into(),
+                Ok(Answered::NobodyWaiting) => {
+                    "The agent is no longer waiting for this write; nothing runs.".into()
+                }
+                Err(error) => error.to_string(),
+            };
+            std::iter::once(Action::Notice(message))
+                .chain(mcp_audit_loaded())
+                .collect()
+        });
     }
 
     /// Asked every two seconds, on the storage worker's open connection: it opened a
-    /// database and wrote to it each time, for people who never use MCP too.
-    /// Spawned, never awaited here: the worker answers after whatever it is doing, and a
-    /// write of its waits for a lock another process -- the MCP server -- holds on the
-    /// database. Every two seconds the screen froze with it.
+    /// database and wrote to it each time, for people who never use MCP too. Spawned,
+    /// never awaited here: the worker answers after whatever it is doing, and a write of
+    /// its waits for a lock another process -- the MCP server -- holds on the database.
+    /// Every two seconds the screen froze with it.
     async fn check_approvals(&self) {
         let Some(storage) = self.storage.clone() else {
             return;
@@ -2633,105 +2601,93 @@ impl WorkbenchRuntime {
     }
 
     async fn set_mcp_profile_enabled(&self, name: String, enabled: bool) {
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let Ok(db) = Database::open(&paths.database) else {
-            return;
-        };
-        let repo = dexo_storage::McpProfileRepository::new(db.connection());
-        if let Ok(Some(mut profile)) = repo.get_by_name(&name) {
-            profile.enabled = enabled;
-            let _ = repo.save(&profile);
-        }
-        self.load_mcp_profiles().await;
+        self.off_the_loop(move || {
+            if let Ok(paths) = AppPaths::discover()
+                && let Ok(db) = Database::open(&paths.database)
+            {
+                let repo = dexo_storage::McpProfileRepository::new(db.connection());
+                if let Ok(Some(mut profile)) = repo.get_by_name(&name) {
+                    profile.enabled = enabled;
+                    let _ = repo.save(&profile);
+                }
+            }
+            mcp_profiles_loaded().into_iter().collect()
+        });
     }
 
     async fn revoke_mcp(&self, profile: String) {
-        let Ok(paths) = AppPaths::discover() else {
-            self.emit(Action::McpRevokeFailed {
-                message: "storage unavailable".into(),
-            })
-            .await;
-            return;
-        };
-        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
-            self.emit(Action::McpRevokeFailed {
-                message: "storage unavailable".into(),
-            })
-            .await;
-            return;
-        };
-        use dexo_app::mcp::GrantLedger;
-        match ledger.revoke_profile(&profile) {
-            Ok(count) => {
-                self.emit(Action::McpGrantsRevoked { count }).await;
-                self.load_mcp_audit().await;
-                self.load_mcp_profiles().await;
-            }
-            Err(error) => {
-                self.emit(Action::McpRevokeFailed {
+        self.off_the_loop(move || {
+            use dexo_app::mcp::GrantLedger;
+            let unavailable = || {
+                vec![Action::McpRevokeFailed {
+                    message: "storage unavailable".into(),
+                }]
+            };
+            let Ok(paths) = AppPaths::discover() else {
+                return unavailable();
+            };
+            let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+                return unavailable();
+            };
+            match ledger.revoke_profile(&profile) {
+                Ok(count) => std::iter::once(Action::McpGrantsRevoked { count })
+                    .chain(mcp_audit_loaded())
+                    .chain(mcp_profiles_loaded())
+                    .collect(),
+                Err(error) => vec![Action::McpRevokeFailed {
                     message: error.to_string(),
-                })
-                .await;
+                }],
             }
-        }
+        });
     }
 
     async fn delete_mcp_profile(&self, name: String) {
-        let Ok(paths) = AppPaths::discover() else {
-            return;
-        };
-        let (Ok(db), Ok(ledger)) = (
-            Database::open(&paths.database),
-            dexo_storage::SqliteGrantLedger::open(&paths.database),
-        ) else {
-            return;
-        };
-        use dexo_app::mcp::GrantLedger;
-        let _ = ledger.revoke_profile(&name);
-        match dexo_storage::McpProfileRepository::new(db.connection()).delete(&name) {
-            Ok(_) => {
-                self.emit(Action::McpProfileDeleted { name }).await;
-                self.load_mcp_profiles().await;
-            }
-            Err(error) => {
-                self.emit(Action::McpRevokeFailed {
+        self.off_the_loop(move || {
+            use dexo_app::mcp::GrantLedger;
+            let Ok(paths) = AppPaths::discover() else {
+                return Vec::new();
+            };
+            let (Ok(db), Ok(ledger)) = (
+                Database::open(&paths.database),
+                dexo_storage::SqliteGrantLedger::open(&paths.database),
+            ) else {
+                return Vec::new();
+            };
+            let _ = ledger.revoke_profile(&name);
+            match dexo_storage::McpProfileRepository::new(db.connection()).delete(&name) {
+                Ok(_) => std::iter::once(Action::McpProfileDeleted { name })
+                    .chain(mcp_profiles_loaded())
+                    .collect(),
+                Err(error) => vec![Action::McpRevokeFailed {
                     message: error.to_string(),
-                })
-                .await;
+                }],
             }
-        }
+        });
     }
 
     async fn revoke_all_mcp(&self) {
-        let Ok(paths) = AppPaths::discover() else {
-            self.emit(Action::McpRevokeFailed {
-                message: "storage unavailable".into(),
-            })
-            .await;
-            return;
-        };
-        let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
-            self.emit(Action::McpRevokeFailed {
-                message: "storage unavailable".into(),
-            })
-            .await;
-            return;
-        };
-        match ledger.revoke_all() {
-            Ok(count) => {
-                self.emit(Action::McpGrantsRevoked { count }).await;
-                self.load_mcp_audit().await;
-                self.load_mcp_profiles().await;
-            }
-            Err(error) => {
-                self.emit(Action::McpRevokeFailed {
+        self.off_the_loop(|| {
+            let unavailable = || {
+                vec![Action::McpRevokeFailed {
+                    message: "storage unavailable".into(),
+                }]
+            };
+            let Ok(paths) = AppPaths::discover() else {
+                return unavailable();
+            };
+            let Ok(ledger) = dexo_storage::SqliteGrantLedger::open(&paths.database) else {
+                return unavailable();
+            };
+            match ledger.revoke_all() {
+                Ok(count) => std::iter::once(Action::McpGrantsRevoked { count })
+                    .chain(mcp_audit_loaded())
+                    .chain(mcp_profiles_loaded())
+                    .collect(),
+                Err(error) => vec![Action::McpRevokeFailed {
                     message: error.to_string(),
-                })
-                .await;
+                }],
             }
-        }
+        });
     }
 
     pub fn action_tx(&self) -> &tokio::sync::mpsc::Sender<Action> {
@@ -2826,6 +2782,58 @@ fn grant_lines(
 
 /// New MCP Grant: the grant `dexo mcp grant create` would make with the same answers,
 /// written where the MCP server reads it. Says what was made, or why not.
+/// The MCP profiles as the Agents screen lists them, with their live grants.
+fn mcp_profiles_loaded() -> Option<Action> {
+    let paths = AppPaths::discover().ok()?;
+    let db = Database::open(&paths.database).ok()?;
+    let profiles = dexo_storage::McpProfileRepository::new(db.connection())
+        .list()
+        .ok()?;
+    // The grants list used to be fixture-only: nothing read the ledger, so the
+    // screen showed a permanently empty section.
+    let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database).ok();
+    let now = unix_seconds();
+    let profiles = profiles
+        .into_iter()
+        .map(|profile| crate::screens::mcp_profiles::McpProfileSummary {
+            connections: profile.connections.clone(),
+            raw_read: profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql,
+            scopes: profile.selectors.iter().map(ToString::to_string).collect(),
+            tools: profile
+                .tool_rules
+                .iter()
+                .map(|rule| rule.tool.clone())
+                .collect(),
+            grants: ledger
+                .as_ref()
+                .map(|ledger| grant_lines(ledger, &profile.name, now))
+                .unwrap_or_default(),
+            name: profile.name,
+            enabled: profile.enabled,
+        })
+        .collect();
+    Some(Action::McpProfilesLoaded { profiles })
+}
+
+/// The audit log and the writes waiting for approval.
+fn mcp_audit_loaded() -> Option<Action> {
+    use dexo_app::mcp::GrantLedger;
+    let paths = AppPaths::discover().ok()?;
+    let ledger = dexo_storage::SqliteGrantLedger::open(&paths.database).ok()?;
+    let now = unix_now();
+    let events = ledger
+        .recent_audits(200)
+        .into_iter()
+        .map(|event| audit_line(&event))
+        .collect();
+    let pending = ledger.pending_approvals(now);
+    Some(Action::McpAuditLoaded {
+        events,
+        pending,
+        now,
+    })
+}
+
 /// Each agent's config as it is now, and what an entry would run.
 fn mcp_clients() -> Action {
     use dexo_app::mcp::clients::{McpClient, Places, dexo_command};
