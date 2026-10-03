@@ -138,6 +138,9 @@ pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
             "explorer.inspect",
             "explorer.ddl",
             "explorer.copy_ddl",
+            "schema.alter_table",
+            "schema.new_index",
+            "schema.new_trigger",
             "explorer.dependencies",
             "explorer.copy_name",
             "explorer.copy_simple",
@@ -149,6 +152,8 @@ pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
             "explorer.copy_name",
             "explorer.copy_simple",
             "explorer.favorite",
+            "schema.new_view",
+            "schema.new_routine",
             "explorer.refresh",
         ],
     }
@@ -691,8 +696,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 145);
-        assert_eq!(ids.len(), 145);
+        assert_eq!(entries.len(), 150);
+        assert_eq!(ids.len(), 150);
     }
 
     #[test]

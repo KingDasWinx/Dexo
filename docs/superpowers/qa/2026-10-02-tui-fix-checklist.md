@@ -186,7 +186,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-29** `MINOR` Schema form text fields do not scroll to the cursor and cut the text at the border
 - [x] **ES-30** `MINOR` Esc / Cancel in the DDL preview closes the whole form, there is no way back to edit
 - [x] **ES-35** `MINOR` pg-readonly: Apply refuses only after the preview; the refusal leaves the preview open
-- [ ] **ES-36** `MINOR` There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
+- [x] **ES-36** `MINOR` There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
 - [=] SL-16 **ES-37** `MINOR` After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
 - [x] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
 - [x] **ES-42** `MINOR` `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error

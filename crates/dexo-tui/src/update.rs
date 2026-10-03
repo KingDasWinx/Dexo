@@ -1724,6 +1724,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ApplyDdl => apply_ddl(model),
+        Action::OpenSqlTemplate(template) => open_sql_template(model, template),
         Action::OpenSchemaForm => on_document_connection(model, action, open_schema_form),
         Action::ApplyRawDdl => on_document_connection(model, action, apply_raw_ddl),
         Action::OpenSecurity => open_security(model),
@@ -6800,6 +6801,54 @@ fn open_schema_form(model: &mut Model) -> Vec<Effect> {
     model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
     model.schema_editor.open = true;
     Vec::new()
+}
+
+/// A new document on the connection of the selected node, holding the template for its
+/// driver. Running it connects the connection by itself, like any other document.
+fn open_sql_template(model: &mut Model, template: crate::sql_template::SqlTemplate) -> Vec<Effect> {
+    use crate::sql_template::SqlTemplate;
+    let node = model.explorer.selected_node();
+    let table = node
+        .filter(|node| matches!(node.kind, dexo_driver_api::ObjectKind::Table))
+        .map(|node| node.qualified.clone());
+    if template == SqlTemplate::AlterTable && table.is_none() {
+        model.messages.warn("Select a table to alter it.".into());
+        return Vec::new();
+    }
+    let name = model
+        .explorer
+        .selected_connection_name()
+        .unwrap_or(model.connection.name.as_str())
+        .to_string();
+    let Some(row) = model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == name)
+    else {
+        model
+            .messages
+            .warn("Select a connection to start the statement on.".into());
+        return Vec::new();
+    };
+    let (id, driver) = (row.profile.id.0.to_string(), row.profile.driver.clone());
+    let short = table
+        .as_deref()
+        .map(|table| table.rsplit('.').next().unwrap_or(table).to_string());
+    let text = match template.text(&driver, table.as_deref()) {
+        Ok(text) => text,
+        Err(reason) => {
+            model.messages.warn(reason);
+            return Vec::new();
+        }
+    };
+    let mut document = crate::model::EditorDocument::with_text(&text);
+    document.id = uuid::Uuid::new_v4().to_string();
+    document.title = template.title(short.as_deref());
+    document.connection_id = Some(id);
+    model.documents.push(document);
+    let index = model.documents.len() - 1;
+    update(model, Action::SelectDocument { index })
 }
 
 fn apply_raw_ddl(model: &mut Model) -> Vec<Effect> {

@@ -453,6 +453,56 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::OpenFlow(FlowIntent::SchemaRaw),
         },
         CommandSpec {
+            id: "schema.alter_table",
+            title: "Alter Table…",
+            keywords: &["alter", "column", "add column", "ddl"],
+            shortcut: Some("Shift+A"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSqlTemplate(
+                crate::sql_template::SqlTemplate::AlterTable,
+            )),
+        },
+        CommandSpec {
+            id: "schema.new_view",
+            title: "New View…",
+            keywords: &["create", "ddl"],
+            shortcut: Some("Shift+V"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSqlTemplate(
+                crate::sql_template::SqlTemplate::View,
+            )),
+        },
+        CommandSpec {
+            id: "schema.new_index",
+            title: "New Index…",
+            keywords: &["create", "ddl"],
+            shortcut: Some("Shift+X"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSqlTemplate(
+                crate::sql_template::SqlTemplate::Index,
+            )),
+        },
+        CommandSpec {
+            id: "schema.new_routine",
+            title: "New Function…",
+            keywords: &["create", "routine", "procedure", "ddl"],
+            shortcut: Some("Shift+F"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSqlTemplate(
+                crate::sql_template::SqlTemplate::Routine,
+            )),
+        },
+        CommandSpec {
+            id: "schema.new_trigger",
+            title: "New Trigger…",
+            keywords: &["create", "ddl"],
+            shortcut: Some("Shift+T"),
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenSqlTemplate(
+                crate::sql_template::SqlTemplate::Trigger,
+            )),
+        },
+        CommandSpec {
             id: "schema.diff",
             title: "Compare Schema",
             keywords: &["diff", "migration", "snapshot"],

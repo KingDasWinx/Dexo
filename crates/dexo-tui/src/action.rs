@@ -245,6 +245,8 @@ pub enum Action {
     OpenDependencies,
     /// The Schema form, on the connection the document belongs to.
     OpenSchemaForm,
+    /// A new document on the selected object's connection, holding a template.
+    OpenSqlTemplate(crate::sql_template::SqlTemplate),
     ExplorerUp,
     ExplorerDown,
     ExplorerFirst,
