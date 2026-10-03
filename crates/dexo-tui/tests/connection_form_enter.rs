@@ -114,3 +114,31 @@ fn enter_on_advanced_options_opens_them_and_goes_in() {
     enter(&mut model);
     assert!(!model.connection_form.advanced);
 }
+
+/// A tunnel's port, user and key show once its host is typed; a proxy's kind once its
+/// host is; TLS files once a mode is picked.
+#[test]
+fn what_depends_on_another_field_shows_once_that_is_set() {
+    let mut model = filled_form();
+    model.connection_form.set_advanced(true);
+    let lines = |model: &Model| model.connection_form.lines().join("\n");
+    assert!(lines(&model).contains("SSH host:"));
+    assert!(!lines(&model).contains("SSH user:"), "{}", lines(&model));
+    assert!(!lines(&model).contains("proxy kind:"));
+    assert!(!lines(&model).contains("CA file:"));
+    assert!(lines(&model).contains("── SSH tunnel"));
+
+    model.connection_form.set_value("ssh_host", "bastion");
+    model.connection_form.set_value("proxy_host", "proxy.local");
+    model.connection_form.set_value("tls_mode", "required");
+
+    for shown in [
+        "SSH user:",
+        "SSH key:",
+        "proxy kind:",
+        "proxy port:",
+        "CA file:",
+    ] {
+        assert!(lines(&model).contains(shown), "{shown}: {}", lines(&model));
+    }
+}

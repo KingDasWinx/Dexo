@@ -13,6 +13,40 @@ const BASIC_FIELDS: &[&str] = &[
     "name", "driver", "path", "host", "port", "database", "username", "password",
 ];
 
+/// The advanced fields under their headings, in the order they are shown. They were
+/// twenty rows in a run, a proxy's kind among them with no proxy to speak of.
+const SECTIONS: &[(&str, &[&str])] = &[
+    ("Organize", &["environment", "group"]),
+    ("Commands", &["password_command", "pre_connect"]),
+    ("TLS", &["tls_mode", "ca_file", "client_cert", "client_key"]),
+    (
+        "SSH tunnel",
+        &["ssh_host", "ssh_port", "ssh_user", "ssh_key"],
+    ),
+    ("Proxy", &["proxy_host", "proxy_port", "proxy_kind"]),
+    (
+        "Safety",
+        &[
+            "read_only",
+            "confirm_destructive",
+            "require_verified_tls",
+            "max_rows",
+            "timeout_secs",
+        ],
+    ),
+];
+
+/// A field that only means something once another is set: TLS files once a TLS mode
+/// is picked, the rest of a tunnel or a proxy once its host is typed.
+fn depends_on(label: &str) -> Option<&'static str> {
+    match label {
+        "ca_file" | "client_cert" | "client_key" => Some("tls_mode"),
+        "ssh_port" | "ssh_user" | "ssh_key" => Some("ssh_host"),
+        "proxy_port" | "proxy_kind" => Some("proxy_host"),
+        _ => None,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectionForm {
     pub open: bool,
@@ -191,12 +225,58 @@ impl ConnectionForm {
             .collect()
     }
 
+    /// The advanced fields shown, by section, in the order they are drawn and walked.
     fn advanced_field_indices(&self) -> Vec<usize> {
-        self.fields
+        self.advanced_sections()
+            .into_iter()
+            .flat_map(|(_, indices)| indices)
+            .collect()
+    }
+
+    /// Each section's heading and its fields shown; a field set already is shown even
+    /// when what it depends on is not, so nothing saved is hidden.
+    fn advanced_sections(&self) -> Vec<(&'static str, Vec<usize>)> {
+        let index_of = |label: &str| self.fields.iter().position(|field| field.label == label);
+        let shown = |label: &str| {
+            depends_on(label).is_none_or(|on| !field(&self.fields, on).trim().is_empty())
+                || !field(&self.fields, label).trim().is_empty()
+        };
+        let mut sections: Vec<(&'static str, Vec<usize>)> = SECTIONS
+            .iter()
+            .map(|(title, labels)| {
+                let indices = labels
+                    .iter()
+                    .filter(|label| shown(label))
+                    .filter_map(|label| index_of(label))
+                    .collect();
+                (*title, indices)
+            })
+            .filter(|(_, indices): &(&str, Vec<usize>)| !indices.is_empty())
+            .collect();
+        // A field no section names still shows, last.
+        let named: Vec<&str> = SECTIONS
+            .iter()
+            .flat_map(|(_, labels)| labels.iter().copied())
+            .collect();
+        let rest: Vec<usize> = self
+            .fields
             .iter()
             .enumerate()
-            .filter_map(|(index, field)| (!is_basic(&field.label)).then_some(index))
-            .collect()
+            .filter(|(_, field)| !is_basic(&field.label) && !named.contains(&field.label.as_str()))
+            .map(|(index, _)| index)
+            .collect();
+        if !rest.is_empty() {
+            sections.push(("Other", rest));
+        }
+        sections
+    }
+
+    /// How many advanced fields hold something other than their default.
+    fn advanced_set(&self) -> usize {
+        self.fields
+            .iter()
+            .filter(|field| !is_basic(&field.label) && is_set(field))
+            .count()
     }
 
     pub fn footer_focus(&self) -> FooterFocus {
@@ -406,53 +486,83 @@ impl ConnectionForm {
     }
 
     fn field_rows(&self) -> Vec<(Option<usize>, String)> {
+        let sections = if self.advanced {
+            self.advanced_sections()
+        } else {
+            Vec::new()
+        };
+        let width = self.label_width();
         let mut rows = Vec::new();
         for index in self.basic_field_indices() {
-            rows.push((Some(index), self.render_field(index)));
+            rows.push((Some(index), self.render_field(index, width)));
         }
         let advanced = self.advanced_focus_index();
         let marker = if self.focus == advanced { ">" } else { " " };
-        rows.push((
-            Some(advanced),
-            format!(
-                "{marker} [{}] Advanced options",
-                if self.advanced { "v" } else { ">" }
-            ),
-        ));
-        if self.advanced {
-            for index in self.advanced_field_indices() {
-                rows.push((Some(index), self.render_field(index)));
+        let toggle = if self.advanced {
+            format!("{marker} ▾ Advanced options")
+        } else {
+            match self.advanced_set() {
+                0 => format!("{marker} ▸ Advanced options  TLS, SSH, proxy, safety"),
+                set => format!("{marker} ▸ Advanced options  {set} set"),
+            }
+        };
+        rows.push((Some(advanced), toggle));
+        for (title, indices) in sections {
+            rows.push((None, format!("{HEADING}{title}")));
+            for index in indices {
+                rows.push((Some(index), self.render_field(index, width)));
             }
         }
         rows
     }
 
-    fn render_field(&self, index: usize) -> String {
+    /// The values start in one column, so the form reads down it: the widest label the
+    /// driver's form has, and its colon -- the same folded or open, so opening the
+    /// advanced options moves nothing.
+    fn label_width(&self) -> usize {
+        self.fields
+            .iter()
+            .map(|field| shown_label(&field.label).chars().count())
+            .max()
+            .unwrap_or(0)
+            + 1
+    }
+
+    /// What a field's row says before its value, for the cursor to be put after it.
+    pub fn prefix(&self, index: usize) -> String {
+        let marker = if index == self.focus { ">" } else { " " };
+        let label = self
+            .fields
+            .get(index)
+            .map(|field| format!("{}:", shown_label(&field.label)))
+            .unwrap_or_default();
+        format!("{marker} {label:<w$} ", w = self.label_width())
+    }
+
+    /// One field's row: its label padded to `width`, then its value; a choice between
+    /// arrows, which say Left and Right pick it.
+    fn render_field(&self, index: usize, width: usize) -> String {
         let field = &self.fields[index];
         let marker = if index == self.focus { ">" } else { " " };
-        if field.label == "driver" {
+        let label = format!("{}:", shown_label(&field.label));
+        let value = if field.label == "driver" {
             let name = DriverDescriptor::for_id(field.value.as_str())
                 .map(|item| item.display_name)
                 .unwrap_or(field.value.as_str());
-            return format!("{marker} driver: < {name} >  Left/Right");
-        }
-        let label = shown_label(&field.label);
-        if is_choice(&field.label) {
-            let shown = choice_label(&field.label, field.value.as_str());
-            return format!("{marker} {label}: < {shown} >  Left/Right");
-        }
-        // An edit leaves the saved password alone unless a new one is typed.
-        if field.secret && self.editing.is_some() && field.value.as_str().is_empty() {
-            return format!("{marker} {label}: (unchanged; type to replace it)");
-        }
-        // One mark per character typed, so a slip of the finger shows; the characters
-        // themselves never reach the screen.
-        let value = if field.secret {
+            format!("< {name} >")
+        } else if is_choice(&field.label) {
+            format!("< {} >", choice_label(&field.label, field.value.as_str()))
+        } else if field.secret && self.editing.is_some() && field.value.as_str().is_empty() {
+            // An edit leaves the saved password alone unless a new one is typed.
+            "(unchanged; type to replace it)".into()
+        } else if field.secret {
+            // One mark per character typed, so a slip of the finger shows; the
+            // characters themselves never reach the screen.
             "*".repeat(field.value.len())
         } else {
             field.value.as_str().to_string()
         };
-        format!("{marker} {label}: {value}")
+        format!("{marker} {label:<w$} {value}", w = width)
     }
 
     fn footer(&self) -> String {
@@ -749,14 +859,19 @@ fn set_option_field(fields: &mut [FormField], label: &str, value: Option<bool>) 
 }
 
 fn has_advanced_values(fields: &[FormField]) -> bool {
-    fields.iter().any(|field| {
-        if is_basic(&field.label) {
-            return false;
-        }
-        let value = field.value.trim();
-        !(value.is_empty() || field.label == "environment" && value == "local")
-    })
+    fields
+        .iter()
+        .any(|field| !is_basic(&field.label) && is_set(field))
 }
+
+/// Whether a field holds something other than its default.
+fn is_set(field: &FormField) -> bool {
+    let value = field.value.trim();
+    !(value.is_empty() || field.label == "environment" && value == "local")
+}
+
+/// How a section's heading starts, so the form can draw it as one.
+pub const HEADING: &str = "  ── ";
 
 /// The fields a driver takes. A file driver takes a path where the others take a host,
 /// port, database, user and password, and has no transport or TLS to set.
@@ -1043,8 +1158,12 @@ mod tests {
         }
         form.sync_descriptor_fields();
         let dump = form.lines().join("\n");
-        let masked = format!("password: {}\n", "*".repeat("SUPER_SECRET_SENTINEL".len()));
-        assert!(dump.contains(&masked), "one mark per character:\n{dump}");
+        let masked = format!(" {}\n", "*".repeat("SUPER_SECRET_SENTINEL".len()));
+        assert!(
+            dump.lines()
+                .any(|line| line.contains("password:") && format!("{line}\n").ends_with(&masked)),
+            "one mark per character:\n{dump}"
+        );
         assert!(!dump.contains("SUPER_SECRET_SENTINEL"));
         assert!(dump.contains("Advanced options"));
         assert!(!dump.contains("TLS mode"));
@@ -1099,7 +1218,6 @@ mod tests {
         );
         let dump = form.lines().join("\n");
         assert!(dump.contains("< MySQL >"));
-        assert!(dump.contains("Left/Right"));
         form.cycle_choice(1);
         assert_eq!(
             form.fields
@@ -1220,14 +1338,14 @@ mod tests {
         ] {
             assert!(basic.contains(label));
         }
-        assert!(basic.contains("[>] Advanced options"));
+        assert!(basic.contains("▸ Advanced options"));
         assert!(!basic.contains("environment:"));
         assert!(!basic.contains("SSH host:"));
 
         form.focus = form.advanced_focus_index();
         form.toggle_advanced();
         let advanced = form.lines().join("\n");
-        assert!(advanced.contains("[v] Advanced options"));
+        assert!(advanced.contains("▾ Advanced options"));
         assert!(advanced.contains("environment:"));
         // Named as words, like the basic fields; the keys stay the app's.
         for label in [
@@ -1356,11 +1474,7 @@ mod tests {
             ["preferred", "required", "verify_ca", "verify_full", ""]
         );
         form.cycle_choice(-1);
-        assert!(
-            form.lines()
-                .join("\n")
-                .contains("TLS mode: < verify_full >")
-        );
+        assert!(form.lines().join("\n").contains("< verify_full >"));
     }
 
     /// An environment the app has no policy for would be saved and then refuse to

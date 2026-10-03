@@ -27,6 +27,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         super::empty_state(frame, area, model, &lines);
         return;
     }
+    // On a narrow screen the form takes it whole: under the list it scrolled twenty
+    // fields through five rows.
+    if model.connection_form.open && area.width < 100 {
+        form(frame, area, model, hits);
+        return;
+    }
     let (list, detail) = super::list_and_detail(area, rows.len());
     list_pane(frame, list, model, hits, &rows);
     if model.connection_form.open {
@@ -152,7 +158,22 @@ fn form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     let visible = form.visible_rows(usize::from(inner.height).max(4), usize::from(inner.width));
     let lines: Vec<String> = visible.iter().map(|(_, line)| line.clone()).collect();
-    frame.render_widget(Paragraph::new(lines.join("\n")), inner);
+    // The sections' headings stand out from the fields under them.
+    let heading = model
+        .theme
+        .style(crate::theme::Role::Muted, model.capabilities)
+        .add_modifier(Modifier::BOLD);
+    let drawn: Vec<Line> = lines
+        .iter()
+        .map(|line| {
+            if line.starts_with(crate::screens::connection::HEADING) {
+                Line::styled(line.clone(), heading)
+            } else {
+                Line::raw(line.clone())
+            }
+        })
+        .collect();
+    frame.render_widget(Paragraph::new(drawn), inner);
     let footer = lines.len().saturating_sub(1);
     for (index, line) in lines.iter().enumerate().take(usize::from(inner.height)) {
         let rect = crate::mouse::line_rect(inner, index);
@@ -179,7 +200,7 @@ fn form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             && !form.is_choice_at(field)
             && let Some(value) = form.fields.get(field)
         {
-            crate::render::show_form_field(frame, rect, value);
+            crate::render::show_input(frame, rect, &form.prefix(field), &value.value, value.secret);
         }
         hits.register(HitTarget::FormField(field), rect);
         if form.is_choice_at(field) {
