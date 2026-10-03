@@ -165,20 +165,23 @@ impl SettingsScreen {
         format!("{marker} [{label}]")
     }
 
-    /// Spelled out while there is room; the short form still names every key.
-    pub fn hint(wide: bool) -> &'static str {
-        if wide {
-            "  Up/Down row  Left/Right change  e theme  r reset  Esc close"
-        } else {
-            "  arrows change  e theme  r reset  Esc close"
-        }
+    /// The longest that fits `width`: spelled out while there is room, and each shorter
+    /// form still names every key. A hint cut at the border read `Esc cl`.
+    pub fn hint(width: usize) -> &'static str {
+        [
+            "  Up/Down row  Left/Right change  e theme  r reset  Esc close",
+            "  arrows change  e theme  r reset  Esc close",
+        ]
+        .into_iter()
+        .find(|hint| hint.chars().count() <= width)
+        .unwrap_or("  arrows  e theme  r reset  Esc close")
     }
 
-    pub fn lines(&self, wide: bool) -> Vec<String> {
+    pub fn lines(&self, width: usize) -> Vec<String> {
         let mut lines = self.field_rows();
         lines.push(String::new());
         lines.push(self.footer_line());
-        lines.push(Self::hint(wide).into());
+        lines.push(Self::hint(width).into());
         lines
     }
 }

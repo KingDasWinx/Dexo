@@ -6,16 +6,9 @@ expression: "render_to_string(&model, 160, 50)"
 demo  local  public                                                                                                                                             
 ┌  Sidebar─────────────────┐ scratch.sql ×  orders ×  +                                                                                                         
 │[n]ew [e]dit [a]ctions    │┌▸ Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-<<<<<<< HEAD
 │  ● local▾                ││[Grid] Explain  Messages                                                                                                          │
 │>   ▸ public              ││WHERE w to filter                                                ORDER BY o to sort                                               │
 │      mysql.… [restricted]││                                                                                                                                  │
-=======
-│  ● local▾  [offline]     ││[Grid] Explain  Messages                                                                                                          │
-│>   ▸ public              ││WHERE w to filter                                                              ORDER BY o to sort                                 │
-│      mysql.users [no acce││                                                                                                                                  │
-│                          ││                                                                                                                                  │
->>>>>>> a61bfb3b (fix(explorer): a row the account may not read is named for what it is, says "no access", and Inspect gives the reason)
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

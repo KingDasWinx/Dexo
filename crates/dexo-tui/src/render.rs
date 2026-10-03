@@ -2785,10 +2785,11 @@ fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     // The eight rows, a blank line, the reset button and the hint, inside the borders.
     let popup = centered(frame.area(), 64, 13);
-    let wide = popup_inner(popup).width >= crate::screens::settings::WIDE_MIN_WIDTH;
-    let lines = model.settings.lines(wide);
+    let inner = popup_inner(popup).width;
+    let wide = inner >= crate::screens::settings::WIDE_MIN_WIDTH;
+    let lines = model.settings.lines(usize::from(inner));
     let body = if wide {
-        settings_option_lines(model)
+        settings_option_lines(model, usize::from(inner))
     } else {
         lines.iter().map(|line| Line::from(line.clone())).collect()
     };
@@ -2831,7 +2832,7 @@ fn render_settings(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
 
 /// Every choice stays on screen. The active one carries brackets, weight and color at
 /// once, so it still reads when the terminal has no color to give.
-fn settings_option_lines(model: &Model) -> Vec<Line<'static>> {
+fn settings_option_lines(model: &Model, width: usize) -> Vec<Line<'static>> {
     let caps = model.capabilities;
     let muted = model.theme.style(Role::Muted, caps);
     let focus = model.theme.style(Role::Focus, caps);
@@ -2878,7 +2879,7 @@ fn settings_option_lines(model: &Model) -> Vec<Line<'static>> {
         if reset_focused { focus } else { muted },
     )));
     body.push(Line::from(Span::styled(
-        crate::screens::settings::SettingsScreen::hint(true).to_string(),
+        crate::screens::settings::SettingsScreen::hint(width).to_string(),
         muted,
     )));
     body
