@@ -12,6 +12,8 @@ pub enum PaneEdge {
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum HitTarget {
+    /// A name on the header's strip of screens.
+    ScreenTab(crate::model::Screen),
     ResultTab(usize),
     ResultsView(usize),
     DocumentTab(usize),

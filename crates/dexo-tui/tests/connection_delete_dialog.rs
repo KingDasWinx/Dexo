@@ -155,7 +155,7 @@ fn the_list_fits_its_connections_and_scrolls_to_the_selection() {
         .count();
     let top = frame
         .lines()
-        .position(|line| line.contains("Connections"))
+        .position(|line| line.contains("┌Connections"))
         .unwrap();
     let bottom = frame
         .lines()

@@ -11,6 +11,7 @@ pub mod mouse;
 pub mod palette;
 pub mod render;
 pub mod runtime;
+pub mod screen;
 pub mod screens;
 pub mod sql_template;
 pub mod terminal;

@@ -1,5 +1,6 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 256
 expression: "render_to_string(&model, 60, 20)"
 ---
 demo  local  public          1 Sidebar  [2 SQL]  3 Results  

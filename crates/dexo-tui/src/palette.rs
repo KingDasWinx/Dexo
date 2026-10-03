@@ -262,6 +262,7 @@ const CATEGORIES: &[(&str, &str)] = &[
     ("query", "Query"),
     ("document", "Document"),
     ("editor", "Editor"),
+    ("screen", "Screen"),
     ("workbench", "Workbench"),
     ("palette", "Workbench"),
     ("help", "Workbench"),
@@ -696,8 +697,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 150);
-        assert_eq!(ids.len(), 150);
+        assert_eq!(entries.len(), 157);
+        assert_eq!(ids.len(), 157);
     }
 
     #[test]

@@ -38,6 +38,55 @@ use crate::screens::transaction_prompt::TransactionPrompt;
 use crate::screens::transfer::TransferScreen;
 use crate::theme::Theme;
 
+/// A place in Dexo, drawn over the whole terminal below the header. The workbench is
+/// home; the others are where work that outgrew a dialog lives, and each keeps its state
+/// while Dexo runs.
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, PartialEq)]
+pub enum Screen {
+    #[default]
+    Workbench,
+    Connections,
+    Agents,
+    Server,
+    Compare,
+    History,
+}
+
+impl Screen {
+    /// In the order the header lists them.
+    pub const ALL: [Screen; 6] = [
+        Screen::Workbench,
+        Screen::Connections,
+        Screen::Agents,
+        Screen::Server,
+        Screen::Compare,
+        Screen::History,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Screen::Workbench => "Workbench",
+            Screen::Connections => "Connections",
+            Screen::Agents => "Agents",
+            Screen::Server => "Server",
+            Screen::Compare => "Compare",
+            Screen::History => "History",
+        }
+    }
+
+    /// The palette and keymap command that goes there.
+    pub fn command(self) -> &'static str {
+        match self {
+            Screen::Workbench => "screen.workbench",
+            Screen::Connections => "screen.connections",
+            Screen::Agents => "screen.agents",
+            Screen::Server => "screen.server",
+            Screen::Compare => "screen.compare",
+            Screen::History => "screen.history",
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum Focus {
     Explorer,
@@ -1922,6 +1971,9 @@ pub struct PendingDocumentClose {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Model {
+    pub screen: Screen,
+    /// Where Esc and `Ctrl+G Ctrl+G` go back to.
+    pub previous_screen: Screen,
     pub focus: Focus,
     pub width: u16,
     pub height: u16,
@@ -2079,6 +2131,8 @@ pub struct Model {
 impl Default for Model {
     fn default() -> Self {
         Self {
+            screen: Screen::Workbench,
+            previous_screen: Screen::Workbench,
             focus: Focus::Editor,
             width: 160,
             height: 50,

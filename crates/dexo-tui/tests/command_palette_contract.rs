@@ -14,6 +14,13 @@ const COMMAND_IDS: &[&str] = &[
     "transaction.commit",
     "transaction.rollback",
     "help.open",
+    "screen.workbench",
+    "screen.connections",
+    "screen.agents",
+    "screen.server",
+    "screen.compare",
+    "screen.history",
+    "screen.previous",
     "focus.explorer",
     "focus.editor",
     "focus.results",
@@ -249,8 +256,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 178);
-    assert_eq!(actual.len(), 178, "duplicate command id");
+    assert_eq!(specs.len(), 185);
+    assert_eq!(actual.len(), 185, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -259,7 +266,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 150);
+    assert_eq!(visible.len(), 157);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a

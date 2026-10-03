@@ -543,6 +543,10 @@ pub enum Action {
     ResultsExtendUp,
     ResultsExtendDown,
     ToggleHelp,
+    /// Goes to a screen, keeping the one left as the way back.
+    GoToScreen(crate::model::Screen),
+    /// Back to the screen before this one, the workbench when there is none.
+    ScreenBack,
     CycleLayout,
     ResetLayout,
     HideExplorer,

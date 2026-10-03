@@ -56,8 +56,21 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .set_style(area, model.theme.base(model.capabilities));
     let plan =
         LayoutPlan::for_area_with_document_tabs(frame.area(), Some(&model.effective_panes()), true);
-    render_bar(frame, plan.context, context_line(model));
+    let header = render_header(
+        frame,
+        plan.context,
+        model,
+        hits,
+        plan.mode == crate::layout::LayoutMode::Compact,
+    );
+    let on_workbench = model.screen == crate::model::Screen::Workbench;
+    if !on_workbench {
+        let top = plan.context.y + plan.context.height;
+        let body = Rect::new(area.x, top, area.width, plan.status.y.saturating_sub(top));
+        crate::screen::render(frame, body, model, hits);
+    }
     match plan.mode {
+        _ if !on_workbench => {}
         crate::layout::LayoutMode::Compact => {
             crate::widgets::document_tabs::render(frame, plan.document_tabs, model, hits);
             render_compact(frame, plan.content, model, hits);
@@ -104,11 +117,14 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             }
         }
     }
-    if !overlay_blocks_workbench(model) && plan.mode != crate::layout::LayoutMode::Compact {
+    if on_workbench
+        && !overlay_blocks_workbench(model)
+        && plan.mode != crate::layout::LayoutMode::Compact
+    {
         register_pane_dividers(hits, plan);
     }
-    if plan.mode == crate::layout::LayoutMode::Compact {
-        render_pane_switcher(frame, plan.context, model, hits);
+    if on_workbench && plan.mode == crate::layout::LayoutMode::Compact {
+        render_pane_switcher(frame, plan.context, model, hits, header);
     }
     crate::widgets::status::render(frame, plan.status, model);
     if model.onboarding.open {
@@ -283,6 +299,55 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(prompt) = &model.close_prompt {
         render_close_prompt(frame, model, prompt, hits);
     }
+    if !model.pending_chord.keys.is_empty() {
+        render_chord_hint(frame, model);
+    }
+}
+
+/// While a chord waits for its next key, what that key can be: `Ctrl+G` lists the
+/// screens, Emacs' `Ctrl+X` its file keys. Nothing said what came after the first key.
+fn render_chord_hint(frame: &mut Frame, model: &Model) {
+    let context = crate::update::chord_context(model);
+    let next = model.keymap.continuations(&model.pending_chord, context);
+    if next.is_empty() {
+        return;
+    }
+    let rows: Vec<String> = next
+        .iter()
+        .map(|(key, command)| {
+            let title = crate::palette::command_spec(command)
+                .map(|spec| spec.title)
+                .unwrap_or(command.as_str());
+            format!("{:<8} {title}", crate::palette::pretty_chord(key))
+        })
+        .collect();
+    let area = frame.area();
+    let width = (rows
+        .iter()
+        .map(|row| row.chars().count())
+        .max()
+        .unwrap_or(0) as u16
+        + 2)
+    .min(area.width);
+    let height = (rows.len() as u16 + 2).min(area.height.saturating_sub(1));
+    if width < 4 || height < 3 {
+        return;
+    }
+    // Bottom right, above the status line, where the eye goes after a key.
+    let popup = Rect::new(
+        area.right().saturating_sub(width),
+        area.bottom().saturating_sub(height + 1),
+        width,
+        height,
+    );
+    let title = crate::palette::pretty_chord(&crate::keymap::chord_label(&model.pending_chord));
+    paint_popup(
+        frame,
+        model,
+        popup,
+        overlay_block(model, &title),
+        rows.join("\n"),
+    );
 }
 
 /// "Save, don't save, or cancel" for a document closed with unsaved changes. The
@@ -738,7 +803,13 @@ fn render_compact(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMa
 /// Compact mode draws one pane at a time, and only Alt+1..3 changed it: nothing on
 /// screen said so, and the mouse could not. The header row carries the three panes, the
 /// one on screen in brackets, each a click.
-fn render_pane_switcher(frame: &mut Frame, row: Rect, model: &Model, hits: &mut HitMap) {
+fn render_pane_switcher(
+    frame: &mut Frame,
+    row: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    header: usize,
+) {
     let focus = model.effective_focus();
     let panes = [
         ("1 Sidebar", "1", Focus::Explorer, HitTarget::Explorer),
@@ -752,7 +823,7 @@ fn render_pane_switcher(frame: &mut Frame, row: Rect, model: &Model, hits: &mut 
     };
     // The names when the row has room beside the connection, the digits when not.
     let spelled: usize = panes.iter().map(|pane| pane.0.len() + 3).sum();
-    let named = usize::from(row.width) >= context_line(model).chars().count() + spelled + 2;
+    let named = usize::from(row.width) >= header + spelled + 2;
     let mut x = row.x + row.width;
     let mut cells: Vec<(Rect, String, bool, HitTarget)> = Vec::new();
     for (index, (name, digit, _, target)) in panes.iter().enumerate().rev() {
@@ -787,6 +858,73 @@ fn render_pane_switcher(frame: &mut Frame, row: Rect, model: &Model, hits: &mut 
             hits.register(target, rect);
         }
     }
+}
+
+/// Row 1: the screens on the left, the current one bracketed and in the accent, then
+/// the project, connection and schema. Returns the cells it used, which the compact
+/// layout's pane switcher fits beside.
+fn render_header(
+    frame: &mut Frame,
+    row: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    compact: bool,
+) -> usize {
+    if row.width == 0 || row.height == 0 {
+        return 0;
+    }
+    let context = context_line(model);
+    // The compact workbench keeps the right end for its pane switcher's digits.
+    let switcher = if model.screen == crate::model::Screen::Workbench && compact {
+        12
+    } else {
+        0
+    };
+    let room = usize::from(row.width)
+        .saturating_sub(switcher)
+        .saturating_sub(context.chars().count() + 2);
+    let mut items = crate::screen::strip(model, room);
+    // The compact workbench's row is its pane switcher's: the strip shows there only to
+    // say work is waiting elsewhere.
+    if switcher > 0 {
+        items.retain(|item| item.waiting > 0);
+    }
+    let current = model.theme.style(Role::Focus, model.capabilities);
+    let busy = model.theme.style(Role::Warning, model.capabilities);
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let mut spans = Vec::new();
+    let mut x = row.x;
+    let blocked = crate::mouse::top_overlay(model).is_some();
+    for item in items {
+        let width = item.label.chars().count() as u16;
+        let style = if item.current {
+            current
+        } else if item.waiting > 0 {
+            busy
+        } else {
+            muted
+        };
+        if !blocked && x < row.x + row.width {
+            let width = width.min(row.x + row.width - x);
+            hits.register(
+                HitTarget::ScreenTab(item.screen),
+                Rect::new(x, row.y, width, 1),
+            );
+        }
+        x = x.saturating_add(width);
+        spans.push(Span::styled(item.label, style));
+    }
+    spans.push(Span::raw(if spans.is_empty() {
+        context
+    } else {
+        format!("  {context}")
+    }));
+    let used = spans
+        .iter()
+        .map(|span| span.content.chars().count())
+        .sum::<usize>();
+    frame.render_widget(Paragraph::new(Line::from(spans)), row);
+    used
 }
 
 fn context_line(model: &Model) -> String {
@@ -996,13 +1134,6 @@ fn explorer_body(model: &Model, area: Rect) -> Vec<Line<'static>> {
             }
         })
         .collect()
-}
-
-fn render_bar(frame: &mut Frame, area: Rect, text: String) {
-    if area.width == 0 || area.height == 0 {
-        return;
-    }
-    frame.render_widget(Paragraph::new(text), area);
 }
 
 fn render_panel(

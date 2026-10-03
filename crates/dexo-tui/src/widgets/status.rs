@@ -122,6 +122,33 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
             model.theme.style(Role::Warning, model.capabilities),
         ));
     }
+    // Another screen names itself and its keys; the connection and the editor's state
+    // belong to the workbench and are on its header.
+    if model.screen != crate::model::Screen::Workbench {
+        spans.push(Span::styled(
+            format!("{}  ", model.screen.title()),
+            model
+                .theme
+                .style(Role::Focus, model.capabilities)
+                .add_modifier(ratatui::style::Modifier::BOLD),
+        ));
+        let doors = doors(model);
+        let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
+        let room = (area.width as usize).saturating_sub(used + doors.chars().count() + 2);
+        let hint = fit_hint(&crate::screen::hints(model), room);
+        let gap = (area.width as usize)
+            .saturating_sub(used + hint.chars().count() + doors.chars().count());
+        spans.push(Span::raw(hint));
+        if gap > 0 {
+            spans.push(Span::raw(" ".repeat(gap)));
+            spans.push(Span::styled(
+                doors,
+                model.theme.style(Role::Muted, model.capabilities),
+            ));
+        }
+        frame.render_widget(Paragraph::new(Line::from(spans)), area);
+        return;
+    }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact) {
         spans.push(Span::raw(format!("{conn}  {}", doors(model))));
         if let Some(notice) = &model.update_notice {

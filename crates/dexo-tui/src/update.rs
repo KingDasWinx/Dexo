@@ -2759,6 +2759,15 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             toggle_help(model);
             Vec::new()
         }
+        Action::GoToScreen(screen) => go_to_screen(model, screen),
+        Action::ScreenBack => {
+            let back = if model.previous_screen == model.screen {
+                crate::model::Screen::Workbench
+            } else {
+                model.previous_screen
+            };
+            go_to_screen(model, back)
+        }
         Action::CycleLayout => {
             apply_layout_preset(model, model.layout_preset.next());
             Vec::new()
@@ -3320,7 +3329,13 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             }
             _ => Vec::new(),
         },
-        None => mouse_workbench(model, mouse, hit, doubled),
+        None => match hit {
+            Some(HitTarget::ScreenTab(screen)) => update(model, Action::GoToScreen(screen)),
+            _ if model.screen != crate::model::Screen::Workbench => {
+                crate::screen::mouse(model, hit, doubled)
+            }
+            _ => mouse_workbench(model, mouse, hit, doubled),
+        },
     }
 }
 
@@ -4720,6 +4735,91 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
     }
 }
 
+/// Keys on a screen other than the workbench: its own first, then Esc back, then the
+/// keymap's global chords -- only those that do not act on the hidden workbench.
+fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if model.pending_chord.keys.is_empty() {
+        if let Some(effects) = crate::screen::handle_key(model, key) {
+            return effects;
+        }
+        if key.code == KeyCode::Esc && key.modifiers.is_empty() {
+            return update(model, Action::ScreenBack);
+        }
+    }
+    let mut chord = model.pending_chord.clone();
+    chord.keys.push(crate::keymap::KeySpec {
+        modifiers: key.modifiers,
+        code: key.code,
+    });
+    let ctx = crate::keymap::KeyContext::Global;
+    if model.keymap.is_prefix(&chord, ctx) {
+        model.pending_chord = chord;
+        return Vec::new();
+    }
+    model.pending_chord.keys.clear();
+    match model.keymap.resolve(&chord, ctx) {
+        Ok(Some(command)) if crate::screen::screen_safe(command) => {
+            match crate::palette::invocation_by_id(model, command) {
+                Some(invocation) => invoke_palette(model, invocation),
+                None => Vec::new(),
+            }
+        }
+        Ok(Some(command)) => {
+            let title = crate::palette::command_spec(command)
+                .map(|spec| spec.title)
+                .unwrap_or(command);
+            let back = crate::palette::shortcut_for(model, "screen.workbench", None)
+                .map(|key| format!(": {key} goes there"))
+                .unwrap_or_default();
+            model
+                .messages
+                .info(format!("{title} works on the Workbench{back}."));
+            Vec::new()
+        }
+        Ok(None) => Vec::new(),
+        Err(conflict) => {
+            model.messages.error(format!(
+                "keymap conflict {}: {}",
+                conflict.chord,
+                conflict.commands.join(" / ")
+            ));
+            Vec::new()
+        }
+    }
+}
+
+/// The context a pending chord's next key is looked up in.
+pub(crate) fn chord_context(model: &Model) -> crate::keymap::KeyContext {
+    if model.screen == crate::model::Screen::Workbench {
+        active_key_context(model)
+    } else {
+        crate::keymap::KeyContext::Global
+    }
+}
+
+/// Goes to `screen`, the one left becoming the way back, and reads what it shows.
+fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
+    model.pending_chord.keys.clear();
+    if model.screen != screen {
+        model.previous_screen = model.screen;
+        model.screen = screen;
+    }
+    enter_screen(model, screen)
+}
+
+/// What a screen reads when it comes up: the state it kept is shown at once, and the
+/// data under it is read again.
+fn enter_screen(_model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
+    match screen {
+        crate::model::Screen::Workbench
+        | crate::model::Screen::Connections
+        | crate::model::Screen::Agents
+        | crate::model::Screen::Server
+        | crate::model::Screen::Compare
+        | crate::model::Screen::History => Vec::new(),
+    }
+}
+
 fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     // Without the kitty keyboard protocol, ^H is what Ctrl+Backspace sends; taking it for
     // Ctrl+H (find and replace) would leave those terminals no key to delete a word.
@@ -5178,6 +5278,9 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             KeyCode::Char('R' | 'r') => update(model, Action::RevokeAllMcpGrants),
             _ => Vec::new(),
         };
+    }
+    if model.screen != crate::model::Screen::Workbench {
+        return handle_screen_key(model, key);
     }
     if let Some(effects) = clause_bar_key(model, key) {
         return effects;
@@ -12919,8 +13022,16 @@ fn palette_select(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     }
     let invocation = entry.invocation.clone();
+    let id = entry.id;
     close_palette(model);
-    invoke_palette(model, invocation)
+    // A command for the documents or the editor, asked for from another screen, is
+    // carried out where it is seen.
+    let mut effects = Vec::new();
+    if model.screen != crate::model::Screen::Workbench && !crate::screen::screen_safe(id) {
+        effects = update(model, Action::GoToScreen(crate::model::Screen::Workbench));
+    }
+    effects.extend(invoke_palette(model, invocation));
+    effects
 }
 
 #[cfg(test)]

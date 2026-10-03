@@ -192,7 +192,7 @@ This keeps "every document belongs to a connection" true and frees two overlays.
 | Help | F1 opens at the current screen's section; the palette lists the screen's commands first. |
 | Keymap | New key contexts `connections`, `agents`, `server`, `compare`, `history`, overridable in the user's keymap like the others. |
 | Mouse | The strip switches screens; panes, rows and buttons take clicks as in the workbench. |
-| Too small | Below 100 columns a list + detail screen stacks the detail under the list; below 80x24 (compact) it shows the list only and Enter opens the detail full height, Esc goes back. Below 40x12 every screen shows "Terminal too small: Dexo needs 40x12" (there is no such guard today). |
+| Too small | Below 100 columns a list + detail screen stacks the detail under the list; below 80x24 (compact) it shows the list only and Enter opens the detail full height, Esc goes back. Below 20x8 every screen shows "Terminal too small: Dexo needs 20x8" (there was no such guard; 20x8 is the smallest size the tests already hold Dexo to). |
 
 ## Clutter audit (what this removes)
 

@@ -2,7 +2,7 @@ use dexo_driver_api::TransactionState;
 
 use super::{CommandSpec, FlowIntent, PaletteEntry, PaletteInvocation, Requirement};
 use crate::action::{Action, FocusTarget};
-use crate::model::{GridSelection, Model};
+use crate::model::{GridSelection, Model, Screen};
 
 fn command_spec_list() -> Vec<CommandSpec> {
     vec![
@@ -101,6 +101,77 @@ fn command_spec_list() -> Vec<CommandSpec> {
             shortcut: None,
             requirements: &[],
             invocation: PaletteInvocation::Dispatch(Action::RollbackTransaction),
+        },
+        CommandSpec {
+            id: "screen.workbench",
+            title: "Go to Workbench",
+            keywords: &["screen", "editor", "sql", "home", "back"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Workbench)),
+        },
+        CommandSpec {
+            id: "screen.connections",
+            title: "Go to Connections",
+            keywords: &["screen", "connection", "manage", "databases"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Connections)),
+        },
+        CommandSpec {
+            id: "screen.agents",
+            title: "Go to Agents",
+            keywords: &[
+                "screen",
+                "mcp",
+                "agent",
+                "approvals",
+                "activity",
+                "grants",
+                "profiles",
+            ],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Agents)),
+        },
+        CommandSpec {
+            id: "screen.server",
+            title: "Go to Server",
+            keywords: &[
+                "screen",
+                "sessions",
+                "activity",
+                "locks",
+                "processes",
+                "admin",
+            ],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Server)),
+        },
+        CommandSpec {
+            id: "screen.compare",
+            title: "Go to Compare",
+            keywords: &["screen", "schema", "diff", "migration"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::Compare)),
+        },
+        CommandSpec {
+            id: "screen.history",
+            title: "Go to History",
+            keywords: &["screen", "queries", "saved", "recent", "library"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::GoToScreen(Screen::History)),
+        },
+        CommandSpec {
+            id: "screen.previous",
+            title: "Go to Previous Screen",
+            keywords: &["screen", "back", "last", "toggle"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::ScreenBack),
         },
         CommandSpec {
             id: "help.open",

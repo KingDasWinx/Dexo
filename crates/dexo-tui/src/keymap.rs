@@ -182,8 +182,31 @@ impl Keymap {
         })
     }
 
+    /// What can follow a chord begun with `chord`: the key that completes it and the
+    /// command it runs, for the list shown while the rest is awaited.
+    pub fn continuations(&self, chord: &Chord, active: KeyContext) -> Vec<(String, String)> {
+        let mut next = self
+            .bindings
+            .iter()
+            .filter(|binding| {
+                (binding.context == KeyContext::Global || binding.context == active)
+                    && binding.chord.keys.len() == chord.keys.len() + 1
+                    && binding.chord.keys.starts_with(&chord.keys)
+            })
+            .map(|binding| {
+                let last = &binding.chord.keys[chord.keys.len()];
+                (key_label(last), binding.command.clone())
+            })
+            .collect::<Vec<_>>();
+        // In the keymap's order, which lists the screens as the header does.
+        let mut seen = std::collections::HashSet::new();
+        next.retain(|entry| seen.insert(entry.clone()));
+        next
+    }
+
     pub fn help_sections(&self) -> Vec<(&'static str, Vec<(String, String)>)> {
-        let mut buckets: [(KeyContext, Vec<(String, String)>); 7] = [
+        let mut buckets: [(KeyContext, Vec<(String, String)>); 8] = [
+            (KeyContext::Global, Vec::new()),
             (KeyContext::Editor, Vec::new()),
             (KeyContext::Results, Vec::new()),
             (KeyContext::Explorer, Vec::new()),
@@ -195,22 +218,28 @@ impl Keymap {
         for binding in &self.bindings {
             let chord = chord_label(&binding.chord);
             let entry = (chord, binding.command.clone());
+            // The way between screens comes first: it is the way to everything else.
+            if binding.command.starts_with("screen.") {
+                buckets[0].1.push(entry);
+                continue;
+            }
             // Pane sizes are one topic wherever the key is bound: they sat under Editor.
             if binding.command.starts_with("layout.") {
-                buckets[6].1.push(entry);
+                buckets[7].1.push(entry);
                 continue;
             }
             match binding.context {
-                KeyContext::Editor => buckets[0].1.push(entry),
+                KeyContext::Editor => buckets[1].1.push(entry),
                 // the console is the results pane wearing a different hat
-                KeyContext::Results | KeyContext::Console => buckets[1].1.push(entry),
-                KeyContext::Explorer => buckets[2].1.push(entry),
-                KeyContext::DocumentTabs => buckets[3].1.push(entry),
-                KeyContext::Global => buckets[4].1.push(entry),
-                KeyContext::Palette | KeyContext::Modal => buckets[5].1.push(entry),
+                KeyContext::Results | KeyContext::Console => buckets[2].1.push(entry),
+                KeyContext::Explorer => buckets[3].1.push(entry),
+                KeyContext::DocumentTabs => buckets[4].1.push(entry),
+                KeyContext::Global => buckets[5].1.push(entry),
+                KeyContext::Palette | KeyContext::Modal => buckets[6].1.push(entry),
             }
         }
         let names = [
+            "Screens",
             "Editor",
             "Results",
             "Explorer",
@@ -588,6 +617,13 @@ fn key_label(key: &KeySpec) -> String {
 const DEFAULT_TOML: &str = r#"
 profile = "default"
 [global]
+"ctrl+g w" = "screen.workbench"
+"ctrl+g c" = "screen.connections"
+"ctrl+g a" = "screen.agents"
+"ctrl+g s" = "screen.server"
+"ctrl+g d" = "screen.compare"
+"ctrl+g h" = "screen.history"
+"ctrl+g ctrl+g" = "screen.previous"
 "alt+o" = "editor.open_saved_query"
 "ctrl+alt+a" = "mcp.audit"
 "ctrl+p" = "palette.open"
@@ -758,6 +794,13 @@ profile = "default"
 const VIM_TOML: &str = r#"
 profile = "vim"
 [global]
+"ctrl+g w" = "screen.workbench"
+"ctrl+g c" = "screen.connections"
+"ctrl+g a" = "screen.agents"
+"ctrl+g s" = "screen.server"
+"ctrl+g d" = "screen.compare"
+"ctrl+g h" = "screen.history"
+"ctrl+g ctrl+g" = "screen.previous"
 "alt+o" = "editor.open_saved_query"
 "ctrl+alt+a" = "mcp.audit"
 "ctrl+p" = "palette.open"
@@ -899,6 +942,13 @@ profile = "vim"
 const EMACS_TOML: &str = r#"
 profile = "emacs"
 [global]
+"ctrl+g w" = "screen.workbench"
+"ctrl+g c" = "screen.connections"
+"ctrl+g a" = "screen.agents"
+"ctrl+g s" = "screen.server"
+"ctrl+g d" = "screen.compare"
+"ctrl+g h" = "screen.history"
+"ctrl+g ctrl+g" = "screen.previous"
 "alt+o" = "editor.open_saved_query"
 "ctrl+alt+a" = "mcp.audit"
 "alt+x" = "palette.open"
