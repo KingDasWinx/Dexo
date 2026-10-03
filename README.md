@@ -158,7 +158,7 @@ dexo mcp profile enable --name assistant --confirm
 dexo mcp setup --client claude-code --profile assistant   # or codex, cursor, claude-desktop
 ```
 
-The agent reads only what the profile allows. To let it write, make a grant for a while; with `--ask`, each write waits for your approval in Agent Activity (<kbd>Ctrl</kbd>+<kbd>Alt</kbd>+<kbd>A</kbd>). See the [MCP guide](docs/src/mcp.md).
+The agent reads only what the profile allows. To let it write, make a grant for a while; with `--ask`, each write waits for your approval on the Agents screen (<kbd>Ctrl</kbd>+<kbd>G</kbd> <kbd>a</kbd>). See the [MCP guide](docs/src/mcp.md).
 
 ## Compatibility
 

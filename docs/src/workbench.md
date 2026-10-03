@@ -1,12 +1,18 @@
 # Workbench
 
-The TUI is keyboard-first: explorer, SQL editor, results, inspector, and a command palette. Layouts persist per project. Compact mode hides extra panes on small terminals.
+The TUI is keyboard-first: explorer, SQL editor, results, inspector, and a command palette. Layouts persist per project. Compact mode hides extra panes on small terminals; below 20x8 Dexo says the terminal is too small instead of drawing pieces of it.
 
 SQL execution streams result pages. Manual transactions stay visible. Closing a tab does not silently abandon a running query, and quitting with an open transaction or grid edits not yet applied says what would be lost and asks first.
 
 Theme, keymap, mouse capture, Unicode, and animation persist in a local settings file and apply immediately. Mouse clicks map to the same commands as the keyboard.
 
 Every single-line field -- the palette, the F1 search, the WHERE and ORDER BY bars, form fields, names and paths, the typed confirmations -- edits the same way: Ctrl+A selects the whole text, shown in reverse, and what you type next replaces it; Ctrl+Left and Ctrl+Right move by words, accents included; Ctrl+Backspace, Alt+Backspace or Ctrl+W delete the word before the cursor and Ctrl+Delete the one after it; Home and End go to either end. Deleting a project asks for its name; Alt+C there chooses whether its connections go with it.
+
+## Screens
+
+The workbench -- explorer, editor and results -- is one of six screens. The others are places for work that outgrew a dialog: **Connections**, **Agents**, **Server**, **Compare** and **History**. The top line lists them, the current one in brackets, beside the project, connection and schema; a number after a name is work waiting there, such as agent writes waiting for approval.
+
+`Ctrl+G` then a letter goes to a screen: `w` workbench, `c` connections, `a` agents, `s` server, `d` compare, `h` history; `Ctrl+G Ctrl+G` goes back and forth between the last two. After `Ctrl+G` a small list shows what can follow, as it does for any chord that waits for a second key. A click on a name and the palette's "Go to …" commands go there too, and the keys and commands that opened the old dialogs -- `s` in the sidebar, Search History, MCP Profiles -- open their screen. Esc first clears what the screen has open, a search or a form, then goes back to the screen you came from. A screen keeps its state while Dexo runs; Dexo starts on the workbench. On another screen, a key that acts on the workbench (Ctrl+W, Ctrl+S) says so instead of acting on what is hidden; the palette's workbench commands go to the workbench and run there.
 
 ## Themes
 
@@ -80,16 +86,38 @@ F7 shows the estimated plan of the statement under the cursor, Shift+F7 runs it 
 
 A statement with parameters (`$1`, `?`) has a plan that depends on their values. On Postgres 16 and later, F7 shows the plan the server would pick for any value (`EXPLAIN (GENERIC_PLAN)`); on older Postgres, MySQL, MariaDB, SQLite and DuckDB, and for Analyze, which runs the statement, Dexo says the plan needs the values: write them into the statement to explain it. Analyze rolls back what it ran (inside a transaction of your own, to a savepoint on Postgres, MySQL and MariaDB), though a sequence or an auto-increment counter keeps its advance. On MySQL and MariaDB it refuses a write that touches a table with no transactions (MyISAM, Aria, MEMORY), which no rollback would undo, or a table it cannot tell about.
 
-## Object inspector
+## Table views and the object inspector
 
-`i` on an object in the explorer opens the inspector: its properties, what the connected user may do with it, and, with `d` in the explorer, its DDL. Up and Down scroll it. `n` writes a note on the object -- what a table or a column means, for you and for agents over [MCP](mcp.md): Enter or [Save] keeps it, Esc or [Cancel] drops it, and a blank note removes it. The note shows once it is saved. A note belongs to a saved connection's object; without one, the database's own comment is shown, marked as such. Edit Object Note… in the palette does the same for the object selected in the explorer.
+A table's or view's document has its own views beside its rows: **Structure** (columns, keys, indexes, owner, size, note), **DDL** and **Privileges**. `i`, `d` and `g` on a table in the explorer open its document on Structure, DDL and Privileges; `v` walks the views, and a click on one picks it. Privileges lists the roles, what the picked one may do on that table -- its grants elsewhere are counted, not listed -- and Enter previews a grant of SELECT to it.
 
-## Agent Activity
+For any other object, `i` opens the inspector: its properties, what the connected user may do with it, and, with `d` in the explorer, its DDL. Up and Down scroll it. `n` -- in the inspector or on a table's Structure view -- writes a note on the object -- what a table or a column means, for you and for agents over [MCP](mcp.md): Enter or [Save] keeps it, Esc or [Cancel] drops it, and a blank note removes it. The note shows once it is saved. A note belongs to a saved connection's object; without one, the database's own comment is shown, marked as such. Edit Object Note… in the palette does the same for the object selected in the explorer.
 
-Ctrl+Alt+A, or Agent Activity in the palette, lists the writes MCP agents are waiting to make under grants that ask before each write, oldest first, with the time each has left, and the latest tool calls. Up and Down pick a request; its whole statement is shown under it, wrapped, and PgUp/PgDn or the wheel scroll through it while the buttons stay at the bottom. `a` approves after a second confirmation -- Cancel holds the focus, so an Enter out of habit decides nothing -- and `d` denies. A request decided elsewhere or out of time closes its confirmation and settles nothing, and a write is approved only while its agent still waits for the answer; otherwise Dexo says the agent is no longer waiting. `r` revokes every grant, which denies their waiting requests too. With the screen closed, a toast says when a request arrives.
+## Agents
 
-Grants are made in MCP Profiles -- `g`, or New MCP Grant… in the palette, with an "ask before each write" switch -- or with `dexo mcp grant create`; see [MCP](mcp.md).
+Agents (`Ctrl+G a`, or `Ctrl+Alt+A`) has three views, switched with `1`-`3` or `[` and `]`:
+
+- **Approvals** lists the writes MCP agents are waiting to make under grants that ask before each write, oldest first, each with what it would do; the picked one is shown whole beside the list, with the time it has left. `a` approves after a second confirmation -- Cancel holds the focus, so an Enter out of habit decides nothing -- and `d` denies; PgUp and PgDn read a long statement, the question open or not. A request decided elsewhere or out of time closes its confirmation and settles nothing, and a write is approved only while its agent still waits for the answer. `R` revokes every grant, which denies their waiting requests too.
+- **Activity** is the audit log as a table -- time, profile, tool, target, outcome, duration -- newest first; `/` filters it, and the picked call is shown in full under it.
+- **Profiles** lists the MCP profiles beside the picked one's connections, scopes, tools and grants: `e` enables or disables it, `g` makes a grant in that pane, with an "ask before each write" switch, `r` revokes its grants, `R` all of them, `x` deletes it.
+
+A write that starts waiting while you are elsewhere puts its count beside Agents on the top line and says so once. Grants are also made with `dexo mcp grant create`; see [MCP](mcp.md).
+
+## Server
+
+Server (`Ctrl+G s`, or `s` in the sidebar) lists the sessions of the server the connection in use reaches, on Postgres, MySQL and MariaDB, and reads them again every two seconds while it is on screen: `p` pauses, `r` reads now, `c` moves to another open connection's server. The picked session is shown whole under the list -- its query, and who it blocks or waits for. `t` ends it once its id is typed; a read-only connection ends none, and production asks as it does for any write.
+
+## Connections
+
+Connections (`Ctrl+G c`) lists the saved connections and the databases running in Docker, beside where the picked one goes: its address, where its password comes from, its tunnels and its rules. Enter connects, and on a Docker database fills a new connection from it. `n` and `e` -- here or in the sidebar -- open the form in that pane; saving or cancelling a form opened from the sidebar goes back to the sidebar. `d` duplicates, `t` tests, `x` deletes after asking, `c` closes the session, `r` looks for Docker again; each is also a click under the details.
+
+## Compare
+
+Compare (`Ctrl+G d`, or Compare Schema in the palette) compares two sources -- open connections, saved snapshots, a snapshot file -- and keeps the last comparison to read again. The differences are listed with their risk and filters (`a`, `r`, `c`); beside them is the statement for the picked one, or, with `w`, the whole script that makes the first like the second. Enter opens the script in a new document on the first connection, where it runs through that connection's own checks; `e` starts a new comparison.
+
+## History
+
+History (`Ctrl+G h`, Search History, or `h` in the sidebar) lists the statements run on the connection in use, newest first, each once, with its time; the picked one is shown whole beside the list. Typing searches. Tab switches to the saved queries. Enter opens the picked one in a new document on the workbench; nothing runs.
 
 ## Saved queries
 
-Save Query As (Alt+S) keeps the selection, or the whole document, under a name, for the project and the connection; the same name replaces that query, and says so. Open Saved Query (Alt+O) searches names and SQL, shows the query, opens it in a new document on its connection, renames it (F2) and deletes it (Delete, then confirm). A saved query belongs to a saved connection and goes with it; a temporary connection asks to be saved first.
+Save Query As (Alt+S) keeps the selection, or the whole document, under a name, for the project and the connection; the same name replaces that query, and says so. Open Saved Query (Alt+O) is History's saved view: it searches names and SQL, shows the query, opens it in a new document on its connection, renames it (F2) and deletes it (Delete, then confirm). A saved query belongs to a saved connection and goes with it; a temporary connection asks to be saved first.
