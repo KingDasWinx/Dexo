@@ -506,7 +506,7 @@ fn editing_from_connections_overlay_uses_overlay_selection() {
     model
         .connections
         .load_profiles(vec![saved_profile(), alternate]);
-    model.connections.open = true;
+    model.screen = dexo_tui::model::Screen::Connections;
     model.connections.selected_profile = 1;
     model.explorer.connection_cursor = 0;
 

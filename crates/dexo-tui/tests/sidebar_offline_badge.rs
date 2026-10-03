@@ -114,7 +114,7 @@ fn a_container_that_is_already_saved_is_said_so() {
              "Env": ["POSTGRES_USER=ana", "POSTGRES_PASSWORD=s3cret", "POSTGRES_DB=shop"]},
            "NetworkSettings": {"Ports": {"5432/tcp": [{"HostIp": "0.0.0.0", "HostPort": "5433"}]}}}]"#,
     );
-    model.connections.open = true;
+    model.screen = dexo_tui::model::Screen::Connections;
     dexo_tui::update(&mut model, dexo_tui::Action::DockerDiscovered(found));
     let screen = render_to_string(&model, 100, 30);
     assert!(
@@ -185,7 +185,7 @@ fn browse_connections_does_not_print_a_rust_name_beside_the_status() {
         read_only: false,
         driver: "postgres".into(),
     });
-    model.connections.open = true;
+    model.screen = dexo_tui::model::Screen::Connections;
     let screen = render_to_string(&model, 100, 30);
     assert!(screen.contains("connected"), "{screen}");
     assert!(!screen.contains("Idle"), "{screen}");
@@ -198,7 +198,7 @@ fn a_form_over_browse_connections_leaves_no_second_border() {
     let mut model = Model::default();
     model.apply_size(100, 30);
     model.connections.load_profiles(vec![profile("alpha", 1)]);
-    model.connections.open = true;
+    model.screen = dexo_tui::model::Screen::Connections;
     dexo_tui::update(&mut model, dexo_tui::Action::OpenConnectionForm);
     let screen = render_to_string(&model, 100, 30);
     assert!(!screen.contains("Running in Docker"), "{screen}");

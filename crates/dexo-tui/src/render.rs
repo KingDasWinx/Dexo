@@ -87,7 +87,7 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         hits,
         plan.mode == crate::layout::LayoutMode::Compact,
     );
-    let on_workbench = model.screen == crate::model::Screen::Workbench;
+    let on_workbench = model.shown_screen() == crate::model::Screen::Workbench;
     if !on_workbench {
         let top = plan.context.y + plan.context.height;
         let body = Rect::new(area.x, top, area.width, plan.status.y.saturating_sub(top));
@@ -191,9 +191,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     // A dialog opened over another is drawn alone: the one under it, taller, showed its
     // bottom border as a second box edge under the new one.
-    if model.connections.open && !model.connection_form.open && !model.secret_prompt.open {
-        render_connections(frame, model, hits);
-    }
     if model.projects.open {
         render_projects(frame, model, hits);
     }
@@ -255,9 +252,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
                 crate::widgets::form::register_footer(hits, rect, line, "Save");
             }
         });
-    }
-    if model.connection_form.open {
-        render_connection_form(frame, model, hits);
     }
     if model.settings.open {
         render_settings(frame, model, hits);
@@ -2222,59 +2216,6 @@ fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     });
 }
 
-/// The saved connections, sized to them: the list scrolls to keep the selection in
-/// view once there are more than fit, and the hints stay on screen underneath.
-fn render_connections(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    let screen = &model.connections;
-    let listed = screen.rows(model.active_session);
-    // The popup is 72 wide at most, 70 inside its borders.
-    let footer = screen.footer_lines((area.width.min(72) as usize).saturating_sub(2));
-    // Borders, the blank line above the hints, and a row of air above and below.
-    let chrome = 2 + 1 + footer.len();
-    let room = (area.height as usize).saturating_sub(chrome + 2).max(1);
-    let rows = listed.len().clamp(1, room);
-    // Scrolled by line, so the Docker heading scrolls with its rows.
-    let selected_line = listed
-        .iter()
-        .position(|(row, _)| *row == Some(screen.selected_profile))
-        .unwrap_or(0);
-    let offset = scroll_to_selection(selected_line, 0, listed.len(), rows);
-    let shown: Vec<(Option<usize>, String)> = listed.into_iter().skip(offset).take(rows).collect();
-    let mut lines: Vec<String> = shown.iter().map(|(_, line)| line.clone()).collect();
-    lines.push(String::new());
-    lines.extend(footer);
-    let popup = centered(area, 72, (lines.len() + 2) as u16);
-    paint_popup(
-        frame,
-        model,
-        popup,
-        overlay_block(model, "Connections"),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    let buttons = [
-        HitButton::Connect,
-        HitButton::New,
-        HitButton::Edit,
-        HitButton::Duplicate,
-        HitButton::Test,
-        HitButton::Delete,
-        HitButton::CloseSession,
-        HitButton::Docker,
-    ];
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if let Some((Some(row), _)) = shown.get(i).filter(|_| i < rows) {
-            hits.register(HitTarget::ListRow(*row), rect);
-        }
-        if i > rows {
-            for (label, button) in crate::screens::connections::HINTS.iter().zip(buttons) {
-                register_label(hits, rect, line, label, HitTarget::Button(button));
-            }
-        }
-    });
-}
-
 /// "Delete connection", drawn like "Unsaved changes": sized to its text, the focused
 /// button marked with `>` so it reads without colour, Cancel focused first.
 fn render_delete_connection(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
@@ -2690,69 +2631,6 @@ fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitM
         }
         if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, prompt.submit_label());
-        }
-    });
-}
-
-fn render_connection_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    // As tall as its fields, up to what the screen has: a short form was a short list in
-    // a tall box.
-    let wanted = model.connection_form.content_rows() as u16 + 2;
-    let popup = centered(area, 72, area.height.saturating_sub(2).min(22).min(wanted));
-    let rows = popup.height.saturating_sub(2).max(4) as usize;
-    let visible = model
-        .connection_form
-        .visible_rows(rows, popup_inner(popup).width as usize);
-    let lines: Vec<String> = visible.iter().map(|(_, line)| line.clone()).collect();
-    paint_popup(
-        frame,
-        model,
-        popup,
-        overlay_block(model, model.connection_form.title()),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    let footer = lines.len().saturating_sub(1);
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if i == footer {
-            crate::widgets::form::register_footer(hits, rect, line, "Submit");
-            crate::mouse::register_label(
-                hits,
-                rect,
-                line,
-                "[Test]",
-                HitTarget::Button(HitButton::Test),
-            );
-            return;
-        }
-        // The status rows above the buttons are text, not fields: a click there is
-        // nothing, where it used to focus whichever field sat at that row's index.
-        let Some(index) = visible.get(i).and_then(|(field, _)| *field) else {
-            return;
-        };
-        if line.contains("Advanced options") {
-            hits.register(HitTarget::Button(HitButton::ToggleAdvanced), rect);
-            return;
-        }
-        let form = &model.connection_form;
-        if index == form.focus
-            && !form.is_choice_at(index)
-            && let Some(field) = form.fields.get(index)
-        {
-            show_form_field(frame, rect, field);
-        }
-        hits.register(HitTarget::FormField(index), rect);
-        if form.is_choice_at(index) {
-            for (needle, step) in [("< ", -1), (" >", 1)] {
-                crate::mouse::register_label(
-                    hits,
-                    rect,
-                    line,
-                    needle,
-                    HitTarget::FormChoice { index, step },
-                );
-            }
         }
     });
 }

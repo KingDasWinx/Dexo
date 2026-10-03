@@ -112,9 +112,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
     }
     // Another screen names itself and its keys; the connection and the editor's state
     // belong to the workbench and are on its header.
-    if model.screen != crate::model::Screen::Workbench {
+    if model.shown_screen() != crate::model::Screen::Workbench {
         spans.push(Span::styled(
-            format!("{}  ", model.screen.title()),
+            format!("{}  ", model.shown_screen().title()),
             model
                 .theme
                 .style(Role::Focus, model.capabilities)

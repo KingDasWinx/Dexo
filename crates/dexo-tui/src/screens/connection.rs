@@ -466,8 +466,9 @@ impl ConnectionForm {
     }
 
     /// What the form says about itself, in a fixed place above the buttons: the last
-    /// error or test result, or else how to use the form. The place never moves, so the
-    /// message shows wherever the fields are scrolled to and the buttons stay put.
+    /// error or test result, or what the focused field is for. The place never moves, so
+    /// the message shows wherever the fields are scrolled to and the buttons stay put. The
+    /// keys are on the status line.
     fn status_rows(&self, width: usize) -> Vec<String> {
         let text = match (self.errors.first(), &self.notice) {
             // The message names fields by their keys, as the app checks them.
@@ -485,9 +486,7 @@ impl ConnectionForm {
                 .focused_label()
                 .and_then(field_hint)
                 .map(str::to_string)
-                .unwrap_or_else(|| {
-                    "Enter save  Tab next field  Left/Right pick a value  Esc cancel".into()
-                }),
+                .unwrap_or_default(),
         };
         let room = width.saturating_sub(2).max(1);
         let mut lines = crate::model::wrap_words(&text, room);

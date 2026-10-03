@@ -40,8 +40,8 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 
 ## 4. Connections
 
-- [ ] C1 Browse Connections becomes the screen: list grouped by group, Docker section, details pane.
-- [ ] C2 Add/Edit form in the right pane (Esc back to details); sidebar `n`/`e` open it there.
+- [x] C1 Browse Connections becomes the screen: list grouped by group, Docker section, details pane.
+- [x] C2 Add/Edit form in the right pane (Esc back to details); sidebar `n`/`e` open it there.
 
 ## 5. Compare
 

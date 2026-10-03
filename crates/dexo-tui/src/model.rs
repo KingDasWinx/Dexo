@@ -2251,6 +2251,18 @@ impl Default for Model {
     }
 }
 
+impl Model {
+    /// The screen drawn: the connection form is always drawn on Connections, opened from
+    /// wherever it was.
+    pub fn shown_screen(&self) -> Screen {
+        if self.connection_form.open {
+            Screen::Connections
+        } else {
+            self.screen
+        }
+    }
+}
+
 impl From<Focus> for Model {
     fn from(focus: Focus) -> Self {
         Self {

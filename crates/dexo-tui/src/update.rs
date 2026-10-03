@@ -28,7 +28,8 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
     // flushes before anything after it could run.
     promote_placeholder(model);
     let mut swapped = model.swap_results_to_active_document();
-    let effects = dispatch(model, action);
+    let mut effects = dispatch(model, action);
+    effects.extend(follow_connection_form(model));
     promote_placeholder(model);
     model.drop_redundant_placeholder();
     swapped |= model.swap_results_to_active_document();
@@ -50,6 +51,24 @@ pub fn update(model: &mut Model, action: Action) -> Vec<Effect> {
         model.sync_grid_viewport();
     }
     effects
+}
+
+/// The connection form lives on the Connections screen: opened from elsewhere it goes
+/// there, and once it closes it goes back where it came from -- `n` in the sidebar adds a
+/// connection and lands back in the sidebar.
+fn follow_connection_form(model: &mut Model) -> Vec<Effect> {
+    use crate::model::Screen;
+    if model.connection_form.open && model.screen != Screen::Connections {
+        model.connections.form_from = Some(model.screen);
+        return go_to_screen(model, Screen::Connections);
+    }
+    if !model.connection_form.open
+        && model.screen == Screen::Connections
+        && let Some(origin) = model.connections.form_from.take()
+    {
+        return go_to_screen(model, origin);
+    }
+    Vec::new()
 }
 
 fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
@@ -465,7 +484,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ConnectSelected => connect_selected(model),
         Action::EditSelectedConnection => {
-            if !model.connections.open
+            if model.screen != crate::model::Screen::Connections
                 && model.focus == Focus::Explorer
                 && let Some(index) = selected_connection_profile_index(model)
             {
@@ -3252,7 +3271,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Some(OverlayKind::Connections) => mouse_connections(model, hit, doubled),
         Some(OverlayKind::Projects) => mouse_projects(model, hit, doubled),
         Some(OverlayKind::ConfigTransfer) => mouse_config_transfer(model, hit),
         Some(OverlayKind::SecretPrompt) => mouse_secret(model, hit),
@@ -3337,7 +3355,9 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         },
         None => match hit {
             Some(HitTarget::ScreenTab(screen)) => update(model, Action::GoToScreen(screen)),
-            _ if model.screen != crate::model::Screen::Workbench => mouse_screen(model, hit),
+            _ if model.screen != crate::model::Screen::Workbench => {
+                mouse_screen(model, hit, doubled)
+            }
             _ => mouse_workbench(model, mouse, hit, doubled),
         },
     }
@@ -4119,10 +4139,11 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 /// A click on a screen other than the workbench.
-fn mouse_screen(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
     match model.screen {
         crate::model::Screen::Agents => mouse_agents(model, hit),
         crate::model::Screen::Server => mouse_admin(model, hit),
+        crate::model::Screen::Connections => mouse_connections(model, hit, doubled),
         _ => Vec::new(),
     }
 }
@@ -4705,11 +4726,11 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if overlay == Some(OverlayKind::Connections) {
+    if overlay.is_none() && model.screen == crate::model::Screen::Connections {
         if delta < 0 {
             model.connections.selected_profile =
                 model.connections.selected_profile.saturating_sub(1);
-        } else if model.connections.selected_profile + 1 < model.connections.profiles.len() {
+        } else if model.connections.selected_profile + 1 < model.connections.row_count() {
             model.connections.selected_profile += 1;
         }
         return Vec::new();
@@ -4797,6 +4818,7 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         let own = match model.screen {
             crate::model::Screen::Agents => agents_key(model, key),
             crate::model::Screen::Server => server_key(model, key),
+            crate::model::Screen::Connections => connections_key(model, key),
             _ => None,
         };
         if let Some(effects) = own {
@@ -5075,8 +5097,8 @@ fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
             });
             show_server(model, kept)
         }
+        crate::model::Screen::Connections => vec![Effect::DiscoverDocker],
         crate::model::Screen::Workbench
-        | crate::model::Screen::Connections
         | crate::model::Screen::Compare
         | crate::model::Screen::History => Vec::new(),
     }
@@ -5222,9 +5244,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.config_transfer.open {
         return handle_config_transfer_key(model, key);
-    }
-    if model.connections.open && !model.connection_form.open {
-        return handle_connections_key(model, key);
     }
     if model.connection_form.open {
         return handle_connection_form_key(model, key);
@@ -5764,14 +5783,28 @@ fn resolve_delete_connection(
     }
 }
 
-fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    match key.code {
+/// The Connections screen's keys. None leaves the key to the keymap and Esc to going back.
+fn connections_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    Some(match key.code {
         KeyCode::Esc => {
-            model.connections.open = false;
             model.connections.error = None;
-            Vec::new()
+            return None;
         }
         KeyCode::Enter => choose_connection_intent(model),
+        KeyCode::Home => {
+            model.connections.selected_profile = 0;
+            Vec::new()
+        }
+        KeyCode::End => {
+            model.connections.selected_profile = model.connections.row_count().saturating_sub(1);
+            Vec::new()
+        }
         KeyCode::Up => {
             if model.connections.selected_profile > 0 {
                 model.connections.selected_profile -= 1;
@@ -5789,10 +5822,10 @@ fn handle_connections_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         KeyCode::Char('e') => update(model, Action::EditSelectedConnection),
         KeyCode::Char('d') => update(model, Action::DuplicateConnection),
         KeyCode::Char('t') => update(model, Action::TestConnection),
-        KeyCode::Char('x') => update(model, Action::DeleteConnection),
+        KeyCode::Char('x') | KeyCode::Delete => update(model, Action::DeleteConnection),
         KeyCode::Char('c') => update(model, Action::CloseSelectedSession),
-        _ => Vec::new(),
-    }
+        _ => return None,
+    })
 }
 
 fn submit_secret(
@@ -5877,7 +5910,7 @@ fn selected_connection_profile_index(model: &Model) -> Option<usize> {
 }
 
 fn close_selected_session(model: &mut Model) -> Vec<Effect> {
-    let connection_name = if model.connections.open {
+    let connection_name = if model.screen == crate::model::Screen::Connections {
         model
             .connections
             .selected()
@@ -12784,8 +12817,7 @@ fn choose_project_intent(model: &mut Model) -> Vec<Effect> {
 
 /// The connections screen, with the databases running in Docker looked for again.
 fn open_connections(model: &mut Model) -> Vec<Effect> {
-    model.connections.open = true;
-    vec![Effect::DiscoverDocker]
+    go_to_screen(model, crate::model::Screen::Connections)
 }
 
 fn choose_connection_intent(model: &mut Model) -> Vec<Effect> {
@@ -13084,9 +13116,9 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::ConnectionDelete) => {
             // Deleting takes a confirmation, and the connections screen is the only
             // place that draws one -- the flow is that screen, opened on the target.
-            let effects = update(model, Action::DeleteConnection);
+            let mut effects = update(model, Action::DeleteConnection);
             if model.connections.delete_target.is_some() {
-                model.connections.open = true;
+                effects.extend(go_to_screen(model, crate::model::Screen::Connections));
             }
             effects
         }
@@ -13586,7 +13618,7 @@ mod tests {
         model.connection.name = "demo".into();
 
         // A new connection may not be called "demo" while the demo is open.
-        model.connection_form = crate::screens::connection::ConnectionForm::open();
+        update(&mut model, Action::OpenConnectionForm);
         for (label, value) in [
             ("name", "demo"),
             ("host", "db"),

@@ -96,12 +96,12 @@ fn connection_delete_never_hides_confirmation() {
 
     let mut model = Model::default();
     update(&mut model, Action::OpenConnections);
-    assert!(model.connections.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Connections);
     update(
         &mut model,
         Action::Key(KeyEvent::new(KeyCode::Char('x'), KeyModifiers::NONE)),
     );
-    assert!(model.connections.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Connections);
     assert!(model.connections.delete_target.is_none());
 }
 
