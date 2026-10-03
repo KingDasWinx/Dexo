@@ -871,6 +871,12 @@ fn properties_tab_body(model: &Model) -> String {
         if let Some(type_name) = object.attributes.get("type").and_then(|v| v.as_str()) {
             lines.push(format!("type: {type_name}"));
         }
+        if let Some(owner) = object.attributes.get("owner").and_then(|v| v.as_str()) {
+            lines.push(format!("owner: {owner}"));
+        }
+        if let Some(bytes) = object.attributes.get("size_bytes").and_then(|v| v.as_i64()) {
+            lines.push(format!("size: {}", human_bytes(bytes)));
+        }
         // Each driver names these its own way (`driver.sqlite.not_null`, `driver.mysql.nullable`).
         for (key, value) in &object.attributes {
             let Some(rest) = key.strip_prefix("driver.") else {
@@ -929,6 +935,22 @@ fn properties_tab_body(model: &Model) -> String {
         }
     }
     lines.join("\n")
+}
+
+/// `8192` as `8.0 KiB`: what the catalog counts, in the unit a person reads.
+fn human_bytes(bytes: i64) -> String {
+    const UNITS: [&str; 5] = ["B", "KiB", "MiB", "GiB", "TiB"];
+    let mut value = bytes.max(0) as f64;
+    let mut unit = 0;
+    while value >= 1024.0 && unit + 1 < UNITS.len() {
+        value /= 1024.0;
+        unit += 1;
+    }
+    if unit == 0 {
+        format!("{bytes} B")
+    } else {
+        format!("{value:.1} {}", UNITS[unit])
+    }
 }
 
 fn explorer_body(model: &Model, area: Rect) -> Vec<Line<'static>> {
@@ -4040,6 +4062,13 @@ mod tests {
     }
 
     /// A column says its type and nullability, and what it relates to by name, one to a line.
+    #[test]
+    fn sizes_are_said_in_the_unit_a_person_reads() {
+        assert_eq!(super::human_bytes(512), "512 B");
+        assert_eq!(super::human_bytes(8192), "8.0 KiB");
+        assert_eq!(super::human_bytes(5 * 1024 * 1024 + 512 * 1024), "5.5 MiB");
+    }
+
     #[test]
     fn properties_say_what_a_column_is() {
         let mut model = Model::default();

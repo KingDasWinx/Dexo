@@ -794,7 +794,9 @@ impl CatalogReader for PostgresSession {
                     .query_opt(
                         "SELECT current_database()::text, n.nspname::text, c.relname::text,
                                 n.oid::bigint, c.relkind::text, pg_get_partkeydef(c.oid),
-                                obj_description(c.oid, 'pg_class')
+                                obj_description(c.oid, 'pg_class'),
+                                pg_get_userbyid(c.relowner)::text,
+                                pg_total_relation_size(c.oid)::bigint
                          FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
                          WHERE c.oid = $1::bigint::oid",
                         &[&oid],
@@ -805,7 +807,7 @@ impl CatalogReader for PostgresSession {
                     return Ok(None);
                 };
                 let relkind: String = row.get(4);
-                Ok(Some(relation_object(
+                let object = relation_object(
                     id.clone(),
                     QualifiedName::new(
                         Some(row.get::<_, String>(0)),
@@ -817,7 +819,12 @@ impl CatalogReader for PostgresSession {
                     &relkind,
                     row.get(5),
                     row.get(6),
-                )))
+                );
+                Ok(Some(
+                    object
+                        .with_attribute("owner", serde_json::json!(row.get::<_, String>(7)))
+                        .with_attribute("size_bytes", serde_json::json!(row.get::<_, i64>(8))),
+                ))
             }
             "index" | "partition" => {
                 let (catalog, schema, name) = self.relation_name(oid).await?;
@@ -829,6 +836,38 @@ impl CatalogReader for PostgresSession {
                         None,
                     )
                     .with_attribute(oid_attr(oid).0, oid_attr(oid).1),
+                ))
+            }
+            "constraint" => {
+                let Some(row) = self
+                    .client
+                    .query_opt(
+                        "SELECT current_database()::text, n.nspname::text, k.conname::text,
+                                k.contype::text, k.conrelid::bigint
+                         FROM pg_constraint k JOIN pg_namespace n ON n.oid = k.connamespace
+                         WHERE k.oid = $1::bigint::oid",
+                        &[&oid],
+                    )
+                    .await
+                    .map_err(map_error)?
+                else {
+                    return Ok(None);
+                };
+                let contype: String = row.get(3);
+                let table: i64 = row.get(4);
+                Ok(Some(
+                    CatalogObject::new(
+                        id.clone(),
+                        ObjectKind::Constraint,
+                        QualifiedName::new(
+                            Some(row.get::<_, String>(0)),
+                            Some(row.get::<_, String>(1)),
+                            row.get::<_, String>(2),
+                        ),
+                        (table != 0).then(|| pg_id("table", table)),
+                    )
+                    .with_attribute(oid_attr(oid).0, oid_attr(oid).1)
+                    .with_attribute("driver.postgres.contype", serde_json::json!(contype)),
                 ))
             }
             _ => Ok(None),

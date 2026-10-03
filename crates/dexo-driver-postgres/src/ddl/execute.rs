@@ -120,7 +120,8 @@ impl SecurityAdmin for PostgresSession {
                    FROM (SELECT to_regclass(CASE WHEN $2::text IS NULL THEN quote_ident($3)
                                                  ELSE quote_ident($2) || '.' || quote_ident($3)
                                             END) AS oid) r,
-                        unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE'])
+                        unnest(ARRAY['SELECT', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE',
+                                     'REFERENCES', 'TRIGGER'])
                             WITH ORDINALITY AS p(privilege, n)
                    WHERE r.oid IS NOT NULL
                      AND has_table_privilege(COALESCE($1::text, current_user::text)::name,

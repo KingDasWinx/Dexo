@@ -497,7 +497,15 @@ async fn privileges_follow_the_relation_and_the_current_role() {
         drain(session, sql).await;
     }
     let security = session.security().unwrap();
-    let all = ["SELECT", "INSERT", "UPDATE", "DELETE"];
+    let all = [
+        "SELECT",
+        "INSERT",
+        "UPDATE",
+        "DELETE",
+        "TRUNCATE",
+        "REFERENCES",
+        "TRIGGER",
+    ];
     for target in [
         QualifiedName::new(Some("dexo"), Some("public"), "Mixed"),
         QualifiedName::new(None::<String>, None::<String>, "Mixed"),
