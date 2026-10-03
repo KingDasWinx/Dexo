@@ -164,7 +164,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-26** `MAJOR` Applying DDL answers `ddl Committed` / `ddl RolledBack` (Rust enum names); a failure never says why
 - [x] **ES-32** `MAJOR` Apply Raw DDL dialog: raw `key=value` dump, leftover form values shown as removed lines, and ADD COLUMN labelled destructive
 - [x] **ES-33** `MAJOR` DDL preview cannot be scrolled: long DDL is cut with "…" and still offers [Apply]
-- [ ] **ES-34** `MAJOR` After a restart, Preview DDL ran for the explorer's last connection (MySQL) while the visible document belonged to pg-readonly
+- [x] **ES-34** `MAJOR` After a restart, Preview DDL ran for the explorer's last connection (MySQL) while the visible document belonged to pg-readonly
 - [x] **ES-38** `MAJOR` Compare Schema cannot compare two different databases or a snapshot: it only ever diffs the current connection with itself
 - [x] **ES-39** `MAJOR` Schema diff dialog is an unlabelled raw dump with hidden keys and no buttons
 - [x] **ES-41** `MAJOR` Explain Analyze of a write on a production connection asks no name, only "This is a production connection." with [Run] focused

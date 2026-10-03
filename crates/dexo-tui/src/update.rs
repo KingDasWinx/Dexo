@@ -1658,18 +1658,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::ApplyDdl => apply_ddl(model),
-        Action::ApplyRawDdl => {
-            let sql = model.active_document().text();
-            if !sql.trim().is_empty() {
-                model.schema_editor.apply_raw(sql);
-                model.schema_editor.errors.clear();
-                model.schema_editor.footer = crate::widgets::form::FooterFocus::Submit;
-                model.schema_editor.open = true;
-            } else {
-                model.messages.warn("no SQL to apply".into());
-            }
-            Vec::new()
-        }
+        Action::OpenSchemaForm => on_document_connection(model, action, open_schema_form),
+        Action::ApplyRawDdl => on_document_connection(model, action, apply_raw_ddl),
         Action::OpenSecurity => open_security(model),
         Action::SchemaFocusNext => {
             model.schema_editor.focus_next();
@@ -6706,6 +6696,68 @@ fn switch_to_document_connection(model: &mut Model, index: usize) -> Switch {
     }
 }
 
+/// Runs `then` on the connection the active document belongs to, switching to it first:
+/// the form used to open on whatever session the explorer last touched, and its preview
+/// then ran on the document's.
+fn on_document_connection(
+    model: &mut Model,
+    action: Action,
+    then: fn(&mut Model) -> Vec<Effect>,
+) -> Vec<Effect> {
+    match switch_to_document_connection(model, model.active_document) {
+        Switch::Ready => then(model),
+        Switch::Activated(mut effects) => {
+            effects.extend(then(model));
+            effects
+        }
+        Switch::Dialling(effects) => {
+            model.pending_execute = Some(crate::model::PendingExecute {
+                document: model.active_document().id.clone(),
+                action,
+                token: model.connect_token,
+            });
+            effects
+        }
+    }
+}
+
+fn open_schema_form(model: &mut Model) -> Vec<Effect> {
+    // The fields come first: previewing straight away previewed a form nobody saw.
+    if model.connection.read_only {
+        model.messages.warn(format!(
+            "{} is read-only: a schema change cannot be applied here.",
+            model.connection.name
+        ));
+        return Vec::new();
+    }
+    model.schema_editor.raw_sql.clear();
+    model.schema_editor.form_diff = None;
+    model.schema_editor.errors.clear();
+    model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
+    model.schema_editor.open = true;
+    Vec::new()
+}
+
+fn apply_raw_ddl(model: &mut Model) -> Vec<Effect> {
+    if model.connection.read_only {
+        model.messages.warn(format!(
+            "{} is read-only: a schema change cannot be applied here.",
+            model.connection.name
+        ));
+        return Vec::new();
+    }
+    let sql = model.active_document().text();
+    if !sql.trim().is_empty() {
+        model.schema_editor.apply_raw(sql);
+        model.schema_editor.errors.clear();
+        model.schema_editor.footer = crate::widgets::form::FooterFocus::Submit;
+        model.schema_editor.open = true;
+    } else {
+        model.messages.warn("no SQL to apply".into());
+    }
+    Vec::new()
+}
+
 /// Runs an execution on the document's own connection. A document restored from a
 /// launch, or one whose connection dropped, would otherwise send its query to whatever
 /// session happens to be live -- the wrong database, silently.
@@ -9987,8 +10039,12 @@ fn refresh_after_schema_change(
 
 fn apply_ddl(model: &mut Model) -> Vec<Effect> {
     if model.connection.read_only {
-        model.messages.warn("connection is read-only".into());
-        return Vec::new();
+        // Not left standing over the refusal: the preview closes, as Cancel does.
+        model.messages.warn(format!(
+            "{} is read-only: nothing was applied.",
+            model.connection.name
+        ));
+        return cancel_ddl_preview(model);
     }
     let Some(preview) = &mut model.schema_editor.preview else {
         return Vec::new();
@@ -11282,6 +11338,13 @@ fn open_security(model: &mut Model) -> Vec<Effect> {
 }
 
 fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
+    if model.connection.read_only {
+        model.messages.warn(format!(
+            "{} is read-only: a grant cannot be applied here.",
+            model.connection.name
+        ));
+        return Vec::new();
+    }
     let Some(principal) = model
         .security
         .principals
@@ -12665,19 +12728,7 @@ fn invoke_palette(model: &mut Model, invocation: crate::palette::PaletteInvocati
         PaletteInvocation::OpenFlow(FlowIntent::DataReview) => update(model, Action::OpenReview),
         // The fields come first: previewing straight away previewed a form nobody saw.
         PaletteInvocation::OpenFlow(FlowIntent::SchemaPreview) => {
-            if model.connection.read_only {
-                model.messages.warn(format!(
-                    "{} is read-only: a schema change cannot be applied here.",
-                    model.connection.name
-                ));
-                return Vec::new();
-            }
-            model.schema_editor.raw_sql.clear();
-            model.schema_editor.form_diff = None;
-            model.schema_editor.errors.clear();
-            model.schema_editor.footer = crate::widgets::form::FooterFocus::Input;
-            model.schema_editor.open = true;
-            Vec::new()
+            update(model, Action::OpenSchemaForm)
         }
         PaletteInvocation::OpenFlow(FlowIntent::SchemaRaw) => update(model, Action::ApplyRawDdl),
         PaletteInvocation::OpenFlow(FlowIntent::SchemaDiff) => {

@@ -374,3 +374,40 @@ fn refreshing_an_offline_table_connects_then_reloads() {
         "the table never reloaded: {effects:?}"
     );
 }
+
+/// The Schema form opens on the document's connection: it used to open on the session
+/// the explorer touched last, and the preview then ran on the document's.
+#[test]
+fn the_schema_form_opens_on_the_documents_connection() {
+    let mut model = two_connections();
+    model.connections.upsert_session(session_row("beta", 2));
+    model.active_document = 2;
+    update(&mut model, Action::OpenSchemaForm);
+    assert_eq!(model.connection.name, "beta");
+    assert!(model.schema_editor.open);
+
+    let mut model = two_connections();
+    model.active_document = 2;
+    let effects = update(&mut model, Action::OpenSchemaForm);
+    assert!(!model.schema_editor.open, "opened before beta was reached");
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ConnectProfile { .. })),
+        "{effects:?}"
+    );
+}
+
+/// A read-only connection refuses a schema change where it is asked for, not after a
+/// preview that is then left standing.
+#[test]
+fn a_read_only_connection_refuses_the_schema_tools_up_front() {
+    let mut model = two_connections();
+    model.connection.read_only = true;
+    model.active_document = 1;
+    model.documents[1].sql = dexo_sql::SqlDocument::new("create table t (id int)");
+    update(&mut model, Action::OpenSchemaForm);
+    assert!(!model.schema_editor.open);
+    update(&mut model, Action::ApplyRawDdl);
+    assert!(!model.schema_editor.open);
+}

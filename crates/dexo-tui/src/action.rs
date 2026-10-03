@@ -243,6 +243,8 @@ pub enum Action {
     OpenObjectDdl,
     OpenObjectData,
     OpenDependencies,
+    /// The Schema form, on the connection the document belongs to.
+    OpenSchemaForm,
     ExplorerUp,
     ExplorerDown,
     ExplorerFirst,
