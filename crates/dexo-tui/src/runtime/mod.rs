@@ -905,6 +905,19 @@ impl WorkbenchRuntime {
             crate::Effect::SetMcpProfileEnabled { name, enabled } => {
                 self.set_mcp_profile_enabled(name, enabled).await
             }
+            crate::Effect::SaveMcpProfileAccess {
+                name,
+                connections,
+                reads,
+            } => {
+                self.off_the_loop(move || {
+                    let message = save_mcp_profile_access(&name, connections, reads)
+                        .unwrap_or_else(|error| error);
+                    std::iter::once(Action::McpProfileSaved { message })
+                        .chain(mcp_profiles_loaded())
+                        .collect()
+                });
+            }
             crate::Effect::RevokeMcpGrants { profile } => self.revoke_mcp(profile).await,
             crate::Effect::DeleteMcpProfile { name } => self.delete_mcp_profile(name).await,
             crate::Effect::RevokeAllMcpGrants => self.revoke_all_mcp().await,
@@ -2878,6 +2891,52 @@ pub(crate) fn home_relative(path: &std::path::Path, home: &std::path::Path) -> S
         }
         _ => path.display().to_string(),
     }
+}
+
+/// A profile's connections or SQL reading changed and saved, as `dexo mcp profile set`
+/// would: what it now allows, or why not.
+fn save_mcp_profile_access(
+    name: &str,
+    connections: Option<Vec<String>>,
+    reads: Option<bool>,
+) -> Result<String, String> {
+    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+    let repo = dexo_storage::McpProfileRepository::new(db.connection());
+    let mut profile = repo
+        .get_by_name(name)
+        .map_err(|error| error.to_string())?
+        .ok_or_else(|| format!("{name} is not a profile any more"))?;
+    if let Some(connections) = connections {
+        let saved = ConnectionRepository::new(db.connection());
+        for connection in &connections {
+            let found = saved
+                .get_by_name(connection)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("{connection} is not a saved connection"))?;
+            dexo_app::mcp::McpConnection::from_profile(&found)
+                .map_err(|error| format!("{connection}: {error}"))?;
+        }
+        profile.connections = connections;
+    }
+    if let Some(reads) = reads {
+        profile.query_mode = if reads {
+            dexo_app::mcp::QueryMode::RawReadSql
+        } else {
+            dexo_app::mcp::QueryMode::StructuredOnly
+        };
+    }
+    profile.validate().map_err(|error| error.to_string())?;
+    repo.save(&profile).map_err(|error| error.to_string())?;
+    Ok(format!(
+        "{name} uses {}, and {}.",
+        profile.connections.join(", "),
+        if profile.query_mode == dexo_app::mcp::QueryMode::RawReadSql {
+            "reads SQL"
+        } else {
+            "browses only"
+        }
+    ))
 }
 
 /// The profile made -- or the one picked, enabled -- and the agent's config written, as

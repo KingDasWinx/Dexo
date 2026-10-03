@@ -503,6 +503,10 @@ pub enum Action {
     McpGrantsRevoked {
         count: usize,
     },
+    /// What saving a profile's access came to.
+    McpProfileSaved {
+        message: String,
+    },
     McpRevokeFailed {
         message: String,
     },
@@ -1106,6 +1110,12 @@ pub enum Effect {
     SetMcpProfileEnabled {
         name: String,
         enabled: bool,
+    },
+    /// A profile's connections, or whether it reads SQL, changed; what is `None` stays.
+    SaveMcpProfileAccess {
+        name: String,
+        connections: Option<Vec<String>>,
+        reads: Option<bool>,
     },
     DeleteMcpProfile {
         name: String,

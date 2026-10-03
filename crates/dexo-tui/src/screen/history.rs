@@ -44,54 +44,20 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             model.history_view == HistoryView::Saved,
         ),
     ];
-    // The views on the left of the toolbar's row.
-    let views_width = views
-        .iter()
-        .map(|(label, _)| label.chars().count() as u16 + 5)
-        .sum::<u16>()
-        .min(area.width);
-    super::views_bar(
-        frame,
-        Rect::new(area.x, area.y, views_width, area.height),
-        model,
-        hits,
-        &views,
-    );
-    let tools = Rect::new(
-        area.x + views_width,
-        area.y,
-        area.width - views_width,
-        area.height,
-    );
     let search = match model.history_view {
         HistoryView::History => &model.editor.history_search,
         HistoryView::Saved => &model.saved_queries.search,
     };
-    let rest = widgets::toolbar(
+    let rest = super::views_and_toolbar(
         frame,
-        tools,
+        area,
         model,
         hits,
+        &views,
         Some(search),
         &chips(model),
         &toolbar_buttons(model),
     );
-    let rest = Rect::new(
-        area.x,
-        rest.y,
-        area.width,
-        area.bottom().saturating_sub(rest.y),
-    );
-    if rest.y == area.y {
-        // No room for the toolbar: the views' row is all there is.
-        let rest = Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        );
-        return draw_view(frame, rest, model, hits);
-    }
     draw_view(frame, rest, model, hits);
 }
 
@@ -538,7 +504,7 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     } else {
         footer.extend(picker.error.clone());
     }
-    let (footer_area, _, _) = super::detail_pane(
+    let footer_area = super::detail_pane(
         frame,
         detail,
         model,
@@ -548,7 +514,8 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         Text::from(text),
         usize::from(super::detail_scroll(model)),
         &footer,
-    );
+    )
+    .footer;
     if picker.deleting.is_some() {
         for (index, line) in footer
             .iter()

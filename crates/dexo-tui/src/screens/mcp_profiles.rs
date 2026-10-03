@@ -511,6 +511,55 @@ pub struct McpProfilesScreen {
     pub grant_when_loaded: bool,
     /// "Revoke all" was asked for before the profiles were read: it names how many go.
     pub revoke_all_when_loaded: bool,
+    /// `c`: the connections the picked profile may use, being checked.
+    pub checklist: Option<Checklist>,
+}
+
+/// Connections to check, and the row the focus is on.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Checklist {
+    pub items: Vec<(String, bool)>,
+    pub row: usize,
+}
+
+impl Checklist {
+    /// `available` with the profile's `checked`; one it lists that is not available any
+    /// more stays, checked, so saving does not drop it unseen.
+    pub fn new(available: Vec<String>, checked: &[String]) -> Self {
+        let mut items: Vec<(String, bool)> = available
+            .into_iter()
+            .map(|name| {
+                let on = checked.contains(&name);
+                (name, on)
+            })
+            .collect();
+        for name in checked {
+            if !items.iter().any(|(item, _)| item == name) {
+                items.push((name.clone(), true));
+            }
+        }
+        Self { items, row: 0 }
+    }
+
+    pub fn checked(&self) -> Vec<String> {
+        self.items
+            .iter()
+            .filter(|(_, on)| *on)
+            .map(|(name, _)| name.clone())
+            .collect()
+    }
+
+    pub fn toggle(&mut self, row: usize) {
+        if let Some((_, on)) = self.items.get_mut(row) {
+            *on = !*on;
+        }
+        self.row = row.min(self.items.len().saturating_sub(1));
+    }
+
+    pub fn step(&mut self, step: isize) {
+        let last = self.items.len().saturating_sub(1) as isize;
+        self.row = (self.row as isize + step).clamp(0, last) as usize;
+    }
 }
 
 impl McpProfilesScreen {
@@ -794,6 +843,28 @@ impl McpProfilesScreen {
             }
         }
         lines
+    }
+
+    /// A profile in the list's row, after its glyph: its connections, what it reads, its
+    /// grants.
+    pub fn columns(profile: &McpProfileSummary) -> String {
+        let connections = match profile.connections.len() {
+            0 => "any conn".to_string(),
+            n => format!("{n} conn"),
+        };
+        let grants = match profile.grants.len() {
+            0 => String::new(),
+            1 => "  1 grant".into(),
+            n => format!("  {n} grants"),
+        };
+        format!(
+            "{connections:<8}  {:<8}{grants}",
+            if profile.raw_read {
+                "read SQL"
+            } else {
+                "browse"
+            }
+        )
     }
 
     /// A profile in one row of the list.

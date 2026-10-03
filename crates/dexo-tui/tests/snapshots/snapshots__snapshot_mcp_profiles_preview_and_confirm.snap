@@ -3,18 +3,18 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   demo  local  public                                                                                 
- 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                                                                                
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                                                                         [n New]
 ┌▸ Profiles (1)───────────────────────────────────────────────────┐┌  assistant────────────────────────────────────────────────────────────────────────────────┐
-│> assistant  disabled  1 grant                                   ││assistant is disabled: agents cannot use it yet.                                           │
-│                                                                 ││Connections: local                                                                         │
-│                                                                 ││Reads: structured tools only                                                               │
-│                                                                 ││Objects it can see: db.public.*                                                            │
-│                                                                 ││  never: db.public.secrets                                                                 │
-│                                                                 ││Tools set by hand: catalog_search, object_describe                                         │
-│                                                                 ││Grants (1): agents may write while they last                                               │
-│                                                                 ││  data_insert on db.public.items (local): one write, then it is spent, ends in 15 min      │
+│> ○ assistant  1 conn    browse    1 grant                       ││ [e Enable]  [c Connections…]  [q Read SQL on]  [g Grant…]  [r Revoke grants]  [x Delete]  │
 │                                                                 ││                                                                                           │
-│                                                                 ││                                                                                           │
+│                                                                 ││ State        disabled                                                                     │
+│                                                                 ││ Connections  local                                                                        │
+│                                                                 ││ Access       browse and describe only                                                     │
+│                                                                 ││ Sees         db.public.*                                                                  │
+│                                                                 ││ Never        db.public.secrets                                                            │
+│                                                                 ││ Tools        catalog_search, object_describe                                              │
+│                                                                 ││ ── Grants                                                                                 │
+│                                                                 ││ data_insert on db.public.items (local): one write, then it is spent, ends in 15 min       │
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
@@ -51,4 +51,4 @@ expression: "render_to_string(&model, 160, 50)"
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
 └─────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────────────────────────────┘
-Agents  n new  e enable  g grant  r revoke  R revoke all  x delete  PgUp/PgDn read  1-4 views  Esc back                                               Ctrl+P  F1
+Agents  Up/Down pick  R revoke all  PgUp/PgDn read  1-4 views  Esc back                                                                               Ctrl+P  F1

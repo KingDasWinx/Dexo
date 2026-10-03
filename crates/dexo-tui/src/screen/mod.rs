@@ -29,6 +29,9 @@ pub fn buttons(model: &Model) -> Vec<Button> {
         Screen::Agents if model.agents_view == agents::AgentsView::Setup => {
             agents::setup_buttons(model)
         }
+        Screen::Agents if model.agents_view == agents::AgentsView::Profiles => {
+            agents::profile_buttons(model)
+        }
         _ => Vec::new(),
     }
 }
@@ -38,6 +41,7 @@ pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::toolbar_buttons(),
         Screen::History => history::toolbar_buttons(model),
+        Screen::Agents => agents::toolbar_buttons(model),
         _ => Vec::new(),
     }
 }
@@ -109,6 +113,10 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
             AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
                 Some((Section::Detail, question))
             }
+            AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => Some((
+                Section::Detail,
+                "Space checks, Enter saves, Esc keeps them as they were.",
+            )),
             _ => None,
         },
         Screen::Server if model.admin.terminate.is_some() => Some((Section::Detail, question)),
@@ -433,7 +441,7 @@ pub fn text_pane(
     scroll: usize,
     footer: &[String],
 ) -> (Rect, usize, u16) {
-    detail_pane(
+    let drawn = detail_pane(
         frame,
         area,
         model,
@@ -443,7 +451,18 @@ pub fn text_pane(
         Text::raw(lines.join("\n")),
         scroll,
         footer,
-    )
+    );
+    (drawn.footer, drawn.max_scroll, drawn.page)
+}
+
+/// Where [`detail_pane`] drew: its text and its footer, how far the text scrolls, and how
+/// many of its lines show at once.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Drawn {
+    pub body: Rect,
+    pub footer: Rect,
+    pub max_scroll: usize,
+    pub page: u16,
 }
 
 /// [`text_pane`] with the screen's buttons for the picked item on its first rows, where
@@ -459,9 +478,9 @@ pub fn detail_pane(
     text: Text<'_>,
     scroll: usize,
     footer: &[String],
-) -> (Rect, usize, u16) {
+) -> Drawn {
     if area.width < 2 || area.height < 2 {
-        return (Rect::default(), 0, 0);
+        return Drawn::default();
     }
     let block: Block = crate::render::pane_block(model, title, section(model) == Section::Detail);
     let mut inner = block.inner(area);
@@ -491,7 +510,55 @@ pub fn detail_pane(
     );
     let footer_area = Rect::new(inner.x, body.bottom(), inner.width, footer_rows);
     frame.render_widget(Paragraph::new(footer.join("\n")), footer_area);
-    (footer_area, max_scroll, body.height)
+    Drawn {
+        body,
+        footer: footer_area,
+        max_scroll,
+        page: body.height,
+    }
+}
+
+/// A screen's views on the left of its toolbar's row, and the toolbar -- search, filters,
+/// the buttons that act on all of it -- in the rest. Returns what is under the row.
+#[allow(clippy::too_many_arguments)]
+pub fn views_and_toolbar(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    views: &[(String, bool)],
+    search: Option<&widgets::Search>,
+    chips: &[widgets::Chip],
+    buttons: &[Button],
+) -> Rect {
+    let views_width = views
+        .iter()
+        .map(|(label, _)| label.chars().count() as u16 + 5)
+        .sum::<u16>()
+        .min(area.width);
+    views_bar(
+        frame,
+        Rect::new(area.x, area.y, views_width, area.height),
+        model,
+        hits,
+        views,
+    );
+    widgets::toolbar(
+        frame,
+        Rect::new(
+            area.x + views_width,
+            area.y,
+            area.width - views_width,
+            area.height,
+        ),
+        model,
+        hits,
+        search,
+        chips,
+        buttons,
+    );
+    let row = 1.min(area.height);
+    Rect::new(area.x, area.y + row, area.width, area.height - row)
 }
 
 /// Sentences shown in the middle of an empty screen.

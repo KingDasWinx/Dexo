@@ -2048,7 +2048,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             };
             Vec::new()
         }
-        Action::McpRevokeFailed { message } => {
+        Action::McpRevokeFailed { message } | Action::McpProfileSaved { message } => {
             model.mcp_profiles.status = message;
             Vec::new()
         }
@@ -4112,6 +4112,12 @@ fn mouse_mcp_profiles(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> 
             _ => Vec::new(),
         };
     }
+    if let Some(checklist) = model.mcp_profiles.checklist.as_mut() {
+        if let Some(HitTarget::FormField(index)) = hit {
+            checklist.toggle(index);
+        }
+        return Vec::new();
+    }
     if model.mcp_profiles.confirm.is_some() {
         return match hit {
             Some(HitTarget::FooterSubmit) => commit_mcp_confirm(model),
@@ -5441,11 +5447,30 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             }
             Some(Vec::new())
         }
+        AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => {
+            Some(mcp_checklist_key(model, key))
+        }
         AgentsView::Profiles => {
             let screen = &mut model.mcp_profiles;
             let page = usize::from(page);
             match key.code {
                 KeyCode::Char('g') => return Some(update(model, Action::OpenMcpGrantForm)),
+                KeyCode::Char('c') if !screen.name.is_empty() => {
+                    let available = mcp_connections(model);
+                    let screen = &mut model.mcp_profiles;
+                    screen.checklist = Some(crate::screens::mcp_profiles::Checklist::new(
+                        available,
+                        &screen.connections,
+                    ));
+                    screen.status.clear();
+                }
+                KeyCode::Char('q') if !screen.name.is_empty() => {
+                    return Some(vec![Effect::SaveMcpProfileAccess {
+                        name: screen.name.clone(),
+                        connections: None,
+                        reads: Some(!screen.raw_read),
+                    }]);
+                }
                 // A new profile is made where an agent is set up with it.
                 KeyCode::Char('n') => {
                     model.agents_view = AgentsView::Setup;
@@ -5498,10 +5523,9 @@ fn mcp_profile_names(model: &Model) -> Vec<String> {
         .collect()
 }
 
-/// The Setup form's defaults, from the profiles and the saved connections MCP serves.
-fn prepare_mcp_setup(model: &mut Model) {
-    let profiles = mcp_profile_names(model);
-    let connections = model
+/// The saved connections MCP serves: Postgres and MySQL.
+fn mcp_connections(model: &Model) -> Vec<String> {
+    model
         .connections
         .profiles
         .iter()
@@ -5513,9 +5537,44 @@ fn prepare_mcp_setup(model: &mut Model) {
             )
         })
         .map(|row| row.profile.name.clone())
-        .collect();
+        .collect()
+}
+
+/// The Setup form's defaults, from the profiles and the saved connections MCP serves.
+fn prepare_mcp_setup(model: &mut Model) {
+    let profiles = mcp_profile_names(model);
+    let connections = mcp_connections(model);
     let in_use = model.connection.name.clone();
     model.mcp_setup.prepare(&profiles, connections, &in_use);
+}
+
+/// The connections checklist: Space checks, Enter saves, Esc keeps them as they were.
+fn mcp_checklist_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let screen = &mut model.mcp_profiles;
+    let Some(checklist) = screen.checklist.as_mut() else {
+        return Vec::new();
+    };
+    match key.code {
+        KeyCode::Esc => screen.checklist = None,
+        KeyCode::Up | KeyCode::BackTab => checklist.step(-1),
+        KeyCode::Down | KeyCode::Tab => checklist.step(1),
+        KeyCode::Char(' ') => checklist.toggle(checklist.row),
+        KeyCode::Enter => {
+            let connections = checklist.checked();
+            if connections.is_empty() {
+                screen.status = "Check at least one connection for the agent to use.".into();
+                return Vec::new();
+            }
+            screen.checklist = None;
+            return vec![Effect::SaveMcpProfileAccess {
+                name: screen.name.clone(),
+                connections: Some(connections),
+                reads: None,
+            }];
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 /// The Setup form's keys: Up and Down walk it, Left, Right and Space change a row, Enter

@@ -64,7 +64,16 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             (label, model.agents_view == view)
         })
         .collect();
-    let body = super::views_bar(frame, area, model, hits, &views);
+    let body = super::views_and_toolbar(
+        frame,
+        area,
+        model,
+        hits,
+        &views,
+        None,
+        &[],
+        &toolbar_buttons(model),
+    );
     match model.agents_view {
         AgentsView::Approvals => approvals(frame, body, model, hits),
         AgentsView::Activity => activity(frame, body, model, hits),
@@ -542,6 +551,43 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 }
 
+/// What acts on the view as a whole: a new profile.
+pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+    match model.agents_view {
+        AgentsView::Profiles => vec![Button::new(KeyCode::Char('n'), "New")],
+        _ => Vec::new(),
+    }
+}
+
+/// What can be done to the picked profile.
+pub fn profile_buttons(model: &Model) -> Vec<Button> {
+    let screen = &model.mcp_profiles;
+    if screen.name.is_empty() || screen.grant_form.is_some() {
+        return Vec::new();
+    }
+    vec![
+        Button::new(
+            KeyCode::Char('e'),
+            if screen.enabled { "Disable" } else { "Enable" },
+        ),
+        Button::new(KeyCode::Char('c'), "Connections…"),
+        Button::new(
+            KeyCode::Char('q'),
+            if screen.raw_read {
+                "Read SQL off"
+            } else {
+                "Read SQL on"
+            },
+        ),
+        Button::new(KeyCode::Char('g'), "Grant…"),
+        Button::new(KeyCode::Char('r'), "Revoke grants").enabled_if(
+            !screen.grants.is_empty(),
+            format!("{} has no grant to revoke.", screen.name),
+        ),
+        Button::new(KeyCode::Char('x'), "Delete"),
+    ]
+}
+
 fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let screen = &model.mcp_profiles;
     if screen.profiles.is_empty() {
@@ -560,45 +606,180 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         super::empty_state(frame, area, model, &lines);
         return;
     }
-    let rows: Vec<String> = screen.profiles.iter().map(McpProfilesScreen::row).collect();
-    let (list, detail) = super::list_and_detail(area, rows.len());
-    super::list_pane(
-        frame,
-        list,
-        model,
-        hits,
-        &format!("Profiles ({})", rows.len()),
-        None,
-        &rows,
-        Some(screen.selected),
-    );
+    let (list, detail) = super::list_and_detail(area, screen.profiles.len());
+    profiles_list(frame, list, model, hits);
     if let Some(form) = &screen.grant_form {
         grant_form(frame, detail, model, form, hits);
         return;
     }
-    let width = usize::from(detail.width.saturating_sub(2));
-    let lines = screen.detail_lines(width);
+    let width = detail.width.saturating_sub(2);
     let mut footer = Vec::new();
     if let Some(confirm) = &screen.confirm {
         footer.extend(confirm.lines(&screen.connections));
     } else if !screen.status.is_empty() {
-        footer.extend(crate::model::wrap_words(&screen.status, width.max(8)));
+        footer.extend(crate::model::wrap_words(
+            &screen.status,
+            usize::from(width).max(8),
+        ));
     }
-    let (footer_area, max_scroll, page) = super::text_pane(
+    let text = match &screen.checklist {
+        Some(checklist) => checklist_lines(model, checklist),
+        None => widgets::field_lines(model, &profile_fields(screen), width),
+    };
+    let drawn = super::detail_pane(
         frame,
         detail,
         model,
         hits,
         &screen.name,
-        &lines,
+        &profile_buttons(model),
+        ratatui::text::Text::from(text),
         screen.detail_scroll,
         &footer,
     );
-    hits.set_scroll_limit(crate::mouse::ScrollArea::McpProfiles, max_scroll);
-    hits.set_page(crate::mouse::ScrollArea::McpProfiles, page);
-    if let Some(confirm) = &screen.confirm {
-        register_buttons(hits, footer_area, &footer, confirm.submit_label());
+    hits.set_scroll_limit(crate::mouse::ScrollArea::McpProfiles, drawn.max_scroll);
+    hits.set_page(crate::mouse::ScrollArea::McpProfiles, drawn.page);
+    // A click on a connection checks it.
+    if let Some(checklist) = &screen.checklist {
+        let top = screen.detail_scroll.min(drawn.max_scroll);
+        for index in 0..checklist.items.len() {
+            let Some(line) = (index + 1).checked_sub(top) else {
+                continue;
+            };
+            if line < usize::from(drawn.body.height) {
+                hits.register(
+                    HitTarget::FormField(index),
+                    crate::mouse::line_rect(drawn.body, line),
+                );
+            }
+        }
     }
+    if let Some(confirm) = &screen.confirm {
+        register_buttons(hits, drawn.footer, &footer, confirm.submit_label());
+    }
+}
+
+/// Each profile with its state, its connections, what it reads and its grants.
+fn profiles_list(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    if area.width < 2 || area.height < 2 {
+        return;
+    }
+    let screen = &model.mcp_profiles;
+    let block = crate::render::pane_block(
+        model,
+        &format!("Profiles ({})", screen.profiles.len()),
+        super::section(model) == super::Section::List,
+    );
+    let inner = block.inner(area);
+    frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenList, area);
+    let style = |role: Role| model.theme.style(role, model.capabilities);
+    let name_width = screen
+        .profiles
+        .iter()
+        .map(|profile| profile.name.chars().count())
+        .max()
+        .unwrap_or(0)
+        .min(24);
+    let entries: Vec<Entry> = screen
+        .profiles
+        .iter()
+        .enumerate()
+        .map(|(index, profile)| Entry {
+            spans: vec![
+                if profile.enabled {
+                    Span::styled("●", style(Role::Success))
+                } else {
+                    Span::styled("○", style(Role::Muted))
+                },
+                Span::raw(format!(
+                    " {:<name_width$}  {}",
+                    crate::model::truncate_cell(&profile.name, name_width),
+                    McpProfilesScreen::columns(profile)
+                )),
+            ],
+            target: Some(HitTarget::ListRow(index)),
+            picked: index == screen.selected,
+            heading: false,
+        })
+        .collect();
+    widgets::entries(frame, inner, model, hits, &entries);
+}
+
+/// The picked profile in fields: what it may use, read and see, then its grants.
+fn profile_fields(screen: &McpProfilesScreen) -> Vec<FieldRow> {
+    let mut rows = vec![
+        FieldRow::Field(
+            "State",
+            if screen.enabled {
+                "enabled: agents can use it".into()
+            } else {
+                "disabled".into()
+            },
+        ),
+        FieldRow::Field(
+            "Connections",
+            if screen.connections.is_empty() {
+                "any".into()
+            } else {
+                screen.connections.join(", ")
+            },
+        ),
+        FieldRow::Field(
+            "Access",
+            if screen.raw_read {
+                "read SQL (one SELECT at a time, at most 1000 rows)".into()
+            } else {
+                "browse and describe only".into()
+            },
+        ),
+    ];
+    let (mut sees, mut denies) = (Vec::new(), Vec::new());
+    for scope in &screen.scopes {
+        match scope.strip_prefix("deny ") {
+            Some(denied) => denies.push(denied.to_string()),
+            None => sees.push(scope.strip_prefix("allow ").unwrap_or(scope).to_string()),
+        }
+    }
+    rows.push(FieldRow::Field(
+        "Sees",
+        if sees.is_empty() {
+            "nothing yet".into()
+        } else {
+            sees.join(", ")
+        },
+    ));
+    if !denies.is_empty() {
+        rows.push(FieldRow::Field("Never", denies.join(", ")));
+    }
+    if !screen.tools.is_empty() {
+        rows.push(FieldRow::Field("Tools", screen.tools.join(", ")));
+    }
+    rows.push(FieldRow::Section("Grants"));
+    if screen.grants.is_empty() {
+        rows.push(FieldRow::Text("none: agents cannot write".into()));
+    }
+    for grant in &screen.grants {
+        rows.push(FieldRow::Text(grant.words()));
+    }
+    rows
+}
+
+/// The connections the profile may use, checked, with the focus marked.
+fn checklist_lines(
+    model: &Model,
+    checklist: &crate::screens::mcp_profiles::Checklist,
+) -> Vec<Line<'static>> {
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let mut lines = vec![Line::styled(" Connections the agent may use", muted)];
+    for (index, (name, on)) in checklist.items.iter().enumerate() {
+        let marker = if index == checklist.row { ">" } else { " " };
+        lines.push(Line::raw(format!(
+            "{marker}[{}] {name}",
+            if *on { "x" } else { " " }
+        )));
+    }
+    lines
 }
 
 /// New grant, in the pane the profile's details were in.
@@ -689,8 +870,11 @@ pub fn hints(model: &Model) -> String {
         AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
             "Left/Right pick  Enter answer  Esc cancel".into()
         }
-        AgentsView::Profiles => format!(
-            "n new  e enable  g grant  r revoke  R revoke all  x delete  PgUp/PgDn read  {views}  Esc back"
-        ),
+        AgentsView::Profiles if model.mcp_profiles.checklist.is_some() => {
+            "Up/Down move  Space check  Enter save  Esc keep them".into()
+        }
+        AgentsView::Profiles => {
+            format!("Up/Down pick  R revoke all  PgUp/PgDn read  {views}  Esc back")
+        }
     }
 }
