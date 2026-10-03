@@ -28,7 +28,49 @@ pub struct AuditLine {
     pub rows: u64,
 }
 
+/// How a call went, as Activity filters and marks it.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum CallOutcome {
+    Ok,
+    Failed,
+    Denied,
+    Waiting,
+}
+
+impl CallOutcome {
+    /// What `o` walks through after all of them.
+    pub const FILTERS: [CallOutcome; 3] = [Self::Ok, Self::Failed, Self::Denied];
+
+    pub fn word(self) -> &'static str {
+        match self {
+            Self::Ok => "ok",
+            Self::Failed => "failed",
+            Self::Denied => "denied",
+            Self::Waiting => "waiting",
+        }
+    }
+
+    pub fn glyph(self) -> &'static str {
+        match self {
+            Self::Ok => "✓",
+            Self::Failed => "✗",
+            Self::Denied => "⊘",
+            Self::Waiting => "…",
+        }
+    }
+}
+
 impl AuditLine {
+    /// How the call went, from its outcome's words.
+    pub fn kind(&self) -> CallOutcome {
+        match self.outcome.as_str() {
+            "ok" | "approved by a person" => CallOutcome::Ok,
+            "waiting for approval" => CallOutcome::Waiting,
+            outcome if outcome.starts_with("refused") => CallOutcome::Denied,
+            _ => CallOutcome::Failed,
+        }
+    }
+
     /// The call in one sentence, as the log reads aloud.
     pub fn sentence(&self) -> String {
         let on = if self.target.is_empty() {
@@ -62,12 +104,14 @@ pub struct McpAuditScreen {
     pub notice: Option<String>,
     /// Lines scrolled down the picked request's statement.
     pub scroll: u16,
-    /// The call picked in the Activity view, among those the filter shows.
+    /// The call picked in the Activity view, among those the filters show.
     pub event_selected: usize,
     /// Narrows the Activity view to the calls whose sentence holds it.
-    pub filter: crate::widgets::text_input::TextInput,
-    /// The filter has the keys.
-    pub filtering: bool,
+    pub search: crate::screen::widgets::Search,
+    /// Only one profile's calls.
+    pub profile: Option<String>,
+    /// Only the calls that went one way.
+    pub outcome: Option<CallOutcome>,
 }
 
 /// `text` wrapped to `width`, its first line after `first` and the rest after `rest`.
@@ -201,28 +245,6 @@ impl McpAuditScreen {
         )
     }
 
-    /// The picked request in full, `width` cells wide: what it would run, wrapped and
-    /// whole -- a statement cut at a popup's edge was approved unseen.
-    pub fn request_lines(&self, width: usize) -> Vec<String> {
-        let Some(request) = self.current() else {
-            return Vec::new();
-        };
-        let asked = format!(
-            "asked by {} at {}",
-            request.profile,
-            clock(request.created_at)
-        );
-        let mut lines: Vec<String> = [self.summary(request), asked]
-            .iter()
-            .flat_map(|text| crate::model::wrap_words(text, width.max(8)))
-            .collect();
-        lines.push(String::new());
-        for line in readable_statement(request).lines() {
-            push_wrapped(&mut lines, "", "  ", line, width);
-        }
-        lines
-    }
-
     /// The question an approve or a deny waits on, with its buttons, or the keys that ask
     /// it; and what the screen last had to say.
     pub fn decision_lines(&self, width: usize) -> Vec<String> {
@@ -231,9 +253,6 @@ impl McpAuditScreen {
             push_wrapped(&mut lines, "", "", notice, width);
         }
         let Some(deciding) = &self.deciding else {
-            if self.current().is_some() {
-                lines.push("a approve  d deny".into());
-            }
             return lines;
         };
         let question = if deciding.approve {
@@ -250,13 +269,34 @@ impl McpAuditScreen {
         lines
     }
 
-    /// The calls the filter lets through, newest first.
+    /// The calls the filters let through, newest first.
     pub fn visible_events(&self) -> Vec<&AuditLine> {
-        let needle = self.filter.as_str().trim().to_lowercase();
         self.events
             .iter()
-            .filter(|event| needle.is_empty() || event.sentence().to_lowercase().contains(&needle))
+            .filter(|event| {
+                self.profile
+                    .as_ref()
+                    .is_none_or(|profile| &event.profile == profile)
+                    && self.outcome.is_none_or(|outcome| event.kind() == outcome)
+                    && self.search.matches([event.sentence().as_str()])
+            })
             .collect()
+    }
+
+    /// Whether a filter is on.
+    pub fn filtered(&self) -> bool {
+        !self.search.input.is_empty() || self.profile.is_some() || self.outcome.is_some()
+    }
+
+    /// The profiles the calls are of, in the order they come.
+    pub fn profiles(&self) -> Vec<String> {
+        let mut profiles: Vec<String> = Vec::new();
+        for event in &self.events {
+            if !profiles.contains(&event.profile) {
+                profiles.push(event.profile.clone());
+            }
+        }
+        profiles
     }
 
     /// Moves the Activity view's pick, kept on the calls shown.
@@ -282,7 +322,7 @@ impl McpAuditScreen {
 }
 
 /// Unix seconds as the local time of day.
-fn clock(seconds: i64) -> String {
+pub fn clock(seconds: i64) -> String {
     chrono::DateTime::from_timestamp(seconds, 0)
         .map(|utc| {
             utc.with_timezone(&chrono::Local)
@@ -331,9 +371,9 @@ mod tests {
         });
         assert!(!screen.load(vec![b.clone(), c.clone()], 1002));
         assert_eq!(screen.current().map(|request| request.id), Some(b.id));
-        let lines = screen.request_lines(100).join("\n");
-        assert!(lines.contains("data_execute_sql"), "{lines}");
-        assert!(lines.contains("UPDATE b SET x = 1"), "{lines}");
+        let picked = screen.current().expect("b is still picked");
+        assert_eq!(picked.tool, "data_execute_sql");
+        assert!(super::readable_statement(picked).contains("UPDATE b SET x = 1"));
         // The one not picked says what it is in its row; only the picked one in full.
         assert!(screen.row(&c).contains("UPDATE c SET x = 1"));
 
@@ -371,10 +411,14 @@ mod tests {
         screen.load(vec![a.clone(), b.clone()], 1001);
         assert!(screen.row(&a).contains("UPDATE a SET x = 1"));
         assert!(screen.row(&b).contains("UPDATE b SET x = 1"));
-        let lines = screen.request_lines(100).join("\n");
-        assert!(
-            lines.contains("2 min left"),
-            "times are not raw seconds: {lines}"
+        let left = screen
+            .current()
+            .map(|request| request.seconds_left(screen.now));
+        assert_eq!(
+            left.map(crate::screens::mcp_profiles::duration_words)
+                .as_deref(),
+            Some("2 min"),
+            "times are not raw seconds"
         );
         screen.deciding = Some(Deciding {
             id: a.id,
@@ -403,9 +447,7 @@ mod tests {
             1000,
             120,
         );
-        let mut screen = McpAuditScreen::default();
-        screen.load(vec![request], 1001);
-        let lines = screen.request_lines(100).join("\n");
+        let lines = super::readable_statement(&request);
         assert!(lines.contains("values: note = small-term"), "{lines}");
         assert!(!lines.contains("{\""), "no raw JSON: {lines}");
     }

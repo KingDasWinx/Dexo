@@ -32,6 +32,9 @@ pub fn buttons(model: &Model) -> Vec<Button> {
         Screen::Agents if model.agents_view == agents::AgentsView::Profiles => {
             agents::profile_buttons(model)
         }
+        Screen::Agents if model.agents_view == agents::AgentsView::Approvals => {
+            agents::approval_buttons(model)
+        }
         _ => Vec::new(),
     }
 }
@@ -103,9 +106,6 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
             AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
                 Some((Section::Detail, question))
             }
-            AgentsView::Activity if model.mcp_audit.filtering => {
-                Some((Section::List, "Enter keeps the filter, Esc clears it."))
-            }
             AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => Some((
                 Section::Detail,
                 "The grant form has the keys: Esc closes it.",
@@ -141,6 +141,9 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
             history::HistoryView::History => &model.editor.history_search,
             history::HistoryView::Saved => &model.saved_queries.search,
         }),
+        Screen::Agents if model.agents_view == agents::AgentsView::Activity => {
+            Some(&model.mcp_audit.search)
+        }
         _ => None,
     }
 }
@@ -154,6 +157,7 @@ pub fn stop_typing(model: &mut Model) {
             model.editor.history_search.typing = false;
             model.saved_queries.search.typing = false;
         }
+        Screen::Agents => model.mcp_audit.search.typing = false,
         _ => {}
     }
 }

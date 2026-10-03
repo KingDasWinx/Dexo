@@ -64,14 +64,19 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             (label, model.agents_view == view)
         })
         .collect();
+    let on_activity = model.agents_view == AgentsView::Activity;
     let body = super::views_and_toolbar(
         frame,
         area,
         model,
         hits,
         &views,
-        None,
-        &[],
+        on_activity.then_some(&model.mcp_audit.search),
+        &if on_activity {
+            activity_chips(model)
+        } else {
+            Vec::new()
+        },
         &toolbar_buttons(model),
     );
     match model.agents_view {
@@ -398,6 +403,18 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 }
 
+/// What can be done to the picked request: approve it, or deny it.
+pub fn approval_buttons(model: &Model) -> Vec<Button> {
+    let audit = &model.mcp_audit;
+    if audit.current().is_none() || audit.deciding.is_some() {
+        return Vec::new();
+    }
+    vec![
+        Button::new(KeyCode::Char('a'), "Approve"),
+        Button::new(KeyCode::Char('d'), "Deny"),
+    ]
+}
+
 fn approvals(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let audit = &model.mcp_audit;
     if audit.pending.is_empty() {
@@ -426,58 +443,137 @@ fn approvals(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         &rows,
         audit.position(),
     );
-    let width = usize::from(detail.width.saturating_sub(2));
-    let lines = audit.request_lines(width);
-    let footer = audit.decision_lines(width);
-    let (footer_area, max_scroll, page) = super::text_pane(
+    let width = detail.width.saturating_sub(2);
+    let mut text = Vec::new();
+    if let Some(request) = audit.current() {
+        let gone = if request.seems_gone(audit.now) {
+            " (the agent has stopped answering)"
+        } else {
+            ""
+        };
+        text.extend(widgets::field_lines(
+            model,
+            &[
+                FieldRow::Field("Profile", request.profile.clone()),
+                FieldRow::Field("Tool", request.tool.clone()),
+                FieldRow::Field("Connection", request.connection.clone()),
+                FieldRow::Field("Target", request.targets.join(", ")),
+                FieldRow::Field(
+                    "Asked",
+                    crate::screens::mcp_audit::clock(request.created_at),
+                ),
+                FieldRow::Field(
+                    "Left",
+                    format!(
+                        "{}{gone}",
+                        crate::screens::mcp_profiles::duration_words(
+                            request.seconds_left(audit.now)
+                        )
+                    ),
+                ),
+            ],
+            width,
+        ));
+        text.push(Line::default());
+        // What it would run, whole and in the editor's colours: a statement cut at a
+        // popup's edge was approved unseen.
+        let statement = crate::screens::mcp_audit::readable_statement(request);
+        let sql = request.statement == statement;
+        let lines: Vec<Line> = if sql {
+            crate::widgets::editor::sql_lines(
+                &statement,
+                usize::from(width.saturating_sub(1)),
+                dialect_of(model, &request.connection),
+            )
+        } else {
+            statement
+                .lines()
+                .flat_map(|line| crate::model::wrap_display_text(line, usize::from(width)))
+                .map(Line::raw)
+                .collect()
+        };
+        text.extend(lines.into_iter().map(|line| {
+            let mut spans = vec![Span::raw(" ")];
+            spans.extend(line.spans);
+            Line::from(spans)
+        }));
+    }
+    let footer = audit.decision_lines(usize::from(width));
+    let drawn = super::detail_pane(
         frame,
         detail,
         model,
         hits,
         "Request",
-        &lines,
+        &approval_buttons(model),
+        ratatui::text::Text::from(text),
         usize::from(audit.scroll),
         &footer,
     );
-    hits.set_scroll_limit(crate::mouse::ScrollArea::McpAudit, max_scroll);
-    hits.set_page(crate::mouse::ScrollArea::McpAudit, page);
+    hits.set_scroll_limit(crate::mouse::ScrollArea::McpAudit, drawn.max_scroll);
+    hits.set_page(crate::mouse::ScrollArea::McpAudit, drawn.page);
     if let Some(deciding) = &audit.deciding {
         let label = if deciding.approve { "Approve" } else { "Deny" };
-        register_buttons(hits, footer_area, &footer, label);
+        register_buttons(hits, drawn.footer, &footer, label);
     }
 }
 
-fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+/// The SQL dialect of the saved connection called `name`, for a statement's colours.
+fn dialect_of(model: &Model, name: &str) -> dexo_sql::Dialect {
+    let driver = model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == name)
+        .map_or("postgres", |row| row.profile.driver.as_str());
+    dexo_app::dialect_for_driver(driver)
+}
+
+/// The filters over the calls: one profile's, and how they went.
+fn activity_chips(model: &Model) -> Vec<widgets::Chip> {
     let audit = &model.mcp_audit;
-    let mut area = area;
-    if audit.filtering || !audit.filter.is_empty() {
-        let row = Rect::new(area.x, area.y, area.width, 1.min(area.height));
-        let before = "Filter: ";
-        frame.render_widget(
-            ratatui::widgets::Paragraph::new(format!("{before}{}", audit.filter.as_str())),
-            row,
-        );
-        if audit.filtering {
-            crate::render::show_input(frame, row, before, &audit.filter, false);
-        }
-        area = Rect::new(
-            area.x,
-            area.y + 1,
-            area.width,
-            area.height.saturating_sub(1),
-        );
-    }
+    vec![
+        widgets::Chip {
+            key: KeyCode::Char('p'),
+            label: format!("Profile: {}", audit.profile.as_deref().unwrap_or("all")),
+            active: audit.profile.is_some(),
+        },
+        widgets::Chip {
+            key: KeyCode::Char('o'),
+            label: format!(
+                "Outcome: {}",
+                audit.outcome.map_or("all", |outcome| outcome.word())
+            ),
+            active: audit.outcome.is_some(),
+        },
+    ]
+}
+
+fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    use crate::screens::mcp_audit::CallOutcome;
+    let audit = &model.mcp_audit;
     let events = audit.visible_events();
     if events.is_empty() {
-        let lines = if audit.events.is_empty() {
-            vec![
-                "No calls yet.".to_string(),
-                "What agents do through Dexo is listed here as it happens.".to_string(),
-            ]
+        if audit.events.is_empty() {
+            super::empty_state(
+                frame,
+                area,
+                model,
+                &[
+                    "No calls yet.".to_string(),
+                    "What agents do through Dexo is listed here as it happens.".to_string(),
+                ],
+            );
         } else {
-            vec![format!("No call matches \"{}\".", audit.filter.as_str())]
-        };
-        super::empty_state(frame, area, model, &lines);
+            widgets::empty_with_buttons(
+                frame,
+                area,
+                model,
+                hits,
+                &["Nothing matches the filters.".to_string()],
+                &[Button::new(KeyCode::Esc, "Clear filters")],
+            );
+        }
         return;
     }
     let picked = audit.event_selected.min(events.len() - 1);
@@ -489,71 +585,126 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         area.width,
         area.height.saturating_sub(detail_rows),
     );
-    let inner_width = usize::from(table.width.saturating_sub(2));
-    let target_width = inner_width
-        .saturating_sub(8 + 2 + 12 + 2 + 20 + 2 + 24 + 2 + 7)
-        .max(8);
-    let header = format!(
-        "{:<8}  {:<12}  {:<20}  {:<target_width$}  {:<24}  {:>7}",
-        "TIME", "PROFILE", "TOOL", "TARGET", "OUTCOME", "MS"
-    );
-    let rows: Vec<String> = events
-        .iter()
-        .map(|event| {
-            format!(
-                "{:<8}  {:<12}  {:<20}  {:<target_width$}  {:<24}  {:>7}",
-                event.time,
-                crate::model::truncate_cell(&event.profile, 12),
-                crate::model::truncate_cell(&event.tool, 20),
-                crate::model::truncate_cell(&event.target, target_width),
-                crate::model::truncate_cell(&event.outcome, 24),
-                event.duration_ms
-            )
-        })
-        .collect();
-    super::list_pane(
-        frame,
-        table,
-        model,
-        hits,
-        &format!("Recent calls ({})", events.len()),
-        Some(&header),
-        &rows,
-        Some(picked),
-    );
+    if table.width >= 2 && table.height >= 2 {
+        let title = if audit.filtered() {
+            format!("Recent calls ({} shown)", events.len())
+        } else {
+            format!("Recent calls ({})", events.len())
+        };
+        let block =
+            crate::render::pane_block(model, &title, super::section(model) == super::Section::List);
+        let mut inner = block.inner(table);
+        frame.render_widget(block, table);
+        hits.register(HitTarget::ScreenList, table);
+        let width = usize::from(inner.width);
+        let target_width = width
+            .saturating_sub(4 + 8 + 2 + 12 + 2 + 20 + 2 + 2 + 24 + 2 + 7 + 2 + 6)
+            .max(8);
+        let header = format!(
+            "    {:<8}  {:<12}  {:<20}  {:<target_width$}  {:<24}  {:>7}  {:>6}",
+            "TIME", "PROFILE", "TOOL", "TARGET", "OUTCOME", "MS", "ROWS"
+        );
+        if inner.height > 1 {
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(crate::model::truncate_cell(&header, width))
+                    .style(
+                        model
+                            .theme
+                            .style(Role::Muted, model.capabilities)
+                            .add_modifier(ratatui::style::Modifier::BOLD),
+                    ),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+            inner = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+        }
+        let style = |role: Role| model.theme.style(role, model.capabilities);
+        let entries: Vec<Entry> = events
+            .iter()
+            .enumerate()
+            .map(|(index, event)| {
+                let kind = event.kind();
+                let role = match kind {
+                    CallOutcome::Ok => Role::Success,
+                    CallOutcome::Failed => Role::Error,
+                    CallOutcome::Denied => Role::Warning,
+                    CallOutcome::Waiting => Role::Muted,
+                };
+                Entry {
+                    spans: vec![
+                        Span::styled(kind.glyph(), style(role)),
+                        Span::raw(format!(
+                            " {:<8}  {:<12}  {:<20}  {:<target_width$}  {:<24}  {:>7}  {:>6}",
+                            event.time,
+                            crate::model::truncate_cell(&event.profile, 12),
+                            crate::model::truncate_cell(&event.tool, 20),
+                            crate::model::truncate_cell(&event.target, target_width),
+                            crate::model::truncate_cell(&event.outcome, 24),
+                            event.duration_ms,
+                            event.rows
+                        )),
+                    ],
+                    target: Some(HitTarget::ListRow(index)),
+                    picked: index == picked,
+                    heading: false,
+                }
+            })
+            .collect();
+        widgets::entries(frame, inner, model, hits, &entries);
+    }
     if detail_rows >= 3 {
         let event = events[picked];
         let detail = Rect::new(area.x, table.bottom(), area.width, detail_rows);
-        let lines = vec![
-            format!("{} on {}", event.tool, event.target),
-            format!(
-                "by {} through {} at {}",
-                event.profile, event.client, event.time
+        let on = if event.target.is_empty() {
+            String::new()
+        } else {
+            format!(" on {}", event.target)
+        };
+        let fields = [
+            FieldRow::Field("Call", format!("{}{on}", event.tool)),
+            FieldRow::Field(
+                "By",
+                if event.client.is_empty() {
+                    format!("{} at {}", event.profile, event.time)
+                } else {
+                    format!(
+                        "{} through {} at {}",
+                        event.profile, event.client, event.time
+                    )
+                },
             ),
-            format!(
-                "{} · {} ms · {} row{}",
-                event.outcome,
-                event.duration_ms,
-                event.rows,
-                if event.rows == 1 { "" } else { "s" }
+            FieldRow::Field(
+                "Result",
+                format!(
+                    "{} · {} ms · {} row{}",
+                    event.outcome,
+                    event.duration_ms,
+                    event.rows,
+                    if event.rows == 1 { "" } else { "s" }
+                ),
             ),
         ];
-        super::text_pane(
+        super::detail_pane(
             frame,
             detail,
             model,
             hits,
             "Call",
-            &lines,
+            &[],
+            ratatui::text::Text::from(widgets::field_lines(
+                model,
+                &fields,
+                detail.width.saturating_sub(2),
+            )),
             usize::from(super::detail_scroll(model)),
             &[],
         );
     }
 }
 
-/// What acts on the view as a whole: a new profile.
+/// What acts on the view as a whole: every grant taken back; a new profile.
 pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
     match model.agents_view {
+        AgentsView::Approvals => vec![Button::new(KeyCode::Char('R'), "Revoke all grants")],
         AgentsView::Profiles => vec![Button::new(KeyCode::Char('n'), "New")],
         _ => Vec::new(),
     }
@@ -858,12 +1009,14 @@ pub fn hints(model: &Model) -> String {
             "Left/Right pick  Enter answer  Esc cancel".into()
         }
         AgentsView::Approvals => {
-            format!("a approve  d deny  Up/Down pick  PgUp/PgDn read  {views}  Esc back")
+            format!("Up/Down pick  PgUp/PgDn read  {views}  Esc back")
         }
-        AgentsView::Activity if model.mcp_audit.filtering => {
-            "type to filter  Enter keep  Esc clear".into()
+        AgentsView::Activity if model.mcp_audit.search.typing => {
+            "Type to search  Up/Down pick  Enter keep  Esc clear".into()
         }
-        AgentsView::Activity => format!("/ filter  Up/Down pick  {views}  Esc back"),
+        AgentsView::Activity => {
+            format!("Up/Down pick  / search  p profile  o outcome  {views}  Esc back")
+        }
         AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => {
             "Tab next  Left/Right change  Enter create  Esc cancel".into()
         }

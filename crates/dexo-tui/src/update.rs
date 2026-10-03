@@ -5316,22 +5316,10 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                 },
             );
         }
-        AgentsView::Activity if model.mcp_audit.filtering => {
-            let screen = &mut model.mcp_audit;
-            match key.code {
-                KeyCode::Esc => {
-                    screen.filter.clear();
-                    screen.filtering = false;
-                }
-                KeyCode::Enter => screen.filtering = false,
-                KeyCode::Up | KeyCode::Down => {
-                    screen.select_event(if key.code == KeyCode::Up { -1 } else { 1 })
-                }
-                _ => {
-                    screen.filter.handle_key(key);
-                    screen.event_selected = 0;
-                }
-            }
+        AgentsView::Activity
+            if model.mcp_audit.search.typing && model.mcp_audit.search.key(key) =>
+        {
+            model.mcp_audit.event_selected = 0;
             return Some(Vec::new());
         }
         _ => {}
@@ -5434,9 +5422,41 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             let screen = &mut model.mcp_audit;
             let shown = screen.visible_events().len() as isize;
             match key.code {
-                KeyCode::Char('/') => screen.filtering = true,
-                // Esc clears a filter kept from before, then goes back.
-                KeyCode::Esc if !screen.filter.is_empty() => screen.filter.clear(),
+                KeyCode::Char('/') => screen.search.typing = true,
+                KeyCode::Char('p') => {
+                    let profiles = screen.profiles();
+                    screen.profile = match &screen.profile {
+                        None => profiles.first().cloned(),
+                        Some(current) => profiles
+                            .iter()
+                            .position(|profile| profile == current)
+                            .and_then(|at| profiles.get(at + 1))
+                            .cloned(),
+                    };
+                    screen.event_selected = 0;
+                }
+                KeyCode::Char('o') => {
+                    use crate::screens::mcp_audit::CallOutcome;
+                    screen.outcome = match screen.outcome {
+                        None => Some(CallOutcome::FILTERS[0]),
+                        Some(current) => CallOutcome::FILTERS
+                            .iter()
+                            .position(|outcome| *outcome == current)
+                            .and_then(|at| CallOutcome::FILTERS.get(at + 1))
+                            .copied(),
+                    };
+                    screen.event_selected = 0;
+                }
+                // Esc clears the search, then the filters, then goes back.
+                KeyCode::Esc if !screen.search.input.is_empty() => {
+                    screen.search = Default::default();
+                    screen.event_selected = 0;
+                }
+                KeyCode::Esc if screen.filtered() => {
+                    screen.profile = None;
+                    screen.outcome = None;
+                    screen.event_selected = 0;
+                }
                 KeyCode::Up => screen.select_event(-1),
                 KeyCode::Down => screen.select_event(1),
                 KeyCode::PageUp => screen.select_event(-(page as isize)),
@@ -15280,9 +15300,12 @@ mod tests {
                 now: 1010,
             },
         );
-        let lines = model.mcp_audit.request_lines(100).join("\n");
-        assert!(lines.contains("DELETE FROM orders WHERE id = 7"), "{lines}");
-        assert!(lines.contains("2 min left"), "{lines}");
+        let screen = crate::render::render_to_string(&model, 140, 40);
+        assert!(
+            screen.contains("DELETE FROM orders WHERE id = 7"),
+            "{screen}"
+        );
+        assert!(screen.contains("Left        2 min"), "{screen}");
         update(&mut model, key(KeyCode::Char('a')));
         assert!(
             update(&mut model, key(KeyCode::Enter)).is_empty(),
@@ -15440,6 +15463,14 @@ mod tests {
         update(&mut model, key(KeyCode::Char('a')));
         let mut seen = String::new();
         for _ in 0..12 {
+            // Painted as the app paints: a page is what the pane shows.
+            let mut terminal =
+                ratatui::Terminal::new(ratatui::backend::TestBackend::new(80, 16)).unwrap();
+            let mut hits = crate::mouse::HitMap::default();
+            terminal
+                .draw(|frame| crate::render::render(frame, &model, &mut hits))
+                .unwrap();
+            model.hits = hits;
             let frame = crate::render::render_to_string(&model, 80, 16);
             assert!(
                 frame.contains("[Approve]") && frame.contains("[Cancel]"),
