@@ -1860,7 +1860,9 @@ fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
     let width = area.width.min(max_width.max(10));
     let height = area.height.min(max_height.max(6));
     let x = area.x + area.width.saturating_sub(width) / 2;
-    let y = area.y + area.height.saturating_sub(height) / 3;
+    // Every dialog starts on the same row, whatever it holds: they sat at rows 1 to 11
+    // depending on their height. A tall one still moves up to fit.
+    let y = area.y + (area.height / 6).min(area.height.saturating_sub(height));
     Rect::new(x, y, width, height)
 }
 

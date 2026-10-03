@@ -10,10 +10,6 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
 │                          ││                   ┌Session recovery──────────────────────────────────────────────┐                                               │
 │                          ││                   │Dexo closed unexpectedly and kept these unsaved documents:    │                                               │
 │                          ││                   │  scratch.sql                                                 │                                               │
@@ -26,6 +22,10 @@ default  no connection  —
 │                          ││                   │                                                              │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

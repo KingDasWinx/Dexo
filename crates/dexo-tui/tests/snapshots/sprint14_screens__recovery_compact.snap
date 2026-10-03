@@ -4,6 +4,7 @@ expression: "render_to_string(&model, 60, 20)"
 ---
 default  no connection  —    1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
 ┌Session recovery──────────────────────────────────────────┐
 │Dexo closed unexpectedly and kept these unsaved documents:│
 │  scratch.sql                                             │
@@ -16,7 +17,6 @@ default  no connection  —    1 Sidebar  [2 SQL]  3 Results
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-│                                                          │
 │                                                          │
 │                                                          │
 │                                                          │

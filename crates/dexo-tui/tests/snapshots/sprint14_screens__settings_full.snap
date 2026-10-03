@@ -10,10 +10,6 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
 │                          ││                   ┌Settings──────────────────────────────────────────────────────┐                                               │
 │                          ││                   │> Theme      [1/6  Dexo]                                      │                                               │
 │                          ││                   │  Mode       [Dark]  Light   Low color                        │                                               │
@@ -27,6 +23,10 @@ default  no connection  —
 │                          ││                   │  [Reset to defaults]                                         │                                               │
 │                          ││                   │  up/down row  left/right change  e theme  r reset  esc close │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

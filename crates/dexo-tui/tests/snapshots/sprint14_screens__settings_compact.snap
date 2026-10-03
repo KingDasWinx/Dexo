@@ -4,6 +4,7 @@ expression: "render_to_string(&model, 60, 20)"
 ---
 default  no connection  —    1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
+┌▸ SQL · scratch.sql───────────────────────────────────────┐
 ┌Settings──────────────────────────────────────────────────┐
 │> Theme      [1/6  Dexo]                                  │
 │  Mode       [Dark]  Light   Low color                    │
@@ -17,7 +18,6 @@ default  no connection  —    1 Sidebar  [2 SQL]  3 Results
 │  [Reset to defaults]                                     │
 │  up/down row  left/right change  e theme  r reset  esc cl│
 └──────────────────────────────────────────────────────────┘
-│                                                          │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
