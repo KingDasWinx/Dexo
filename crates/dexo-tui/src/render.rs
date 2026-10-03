@@ -14,6 +14,41 @@ use crate::palette::{filter_entries, palette_entries, scroll_to_selection};
 use crate::theme::Role;
 
 pub fn render(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+    draw_workbench(frame, model, hits);
+    if !model.capabilities.unicode {
+        asciify(frame);
+    }
+}
+
+/// With Unicode glyphs off, the marks that are not box drawing fall back to ASCII: the
+/// pointer, the folder arrows, the ellipsis, the separators and the close mark were
+/// drawn whatever the setting said, in every place that spells one.
+fn asciify(frame: &mut Frame) {
+    let area = frame.area();
+    let buffer = frame.buffer_mut();
+    for y in area.top()..area.bottom() {
+        for x in area.left()..area.right() {
+            let Some(cell) = buffer.cell_mut((x, y)) else {
+                continue;
+            };
+            let ascii = match cell.symbol() {
+                "▸" | "▶" => ">",
+                "▾" | "▼" => "v",
+                "…" => ".",
+                "·" | "—" | "–" => "-",
+                "×" => "x",
+                "↑" => "^",
+                "█" => "#",
+                "‹" => "<",
+                "›" => ">",
+                _ => continue,
+            };
+            cell.set_symbol(ascii);
+        }
+    }
+}
+
+fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     hits.clear();
     let area = frame.area();
     frame
