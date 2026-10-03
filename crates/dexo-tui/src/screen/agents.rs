@@ -230,21 +230,35 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     } else {
         "not found on this machine"
     };
-    let mut writes = client.path.clone();
+    // A path on one line, its middle left out: wrapped, it broke inside its words.
+    let room = usize::from(width).saturating_sub(1 + LABEL + 2);
+    let path = |path: &str, after: usize| {
+        crate::widgets::document_tabs::cut_middle(path, room.saturating_sub(after).max(12))
+    };
+    let mut suffix = String::new();
     if client.client.per_project() {
-        writes.push_str(" (this folder)");
+        suffix.push_str(" (this folder)");
     }
-    writes.push_str(if matches!(client.state, ClientState::NoFile) {
+    suffix.push_str(if matches!(client.state, ClientState::NoFile) {
         " · new file"
     } else {
         " · exists"
     });
     let mut fields = vec![
         FieldRow::Field("Status", format!("{status} · {found}")),
-        FieldRow::Field("Writes", writes),
+        FieldRow::Field(
+            "Writes",
+            format!(
+                "{}{suffix}",
+                path(
+                    &client.path,
+                    unicode_width::UnicodeWidthStr::width(suffix.as_str())
+                )
+            ),
+        ),
     ];
     if let Some(skill) = &client.skill {
-        fields.push(FieldRow::Field("Skill", skill.clone()));
+        fields.push(FieldRow::Field("Skill", path(skill, 0)));
     }
     // The labels line up with the form's under them.
     lines.extend(

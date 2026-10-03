@@ -334,3 +334,19 @@ fn a_small_terminal_scrolls_the_form_to_its_buttons() {
 
     assert!(screen.contains("[Set up]"), "{screen}");
 }
+
+/// A long path is cut in its middle, on one line: wrapped, it broke inside its words.
+#[test]
+fn a_long_path_keeps_to_one_line() {
+    let mut model = setup();
+    let long = format!("/tmp/{}/project/.mcp.json", "x".repeat(120));
+    model.mcp_setup.clients[0].path = long;
+    let screen = dexo_tui::render::render_to_string(&model, 140, 40);
+    let writes = screen
+        .lines()
+        .find(|line| line.contains(" Writes "))
+        .expect("a Writes field");
+    assert!(writes.contains("…"), "{writes}");
+    assert!(writes.contains("(this folder)"), "{writes}");
+    assert!(writes.contains("project/.mcp.json"), "{writes}");
+}
