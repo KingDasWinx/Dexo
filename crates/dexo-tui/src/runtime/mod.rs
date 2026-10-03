@@ -872,6 +872,30 @@ impl WorkbenchRuntime {
                 let action = dexo_driver_api::AdminAction::TerminateSession { session_id: target };
                 self.admin_on_side_connection(session, Some(action)).await
             }
+            crate::Effect::LoadAdminView { session, view } => {
+                let dial = match self.side_dial(session) {
+                    Ok(dial) => dial,
+                    Err(message) => {
+                        return self
+                            .emit(Action::AdminViewLoaded {
+                                view,
+                                result: Err(message),
+                            })
+                            .await;
+                    }
+                };
+                let action_tx = self.action_tx.clone();
+                tokio::spawn(async move {
+                    let action = match dial.open().await {
+                        Ok(side) => admin_manager::load_view(Arc::from(side), view).await,
+                        Err(message) => Action::AdminViewLoaded {
+                            view,
+                            result: Err(message),
+                        },
+                    };
+                    let _ = action_tx.send(action).await;
+                });
+            }
             crate::Effect::AdminCancel { session, target } => {
                 let action = dexo_driver_api::AdminAction::CancelQuery { session_id: target };
                 self.admin_on_side_connection(session, Some(action)).await

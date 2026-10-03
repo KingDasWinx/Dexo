@@ -1,4 +1,4 @@
-use dexo_driver_api::{BlockingEdge, SessionInfo};
+use dexo_driver_api::{BlockingEdge, LockInfo, SessionInfo, SizeInfo, StatInfo, VariableInfo};
 
 use crate::widgets::form::{FooterFocus, footer_line};
 use crate::widgets::text_input::TextInput;
@@ -47,6 +47,72 @@ pub struct AdminScreen {
     pub sort: SessionSort,
     /// `k`: a cancel waiting on its confirmation.
     pub cancel: Option<CancelPrompt>,
+    /// What the screen shows of the server.
+    pub view: ServerView,
+    /// The rows of a view other than Sessions, once read.
+    pub rows: Option<ViewRows>,
+    /// What the server would not show of the view, in its words.
+    pub restriction: Option<String>,
+    /// The pick in a view other than Sessions, among the rows the search leaves.
+    pub view_selected: usize,
+}
+
+/// What the Server screen shows: its sessions, or its locks, sizes, statistics or
+/// settings.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum ServerView {
+    #[default]
+    Sessions,
+    Locks,
+    Sizes,
+    Stats,
+    Settings,
+}
+
+impl ServerView {
+    pub const ALL: [ServerView; 5] = [
+        Self::Sessions,
+        Self::Locks,
+        Self::Sizes,
+        Self::Stats,
+        Self::Settings,
+    ];
+
+    pub fn title(self) -> &'static str {
+        match self {
+            Self::Sessions => "Sessions",
+            Self::Locks => "Locks",
+            Self::Sizes => "Sizes",
+            Self::Stats => "Stats",
+            Self::Settings => "Settings",
+        }
+    }
+
+    /// The views read again on their own while shown: what changes from one second to
+    /// the next.
+    pub fn live(self) -> bool {
+        matches!(self, Self::Sessions | Self::Locks)
+    }
+
+    /// The columns of a view's table.
+    pub fn columns(self) -> &'static [&'static str] {
+        match self {
+            Self::Sessions => &[],
+            Self::Locks => &["PID", "TYPE", "RELATION", "MODE", "STATE"],
+            Self::Sizes => &["OBJECT", "SIZE"],
+            Self::Stats => &["NAME", "VALUE"],
+            Self::Settings => &["NAME", "VALUE", "SCOPE"],
+        }
+    }
+}
+
+/// A view's rows as the driver gave them.
+#[derive(Clone, Debug, PartialEq)]
+pub enum ViewRows {
+    Locks(Vec<LockInfo>),
+    Sizes(Vec<SizeInfo>),
+    Stats(Vec<StatInfo>),
+    Settings(Vec<VariableInfo>),
 }
 
 /// The column the sessions are sorted by: the longest running first, else in order.
@@ -310,9 +376,79 @@ impl AdminScreen {
             .collect()
     }
 
+    /// The shown view's rows as cells, in the order shown -- sizes the largest first --
+    /// and those the search leaves.
+    pub fn view_cells(&self) -> Vec<Vec<String>> {
+        let text = |value: &Option<String>| value.clone().unwrap_or_else(|| "-".into());
+        let cells: Vec<Vec<String>> = match &self.rows {
+            None => Vec::new(),
+            Some(ViewRows::Locks(locks)) => locks
+                .iter()
+                .map(|lock| {
+                    vec![
+                        lock.session_id.clone(),
+                        lock.lock_type.clone(),
+                        text(&lock.relation),
+                        lock.mode.clone(),
+                        if lock.granted {
+                            "granted".into()
+                        } else {
+                            "waiting".into()
+                        },
+                    ]
+                })
+                .collect(),
+            Some(ViewRows::Sizes(sizes)) => {
+                let mut sizes: Vec<&SizeInfo> = sizes.iter().collect();
+                sizes.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+                sizes
+                    .into_iter()
+                    .map(|size| {
+                        vec![
+                            size.object.clone(),
+                            size.native_size
+                                .clone()
+                                .or_else(|| size.bytes.map(|bytes| format!("{bytes} B")))
+                                .unwrap_or_else(|| "-".into()),
+                        ]
+                    })
+                    .collect()
+            }
+            Some(ViewRows::Stats(stats)) => stats
+                .iter()
+                .map(|stat| vec![stat.name.clone(), text(&stat.value)])
+                .collect(),
+            Some(ViewRows::Settings(settings)) => settings
+                .iter()
+                .map(|setting| {
+                    vec![
+                        setting.name.clone(),
+                        text(&setting.value),
+                        match setting.scope {
+                            dexo_driver_api::VariableScope::Session => "session".into(),
+                            dexo_driver_api::VariableScope::Server => "server".into(),
+                        },
+                    ]
+                })
+                .collect(),
+        };
+        cells
+            .into_iter()
+            .filter(|row| self.search.matches(row.iter().map(String::as_str)))
+            .collect()
+    }
+
+    /// Moves the pick in a view other than Sessions, kept on its rows.
+    pub fn move_view(&mut self, delta: isize) {
+        let last = self.view_cells().len().saturating_sub(1);
+        self.view_selected = self.view_selected.saturating_add_signed(delta).min(last);
+    }
+
     /// How the list is kept fresh, for its title.
     pub fn freshness(&self) -> &'static str {
-        if self.paused {
+        if !self.view.live() {
+            "as read"
+        } else if self.paused {
             "paused"
         } else if self.loading && self.sessions.is_empty() {
             "reading"

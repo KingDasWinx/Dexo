@@ -88,6 +88,47 @@ pub async fn load_live(
         .await;
 }
 
+/// Reads `view` -- locks, sizes, statistics or settings -- off `session`.
+pub async fn load_view(
+    session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    view: crate::screens::admin::ServerView,
+) -> crate::action::Action {
+    use crate::screens::admin::{ServerView, ViewRows};
+    let result = match session.admin() {
+        None => Err("This connection has no server administration.".to_string()),
+        Some(admin) => {
+            let text = |error: dexo_driver_api::DriverError| error.to_string();
+            match view {
+                ServerView::Sessions => Err("Sessions are read on their own.".to_string()),
+                ServerView::Locks => admin
+                    .list_locks()
+                    .await
+                    .map(|list| (ViewRows::Locks(list.items), list.restriction))
+                    .map_err(text),
+                ServerView::Sizes => match dexo_driver_api::Page::new(0, 200) {
+                    Ok(page) => admin
+                        .sizes(page)
+                        .await
+                        .map(|list| (ViewRows::Sizes(list.items), list.restriction))
+                        .map_err(text),
+                    Err(error) => Err(error.to_string()),
+                },
+                ServerView::Stats => admin
+                    .statistics()
+                    .await
+                    .map(|list| (ViewRows::Stats(list.items), list.restriction))
+                    .map_err(text),
+                ServerView::Settings => admin
+                    .variables()
+                    .await
+                    .map(|list| (ViewRows::Settings(list.items), list.restriction))
+                    .map_err(text),
+            }
+        }
+    };
+    crate::action::Action::AdminViewLoaded { view, result }
+}
+
 /// Runs `act` -- a cancel or a terminate -- and says how it went.
 pub async fn act_live(
     session: std::sync::Arc<dyn dexo_driver_api::Session>,

@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections  Agents [Server] Compare  History   demo  local  public                                                                                 
-[1 Sessions] [c Server: local]                                                                                                            [p Pause]  [r Refresh]
+[1 Sessions]  2 Locks   3 Sizes   4 Stats   5 Settings  [c Server: local]                                                                 [p Pause]  [r Refresh]
 / search                        [a Idle: hidden]                                                                                                                
 ┌▸ Sessions (2) · 1 blocked · every 2s─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │    PID      USER         DATABASE     STATE                        TIME ▼  QUERY                                                                             │
@@ -51,4 +51,4 @@ expression: "render_to_string(&model, 160, 50)"
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-Server  Up/Down pick  / search  a idle  s sort  c server  Esc back                                                                                    Ctrl+P  F1
+Server  Up/Down pick  / search  a idle  s sort  c server  1-5 views  Esc back                                                                         Ctrl+P  F1

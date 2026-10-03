@@ -11,7 +11,7 @@ use super::Button;
 use super::widgets::{self, Chip, Entry, FieldRow};
 use crate::model::Model;
 use crate::mouse::{HitMap, HitTarget};
-use crate::screens::admin::{SessionSort, duration, one_line};
+use crate::screens::admin::{ServerView, SessionSort, duration, one_line};
 use crate::theme::Role;
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
@@ -33,7 +33,10 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         );
         return;
     };
-    let views = [("Sessions".to_string(), true)];
+    let views: Vec<(String, bool)> = ServerView::ALL
+        .into_iter()
+        .map(|view| (view.title().to_string(), admin.view == view))
+        .collect();
     let rest = super::views_and_toolbar(
         frame,
         area,
@@ -48,13 +51,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         }],
         &toolbar_buttons(model),
     );
-    let rest = widgets::toolbar(
-        frame,
-        rest,
-        model,
-        hits,
-        Some(&admin.search),
-        &[Chip {
+    let on_sessions = admin.view == ServerView::Sessions;
+    let chips = if on_sessions {
+        vec![Chip {
             key: KeyCode::Char('a'),
             label: if admin.show_idle {
                 "Idle: shown".into()
@@ -62,10 +61,168 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 "Idle: hidden".into()
             },
             active: admin.show_idle,
-        }],
-        &[],
+        }]
+    } else {
+        Vec::new()
+    };
+    let rest = widgets::toolbar(frame, rest, model, hits, Some(&admin.search), &chips, &[]);
+    if on_sessions {
+        sessions(frame, rest, model, hits);
+    } else {
+        view_table(frame, rest, model, hits);
+    }
+}
+
+/// A view other than Sessions: its rows in a table, and the picked one whole under it.
+fn view_table(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
+    let admin = &model.admin;
+    let view = admin.view;
+    let Some(_) = &admin.rows else {
+        let mut lines = vec![match &admin.last_error {
+            Some(_) => format!(
+                "The server's {} could not be read.",
+                view.title().to_lowercase()
+            ),
+            None => format!("Reading the server's {}...", view.title().to_lowercase()),
+        }];
+        lines.extend(admin.last_error.clone());
+        super::empty_state(frame, area, model, &lines);
+        return;
+    };
+    let cells = admin.view_cells();
+    if cells.is_empty() {
+        if admin.search.input.is_empty() {
+            let mut lines = vec![format!("No {} to show.", view.title().to_lowercase())];
+            lines.extend(admin.restriction.clone());
+            super::empty_state(frame, area, model, &lines);
+        } else {
+            widgets::empty_with_buttons(
+                frame,
+                area,
+                model,
+                hits,
+                &["Nothing matches the search.".to_string()],
+                &[Button::new(KeyCode::Esc, "Clear filters")],
+            );
+        }
+        return;
+    }
+    let columns = view.columns();
+    let detail_rows = (columns.len() as u16 + 2).min(area.height / 3);
+    let table = Rect::new(
+        area.x,
+        area.y,
+        area.width,
+        area.height.saturating_sub(detail_rows),
     );
-    sessions(frame, rest, model, hits);
+    if table.width >= 2 && table.height >= 2 {
+        let block = crate::render::pane_block(
+            model,
+            &format!("{} ({}) · {}", view.title(), cells.len(), admin.freshness()),
+            super::section(model) == super::Section::List,
+        );
+        let mut inner = block.inner(table);
+        frame.render_widget(block, table);
+        hits.register(HitTarget::ScreenList, table);
+        // Each column as wide as its widest cell, up to forty; the last takes the rest.
+        let widths: Vec<usize> = (0..columns.len())
+            .map(|column| {
+                cells
+                    .iter()
+                    .map(|row| unicode_width::UnicodeWidthStr::width(row[column].as_str()))
+                    .chain(std::iter::once(columns[column].len()))
+                    .max()
+                    .unwrap_or(0)
+                    .min(40)
+            })
+            .collect();
+        let line = |row: &[String]| -> String {
+            row.iter()
+                .enumerate()
+                .map(|(column, text)| {
+                    if column + 1 == row.len() {
+                        text.clone()
+                    } else {
+                        let text = crate::model::truncate_cell(text, widths[column]);
+                        let pad = widths[column]
+                            .saturating_sub(unicode_width::UnicodeWidthStr::width(text.as_str()));
+                        format!("{text}{}  ", " ".repeat(pad))
+                    }
+                })
+                .collect()
+        };
+        if inner.height > 1 {
+            let header: Vec<String> = columns.iter().map(|name| name.to_string()).collect();
+            frame.render_widget(
+                ratatui::widgets::Paragraph::new(crate::model::truncate_cell(
+                    &format!("  {}", line(&header)),
+                    usize::from(inner.width),
+                ))
+                .style(
+                    model
+                        .theme
+                        .style(Role::Muted, model.capabilities)
+                        .add_modifier(ratatui::style::Modifier::BOLD),
+                ),
+                Rect::new(inner.x, inner.y, inner.width, 1),
+            );
+            inner = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+        }
+        let entries: Vec<Entry> = cells
+            .iter()
+            .enumerate()
+            .map(|(index, row)| Entry {
+                spans: vec![Span::raw(line(row))],
+                target: Some(HitTarget::ListRow(index)),
+                picked: index == admin.view_selected,
+                heading: false,
+            })
+            .collect();
+        widgets::entries(frame, inner, model, hits, &entries);
+    }
+    if detail_rows >= 3
+        && let Some(row) = cells.get(admin.view_selected)
+    {
+        let detail = Rect::new(area.x, table.bottom(), area.width, detail_rows);
+        let fields: Vec<FieldRow> = columns
+            .iter()
+            .zip(row)
+            .map(|(column, value)| FieldRow::Field(label(column), value.clone()))
+            .collect();
+        let footer: Vec<String> = admin.restriction.clone().into_iter().collect();
+        super::detail_pane(
+            frame,
+            detail,
+            model,
+            hits,
+            view.title(),
+            &[],
+            Text::from(widgets::field_lines(
+                model,
+                &fields,
+                detail.width.saturating_sub(2),
+            )),
+            usize::from(super::detail_scroll(model)),
+            &footer,
+        );
+    }
+}
+
+/// A column's name as a field's label.
+fn label(column: &str) -> &'static str {
+    match column {
+        "PID" => "Session",
+        "TYPE" => "Type",
+        "RELATION" => "Relation",
+        "MODE" => "Mode",
+        "STATE" => "State",
+        "OBJECT" => "Object",
+        "SIZE" => "Size",
+        "NAME" => "Name",
+        "VALUE" => "Value",
+        "SCOPE" => "Scope",
+        _ => "",
+    }
 }
 
 /// Pause or resume the reading, and read now.
@@ -91,8 +248,9 @@ pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
 /// connection.
 pub fn buttons(model: &Model) -> Vec<Button> {
     let admin = &model.admin;
-    // A question asked of the session has the pane until it is answered.
-    if admin.terminate.is_some() || admin.cancel.is_some() {
+    // A question asked of the session has the pane until it is answered; the other
+    // views have no session picked.
+    if admin.terminate.is_some() || admin.cancel.is_some() || admin.view != ServerView::Sessions {
         return Vec::new();
     }
     let Some(session) = admin.picked() else {
@@ -402,7 +560,9 @@ pub fn hints(model: &Model) -> String {
         "Left/Right pick  Enter answer  Esc keep it running".into()
     } else if admin.search.typing {
         "Type to search  Up/Down pick  Enter keep  Esc clear".into()
+    } else if admin.view == ServerView::Sessions {
+        "Up/Down pick  / search  a idle  s sort  c server  1-5 views  Esc back".into()
     } else {
-        "Up/Down pick  / search  a idle  s sort  c server  Esc back".into()
+        "Up/Down pick  / search  c server  1-5 views  Esc back".into()
     }
 }

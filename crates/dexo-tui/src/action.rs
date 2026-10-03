@@ -645,6 +645,12 @@ pub enum Action {
     AdminCancelled {
         result: Result<String, String>,
     },
+    /// A view's rows, and what the server would not show of it; or why it could not be
+    /// read.
+    AdminViewLoaded {
+        view: crate::screens::admin::ServerView,
+        result: Result<(crate::screens::admin::ViewRows, Option<String>), String>,
+    },
     AdminTerminated {
         result: Result<String, String>,
     },
@@ -1094,6 +1100,11 @@ pub enum Effect {
     LoadAdminSessions {
         session: SessionId,
         generation: u64,
+    },
+    /// Reads one of the Server screen's views other than Sessions.
+    LoadAdminView {
+        session: SessionId,
+        view: crate::screens::admin::ServerView,
     },
     /// Stops the query session `target` runs on the server, leaving the session.
     AdminCancel {

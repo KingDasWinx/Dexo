@@ -1971,6 +1971,29 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.admin.notice = None;
             go_to_screen(model, crate::model::Screen::Server)
         }
+        Action::AdminViewLoaded { view, result } => {
+            let admin = &mut model.admin;
+            // A view left while it was read is not drawn over the one now shown.
+            if admin.view != view {
+                return Vec::new();
+            }
+            admin.loading = false;
+            match result {
+                Ok((rows, restriction)) => {
+                    admin.rows = Some(rows);
+                    admin.restriction = restriction;
+                    admin.last_error = None;
+                }
+                Err(message) => {
+                    admin.rows = None;
+                    admin.restriction = None;
+                    admin.last_error = Some(message);
+                }
+            }
+            let last = admin.view_cells().len().saturating_sub(1);
+            admin.view_selected = admin.view_selected.min(last);
+            Vec::new()
+        }
         Action::AdminCancelled { result } => {
             match result {
                 Ok(message) => {
@@ -2553,9 +2576,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             // while one reading is on its way, and not while paused.
             let admin = &mut model.admin;
             if model.screen == crate::model::Screen::Server
+                && admin.view.live()
                 && !admin.paused
                 && !admin.loading
                 && admin.terminate.is_none()
+                && admin.cancel.is_none()
             {
                 admin.ticks += 1;
                 if admin.ticks >= crate::screens::admin::REFRESH_SECS {
@@ -3857,6 +3882,13 @@ fn mouse_parameters(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    if let Some(HitTarget::ScreenView(index)) = hit
+        && let Some(view) = crate::screens::admin::ServerView::ALL.get(index).copied()
+        && model.admin.terminate.is_none()
+        && model.admin.cancel.is_none()
+    {
+        return show_server_view(model, view);
+    }
     if model.admin.cancel.is_some() {
         return match hit {
             Some(HitTarget::FooterSubmit) => submit_cancel(model),
@@ -3880,6 +3912,14 @@ fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             }
             _ => Vec::new(),
         };
+    }
+    if model.admin.view != crate::screens::admin::ServerView::Sessions {
+        if let Some(HitTarget::ListRow(index)) = hit
+            && index < model.admin.view_cells().len()
+        {
+            model.admin.view_selected = index;
+        }
+        return Vec::new();
     }
     if let Some(HitTarget::ListRow(index)) = hit
         && index < model.admin.visible().len()
@@ -13155,6 +13195,7 @@ fn server_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     let admin = &mut model.admin;
     if admin.search.typing && admin.search.key(key) {
         admin.reset_pick();
+        admin.view_selected = 0;
         return Some(Vec::new());
     }
     if key
@@ -13164,6 +13205,34 @@ fn server_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         return None;
     }
     let page = (model.height / 3).max(1) as isize;
+    if let KeyCode::Char(digit @ '1'..='5') = key.code {
+        let view = crate::screens::admin::ServerView::ALL[usize::from(digit as u8 - b'1')];
+        return Some(show_server_view(model, view));
+    }
+    // The views other than Sessions: their rows are walked, searched and read again.
+    if admin.view != crate::screens::admin::ServerView::Sessions {
+        match key.code {
+            KeyCode::Up => admin.move_view(-1),
+            KeyCode::Down => admin.move_view(1),
+            KeyCode::Home => admin.view_selected = 0,
+            KeyCode::End => admin.move_view(isize::MAX),
+            KeyCode::PageUp => admin.move_view(-page),
+            KeyCode::PageDown => admin.move_view(page),
+            KeyCode::Char('/') => admin.search.typing = true,
+            KeyCode::Esc if !admin.search.input.is_empty() => {
+                admin.search = Default::default();
+                admin.view_selected = 0;
+            }
+            KeyCode::Char('r') => return Some(load_admin_sessions(model)),
+            KeyCode::Char('p') => {
+                admin.paused = !admin.paused;
+                admin.ticks = 0;
+            }
+            KeyCode::Char('c') => return Some(next_server(model)),
+            _ => return None,
+        }
+        return Some(Vec::new());
+    }
     match key.code {
         KeyCode::Up => admin.move_selection(false),
         KeyCode::Down => admin.move_selection(true),
@@ -13364,6 +13433,7 @@ fn show_server(
     load_admin_sessions(model)
 }
 
+/// Reads what the Server screen shows again: its sessions, or the view picked.
 fn load_admin_sessions(model: &mut Model) -> Vec<Effect> {
     model.admin.ticks = 0;
     let Some(server) = &model.admin.server else {
@@ -13371,10 +13441,30 @@ fn load_admin_sessions(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     model.admin.loading = true;
-    vec![Effect::LoadAdminSessions {
-        session: server.session,
-        generation: server.generation,
-    }]
+    match model.admin.view {
+        crate::screens::admin::ServerView::Sessions => vec![Effect::LoadAdminSessions {
+            session: server.session,
+            generation: server.generation,
+        }],
+        view => vec![Effect::LoadAdminView {
+            session: server.session,
+            view,
+        }],
+    }
+}
+
+/// The Server screen on `view`, read afresh.
+fn show_server_view(model: &mut Model, view: crate::screens::admin::ServerView) -> Vec<Effect> {
+    let admin = &mut model.admin;
+    if admin.view != view {
+        admin.view = view;
+        admin.rows = None;
+        admin.restriction = None;
+        admin.view_selected = 0;
+        admin.search = Default::default();
+        admin.last_error = None;
+    }
+    load_admin_sessions(model)
 }
 
 /// Ending a session is a write on the server: the connection's policy is asked first,

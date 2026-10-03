@@ -190,3 +190,96 @@ fn the_query_is_copied_or_opened_on_its_connection() {
         "update orders set status = 'x'"
     );
 }
+
+#[test]
+fn the_views_load_their_own_rows_and_draw_a_table() {
+    use dexo_tui::screens::admin::{ServerView, ViewRows};
+    let mut model = server();
+    let effects = press(&mut model, KeyCode::Char('2'));
+    assert_eq!(model.admin.view, ServerView::Locks);
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::LoadAdminView {
+                view: ServerView::Locks,
+                ..
+            }
+        )),
+        "{effects:?}"
+    );
+    update(
+        &mut model,
+        Action::AdminViewLoaded {
+            view: ServerView::Locks,
+            result: Ok((
+                ViewRows::Locks(vec![dexo_driver_api::LockInfo {
+                    lock_type: "relation".into(),
+                    relation: Some("public.orders".into()),
+                    mode: "RowExclusiveLock".into(),
+                    granted: false,
+                    session_id: "4121".into(),
+                }]),
+                None,
+            )),
+        },
+    );
+    let frame = paint(&mut model);
+    for text in [
+        "[2 Locks]",
+        "RELATION",
+        "public.orders",
+        "RowExclusiveLock",
+        "waiting",
+    ] {
+        assert!(frame.contains(text), "{text}: {frame}");
+    }
+}
+
+#[test]
+fn settings_are_searched_and_a_refusal_says_why() {
+    use dexo_tui::screens::admin::{ServerView, ViewRows};
+    let mut model = server();
+    press(&mut model, KeyCode::Char('5'));
+    let setting = |name: &str, value: &str| dexo_driver_api::VariableInfo {
+        name: name.into(),
+        value: Some(value.into()),
+        scope: dexo_driver_api::VariableScope::Server,
+    };
+    update(
+        &mut model,
+        Action::AdminViewLoaded {
+            view: ServerView::Settings,
+            result: Ok((
+                ViewRows::Settings(vec![
+                    setting("work_mem", "4MB"),
+                    setting("shared_buffers", "128MB"),
+                    setting("max_connections", "100"),
+                ]),
+                None,
+            )),
+        },
+    );
+    press(&mut model, KeyCode::Char('/'));
+    for ch in "mem".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    let frame = paint(&mut model);
+    assert!(frame.contains("work_mem"), "{frame}");
+    assert!(!frame.contains("shared_buffers"), "{frame}");
+    assert!(!frame.contains("max_connections"), "{frame}");
+
+    press(&mut model, KeyCode::Enter);
+    press(&mut model, KeyCode::Char('3'));
+    update(
+        &mut model,
+        Action::AdminViewLoaded {
+            view: ServerView::Sizes,
+            result: Ok((
+                ViewRows::Sizes(Vec::new()),
+                Some("permission denied for pg_class".into()),
+            )),
+        },
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("permission denied for pg_class"), "{frame}");
+}
