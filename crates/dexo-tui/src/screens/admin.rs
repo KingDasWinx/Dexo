@@ -11,10 +11,8 @@ pub struct ServerTarget {
     pub connection: String,
     pub environment: String,
     pub read_only: bool,
-    /// Who the connection logs in as and to which database: a session of Dexo's own on
-    /// the server is told by them.
-    pub user: Option<String>,
-    pub database: Option<String>,
+    /// What the server calls the sessions Dexo has open on it.
+    pub own: Vec<String>,
 }
 
 /// The server's sessions, one picked with the arrows; `t` ends the picked one once its
@@ -215,8 +213,7 @@ impl AdminScreen {
                 connection: "local".into(),
                 environment: "local".into(),
                 read_only: false,
-                user: Some("dexo".into()),
-                database: Some("dexo".into()),
+                own: Vec::new(),
             }),
             captured_at: "1710000000".into(),
             sessions: vec![
@@ -294,17 +291,13 @@ impl AdminScreen {
         self.visible().get(self.selected).copied()
     }
 
-    /// Whether `session` is one of Dexo's own on this server: named `dexo`, logged in as
-    /// the connection is, on its database. Cancelling it would stop what Dexo is doing,
-    /// and ending it would drop the connection.
+    /// Whether `session` is one of this Dexo's own on the server, by the id the server
+    /// gave it: cancelling it would stop what Dexo is doing, and ending it would drop the
+    /// connection. Another Dexo's, or the MCP server's, is not.
     pub fn is_you(&self, session: &SessionInfo) -> bool {
-        let Some(server) = &self.server else {
-            return false;
-        };
-        session.application.as_deref() == Some("dexo")
-            && session.user.is_some()
-            && session.user == server.user
-            && (server.database.is_none() || session.database == server.database)
+        self.server
+            .as_ref()
+            .is_some_and(|server| server.own.contains(&session.id))
     }
 
     pub fn move_selection(&mut self, down: bool) {

@@ -37,8 +37,7 @@ fn server() -> Model {
             connection: "pg-dev".into(),
             environment: "development".into(),
             read_only: false,
-            user: Some("dexo".into()),
-            database: Some("orders".into()),
+            own: vec!["50".into()],
         }),
         sessions: vec![
             session(
@@ -304,4 +303,65 @@ fn another_servers_view_is_not_drawn() {
     assert!(model.admin.rows.is_none());
     let frame = paint(&mut model);
     assert!(!frame.contains("not this one"), "{frame}");
+}
+
+/// Another Dexo's session on the same login -- or the MCP server's -- is not "you", and
+/// can be stopped: only the ids of this Dexo's own sessions are.
+#[test]
+fn only_this_dexos_sessions_are_you() {
+    let mut model = server();
+    let mut other = session("51", "dexo", "active", 50, "select 2");
+    other.application = Some("dexo".into());
+    model.admin.sessions.push(other);
+    let frame = paint(&mut model);
+    assert_eq!(frame.matches("· you").count(), 1, "{frame}");
+    while model.admin.picked().map(|session| session.id.as_str()) != Some("51") {
+        press(&mut model, KeyCode::Down);
+    }
+    press(&mut model, KeyCode::Char('k'));
+    assert!(model.admin.cancel.is_some());
+}
+
+/// The id the server gave a session Dexo opened reaches the Server screen.
+#[test]
+fn the_server_id_of_a_session_dexo_opened_is_its_own() {
+    use dexo_driver_api::TransactionState;
+    let mut model = Model::default();
+    model
+        .connections
+        .load_profiles(vec![dexo_app::ConnectionProfile::new(
+            dexo_app::ConnectionId(uuid::Uuid::from_u128(1)),
+            None,
+            "pg-dev",
+            "postgres",
+            "development",
+            serde_json::json!({"host":"127.0.0.1","port":5432,"username":"u","database":"d"}),
+            dexo_app::SecretRef::new("r".into()),
+        )]);
+    let id = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(9));
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id,
+            connection: "pg-dev".into(),
+            transaction: TransactionState::Idle,
+            generation: 1,
+            environment: "development".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    model.active_session = Some(id);
+    update(
+        &mut model,
+        Action::SessionServerId {
+            session: id,
+            server_id: "4242".into(),
+        },
+    );
+    update(
+        &mut model,
+        Action::GoToScreen(dexo_tui::model::Screen::Server),
+    );
+    let own = model.admin.server.as_ref().map(|server| server.own.clone());
+    assert_eq!(own, Some(vec!["4242".to_string()]));
 }

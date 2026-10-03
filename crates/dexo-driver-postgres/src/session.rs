@@ -27,6 +27,9 @@ pub struct PostgresSession {
     cancel: PostgresCancelContext,
     /// `server_version_num`, asked once, the first time something depends on it.
     server_version: tokio::sync::OnceCell<i32>,
+    /// The backend's pid, asked once the session is open: what `pg_stat_activity` calls
+    /// it.
+    backend_pid: std::sync::OnceLock<String>,
     _lease: Option<dexo_transport::TransportLease>,
 }
 
@@ -44,7 +47,20 @@ impl PostgresSession {
             notices: tokio::sync::Mutex::new(Some(notices)),
             cancel,
             server_version: tokio::sync::OnceCell::new(),
+            backend_pid: std::sync::OnceLock::new(),
             _lease: lease,
+        }
+    }
+
+    /// Asks the server for the backend's pid. A session behind a pooler may get another
+    /// backend next time; it is then simply not told apart.
+    pub(crate) async fn read_backend_pid(&self) {
+        if let Ok(row) = self
+            .client
+            .query_one("SELECT pg_backend_pid()::text", &[])
+            .await
+        {
+            let _ = self.backend_pid.set(row.get(0));
         }
     }
 
@@ -229,6 +245,10 @@ impl Session for PostgresSession {
 
     fn admin(&self) -> Option<&dyn dexo_driver_api::AdministrationProvider> {
         Some(self)
+    }
+
+    fn server_session_id(&self) -> Option<String> {
+        self.backend_pid.get().cloned()
     }
 
     fn events(&self) -> Option<SessionEventStream> {

@@ -281,6 +281,13 @@ async fn the_server_sees_dexo_as_the_application_behind_its_sessions() {
         "{:?}",
         listed.items
     );
+    // The session says what the server calls it, and the list calls it that.
+    let own = session.server_session_id().expect("a backend pid");
+    assert!(
+        listed.items.iter().any(|info| info.id == own),
+        "{own} in {:?}",
+        listed.items
+    );
 }
 
 async fn drain(mut stream: dexo_driver_api::QueryStream) {

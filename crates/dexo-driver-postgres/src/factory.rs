@@ -75,9 +75,9 @@ impl ConnectionFactory for PostgresFactory {
                 });
                 notice_rx
             };
-            return Ok(Box::new(PostgresSession::new(
-                client, notice_rx, cancel, lease,
-            )));
+            let session = PostgresSession::new(client, notice_rx, cancel, lease);
+            session.read_backend_pid().await;
+            return Ok(Box::new(session));
         }
         let (client, mut connection) = config
             .connect(tokio_postgres::NoTls)
@@ -101,9 +101,9 @@ impl ConnectionFactory for PostgresFactory {
             });
             notice_rx
         };
-        Ok(Box::new(PostgresSession::new(
-            client, notice_rx, cancel, lease,
-        )))
+        let session = PostgresSession::new(client, notice_rx, cancel, lease);
+        session.read_backend_pid().await;
+        Ok(Box::new(session))
     }
 }
 

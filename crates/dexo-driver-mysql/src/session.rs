@@ -236,6 +236,10 @@ impl Session for MysqlSession {
     fn admin(&self) -> Option<&dyn dexo_driver_api::AdministrationProvider> {
         Some(self)
     }
+
+    fn server_session_id(&self) -> Option<String> {
+        Some(self.conn_id.to_string())
+    }
 }
 
 #[async_trait::async_trait]

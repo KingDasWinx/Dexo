@@ -1847,6 +1847,17 @@ impl WorkbenchRuntime {
             driver: profile.driver,
         })
         .await;
+        let server_id = self
+            .sessions
+            .get(id)
+            .and_then(|active| active.session.server_session_id());
+        if let Some(server_id) = server_id {
+            self.emit(Action::SessionServerId {
+                session: id,
+                server_id,
+            })
+            .await;
+        }
     }
 
     async fn duplicate_profile(&mut self, id: dexo_app::ConnectionId, taken: Vec<String>) {

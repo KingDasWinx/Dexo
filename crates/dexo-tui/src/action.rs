@@ -44,6 +44,11 @@ pub enum Action {
     SessionOpened {
         token: u64,
     },
+    /// What the server calls a session Dexo opened: how Server tells Dexo's own.
+    SessionServerId {
+        session: SessionId,
+        server_id: String,
+    },
     /// What a newly opened session's driver cannot do, and why.
     SessionCapabilities {
         session: SessionId,

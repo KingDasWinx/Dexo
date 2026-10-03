@@ -196,6 +196,12 @@ pub trait Session: Send + Sync {
         None
     }
 
+    /// What the server calls this session in its own list of them: a Postgres backend's
+    /// pid, a MySQL connection id. It is how Dexo's own sessions are told from others'.
+    fn server_session_id(&self) -> Option<String> {
+        None
+    }
+
     fn events(&self) -> Option<SessionEventStream> {
         None
     }

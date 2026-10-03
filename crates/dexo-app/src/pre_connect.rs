@@ -331,6 +331,10 @@ impl Session for WithPreConnect {
     fn events(&self) -> Option<dexo_driver_api::SessionEventStream> {
         self.session.events()
     }
+
+    fn server_session_id(&self) -> Option<String> {
+        self.session.server_session_id()
+    }
 }
 
 #[cfg(all(test, unix))]

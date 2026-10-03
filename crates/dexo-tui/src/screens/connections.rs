@@ -65,6 +65,8 @@ pub struct ConnectionsScreen {
     pub picked_group: Option<String>,
     /// The last test of a connection, shown under its fields until another is picked.
     pub test: Option<(dexo_app::ConnectionId, TestLine)>,
+    /// What the server calls each session Dexo has open on it.
+    pub server_ids: Vec<(SessionId, String)>,
 }
 
 /// A connection's test: running since when, or how it ended.
@@ -247,6 +249,7 @@ impl ConnectionsScreen {
 
     pub fn remove_session(&mut self, id: SessionId) {
         self.sessions.retain(|row| row.id != id);
+        self.server_ids.retain(|(session, _)| *session != id);
         if self.selected_session == Some(id) {
             self.selected_session = None;
         }

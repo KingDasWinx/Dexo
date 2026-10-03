@@ -212,6 +212,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SessionOpened { token } => vec![Effect::AdoptSession { token }],
+        Action::SessionServerId { session, server_id } => {
+            let ids = &mut model.connections.server_ids;
+            ids.retain(|(known, _)| *known != session);
+            ids.push((session, server_id));
+            Vec::new()
+        }
         Action::SessionCapabilities {
             session,
             unavailable,
@@ -13455,21 +13461,46 @@ fn servers(model: &Model) -> Vec<crate::screens::admin::ServerTarget> {
                 .iter()
                 .find(|profile| profile.profile.name == row.connection)
                 .map(|profile| &profile.profile.config);
-            let text = |key: &str| {
-                config
-                    .and_then(|config| config.get(key))
-                    .and_then(serde_json::Value::as_str)
-                    .filter(|value| !value.is_empty())
-                    .map(str::to_string)
+            let place = |config: Option<&serde_json::Value>| {
+                let text = |key: &str| {
+                    config
+                        .and_then(|config| config.get(key))
+                        .map(|value| value.to_string())
+                };
+                (text("host"), text("port"))
             };
+            let here = place(config);
+            // Dexo's own sessions on this server: those of every open connection that
+            // reaches the same host and port.
+            let own = model
+                .connections
+                .sessions
+                .iter()
+                .filter(|other| {
+                    let config = model
+                        .connections
+                        .profiles
+                        .iter()
+                        .find(|profile| profile.profile.name == other.connection)
+                        .map(|profile| &profile.profile.config);
+                    other.id == row.id || (here.0.is_some() && place(config) == here)
+                })
+                .filter_map(|other| {
+                    model
+                        .connections
+                        .server_ids
+                        .iter()
+                        .find(|(session, _)| *session == other.id)
+                        .map(|(_, server_id)| server_id.clone())
+                })
+                .collect();
             crate::screens::admin::ServerTarget {
                 session: row.id,
                 generation: row.generation,
                 connection: row.connection.clone(),
                 environment: row.environment.clone(),
                 read_only: row.read_only,
-                user: text("username"),
-                database: text("database"),
+                own,
             }
         })
         .collect()
