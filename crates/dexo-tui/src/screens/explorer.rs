@@ -1235,10 +1235,21 @@ fn bucket_user_role(kind: &ObjectKind) -> bool {
     matches!(kind, ObjectKind::User | ObjectKind::Role)
 }
 
+/// `mysql.users` is the driver's own key for what the account may not read: shown as
+/// the thing it is, `Users`.
+fn restricted_label(capability: &str) -> String {
+    let name = capability.rsplit('.').next().unwrap_or(capability);
+    let mut chars = name.chars();
+    match chars.next() {
+        Some(first) => first.to_uppercase().chain(chars).collect(),
+        None => capability.to_string(),
+    }
+}
+
 fn restriction_node(restriction: dexo_driver_api::CatalogRestriction) -> ExplorerNode {
     ExplorerNode {
         id: ObjectId::new(format!("restricted:{}", restriction.capability)),
-        label: restriction.capability,
+        label: restricted_label(&restriction.capability),
         kind: ObjectKind::DriverSpecific("restricted".into()),
         qualified: String::new(),
         schema: None,

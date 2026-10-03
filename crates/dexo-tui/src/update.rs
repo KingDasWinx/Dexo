@@ -1379,6 +1379,16 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 // A constraint, a function, a type or a group is not one the catalog hands
                 // back by id: it is described by the node it was picked on, rather than
                 // answered with "Select an object in Explorer.".
+                // What a restricted row was refused is the one fact it has.
+                let mut restrictions = restrictions;
+                if object.is_none()
+                    && let Some(reason) = model
+                        .explorer
+                        .selected_node()
+                        .and_then(|node| node.restriction.clone())
+                {
+                    restrictions.push(reason);
+                }
                 let object = object.or_else(|| {
                     model.explorer.selected_node().map(|node| {
                         dexo_driver_api::CatalogObject::new(

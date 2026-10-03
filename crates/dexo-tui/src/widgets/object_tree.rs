@@ -241,7 +241,8 @@ fn collect(
             };
             let badge = match node.state {
                 NodeState::Loading(_) => " [loading]",
-                NodeState::Restricted => " [restricted]",
+                // The reason is too long for the pane: Inspect shows it.
+                NodeState::Restricted => " [no access]",
                 NodeState::Error { .. } => " [error]",
                 NodeState::Stale => " [stale]",
                 NodeState::Collapsed | NodeState::Expanded => {

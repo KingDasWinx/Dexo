@@ -231,3 +231,32 @@ fn a_connection_row_connects_on_a_double_click_like_every_other_row() {
     let second = click(&mut model);
     assert!(!second.is_empty(), "a double click did nothing");
 }
+
+/// `mysql.users [restricted]` explained nothing: the row says what it is and that the
+/// account has no access, and Inspect says why.
+#[test]
+fn a_restricted_row_says_what_it_is() {
+    use dexo_driver_api::QualifiedName;
+    use dexo_driver_api::{CatalogList, CatalogObject, CatalogRestriction, ObjectId, ObjectKind};
+    let mut model = Model::default();
+    model.explorer.replace_roots(CatalogList {
+        objects: vec![CatalogObject::new(
+            ObjectId::new("db"),
+            ObjectKind::Catalog,
+            QualifiedName::new(None::<String>, None::<String>, "qa4"),
+            None,
+        )],
+        restrictions: vec![CatalogRestriction {
+            parent: None,
+            capability: "mysql.users".into(),
+            reason: "SELECT command denied".into(),
+        }],
+    });
+    let node = model
+        .explorer
+        .nodes()
+        .iter()
+        .find(|node| node.restriction.is_some())
+        .expect("a restricted row");
+    assert_eq!(node.label, "Users");
+}
