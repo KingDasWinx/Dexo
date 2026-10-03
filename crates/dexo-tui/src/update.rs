@@ -3983,6 +3983,14 @@ fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             crate::screens::schema_diff::request(model)
         }
         Some(HitTarget::FooterSubmit) => crate::screens::schema_diff::open_script(model),
+        // As the key: back to the result there is, else off the screen.
+        Some(HitTarget::FooterCancel) if model.schema_diff.compared => {
+            let diff = &mut model.schema_diff;
+            diff.restore_picks();
+            diff.source_prompt = false;
+            diff.footer = crate::widgets::form::FooterFocus::Input;
+            Vec::new()
+        }
         Some(HitTarget::FooterCancel) => update(model, Action::ScreenBack),
         _ => Vec::new(),
     }

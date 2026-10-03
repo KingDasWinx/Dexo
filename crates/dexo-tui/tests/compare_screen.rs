@@ -173,7 +173,10 @@ fn a_swap_leaves_the_result_shown_its_own_until_the_new_one_comes() {
         },
     );
     let frame = paint(&mut model);
-    assert!(frame.contains("From ‹ pg-dev › ⇄  To ‹ pg-prod ›"), "{frame}");
+    assert!(
+        frame.contains("From ‹ pg-dev › ⇄  To ‹ pg-prod ›"),
+        "{frame}"
+    );
 }
 
 /// Picks changed and given up go back to the result's.
@@ -185,5 +188,28 @@ fn picks_given_up_go_back_to_the_results() {
     press(&mut model, KeyCode::Esc);
     assert!(!model.schema_diff.source_prompt);
     let frame = paint(&mut model);
-    assert!(frame.contains("From ‹ pg-dev › ⇄  To ‹ pg-prod ›"), "{frame}");
+    assert!(
+        frame.contains("From ‹ pg-dev › ⇄  To ‹ pg-prod ›"),
+        "{frame}"
+    );
+}
+
+/// A click on [Cancel] does what Esc does: back to the result, not off the screen.
+#[test]
+fn a_click_on_cancel_goes_back_to_the_result() {
+    let mut model = compared();
+    press(&mut model, KeyCode::Char('p'));
+    paint(&mut model);
+    let (column, row) = model.hits.center(HitTarget::FooterCancel);
+    update(
+        &mut model,
+        Action::Mouse(MouseEvent {
+            kind: MouseEventKind::Down(MouseButton::Left),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
+    assert!(!model.schema_diff.source_prompt);
 }
