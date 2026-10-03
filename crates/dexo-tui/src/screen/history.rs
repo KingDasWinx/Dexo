@@ -130,6 +130,12 @@ pub fn buttons(model: &Model) -> Vec<Button> {
                 Button::new(KeyCode::Char('x'), "Delete"),
             ]
         }
+        // Renaming or deleting, the question has the pane.
+        HistoryView::Saved
+            if model.saved_queries.renaming.is_some() || model.saved_queries.deleting.is_some() =>
+        {
+            Vec::new()
+        }
         HistoryView::Saved if model.saved_queries.current().is_some() => vec![
             Button::new(KeyCode::Enter, "Open"),
             Button::new(KeyCode::Char('r'), "Run"),

@@ -5,9 +5,6 @@ expression: "render_to_string(&model, 60, 20)"
 [Agents]  demo  local  public                               
  1 Approvals   2 Activity  [3 Profiles]  4 Setup            
 ┌▸ assistant───────────────────────────────────────────────┐
-│ [e Enable]  [c Connections…]  [q Read SQL on]  [g Grant…]│
-│ [r Revoke grants]  [x Delete]                            │
-│                                                          │
 │ State        disabled                                    │
 │ Connections  local                                       │
 │ Access       browse and describe only                    │
@@ -15,6 +12,9 @@ expression: "render_to_string(&model, 60, 20)"
 │ Never        db.public.secrets                           │
 │ Tools        catalog_search, object_describe             │
 │ ── Grants                                                │
+│ data_insert on db.public.items (local): one write, then  │
+│ it is spent, ends in 15 min                              │
+│                                                          │
 │Enable assistant?                                         │
 │Agents that connect through it can then use what it allows│
 │Connections: local.                                       │

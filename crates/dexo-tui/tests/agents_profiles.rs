@@ -143,3 +143,18 @@ fn q_flips_read_sql() {
         "{effects:?}"
     );
 }
+
+/// The buttons go while the pane asks something: they were drawn under the question,
+/// and did nothing.
+#[test]
+fn a_question_or_the_checklist_has_the_pane_without_the_buttons() {
+    let mut model = profiles();
+    press(&mut model, KeyCode::Char('c'));
+    let frame = paint(&mut model);
+    assert!(!frame.contains("[e Disable]"), "{frame}");
+    press(&mut model, KeyCode::Esc);
+    press(&mut model, KeyCode::Char('x'));
+    let frame = paint(&mut model);
+    assert!(model.mcp_profiles.confirm.is_some());
+    assert!(!frame.contains("[e Disable]"), "{frame}");
+}

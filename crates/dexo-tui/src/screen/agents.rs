@@ -713,7 +713,12 @@ pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
 /// What can be done to the picked profile.
 pub fn profile_buttons(model: &Model) -> Vec<Button> {
     let screen = &model.mcp_profiles;
-    if screen.name.is_empty() || screen.grant_form.is_some() {
+    // A form, a question or the checklist has the pane until it is done.
+    if screen.name.is_empty()
+        || screen.grant_form.is_some()
+        || screen.confirm.is_some()
+        || screen.checklist.is_some()
+    {
         return Vec::new();
     }
     vec![
