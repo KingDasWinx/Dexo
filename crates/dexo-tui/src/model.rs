@@ -53,14 +53,15 @@ pub enum Screen {
 }
 
 impl Screen {
-    /// In the order the header lists them.
+    /// In the order the header lists them. Compare is listed only while it is on screen:
+    /// it is opened from the palette or `Ctrl+G d`, now and then.
     pub const ALL: [Screen; 6] = [
         Screen::Workbench,
         Screen::Connections,
         Screen::Agents,
         Screen::Server,
-        Screen::Compare,
         Screen::History,
+        Screen::Compare,
     ];
 
     pub fn title(self) -> &'static str {

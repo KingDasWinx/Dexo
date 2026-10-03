@@ -1,9 +1,8 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 121
 expression: "render_to_string(&model, 100, 30)"
 ---
-[Workbench] Connections  Agents  Server  Compare  History   demo  local  public                     
+[Workbench] Connections  Agents  Server  History   demo  local  public                              
 ┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │showing name "public"     ││   1▸select 1                                                         │

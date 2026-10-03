@@ -238,3 +238,17 @@ fn slash_searches_the_differences() {
     assert_eq!(model.schema_diff.filtered().len(), 4);
     assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
 }
+
+/// The header lists Compare only while it is on screen; the palette and `Ctrl+G d` open it.
+#[test]
+fn the_header_lists_compare_only_while_on_it() {
+    let mut model = Model::default();
+    let frame = paint(&mut model);
+    let header = frame.lines().next().unwrap_or_default();
+    assert!(header.contains("History"), "{header}");
+    assert!(!header.contains("Compare"), "{header}");
+    let mut model = compared();
+    let frame = paint(&mut model);
+    let header = frame.lines().next().unwrap_or_default();
+    assert!(header.contains("History [Compare]"), "{header}");
+}

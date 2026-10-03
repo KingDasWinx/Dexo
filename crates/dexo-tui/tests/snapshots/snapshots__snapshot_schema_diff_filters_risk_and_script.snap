@@ -2,7 +2,7 @@
 source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
- Workbench  Connections  Agents  Server [Compare] History   demo  local  public                                                                                 
+ Workbench  Connections  Agents  Server  History [Compare]  demo  local  public                                                                                 
  From ‹ prod@v1 › ⇄  To ‹ prod@v2 ›  [a +1 added] [r −1 removed] [c ~1 changed]                                                            [s Swap]  [e Compare]
 / search                                                                                                                                                        
 ┌▸ Differences (3)────────────────────────────────────────────────┐┌  db.public.orders_new─────────────────────────────────────────────────────────────────────┐

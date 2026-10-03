@@ -283,6 +283,7 @@ pub fn waiting(model: &Model, screen: Screen) -> usize {
 pub fn strip(model: &Model, room: usize) -> Vec<StripItem> {
     let all: Vec<StripItem> = Screen::ALL
         .into_iter()
+        .filter(|screen| *screen != Screen::Compare || model.screen == Screen::Compare)
         .map(|screen| {
             let waiting = waiting(model, screen);
             let name = if waiting > 0 {
