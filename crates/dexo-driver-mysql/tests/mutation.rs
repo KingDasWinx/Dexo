@@ -257,3 +257,94 @@ async fn mysql_bulk_insert_batch() {
         .unwrap();
     assert_eq!(page.rows.len(), 1);
 }
+
+async fn texts(session: &dyn Session, sql: &str) -> Vec<String> {
+    let mut stream = session
+        .execute(dexo_driver_api::QueryRequest::read(sql, 100))
+        .await
+        .unwrap();
+    let mut texts = Vec::new();
+    while let Some(event) = stream.next().await {
+        if let dexo_driver_api::QueryEvent::Rows(batch) = event.unwrap() {
+            for row in batch.rows {
+                match &row[0] {
+                    DbValue::Text(text) => texts.push(text.clone()),
+                    other => panic!("{other:?}"),
+                }
+            }
+        }
+    }
+    texts
+}
+
+/// A batch goes in as one statement: NULL and the empty text stay apart, bytes and
+/// booleans read as themselves, text goes into any column that reads it, and a bad row
+/// names its place in the batch, which goes in whole or not at all. A statement the
+/// server refuses leaves the session usable.
+#[tokio::test]
+#[ignore = "requires Docker"]
+async fn mysql_bulk_insert_is_one_statement_and_names_the_bad_row() {
+    let fixture = connect().await;
+    let session = &*fixture.session;
+    drain(
+        session
+            .execute(dexo_driver_api::QueryRequest::write(
+                "create table bulk (id int primary key, t text, b blob, f boolean)",
+            ))
+            .await
+            .unwrap(),
+    )
+    .await;
+    let writer = session.bulk().unwrap();
+    let table = QualifiedName::new(Some("dexo"), None::<String>, "bulk");
+    let columns: Vec<String> = ["id", "t", "b", "f"].map(String::from).to_vec();
+    let written = writer
+        .insert_batch(
+            &table,
+            &columns,
+            &[
+                vec![
+                    DbValue::I64(1),
+                    DbValue::Text(String::new()),
+                    DbValue::Bytes(vec![0xde, 0xad]),
+                    DbValue::Bool(true),
+                ],
+                vec![DbValue::I64(2), DbValue::Null, DbValue::Null, DbValue::Null],
+                vec![
+                    DbValue::Text("3".into()),
+                    DbValue::Text("say \"hi\", ok\nnext".into()),
+                    DbValue::Text("raw".into()),
+                    DbValue::Text("0".into()),
+                ],
+            ],
+        )
+        .await
+        .unwrap();
+    assert_eq!(written, 3);
+    let read =
+        "select concat_ws('|', id, coalesce(t, '-'), coalesce(hex(b), '-'), coalesce(f, '-'))
+                from bulk order by id";
+    assert_eq!(
+        texts(session, read).await,
+        ["1||DEAD|1", "2|-|-|-", "3|say \"hi\", ok\nnext|726177|0"]
+    );
+    let error = writer
+        .insert_batch(
+            &table,
+            &columns[..1],
+            &[vec![DbValue::I64(4)], vec![DbValue::Text("x".into())]],
+        )
+        .await
+        .unwrap_err();
+    assert_eq!(error.row(), Some(2), "{error}");
+    assert!(
+        writer
+            .insert_batch(&table, &["nope".to_string()], &[vec![DbValue::I64(5)]])
+            .await
+            .is_err()
+    );
+    assert_eq!(
+        texts(session, "select cast(count(*) as char) from bulk").await,
+        ["3"]
+    );
+}
