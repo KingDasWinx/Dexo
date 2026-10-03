@@ -253,3 +253,21 @@ fn the_form_is_entered_from_its_top() {
         Some(dexo_tui::screens::mcp_setup::Row::Profile)
     );
 }
+
+/// On a small terminal the form scrolls to what has the focus: under the list, its
+/// buttons were cut off below the bottom.
+#[test]
+fn a_small_terminal_scrolls_the_form_to_its_buttons() {
+    let mut model = setup();
+    press(&mut model, KeyCode::Enter);
+    for _ in 0..20 {
+        if model.mcp_setup.footer == dexo_tui::widgets::form::FooterFocus::Submit {
+            break;
+        }
+        press(&mut model, KeyCode::Down);
+    }
+
+    let screen = dexo_tui::render::render_to_string(&model, 80, 16);
+
+    assert!(screen.contains("[Set up]"), "{screen}");
+}

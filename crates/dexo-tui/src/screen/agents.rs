@@ -80,6 +80,11 @@ fn setup(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         );
         return;
     }
+    // On a narrow screen the form, while it has the keys, takes it whole.
+    if area.width < 100 && super::section(model) == super::Section::Detail {
+        setup_form(frame, area, model, hits);
+        return;
+    }
     let rows: Vec<String> = setup
         .clients
         .iter()
@@ -234,14 +239,26 @@ fn setup_form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         lines.push((None, String::new()));
         say(&mut lines, &format!("By hand: {command}"));
     }
+    // Scrolled so the focused row, or the buttons, stay in sight.
+    let height = usize::from(inner.height);
+    let focus_line = if setup.footer == crate::widgets::form::FooterFocus::Input {
+        lines
+            .iter()
+            .position(|(row, _)| *row == Some(setup.row))
+            .unwrap_or(0)
+    } else {
+        footer_row
+    };
+    let offset = crate::palette::scroll_to_selection(focus_line, 0, lines.len(), height);
     let shown: Vec<String> = lines
         .iter()
-        .take(usize::from(inner.height))
+        .skip(offset)
+        .take(height)
         .map(|(_, line)| crate::model::truncate_cell(line, width))
         .collect();
     frame.render_widget(ratatui::widgets::Paragraph::new(shown.join("\n")), inner);
-    for (line, (row, text)) in lines.iter().enumerate().take(usize::from(inner.height)) {
-        let rect = crate::mouse::line_rect(inner, line);
+    for (line, (row, text)) in lines.iter().enumerate().skip(offset).take(height) {
+        let rect = crate::mouse::line_rect(inner, line - offset);
         if line == footer_row {
             crate::widgets::form::register_footer(hits, rect, text, "Set up");
             continue;
