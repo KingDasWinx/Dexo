@@ -179,9 +179,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.transfer.open {
         render_transfer(frame, model, hits);
     }
-    if model.security.open {
-        render_security(frame, model, hits);
-    }
     // Above the panel that asked for it, which drew over it and left a few columns of it.
     if let Some(preview) = &model.schema_editor.preview {
         render_ddl_preview(frame, model, preview, hits);
@@ -993,7 +990,7 @@ fn object_name(model: &Model, id: &dexo_driver_api::ObjectId) -> String {
     })
 }
 
-fn properties_tab_body(model: &Model) -> String {
+pub(crate) fn properties_tab_body(model: &Model) -> String {
     if model.inspector.qualified_name.is_empty() && model.inspector.object.is_none() {
         return "Select an object in Explorer.".into();
     }
@@ -2093,46 +2090,33 @@ fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     });
 }
 
-fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    let width = 84.min(area.width.saturating_sub(2));
-    let popup = centered(area, width, 14.min(area.height.saturating_sub(2)));
-    let target = model.security_grant_target().unwrap_or_default();
-    let lines = model
-        .security
-        .lines(popup_inner(popup).width as usize, &target);
-    let rows = popup_inner(popup).height as usize;
-    // The hint stays at the bottom, whatever the roles and grants take.
-    let (list, hint) = lines.split_at(lines.len().saturating_sub(1));
-    let room = rows.saturating_sub(1);
-    let offset = scroll_to_selection(
-        model.security.selected,
-        0,
-        model.security.principals.len(),
-        room,
-    );
-    let mut visible = list
-        .iter()
-        .skip(offset)
-        .take(room)
-        .cloned()
-        .collect::<Vec<_>>();
-    visible.resize(room, String::new());
-    visible.extend(hint.iter().cloned());
-    paint_popup(
-        frame,
-        model,
-        popup,
-        Block::bordered().title(format!("Security on {}", model.connection.name)),
-        visible.join("\n"),
-    );
-    register_overlay(hits, popup);
-    for_popup_lines(popup, &visible, |i, _, rect| {
-        let source_index = offset + i;
-        if i < room && source_index < model.security.principals.len() {
-            hits.register(HitTarget::ListRow(source_index), rect);
+/// The first line of the Privileges view that is a role.
+pub(crate) const PRIVILEGE_ROLES_FROM: usize = 0;
+
+/// A table document's own views: its structure, its definition, its privileges. Each
+/// says so while it is still being read.
+pub(crate) fn object_view_lines(model: &Model, view: crate::model::ResultsView) -> Vec<String> {
+    use crate::model::ResultsView;
+    let crate::model::DocumentKind::Table(target) = &model.active_document().kind else {
+        return Vec::new();
+    };
+    let table = target.display_unquoted();
+    let read = model.inspector.qualified_name == table;
+    match view {
+        ResultsView::Structure | ResultsView::Ddl if !read => {
+            vec![format!("Reading {table}...")]
         }
-    });
+        ResultsView::Structure => properties_tab_body(model)
+            .lines()
+            .map(str::to_string)
+            .collect(),
+        ResultsView::Ddl => ddl_overlay_body(model)
+            .lines()
+            .map(str::to_string)
+            .collect(),
+        ResultsView::Privileges => model.security.table_lines(&table),
+        _ => Vec::new(),
+    }
 }
 
 /// "Delete connection", drawn like "Unsaved changes": sized to its text, the focused
@@ -2593,7 +2577,7 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
 }
 
-fn ddl_overlay_body(model: &Model) -> String {
+pub(crate) fn ddl_overlay_body(model: &Model) -> String {
     match &model.inspector.ddl {
         Some(ddl) if model.inspector.qualified_name.is_empty() => ddl.clone(),
         Some(ddl) => format!("{}\n\n{ddl}", model.inspector.qualified_name),
@@ -3568,14 +3552,17 @@ mod tests {
 
     /// A column says its type and nullability, and what it relates to by name, one to a line.
     #[test]
-    fn the_security_panel_lists_roles_above_its_hint() {
+    fn the_privileges_view_lists_roles_above_its_grant() {
         let mut model = Model::default();
-        model.security.open = true;
+        model.active_document_mut().kind =
+            crate::model::DocumentKind::Table(dexo_app::parse_qualified("local.public.orders"));
+        model.results.view = crate::model::ResultsView::Privileges;
         model.security.principals = vec!["reporter".into()];
-        let text = render_to_string(&model, 100, 30);
+        let text =
+            super::object_view_lines(&model, crate::model::ResultsView::Privileges).join("\n");
         let role = text.find("> reporter").expect("the role");
-        let hint = text.find("Esc close").expect("the hint");
-        assert!(role < hint, "{text}");
+        let grant = text.find("Enter grants SELECT").expect("the grant");
+        assert!(role < grant, "{text}");
     }
 
     #[test]

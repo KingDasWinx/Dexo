@@ -351,6 +351,23 @@ fn footer_hint(model: &Model) -> Option<String> {
                 ("document.close", "close"),
             ],
         )),
+        // A table's own views have their own keys: not the grid's.
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Privileges =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down pick a role  Enter grant SELECT  {view}"))
+        }
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Structure =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  n note  {view}"))
+        }
+        crate::model::Focus::Results if model.results.view == crate::model::ResultsView::Ddl => {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  {view}"))
+        }
         crate::model::Focus::Results => {
             // Only what this grid does: `n` and `p` turn the pages of a table's rows or of
             // a paged result, and the rows are changed in a table's.

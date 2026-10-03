@@ -954,17 +954,24 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::OpenObjectInspector => open_inspector_facet(
+        Action::OpenObjectInspector => open_object_view(
             model,
-            crate::screens::object_inspector::InspectorFacet::Properties,
+            crate::model::ResultsView::Structure,
+            Some(crate::screens::object_inspector::InspectorFacet::Properties),
+            "",
         ),
-        Action::OpenObjectDdl => {
-            open_inspector_facet(model, crate::screens::object_inspector::InspectorFacet::Ddl)
-        }
-        Action::OpenObjectData => open_selected_table(model),
-        Action::OpenDependencies => open_inspector_facet(
+        Action::OpenObjectDdl => open_object_view(
             model,
-            crate::screens::object_inspector::InspectorFacet::Properties,
+            crate::model::ResultsView::Ddl,
+            Some(crate::screens::object_inspector::InspectorFacet::Ddl),
+            "",
+        ),
+        Action::OpenObjectData => open_selected_table(model),
+        Action::OpenDependencies => open_object_view(
+            model,
+            crate::model::ResultsView::Structure,
+            Some(crate::screens::object_inspector::InspectorFacet::Properties),
+            "",
         ),
         Action::ExplorerUp => {
             move_sidebar_selection(model, -1);
@@ -1838,13 +1845,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             use crate::screens::explain::ExplainView;
             model.results.explain_scroll = 0;
             model.results.messages_scroll = 0;
+            model.inspector.scroll = 0;
+            let table = model.active_document().kind.is_table();
             match (model.results.view, model.results.explain.view) {
+                // A table's document walks its table's own views first.
+                (ResultsView::Grid, _) if table => model.results.view = ResultsView::Structure,
+                (ResultsView::Structure, _) => model.results.view = ResultsView::Ddl,
+                (ResultsView::Ddl, _) => model.results.view = ResultsView::Privileges,
                 // No plan to show: Explain is not a stop on the way, and the log is one
                 // press from the grid instead of four.
-                (ResultsView::Grid, _) if model.results.explain.plan.is_none() => {
+                (ResultsView::Grid | ResultsView::Privileges, _)
+                    if model.results.explain.plan.is_none() =>
+                {
                     model.results.view = ResultsView::Messages;
                 }
-                (ResultsView::Grid, _) => {
+                (ResultsView::Grid | ResultsView::Privileges, _) => {
                     model.results.view = ResultsView::Explain;
                     model.results.explain.view = ExplainView::Tree;
                 }
@@ -1855,7 +1870,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 (ResultsView::Messages, _) => model.results.view = ResultsView::Grid,
             }
             scroll_results_view_to_start(model);
-            Vec::new()
+            load_object_view(model)
         }
         // ANALYZE runs the statement, so it asks first; it used to run straight from the
         // palette, and its "confirmation" was a flag it set on itself.
@@ -2614,6 +2629,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ResultsUp => {
             match model.results.view {
+                crate::model::ResultsView::Privileges => model.security.select_previous(),
+                crate::model::ResultsView::Structure | crate::model::ResultsView::Ddl => {
+                    model.inspector.scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Inspector,
+                        model.inspector.scroll,
+                        -1,
+                    );
+                }
                 crate::model::ResultsView::Explain => {
                     model.results.explain_scroll = model.hits.scroll(
                         crate::mouse::ScrollArea::Explain,
@@ -2637,6 +2660,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::ResultsDown => {
             match model.results.view {
+                crate::model::ResultsView::Privileges => model.security.select_next(),
+                crate::model::ResultsView::Structure | crate::model::ResultsView::Ddl => {
+                    model.inspector.scroll = model.hits.scroll(
+                        crate::mouse::ScrollArea::Inspector,
+                        model.inspector.scroll,
+                        1,
+                    );
+                }
                 crate::model::ResultsView::Explain => {
                     model.results.explain_scroll = model.hits.scroll(
                         crate::mouse::ScrollArea::Explain,
@@ -3249,7 +3280,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::Review) => mouse_review(model, hit),
         Some(OverlayKind::DdlPreview) => mouse_ddl_preview(model, hit),
         Some(OverlayKind::Transfer) => mouse_transfer(model, hit),
-        Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
         Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
         Some(OverlayKind::SchemaForm) => match hit {
             Some(HitTarget::FormField(index))
@@ -3818,22 +3848,6 @@ fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     }
 }
 
-fn mouse_security(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
-    match hit {
-        Some(HitTarget::ListRow(index)) => {
-            if index < model.security.principals.len() {
-                model.security.selected = index;
-            }
-            if doubled {
-                open_security_change_preview(model)
-            } else {
-                Vec::new()
-            }
-        }
-        _ => Vec::new(),
-    }
-}
-
 fn mouse_diagnostics(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
         Some(HitTarget::Button(HitButton::Export)) if !model.diagnostics.writing => {
@@ -4233,12 +4247,29 @@ fn mouse_workbench(
     match hit {
         Some(HitTarget::ResultTab(index)) => update(model, Action::SelectResultTab { index }),
         Some(HitTarget::ResultsView(index)) => {
-            if let Some(view) = crate::model::ResultsView::ALL.get(index).copied() {
-                model.results.view = view;
-                scroll_results_view_to_start(model);
-            }
+            let table = model.active_document().kind.is_table();
             model.focus = Focus::Results;
+            if let Some(view) = crate::model::ResultsView::views(table).get(index).copied() {
+                model.results.view = view;
+                model.inspector.scroll = 0;
+                scroll_results_view_to_start(model);
+                return load_object_view(model);
+            }
             Vec::new()
+        }
+        // A role in the Privileges view: picked, and a grant previewed on a double click.
+        Some(HitTarget::ListRow(index))
+            if model.results.view == crate::model::ResultsView::Privileges =>
+        {
+            model.focus = Focus::Results;
+            if index < model.security.principals.len() {
+                model.security.selected = index;
+            }
+            if doubled {
+                open_security_change_preview(model)
+            } else {
+                Vec::new()
+            }
         }
         Some(HitTarget::DocumentTab(index)) => update(model, Action::SelectDocument { index }),
         Some(HitTarget::DocumentTabClose(index)) => {
@@ -4706,14 +4737,6 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if overlay == Some(OverlayKind::Security) {
-        if delta < 0 {
-            model.security.select_previous();
-        } else {
-            model.security.select_next();
-        }
-        return Vec::new();
-    }
     if overlay == Some(OverlayKind::Transfer) {
         model.transfer.scroll = if delta < 0 {
             model.transfer.scroll.saturating_sub(1)
@@ -4804,6 +4827,15 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             | HitTarget::GridHeader(_)
             | HitTarget::ResultTab(_),
         ) => {
+            if delta < 0 {
+                update(model, Action::ResultsUp)
+            } else {
+                update(model, Action::ResultsDown)
+            }
+        }
+        Some(HitTarget::ListRow(_))
+            if model.results.view == crate::model::ResultsView::Privileges =>
+        {
             if delta < 0 {
                 update(model, Action::ResultsUp)
             } else {
@@ -5329,6 +5361,28 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.try_index.is_some() {
         return try_index_key(model, key);
     }
+    // In the Structure view `n` writes the table's note, as it does in the inspector.
+    if model.effective_focus() == Focus::Results
+        && crate::mouse::top_overlay(model).is_none()
+        && model.results.view == crate::model::ResultsView::Structure
+        && model.inspector.object.is_some()
+        && key.code == KeyCode::Char('n')
+        && key.modifiers.is_empty()
+    {
+        model.inspector.open = true;
+        model.inspector.facet = crate::screens::object_inspector::InspectorFacet::Properties;
+        start_note_editor(model);
+        return Vec::new();
+    }
+    // In the Privileges view Enter previews a grant to the picked role.
+    if model.effective_focus() == Focus::Results
+        && crate::mouse::top_overlay(model).is_none()
+        && model.results.view == crate::model::ResultsView::Privileges
+        && key.code == KeyCode::Enter
+        && key.modifiers.is_empty()
+    {
+        return open_security_change_preview(model);
+    }
     // In the Explain view `i` tries an index; elsewhere in the results it inserts a row.
     if model.effective_focus() == Focus::Results
         && crate::mouse::top_overlay(model).is_none()
@@ -5362,24 +5416,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.schema_editor.preview.is_some() {
         return ddl_preview_key(model, key);
-    }
-    if model.security.open {
-        return match key.code {
-            KeyCode::Esc => {
-                model.security.open = false;
-                Vec::new()
-            }
-            KeyCode::Up => {
-                model.security.select_previous();
-                Vec::new()
-            }
-            KeyCode::Down => {
-                model.security.select_next();
-                Vec::new()
-            }
-            KeyCode::Enter => open_security_change_preview(model),
-            _ => Vec::new(),
-        };
     }
     if model.diagnostics.open {
         return match key.code {
@@ -6532,6 +6568,15 @@ fn scroll_output_view(model: &mut Model, delta: i32) {
             let last = model.messages.line_count().saturating_sub(rows) as i32;
             let next = i32::from(model.results.messages_scroll).saturating_add(delta);
             model.results.messages_scroll = next.clamp(0, last.max(0)) as u16;
+        }
+        crate::model::ResultsView::Structure
+        | crate::model::ResultsView::Ddl
+        | crate::model::ResultsView::Privileges => {
+            model.inspector.scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::Inspector,
+                model.inspector.scroll,
+                delta,
+            );
         }
         crate::model::ResultsView::Grid => {}
     }
@@ -11760,15 +11805,86 @@ pub(crate) fn new_schema_comparison(model: &mut Model) -> Vec<Effect> {
     vec![Effect::LoadSchemaSources]
 }
 
+/// Manage Grants: the Privileges view of the table's document -- the one picked in the
+/// explorer, or the one in front.
 fn open_security(model: &mut Model) -> Vec<Effect> {
-    model.security.open = true;
+    open_object_view(
+        model,
+        crate::model::ResultsView::Privileges,
+        None,
+        "Manage Grants is a table's: open one (o in the sidebar), then its Privileges.",
+    )
+}
+
+/// One of a table's own views. From the explorer on a table or view, its document opens
+/// on it; on a table's document, the view comes up; anywhere else, `facet` of the
+/// inspector dialog, which shows any object, or `refusal` when there is none.
+fn open_object_view(
+    model: &mut Model,
+    view: crate::model::ResultsView,
+    facet: Option<crate::screens::object_inspector::InspectorFacet>,
+    refusal: &str,
+) -> Vec<Effect> {
+    let on_table_node = model.effective_focus() == Focus::Explorer
+        && model
+            .explorer
+            .selected_node()
+            .is_some_and(|node| crate::screens::explorer::opens_table_data(&node.kind));
+    let mut effects = Vec::new();
+    if on_table_node {
+        effects = open_selected_table(model);
+        // The view is the new document's, whose results come in front now.
+        model.swap_results_to_active_document();
+    } else if !model.active_document().kind.is_table() || model.effective_focus() == Focus::Explorer
+    {
+        return match facet {
+            Some(facet) => open_inspector_facet(model, facet),
+            None => {
+                model.messages.warn(refusal.to_string());
+                Vec::new()
+            }
+        };
+    }
+    model.results.view = view;
+    model.inspector.scroll = 0;
+    model.focus = Focus::Results;
+    model.panes.results_visible = true;
+    effects.extend(load_object_view(model));
+    effects
+}
+
+/// A table's own view reads what it shows when it comes up: the table's metadata when
+/// the inspector holds another object's, and the privileges.
+fn load_object_view(model: &mut Model) -> Vec<Effect> {
+    use crate::model::ResultsView;
+    let crate::model::DocumentKind::Table(target) = &model.active_document().kind else {
+        return Vec::new();
+    };
+    let qualified = target.display_unquoted();
     let Some(session) = model.active_session else {
         return Vec::new();
     };
-    vec![Effect::LoadSecurity {
-        session,
-        generation: model.session_generation,
-    }]
+    match model.results.view {
+        ResultsView::Structure | ResultsView::Ddl
+            if model.inspector.qualified_name != qualified =>
+        {
+            let Some(id) = find_qualified(&model.explorer, &qualified) else {
+                return Vec::new();
+            };
+            model.inspector =
+                crate::screens::object_inspector::ObjectInspector::loading(&qualified);
+            vec![Effect::LoadObjectInspector {
+                id,
+                session,
+                generation: model.session_generation,
+            }]
+        }
+        ResultsView::Privileges => vec![Effect::LoadSecurity {
+            session,
+            generation: model.session_generation,
+        }],
+        _ => Vec::new(),
+    }
 }
 
 fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {

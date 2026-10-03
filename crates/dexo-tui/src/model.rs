@@ -761,6 +761,14 @@ pub struct ResultsState {
 pub enum ResultsView {
     #[default]
     Grid,
+    /// A table document's columns, keys, indexes, size and note: what Inspect showed in a
+    /// dialog over the grid.
+    Structure,
+    /// A table document's definition.
+    Ddl,
+    /// Who may do what on a table document's table, and a grant made from there: what
+    /// Manage Grants showed in a dialog.
+    Privileges,
     Explain,
     /// The log, which until now had no surface at all: a message got one toast and was
     /// then unreachable.
@@ -769,10 +777,32 @@ pub enum ResultsView {
 
 impl ResultsView {
     pub const ALL: [Self; 3] = [Self::Grid, Self::Explain, Self::Messages];
+    /// A table's document has its table's own views besides.
+    pub const TABLE: [Self; 6] = [
+        Self::Grid,
+        Self::Structure,
+        Self::Ddl,
+        Self::Privileges,
+        Self::Explain,
+        Self::Messages,
+    ];
+
+    /// The views a document's output pane offers.
+    pub fn views(table: bool) -> &'static [Self] {
+        if table { &Self::TABLE } else { &Self::ALL }
+    }
+
+    /// One of the table's own views, which show the table and not a result.
+    pub fn is_object(self) -> bool {
+        matches!(self, Self::Structure | Self::Ddl | Self::Privileges)
+    }
 
     pub fn label(self) -> &'static str {
         match self {
             Self::Grid => "Grid",
+            Self::Structure => "Structure",
+            Self::Ddl => "DDL",
+            Self::Privileges => "Privileges",
             Self::Explain => "Explain",
             Self::Messages => "Messages",
         }

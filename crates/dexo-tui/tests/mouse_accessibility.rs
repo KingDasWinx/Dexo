@@ -593,8 +593,7 @@ fn wheel_moves_schema_diff_selection() {
 
 #[test]
 fn wheel_moves_security_selection() {
-    let mut model = Model::default();
-    model.security.open = true;
+    let mut model = privileges_view();
     model.security.principals = vec!["reader".into(), "writer".into()];
     let (x, y) = (model.width / 2, model.height / 2);
 
@@ -647,8 +646,7 @@ fn wheel_keeps_schema_diff_and_security_selection_in_the_popup_viewport() {
         (0, 0)
     );
 
-    let mut security_model = Model::default();
-    security_model.security.open = true;
+    let mut security_model = privileges_view();
     security_model.security.principals = (0..30).map(|index| format!("role_{index}")).collect();
     let (x, y) = (security_model.width / 2, security_model.height / 2);
     for _ in 0..20 {
@@ -739,4 +737,14 @@ fn a_click_on_a_completion_row_accepts_it() {
         "{:?}",
         model.active_document().text()
     );
+}
+
+/// A table's document on its Privileges view, the Results pane in focus.
+fn privileges_view() -> Model {
+    let mut model = Model::default();
+    model.active_document_mut().kind =
+        dexo_tui::model::DocumentKind::Table(dexo_app::parse_qualified("local.public.orders"));
+    model.results.view = dexo_tui::model::ResultsView::Privileges;
+    model.focus = dexo_tui::Focus::Results;
+    model
 }

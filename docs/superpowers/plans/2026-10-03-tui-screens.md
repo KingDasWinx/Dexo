@@ -55,7 +55,7 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 
 ## 7. Object views
 
-- [ ] O1 Table document views Data / Structure / DDL / Privileges; Inspect opens Structure; Manage
+- [x] O1 Table document views Data / Structure / DDL / Privileges; Inspect opens Structure; Manage
       Grants becomes Privileges.
 
 ## 8. Finish

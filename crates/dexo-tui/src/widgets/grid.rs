@@ -104,6 +104,41 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 body,
             );
         }
+        ResultsView::Structure | ResultsView::Ddl | ResultsView::Privileges => {
+            let lines = crate::render::object_view_lines(model, model.results.view);
+            let max_scroll = lines.len().saturating_sub((body.height as usize).max(1));
+            hits.set_scroll_limit(crate::mouse::ScrollArea::Inspector, max_scroll);
+            // The picked role stays in sight as it moves.
+            let scroll = if model.results.view == ResultsView::Privileges {
+                crate::palette::scroll_to_selection(
+                    model.security.selected + crate::render::PRIVILEGE_ROLES_FROM,
+                    usize::from(model.inspector.scroll),
+                    lines.len(),
+                    usize::from(body.height).max(1),
+                )
+            } else {
+                usize::from(model.inspector.scroll)
+            }
+            .min(max_scroll);
+            // The roles of Privileges are rows to pick, a grant away.
+            if model.results.view == ResultsView::Privileges {
+                for index in 0..model.security.principals.len() {
+                    if let Some(row) = (index + crate::render::PRIVILEGE_ROLES_FROM)
+                        .checked_sub(scroll)
+                        .filter(|row| *row < usize::from(body.height))
+                    {
+                        hits.register(
+                            HitTarget::ListRow(index),
+                            crate::mouse::line_rect(body, row),
+                        );
+                    }
+                }
+            }
+            frame.render_widget(
+                Paragraph::new(lines.join("\n")).scroll((scroll as u16, 0)),
+                body,
+            );
+        }
         ResultsView::Grid if model.expanded_records && model.results.row_count() > 0 => {
             frame.render_widget(Paragraph::new(record_lines(model, body)), body);
         }
@@ -347,7 +382,8 @@ fn output_toolbar(model: &Model, hits: &mut HitMap, area: Rect) -> String {
         out.push_str(&text);
     };
 
-    for (index, view) in ResultsView::ALL.iter().enumerate() {
+    let table = model.active_document().kind.is_table();
+    for (index, view) in ResultsView::views(table).iter().enumerate() {
         // The count is how you know there is anything in there without switching.
         let label = match view {
             ResultsView::Messages if !model.messages.is_empty() => {

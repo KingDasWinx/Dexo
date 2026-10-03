@@ -321,17 +321,28 @@ fn schema_diff_command_starts_loading_instead_of_opening_empty_default() {
     assert!(model.schema_diff.entries.is_empty());
 }
 
+/// Manage Grants is the Privileges view of a table's document: with none in front,
+/// nothing is read and the person is told to open one.
 #[test]
-fn security_loads_and_closes_with_escape() {
+fn manage_grants_is_the_privileges_view_of_a_table() {
     let mut model = connected_model();
     let effects = choose_effects(&mut model, "schema.security");
-    assert!(model.security.open);
-    assert!(matches!(
-        effects.as_slice(),
-        [dexo_tui::Effect::LoadSecurity { .. }]
-    ));
-    press(&mut model, crossterm::event::KeyCode::Esc);
-    assert!(!model.security.open);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadSecurity { .. })),
+        "{effects:?}"
+    );
+    model.active_document_mut().kind =
+        dexo_tui::model::DocumentKind::Table(dexo_app::parse_qualified("local.public.orders"));
+    let effects = choose_effects(&mut model, "schema.security");
+    assert_eq!(model.results.view, dexo_tui::model::ResultsView::Privileges);
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, dexo_tui::Effect::LoadSecurity { .. })),
+        "{effects:?}"
+    );
 }
 
 #[test]
