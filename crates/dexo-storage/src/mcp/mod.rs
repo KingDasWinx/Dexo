@@ -245,6 +245,37 @@ mod tests {
         assert_eq!(listed[0].id, waiting.id);
     }
 
+    /// A request whose agent was killed is withdrawn, and the audit says so: its "waiting"
+    /// line was the last word on it for ever.
+    #[test]
+    fn a_request_whose_agent_went_silent_is_audited_as_withdrawn() {
+        use dexo_app::mcp::approval::Approval;
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        crate::migrations::apply_pending(&conn).unwrap();
+        let arguments = serde_json::json!({"sql": "DELETE FROM orders"})
+            .as_object()
+            .cloned()
+            .unwrap();
+        let waiting = Approval::pending(
+            "pg-dev",
+            "pg-dev",
+            "data_update",
+            &arguments,
+            vec!["public.orders".into()],
+            100,
+            600,
+        );
+        super::approval_repo::insert(&conn, &waiting).unwrap();
+        super::approval_repo::sweep(&conn, 200).unwrap();
+        let events = super::audit_repo::list(&conn).unwrap();
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].profile, "pg-dev");
+        assert!(events[0].status.starts_with("withdrawn"), "{:?}", events[0]);
+        // Swept again, it is not written twice.
+        super::approval_repo::sweep(&conn, 201).unwrap();
+        assert_eq!(super::audit_repo::list(&conn).unwrap().len(), 1);
+    }
+
     #[test]
     fn consume_is_transactional_one_use() {
         let conn = rusqlite::Connection::open_in_memory().unwrap();

@@ -89,11 +89,44 @@ pub fn sweep(conn: &Connection, now: i64) -> anyhow::Result<()> {
          WHERE decision = 'pending' AND deadline <= ?1",
         params![now],
     )?;
+    // A call that went silent was killed: its "waiting" line in the audit would otherwise
+    // stay the last word on it for ever, so the withdrawal is written down.
+    let silent: Vec<(String, String, String)> = {
+        let mut stmt = conn.prepare(
+            "SELECT profile_name, tool, targets_json FROM mcp_approvals
+             WHERE decision = 'pending' AND heartbeat < ?1 - ?2",
+        )?;
+        let rows = stmt.query_map(params![now, HEARTBEAT_GRACE_SECS], |row| {
+            Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        })?;
+        rows.collect::<Result<_, _>>()?
+    };
     conn.execute(
         "UPDATE mcp_approvals SET decision = 'cancelled', statement = ''
          WHERE decision = 'pending' AND heartbeat < ?1 - ?2",
         params![now, HEARTBEAT_GRACE_SECS],
     )?;
+    for (profile, tool, targets) in silent {
+        let targets: Vec<String> = serde_json::from_str(&targets).unwrap_or_default();
+        super::audit_repo::insert(
+            conn,
+            &dexo_app::mcp::AuditEvent {
+                timestamp: now,
+                request: format!("grant {tool}"),
+                operation_id: None,
+                profile,
+                client: "dexo".into(),
+                target: targets.join(", "),
+                decision: "deny".into(),
+                grant_id: None,
+                duration_ms: 0,
+                rows: 0,
+                bytes: 0,
+                status: "withdrawn: the agent stopped waiting".into(),
+                sql: None,
+            },
+        )?;
+    }
     conn.execute(
         "DELETE FROM mcp_approvals WHERE decision <> 'pending' AND deadline < ?1 - ?2",
         params![now, KEEP_SETTLED_SECS],
