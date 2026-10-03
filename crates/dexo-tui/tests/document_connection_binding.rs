@@ -411,3 +411,31 @@ fn a_read_only_connection_refuses_the_schema_tools_up_front() {
     update(&mut model, Action::ApplyRawDdl);
     assert!(!model.schema_editor.open);
 }
+
+/// A session keeps the settings it dialled with, so editing where a connection goes
+/// closes it instead of leaving it on the old database.
+#[test]
+fn editing_where_a_live_connection_goes_closes_its_session() {
+    let mut model = two_connections();
+    let mut edited = profile("alpha", 1);
+    edited.config = serde_json::json!({"host":"h","port":5432,"username":"u","database":"other"});
+    let effects = update(&mut model, Action::ProfileSaved(edited));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseSession { .. })),
+        "{effects:?}"
+    );
+    assert!(model.connections.session_for("alpha").is_none());
+    assert!(model.active_session.is_none());
+
+    let mut model = two_connections();
+    let renamed = profile("alpha", 1);
+    let effects = update(&mut model, Action::ProfileSaved(renamed));
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::CloseSession { .. })),
+        "an unchanged profile closed its session"
+    );
+}

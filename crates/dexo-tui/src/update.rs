@@ -629,8 +629,50 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.connection_form.close();
             }
             let was = previous_name.clone();
+            let mut disconnected = None;
+            let before = model
+                .connections
+                .profiles
+                .iter()
+                .find(|row| row.profile.id == profile.id)
+                .map(|row| row.profile.clone());
             if let Some(from) = previous_name.filter(|from| *from != profile.name) {
                 effects.extend(rename_sessions(model, &from, &profile.name));
+            }
+            // A session keeps the settings it dialled with: after an edit of where it
+            // connects, it is closed rather than left showing the old database.
+            if before.is_some_and(|old| {
+                (&old.driver, &old.config, &old.environment, &old.secret_ref)
+                    != (
+                        &profile.driver,
+                        &profile.config,
+                        &profile.environment,
+                        &profile.secret_ref,
+                    )
+            }) {
+                let stale: Vec<_> = model
+                    .connections
+                    .sessions
+                    .iter()
+                    .filter(|row| row.connection == profile.name)
+                    .map(|row| row.id)
+                    .collect();
+                if !stale.is_empty() {
+                    for session in stale {
+                        model.connections.remove_session(session);
+                        effects.push(Effect::CloseSession { session });
+                    }
+                    if model.connection.name == profile.name {
+                        model.active_session = None;
+                        model.connection.ready = false;
+                        model.explorer.offline = false;
+                        model.explorer.stale = false;
+                    }
+                    disconnected = Some(format!(
+                        "{} was disconnected because its settings changed; connect again to use them.",
+                        profile.name
+                    ));
+                }
             }
             model.connections.load_profiles(
                 model
@@ -664,6 +706,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     .select(crate::screens::explorer::connection_id(&profile.name));
             }
             model.messages.info(format!("saved {}", profile.name));
+            if let Some(notice) = disconnected {
+                model.messages.info(notice);
+            }
             effects
         }
         Action::ProfileDeleted { name } => {

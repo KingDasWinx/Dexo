@@ -188,7 +188,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-35** `MINOR` pg-readonly: Apply refuses only after the preview; the refusal leaves the preview open
 - [ ] **ES-36** `MINOR` There is no UI to alter a table (or create a view / routine / trigger / index): only the CREATE TABLE form is reachable
 - [=] SL-16 **ES-37** `MINOR` After resizing 100x12 back to 120x36 the explorer and results panes stay hidden
-- [ ] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
+- [x] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
 - [x] **ES-42** `MINOR` `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error
 - [=] PC-15 **ES-43** `MINOR` Explain error toasts are wider than the screen and are cut at the right edge
 - [ ] **ES-44** `MINOR` Explain: plan comparison says "now" without naming what it replaced; internal names leak into the node text
