@@ -191,7 +191,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-40** `MINOR` Editing a connected connection keeps the old session: `pg-b` (database changed to qa4b) kept showing `qa4` until Disconnect
 - [x] **ES-42** `MINOR` `:id` named parameter: F7 gives the server's `syntax error at or near ":"`; Analyze asks for confirmation first and then gives the same error
 - [=] PC-15 **ES-43** `MINOR` Explain error toasts are wider than the screen and are cut at the right edge
-- [ ] **ES-44** `MINOR` Explain: plan comparison says "now" without naming what it replaced; internal names leak into the node text
+- [x] **ES-44** `MINOR` Explain: plan comparison says "now" without naming what it replaced; internal names leak into the node text
 - [x] **ES-45** `MINOR` Try an index: the dialog is offered everywhere and only refuses after you type the index
 - [x] **ES-46** `MINOR` Manage Grants panel is transparent and empty on MySQL; unsupported tools are offered in the menu of SQLite / DuckDB
 - [x] **ES-47** `MINOR` Tree keys: Home, End, PageUp, PageDown do nothing; Show Favorites Only is empty after a restart until the tree is expanded

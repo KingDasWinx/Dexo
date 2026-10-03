@@ -20,6 +20,8 @@ pub enum NodeDelta {
         kind: String,
         relation: Option<String>,
         field: String,
+        /// What the node was before, for a node that became another: `Seq Scan on orders`.
+        was: Option<String>,
     },
 }
 
@@ -393,9 +395,13 @@ pub fn describe_delta(delta: &NodeDelta) -> String {
             kind,
             relation,
             field,
+            was,
             ..
         } => match field.as_str() {
-            "kind/relation" => format!("now      {}", named(kind, relation)),
+            "kind/relation" => match was {
+                Some(was) => format!("now      {} (was {was})", named(kind, relation)),
+                None => format!("now      {}", named(kind, relation)),
+            },
             "estimates.rows" => format!("estimate {}: row estimate changed", named(kind, relation)),
             _ => format!("rows     {}: actual rows changed", named(kind, relation)),
         },
@@ -544,6 +550,10 @@ pub fn compare_plans(before: &ExplainPlan, after: &ExplainPlan) -> Vec<NodeDelta
                         kind: other.kind.clone(),
                         relation: other.relation.clone(),
                         field: "kind/relation".into(),
+                        was: Some(match &node.relation {
+                            Some(relation) => format!("{} on {relation}", node.kind),
+                            None => node.kind.clone(),
+                        }),
                     });
                 } else if both(other.estimates.rows, node.estimates.rows) {
                     deltas.push(NodeDelta::Changed {
@@ -551,6 +561,7 @@ pub fn compare_plans(before: &ExplainPlan, after: &ExplainPlan) -> Vec<NodeDelta
                         kind: node.kind.clone(),
                         relation: node.relation.clone(),
                         field: "estimates.rows".into(),
+                        was: None,
                     });
                 } else if both(other.actual.rows, node.actual.rows) {
                     deltas.push(NodeDelta::Changed {
@@ -558,6 +569,7 @@ pub fn compare_plans(before: &ExplainPlan, after: &ExplainPlan) -> Vec<NodeDelta
                         kind: node.kind.clone(),
                         relation: node.relation.clone(),
                         field: "actual.rows".into(),
+                        was: None,
                     });
                 }
             }
@@ -730,6 +742,12 @@ mod tests {
             delta,
             NodeDelta::Changed { path, field, .. } if path == "0" && field == "kind/relation"
         )));
+        let said: Vec<String> = deltas.iter().map(super::describe_delta).collect();
+        assert!(
+            said.iter()
+                .any(|line| line.contains("(was Seq Scan on items)")),
+            "{said:?}"
+        );
         assert!(deltas.iter().any(|delta| matches!(
             delta,
             NodeDelta::Added { path, kind, relation } if path == "0.0" && kind == "Index Scan" && relation.as_deref() == Some("idx_items")

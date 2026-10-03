@@ -36,6 +36,9 @@ pub struct ExplainScreen {
     /// The last plan of `sql` made without them: what a tried index is compared with,
     /// however many are tried.
     pub baseline: Option<ExplainPlan>,
+    /// Whether `plan` was set against an earlier one: with no difference listed, that is
+    /// "the same plan", not "nothing was compared".
+    pub compared: bool,
 }
 
 impl Default for ExplainScreen {
@@ -47,6 +50,7 @@ impl Default for ExplainScreen {
             sql: String::new(),
             indexes: Vec::new(),
             baseline: None,
+            compared: false,
         }
     }
 }
@@ -126,6 +130,13 @@ impl ExplainScreen {
                         if count == 1 { "change" } else { "changes" }
                     ));
                 }
+                if self.compared && self.compare.is_empty() {
+                    headline.push_str(if self.indexes.is_empty() {
+                        " · same plan as the last one"
+                    } else {
+                        " · the plan does not change with it"
+                    });
+                }
                 let rows: Vec<&PlanRow> = view.rows.iter().collect();
                 columns(
                     &headline,
@@ -181,6 +192,7 @@ impl ExplainScreen {
         } else {
             self.baseline.as_ref()
         };
+        self.compared = against.is_some();
         self.compare = against
             .map(|previous| compare_plans(previous, &plan))
             .unwrap_or_default();
@@ -198,6 +210,7 @@ impl ExplainScreen {
         self.sql.clear();
         self.indexes.clear();
         self.baseline = None;
+        self.compared = false;
     }
 }
 

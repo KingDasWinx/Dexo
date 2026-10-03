@@ -263,7 +263,7 @@ fn plan_node(name: &str, info: &[(String, String)], native: Value) -> PlanNode {
                         | "__projections__"
                 )
         })
-        .map(|(key, value)| format!("{key}: {}", value.replace('\n', ", ")))
+        .map(|(key, value)| format!("{}: {}", readable_key(key), value.replace('\n', ", ")))
         .collect::<Vec<_>>()
         .join("; ");
     PlanNode {
@@ -279,6 +279,19 @@ fn plan_node(name: &str, info: &[(String, String)], native: Value) -> PlanNode {
         children: Vec::new(),
         native,
     }
+}
+
+/// `__expression__` is DuckDB's own key for a filter's condition: said as `Expression`.
+fn readable_key(key: &str) -> String {
+    let inner = key.trim_matches('_');
+    if inner.len() == key.len() {
+        return key.to_string();
+    }
+    let mut words = inner.replace('_', " ");
+    if let Some(first) = words.get(..1) {
+        words = first.to_uppercase() + &words[1..];
+    }
+    words
 }
 
 /// DuckDB prints a profiled operator's extra info as `{Key=value, 'Key (s)'='a, b'}`, a
@@ -345,6 +358,12 @@ mod tests {
     use serde_json::json;
 
     use super::{estimated_node, parse_map};
+
+    #[test]
+    fn internal_keys_read_as_words() {
+        assert_eq!(super::readable_key("__expression__"), "Expression");
+        assert_eq!(super::readable_key("Join Type"), "Join Type");
+    }
 
     #[test]
     fn profiled_extra_info_reads_as_pairs() {
