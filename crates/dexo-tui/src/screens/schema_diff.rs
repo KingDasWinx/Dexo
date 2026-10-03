@@ -106,6 +106,12 @@ pub struct SchemaDiffScreen {
     pub scroll: u16,
     /// A result is there, under the sources being picked again.
     pub compared: bool,
+    /// The sources the result shown was compared from: the toolbar goes back to them
+    /// when other picks are given up.
+    pub compared_pick: [usize; 2],
+    /// A comparison asked for and not answered yet: its sources, and the connection its
+    /// script would be for. The result shown keeps its own until the answer comes.
+    pub requested: Option<([usize; 2], Option<String>)>,
 }
 
 impl Default for SchemaDiffScreen {
@@ -132,6 +138,8 @@ impl Default for SchemaDiffScreen {
             whole_script: false,
             scroll: 0,
             compared: false,
+            compared_pick: [0, 0],
+            requested: None,
         }
     }
 }
@@ -289,19 +297,31 @@ impl SchemaDiffScreen {
     }
 
     /// From and To exchanged.
+    /// From and To exchanged among the picks; the result shown stays what it was until
+    /// it is compared again.
     pub fn swap(&mut self) {
         self.pick.swap(0, 1);
-        std::mem::swap(&mut self.from_label, &mut self.to_label);
         self.error = None;
+    }
+
+    /// The picks the result shown came from, back after other ones were given up.
+    pub fn restore_picks(&mut self) {
+        if self.compared {
+            self.pick = self.compared_pick;
+        }
     }
 
     /// The result of comparing, over the sources it came from: they stay to be looked at,
     /// swapped, or compared again.
     pub fn with_sources(mut self, sources: Self) -> Self {
+        let (pick, from_connection) = sources
+            .requested
+            .unwrap_or((sources.pick, sources.from_connection));
         self.options = sources.options;
-        self.pick = sources.pick;
+        self.pick = pick;
+        self.compared_pick = pick;
         self.file = sources.file;
-        self.from_connection = sources.from_connection;
+        self.from_connection = from_connection;
         self
     }
 
@@ -488,6 +508,7 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         return Some(match footer_key(&mut model.schema_diff.footer, &key) {
             // Cancel goes back to the result there is, else leaves the screen.
             FooterKey::Cancel if model.schema_diff.compared => {
+                model.schema_diff.restore_picks();
                 model.schema_diff.source_prompt = false;
                 model.schema_diff.footer = FooterFocus::Input;
                 Vec::new()
@@ -601,10 +622,11 @@ pub fn request(model: &mut Model) -> Vec<Effect> {
     });
     model.schema_diff.loading = true;
     model.schema_diff.error = None;
-    model.schema_diff.from_connection = match &left {
+    let from_connection = match &left {
         DiffSide::Live { name, .. } => Some(name.clone()),
         _ => None,
     };
+    model.schema_diff.requested = Some((model.schema_diff.pick, from_connection));
     vec![Effect::LoadSchemaDiff {
         left,
         right,

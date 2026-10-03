@@ -34,6 +34,7 @@ fn compared() -> Model {
         script: "CREATE TABLE public.invoices ();\n".into(),
         options: vec![live("pg-dev", 1), live("pg-prod", 2)],
         pick: [0, 1],
+        compared_pick: [0, 1],
         compared: true,
         ..SchemaDiffScreen::default()
     };
@@ -148,4 +149,41 @@ fn e_compares_while_the_sources_are_picked() {
             .any(|effect| matches!(effect, Effect::LoadSchemaDiff { .. })),
         "{effects:?}"
     );
+}
+
+/// Swapped and being compared again, the result shown is still the old one: its script
+/// cannot be opened as the new one's, and its labels are its own.
+#[test]
+fn a_swap_leaves_the_result_shown_its_own_until_the_new_one_comes() {
+    let mut model = compared();
+    model.schema_diff.from_connection = Some("pg-dev".into());
+    press(&mut model, KeyCode::Char('s'));
+    assert!(model.schema_diff.loading);
+    assert_eq!(model.schema_diff.from_label, "pg-dev");
+    assert_eq!(model.schema_diff.from_connection.as_deref(), Some("pg-dev"));
+    let documents = model.documents.len();
+    press(&mut model, KeyCode::Enter);
+    assert_eq!(model.documents.len(), documents, "the old script opened");
+    assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
+    // It failed: the toolbar is back on the sources the result came from.
+    update(
+        &mut model,
+        Action::SchemaDiffFailed {
+            message: "gone".into(),
+        },
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("From ‹ pg-dev › ⇄  To ‹ pg-prod ›"), "{frame}");
+}
+
+/// Picks changed and given up go back to the result's.
+#[test]
+fn picks_given_up_go_back_to_the_results() {
+    let mut model = compared();
+    press(&mut model, KeyCode::Char('p'));
+    press(&mut model, KeyCode::Char('s'));
+    press(&mut model, KeyCode::Esc);
+    assert!(!model.schema_diff.source_prompt);
+    let frame = paint(&mut model);
+    assert!(frame.contains("From ‹ pg-dev › ⇄  To ‹ pg-prod ›"), "{frame}");
 }

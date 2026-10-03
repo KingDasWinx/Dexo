@@ -1842,8 +1842,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::SchemaDiffFailed { message } => {
-            model.schema_diff.loading = false;
-            model.schema_diff.error = Some(message);
+            let diff = &mut model.schema_diff;
+            diff.loading = false;
+            diff.requested = None;
+            diff.error = Some(message);
+            // Over a result, the toolbar goes back to the sources it came from.
+            if !diff.source_prompt {
+                diff.restore_picks();
+            }
             Vec::new()
         }
         Action::SecurityLoaded { principals, grants } => {

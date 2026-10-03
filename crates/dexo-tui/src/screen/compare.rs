@@ -173,9 +173,24 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     if diff.source_prompt || diff.filtered().is_empty() {
         return Vec::new();
     }
-    vec![
+    // Being compared again, the result shown is about to go: nothing is taken from it.
+    let reading = "Both schemas are being read again.";
+    let open = if diff.loading {
+        Button::new(KeyCode::Enter, "Open script").disabled(reading)
+    } else {
         Button::new(KeyCode::Enter, "Open script")
-            .enabled_if(!diff.script.is_empty(), "There is no script to open."),
+            .enabled_if(!diff.script.is_empty(), "There is no script to open.")
+    };
+    let copy = if diff.loading {
+        Button::new(KeyCode::Char('y'), "Copy").disabled(reading)
+    } else {
+        Button::new(KeyCode::Char('y'), "Copy").enabled_if(
+            !diff.shown_sql().trim().is_empty(),
+            "This difference has no statement to copy.",
+        )
+    };
+    vec![
+        open,
         Button::new(
             KeyCode::Char('w'),
             if diff.whole_script {
@@ -184,10 +199,7 @@ pub fn buttons(model: &Model) -> Vec<Button> {
                 "Whole script"
             },
         ),
-        Button::new(KeyCode::Char('y'), "Copy").enabled_if(
-            !diff.shown_sql().trim().is_empty(),
-            "This difference has no statement to copy.",
-        ),
+        copy,
     ]
 }
 
