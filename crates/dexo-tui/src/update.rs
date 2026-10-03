@@ -2576,6 +2576,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 doc.title = title;
                 doc.path = Some(path.clone());
                 doc.saved_revision = doc.sql.revision();
+                // The text starts over at revision 0, as the empty tab painted before it
+                // did: that paint passed for this text, and the SQL showed uncoloured
+                // until it was edited.
+                model.editor.repaint(&document);
             }
             touch_recent_sql_file(model, &path)
         }

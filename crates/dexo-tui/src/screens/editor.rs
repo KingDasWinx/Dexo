@@ -2031,6 +2031,18 @@ fn cursor_at(text: &str, line: usize, col: usize) -> usize {
 }
 
 impl EditorState {
+    /// `document`'s text was replaced whole, its revision starting over: what was
+    /// painted for it is not for this text.
+    pub fn repaint(&mut self, document: &str) {
+        if self
+            .painted
+            .as_ref()
+            .is_some_and(|(painted, _)| painted == document)
+        {
+            self.painted = None;
+        }
+    }
+
     /// The history the search leaves, newest first; no search leaves all of it.
     pub fn history_matches(&self) -> Vec<&dexo_storage::HistoryRow> {
         let needle = self.history_search.as_str().trim().to_lowercase();
