@@ -148,3 +148,74 @@ fn a_failed_read_marks_only_the_connection_that_failed() {
         NodeState::Error { .. }
     ));
 }
+
+/// `public` read on both, with one table each.
+fn both_with_public_read() -> Model {
+    let mut model = both_with_public();
+    for (name, table) in [("alpha", "a"), ("beta", "b")] {
+        model.explorer.apply_connection_children(
+            name,
+            &public(),
+            CatalogList {
+                objects: vec![object(
+                    &ObjectId::new(format!("pg:table:public.{table}")),
+                    ObjectKind::Table,
+                    table,
+                    public(),
+                )],
+                restrictions: Vec::new(),
+            },
+        );
+    }
+    model
+}
+
+fn applied(model: &mut Model) -> Vec<dexo_tui::Effect> {
+    update(
+        model,
+        Action::SchemaApplied {
+            message: "created".into(),
+            refresh: Some(QualifiedName::new(None::<String>, Some("public"), "t")),
+            ok: true,
+        },
+    )
+}
+
+/// A change made through the schema form reads its schema again, on the connection it
+/// was made on: the tree showed the table only after `r`.
+#[test]
+fn a_schema_change_reads_its_schema_again() {
+    let mut model = both_with_public_read();
+
+    let effects = applied(&mut model);
+
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::LoadCatalogChildren { parent: Some(parent), session: asked, .. }
+                if *parent == public() && *asked == session(1)
+        )),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn a_schema_change_on_one_connection_leaves_the_others_tree_alone() {
+    let mut model = both_with_public_read();
+    // `beta` in use, `alpha` listed first.
+    model.connection.name = "beta".into();
+    model.active_session = Some(session(2));
+    let before = public_of(&model, "alpha").clone();
+
+    let effects = applied(&mut model);
+
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            dexo_tui::Effect::LoadCatalogChildren { parent: Some(parent), session: asked, .. }
+                if *parent == public() && *asked == session(2)
+        )),
+        "{effects:?}"
+    );
+    assert_eq!(public_of(&model, "alpha"), &before);
+}

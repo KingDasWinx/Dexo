@@ -10580,23 +10580,20 @@ fn refresh_after_schema_change(
     model: &mut Model,
     target: &dexo_driver_api::QualifiedName,
 ) -> Vec<Effect> {
-    let Some(session) = model.active_session else {
-        return Vec::new();
-    };
     let wanted = target.schema().or(target.catalog()).map(str::to_string);
     let Some(wanted) = wanted else {
         return Vec::new();
     };
-    let id = model.explorer.find_container(&wanted);
-    let Some(id) = id else {
+    // In the tree of the connection the change was made on, and read again even when it
+    // was read before: expanding an open schema read nothing, and another connection's
+    // schema of the same name was the one found.
+    let Some(id) = model
+        .explorer
+        .find_container(&model.connection.name, &wanted)
+    else {
         return Vec::new();
     };
-    let operation = crate::runtime::OperationId::new();
-    if model.explorer.expand_with(&id, operation) {
-        let _ = session;
-        return catalog_load_effect(model, Some(id), operation, false);
-    }
-    Vec::new()
+    catalog_load_effect(model, Some(id), crate::runtime::OperationId::new(), false)
 }
 
 fn apply_ddl(model: &mut Model) -> Vec<Effect> {

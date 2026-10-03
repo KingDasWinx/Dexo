@@ -672,7 +672,7 @@ impl ExplorerState {
     /// the cursor falls back to row 0.
     /// The schema (or, where a database has none, the catalog) named `name`, to read again
     /// after something was created in it.
-    pub fn find_container(&self, name: &str) -> Option<ObjectId> {
+    pub fn find_container(&self, connection: &str, name: &str) -> Option<ObjectId> {
         fn walk(nodes: &[ExplorerNode], name: &str, kind: &ObjectKind) -> Option<ObjectId> {
             for node in nodes {
                 if node.kind == *kind && node.label.eq_ignore_ascii_case(name) {
@@ -684,8 +684,8 @@ impl ExplorerState {
             }
             None
         }
-        walk(&self.roots, name, &ObjectKind::Schema)
-            .or_else(|| walk(&self.roots, name, &ObjectKind::Catalog))
+        let tree = self.tree(connection);
+        walk(tree, name, &ObjectKind::Schema).or_else(|| walk(tree, name, &ObjectKind::Catalog))
     }
 
     pub fn reveal(&mut self, id: &ObjectId) -> bool {
@@ -720,6 +720,18 @@ impl ExplorerState {
     ) {
         self.touch();
         Self::apply_in(Self::tree_of(&mut self.roots, connection), parent, page);
+    }
+
+    /// `connection`'s tree, or every root when it lists no such connection.
+    pub fn tree(&self, connection: &str) -> &[ExplorerNode] {
+        match self
+            .roots
+            .iter()
+            .position(|root| connection_name(&root.id) == Some(connection))
+        {
+            Some(index) => std::slice::from_ref(&self.roots[index]),
+            None => &self.roots,
+        }
     }
 
     /// `connection`'s tree, or every root when it lists no such connection.
