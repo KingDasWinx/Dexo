@@ -380,3 +380,107 @@ fn new_starts_on_the_name_with_the_url_above() {
     let focused = &model.connection_form.fields[model.connection_form.focus];
     assert_eq!(focused.label, "url");
 }
+
+fn pick(model: &mut Model, name: &str) {
+    model.connections.pick_end(false);
+    while picked(model).as_deref() != Some(name) {
+        press(model, KeyCode::Down);
+    }
+}
+
+fn profile_id(model: &Model, name: &str) -> String {
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.name == name)
+        .map(|row| row.profile.id.0.to_string())
+        .unwrap()
+}
+
+#[test]
+fn new_sql_opens_a_document_on_the_connection_dialling_it_if_need_be() {
+    let mut model = four_connections();
+    pick(&mut model, "pg-prod");
+    let effects = press(&mut model, KeyCode::Char('s'));
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
+    assert_eq!(
+        model.active_document().connection_id,
+        Some(profile_id(&model, "pg-prod"))
+    );
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::ConnectProfile { profile, .. } if profile.name == "pg-prod")),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn copy_url_leaves_the_password_out() {
+    let mut model = four_connections();
+    pick(&mut model, "pg-dev");
+    let effects = press(&mut model, KeyCode::Char('y'));
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::CopyToClipboard { text } if text == "postgres://dexo@127.0.0.1:5432/qa0"
+        )),
+        "{effects:?}"
+    );
+}
+
+#[test]
+fn browse_goes_to_the_explorer_on_the_connection() {
+    let mut model = four_connections();
+    pick(&mut model, "pg-prod");
+    press(&mut model, KeyCode::Char('b'));
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
+    assert_eq!(model.explorer.selected_connection_name(), Some("pg-prod"));
+}
+
+#[test]
+fn a_test_shows_in_the_detail_as_it_runs_and_when_it_ends() {
+    let mut model = four_connections();
+    pick(&mut model, "pg-prod");
+    let effects = press(&mut model, KeyCode::Char('t'));
+    assert!(
+        effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::TestSavedProfile { .. }))
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("── Last test"), "{frame}");
+    assert!(frame.contains("testing"), "{frame}");
+    update(
+        &mut model,
+        Action::ConnectionTested {
+            name: "pg-prod".into(),
+            ok: false,
+            message: "connection refused".into(),
+        },
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("✗ connection refused"), "{frame}");
+    // Another connection picked, the line goes.
+    press(&mut model, KeyCode::Up);
+    let frame = paint(&mut model);
+    assert!(!frame.contains("── Last test"), "{frame}");
+}
+
+#[test]
+fn the_buttons_follow_the_connections_state() {
+    let mut model = four_connections();
+    pick(&mut model, "pg-prod");
+    let frame = paint(&mut model);
+    for button in ["[⏎ Connect]", "[s New SQL]", "[b Browse]", "[y Copy URL]"] {
+        assert!(frame.contains(button), "{button}: {frame}");
+    }
+    pick(&mut model, "pg-dev");
+    let frame = paint(&mut model);
+    assert!(frame.contains("[⏎ Use]"), "{frame}");
+    model.active_session = Some(SessionId(uuid::Uuid::from_u128(1)));
+    let frame = paint(&mut model);
+    assert!(frame.contains("[⏎ Open SQL]"), "{frame}");
+    assert!(!frame.contains("[s New SQL]"), "{frame}");
+}

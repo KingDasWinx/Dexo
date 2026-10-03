@@ -760,7 +760,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::ConnectionTested { name, ok, message } => {
-            // A test run from the form answers in the form, where the user is looking.
+            // A test run from the form answers in the form, where the user is looking;
+            // one run from the screen, in the tested connection's fields.
             if model.connection_form.open {
                 if ok {
                     model
@@ -769,10 +770,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 } else {
                     model.connection_form.set_error(message);
                 }
-            } else if ok {
-                model.messages.info(format!("{name} ok"));
-            } else {
-                model.messages.error(format!("{name}: {message}"));
+            } else if !model.connections.tested(&name, ok, &message) {
+                if ok {
+                    model.messages.info(format!("{name} ok"));
+                } else {
+                    model.messages.error(format!("{name}: {message}"));
+                }
             }
             Vec::new()
         }
@@ -6414,7 +6417,12 @@ fn connections_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         return None;
     }
     let on_row = screen.picked().is_some() || screen.picked_docker().is_some();
+    let on_connection = screen.picked().is_some();
     let on_group = screen.picked_group.is_some();
+    let in_use = screen
+        .picked()
+        .and_then(|profile| screen.session_for(&profile.name))
+        .is_some_and(|session| model.active_session == Some(session.id));
     Some(match key.code {
         // The search goes first, then the filters, then the screen. With nothing shown,
         // both at once: that is the Clear filters button under the empty list.
@@ -6485,19 +6493,89 @@ fn connections_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             Vec::new()
         }
         // The rest act on a connection: on a heading, or with nothing shown, on none.
-        KeyCode::Enter | KeyCode::Char('e' | 'd' | 't' | 'x' | 'c') | KeyCode::Delete
-            if !on_row =>
+        KeyCode::Enter if !on_row => Vec::new(),
+        KeyCode::Char('e' | 'd' | 't' | 'x' | 'c' | 's' | 'b' | 'y') | KeyCode::Delete
+            if !on_connection =>
         {
             Vec::new()
         }
+        KeyCode::Enter if in_use => new_sql_on_picked(model),
         KeyCode::Enter => choose_connection_intent(model),
+        KeyCode::Char('s') => new_sql_on_picked(model),
+        KeyCode::Char('b') => browse_picked(model),
+        KeyCode::Char('y') => {
+            let profile = model.connections.picked().cloned();
+            match profile
+                .as_ref()
+                .and_then(crate::screens::connections::url_of)
+            {
+                Some(text) => {
+                    model.messages.info(format!(
+                        "Copied the URL of {}, without its password.",
+                        profile.map(|profile| profile.name).unwrap_or_default()
+                    ));
+                    vec![Effect::CopyToClipboard { text }]
+                }
+                None => Vec::new(),
+            }
+        }
+        KeyCode::Char('t') => {
+            if let Some(profile) = model.connections.picked() {
+                model.connections.test = Some((
+                    profile.id,
+                    crate::screens::connections::TestLine::Running(std::time::Instant::now()),
+                ));
+            }
+            update(model, Action::TestConnection)
+        }
         KeyCode::Char('e') => update(model, Action::EditSelectedConnection),
         KeyCode::Char('d') => update(model, Action::DuplicateConnection),
-        KeyCode::Char('t') => update(model, Action::TestConnection),
         KeyCode::Char('x') | KeyCode::Delete => update(model, Action::DeleteConnection),
         KeyCode::Char('c') => update(model, Action::CloseSelectedSession),
         _ => return None,
     })
+}
+
+/// A new SQL document on the picked connection, on the workbench: the connection is
+/// dialled, or made the one in use, as the document becomes the active one.
+fn new_sql_on_picked(model: &mut Model) -> Vec<Effect> {
+    let Some(profile) = model.connections.picked().cloned() else {
+        return Vec::new();
+    };
+    let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
+    let name = suggested_document_name(model);
+    model
+        .documents
+        .push(crate::model::EditorDocument::new_unique(
+            name,
+            None,
+            Some(profile.id.0.to_string()),
+        ));
+    let index = model.documents.len() - 1;
+    model.active_document = index;
+    model.focus_active_document_tab();
+    model.focus = Focus::Editor;
+    effects.extend(activate_document(model, index));
+    effects
+}
+
+/// The workbench, with the explorer on the picked connection.
+fn browse_picked(model: &mut Model) -> Vec<Effect> {
+    let Some(name) = model
+        .connections
+        .picked()
+        .map(|profile| profile.name.clone())
+    else {
+        return Vec::new();
+    };
+    let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
+    sync_explorer_connections(model);
+    model
+        .explorer
+        .select(crate::screens::explorer::connection_id(&name));
+    effects.extend(focus_pane(model, FocusTarget::Explorer));
+    model.explorer.sync_scroll(explorer_visible_rows(model));
+    effects
 }
 
 fn submit_secret(

@@ -1,4 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{Duration, Instant};
 
 use dexo_app::{ConnectionProfile, Environment};
 use dexo_driver_api::TransactionState;
@@ -62,6 +63,16 @@ pub struct ConnectionsScreen {
     pub folded: BTreeSet<String>,
     /// The group heading the pick is on, rather than a row.
     pub picked_group: Option<String>,
+    /// The last test of a connection, shown under its fields until another is picked.
+    pub test: Option<(dexo_app::ConnectionId, TestLine)>,
+}
+
+/// A connection's test: running since when, or how it ended.
+#[derive(Clone, Debug, PartialEq)]
+pub enum TestLine {
+    Running(Instant),
+    Passed(Duration),
+    Failed(String),
 }
 
 /// One row of the list a pick can be on.
@@ -393,6 +404,20 @@ impl ConnectionsScreen {
             rows.push(FieldRow::Section("Rules"));
             rows.extend(rules);
         }
+        if let Some((_, line)) = self.test.as_ref().filter(|(id, _)| *id == profile.id) {
+            rows.push(FieldRow::Section("Last test"));
+            rows.push(match line {
+                TestLine::Running(started) => FieldRow::Styled(
+                    Role::Muted,
+                    format!("… testing ({}s)", started.elapsed().as_secs()),
+                ),
+                TestLine::Passed(took) => FieldRow::Styled(
+                    Role::Success,
+                    format!("✓ reachable in {} ms", took.as_millis()),
+                ),
+                TestLine::Failed(message) => FieldRow::Styled(Role::Error, format!("✗ {message}")),
+            });
+        }
         if let Some(session) = self.session_for(&profile.name) {
             rows.push(FieldRow::Section("Session"));
             rows.push(FieldRow::Field(
@@ -526,15 +551,54 @@ impl ConnectionsScreen {
 
     fn pick_item(&mut self, item: &Item) {
         match item {
-            Item::Group { name, .. } => self.picked_group = Some(name.clone()),
+            Item::Group { name, .. } => {
+                self.picked_group = Some(name.clone());
+                self.test = None;
+            }
             Item::Row(index) => self.pick(*index),
         }
     }
 
-    /// The pick on row `index` of the saved connections and the Docker ones.
+    /// The pick on row `index` of the saved connections and the Docker ones. A test's
+    /// line goes with the connection it was about.
     pub fn pick(&mut self, index: usize) {
+        let id = self.profiles.get(index).map(|row| row.profile.id);
+        if self
+            .test
+            .as_ref()
+            .is_some_and(|(tested, _)| Some(*tested) != id)
+        {
+            self.test = None;
+        }
         self.picked_group = None;
         self.selected_profile = index;
+    }
+
+    /// Whether a test is running, for the clock that redraws it.
+    pub fn testing(&self) -> bool {
+        matches!(self.test, Some((_, TestLine::Running(_))))
+    }
+
+    /// The end of the running test of the connection called `name`; false when no line
+    /// waits for it.
+    pub fn tested(&mut self, name: &str, ok: bool, message: &str) -> bool {
+        let Some((id, TestLine::Running(started))) = &self.test else {
+            return false;
+        };
+        if !self
+            .profiles
+            .iter()
+            .any(|row| row.profile.id == *id && row.profile.name == name)
+        {
+            return false;
+        }
+        let line = if ok {
+            TestLine::Passed(started.elapsed())
+        } else {
+            TestLine::Failed(message.to_string())
+        };
+        self.test = Some((*id, line));
+        true
     }
 
     /// Moves the pick `delta` rows of the list, staying in it.
@@ -724,6 +788,64 @@ pub fn address(config: &serde_json::Value) -> String {
     address
 }
 
+/// A connection as a URL, without its password: what `dexo <url>` and the form's URL
+/// field read back. None for a driver that has no URL form.
+pub fn url_of(profile: &ConnectionProfile) -> Option<String> {
+    let config = &profile.config;
+    let scheme = match profile.driver.as_str() {
+        scheme @ ("postgres" | "mysql" | "mariadb" | "sqlite" | "duckdb") => scheme,
+        _ => return None,
+    };
+    if matches!(scheme, "sqlite" | "duckdb") {
+        let path = config_text(config, "path");
+        if path.is_empty() {
+            return None;
+        }
+        let mut url = format!("{scheme}://{}", encode(&path, "/"));
+        if profile.policy.read_only == Some(true) {
+            url.push_str("?mode=ro");
+        }
+        return Some(url);
+    }
+    let mut url = format!(
+        "{scheme}://{}@{}",
+        encode(&config_text(config, "username"), ""),
+        config_text(config, "host")
+    );
+    let port = config_text(config, "port");
+    if !port.is_empty() {
+        url.push(':');
+        url.push_str(&port);
+    }
+    url.push('/');
+    url.push_str(&encode(&config_text(config, "database"), ""));
+    if let Some(mode) = config
+        .get("tls")
+        .and_then(|tls| tls.get("mode"))
+        .and_then(serde_json::Value::as_str)
+    {
+        url.push_str("?sslmode=");
+        url.push_str(mode);
+    }
+    Some(url)
+}
+
+/// `text` percent-encoded, but for letters, digits, `-._~` and the characters in `keep`.
+fn encode(text: &str, keep: &str) -> String {
+    let mut encoded = String::new();
+    for byte in text.bytes() {
+        if byte.is_ascii_alphanumeric()
+            || b"-._~".contains(&byte)
+            || keep.as_bytes().contains(&byte)
+        {
+            encoded.push(char::from(byte));
+        } else {
+            encoded.push_str(&format!("%{byte:02X}"));
+        }
+    }
+    encoded
+}
+
 /// A config value as text, a number included; empty when unset.
 fn config_text(config: &serde_json::Value, key: &str) -> String {
     config
@@ -797,6 +919,32 @@ mod tests {
         let cells = screen.cells(0, Some(screen.sessions[0].id)).unwrap();
         assert_eq!(cells.state, super::State::InUse);
         assert_eq!((cells.name.as_str(), cells.env.as_str()), ("prod", "local"));
+    }
+
+    #[test]
+    fn a_url_reads_back_as_the_connection_it_was_copied_from() {
+        let mut row = profile("shop");
+        row.config = serde_json::json!({
+            "host": "db.local", "port": 5433, "username": "ana b", "database": "shop/main",
+            "tls": {"mode": "verify_full"}
+        });
+        let url = super::url_of(&row).unwrap();
+        assert_eq!(
+            url,
+            "postgres://ana%20b@db.local:5433/shop%2Fmain?sslmode=verify_full"
+        );
+        let parsed = dexo_app::connection_url::parse(&url).unwrap();
+        assert_eq!(parsed.profile.config["username"], "ana b");
+        assert_eq!(parsed.profile.config["database"], "shop/main");
+        assert_eq!(parsed.profile.config["port"], 5433);
+        assert!(parsed.password.is_none());
+        let mut file = profile("local");
+        file.driver = "sqlite".into();
+        file.config = serde_json::json!({"path": "/data/my shop.db"});
+        assert_eq!(
+            super::url_of(&file).as_deref(),
+            Some("sqlite:///data/my%20shop.db")
+        );
     }
 
     #[test]

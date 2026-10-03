@@ -166,14 +166,17 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     };
     let session = screen.session_for(&profile.name);
     let in_use = session.is_some_and(|session| model.active_session == Some(session.id));
-    let open = match (session.is_some(), in_use) {
-        (false, _) => Button::new(KeyCode::Enter, "Connect"),
-        (true, false) => Button::new(KeyCode::Enter, "Use"),
-        (true, true) => Button::new(KeyCode::Enter, "Connect")
-            .disabled(format!("{} is the connection in use.", profile.name)),
+    // In use, Enter opens SQL on it, which is what New SQL does.
+    let mut buttons = match (session.is_some(), in_use) {
+        (false, _) => vec![Button::new(KeyCode::Enter, "Connect")],
+        (true, false) => vec![Button::new(KeyCode::Enter, "Use")],
+        (true, true) => vec![Button::new(KeyCode::Enter, "Open SQL")],
     };
-    vec![
-        open,
+    if !in_use {
+        buttons.push(Button::new(KeyCode::Char('s'), "New SQL"));
+    }
+    buttons.extend([
+        Button::new(KeyCode::Char('b'), "Browse"),
         Button::new(KeyCode::Char('c'), "Disconnect").enabled_if(
             session.is_some(),
             format!("{} is not connected.", profile.name),
@@ -181,8 +184,13 @@ pub fn buttons(model: &Model) -> Vec<Button> {
         Button::new(KeyCode::Char('e'), "Edit"),
         Button::new(KeyCode::Char('d'), "Duplicate"),
         Button::new(KeyCode::Char('t'), "Test"),
+        Button::new(KeyCode::Char('y'), "Copy URL").enabled_if(
+            crate::screens::connections::url_of(profile).is_some(),
+            format!("A {} connection has no URL.", driver_name(&profile.driver)),
+        ),
         Button::new(KeyCode::Char('x'), "Delete"),
-    ]
+    ]);
+    buttons
 }
 
 /// One line of the list: what it shows, what a click on it picks, whether the pick is on

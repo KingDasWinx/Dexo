@@ -373,6 +373,8 @@ pub enum FieldRow {
     Field(&'static str, String),
     Section(&'static str),
     Text(String),
+    /// A line coloured by what it says: a test that passed or failed.
+    Styled(Role, String),
     Blank,
 }
 
@@ -412,6 +414,16 @@ pub fn field_lines(model: &Model, rows: &[FieldRow], width: u16) -> Vec<Line<'st
                 crate::model::wrap_words(text, usize::from(width).saturating_sub(1))
                     .into_iter()
                     .map(|part| Line::raw(format!(" {part}"))),
+            ),
+            FieldRow::Styled(role, text) => lines.extend(
+                crate::model::wrap_words(text, usize::from(width).saturating_sub(1))
+                    .into_iter()
+                    .map(|part| {
+                        Line::styled(
+                            format!(" {part}"),
+                            model.theme.style(*role, model.capabilities),
+                        )
+                    }),
             ),
             FieldRow::Blank => lines.push(Line::default()),
         }

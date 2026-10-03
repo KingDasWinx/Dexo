@@ -315,7 +315,7 @@ async fn run_loop(
             _ = pause_tick.tick(), if model.editor.hides_errors() => {
                 let _ = crate::update::update(&mut model, Action::DiagnosticsTick);
             }
-            _ = running_tick.tick(), if model.active_operation.is_some() || model.transfer.running => {}
+            _ = running_tick.tick(), if model.active_operation.is_some() || model.transfer.running || model.connections.testing() => {}
             _ = agent_tick.tick(), if matches!(model.screen, crate::model::Screen::Agents | crate::model::Screen::Server) => {
                 let effects = crate::update::update(&mut model, Action::ScreenTick);
                 if dispatch_effects(runtime, &mut action_rx, &mut model, effects).await {
