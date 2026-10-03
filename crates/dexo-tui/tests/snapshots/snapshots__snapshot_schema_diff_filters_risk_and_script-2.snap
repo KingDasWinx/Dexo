@@ -15,7 +15,7 @@ demo  local  public          1 Sidebar  [2 SQL]  3 Results
 │Migration script                                          │
 │  DROP TABLE db.public.gone;                              │
 │ [Open script]   [Cancel]                                 │
-│  a/r/c filter  Enter opens the script  Esc closes        │
+│  a/r/c filter  Enter open the script  Esc close          │
 │                                                          │
 │                                                          │
 │                                                          │

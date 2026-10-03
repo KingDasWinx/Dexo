@@ -80,9 +80,9 @@ impl SecurityScreen {
         }
         lines.push(String::new());
         let hint = if target.is_empty() {
-            "Up/Down pick a role · Esc closes".to_string()
+            "Up/Down pick a role  Esc close".to_string()
         } else {
-            format!("Up/Down pick a role · Enter grants SELECT on {target} to it · Esc closes")
+            format!("Up/Down pick a role  Enter grant SELECT on {target} to it  Esc close")
         };
         lines.push(fit(hint));
         lines

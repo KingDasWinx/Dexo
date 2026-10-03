@@ -18,7 +18,7 @@ demo  local  public
 │                        │                                                                                                            │                        │
 │                        │  Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                            │                        │
 │                        │                                                                                                            │                        │
-│                        │up/down pick  t terminate  r refresh  esc close                                                             │                        │
+│                        │Up/Down pick  t terminate  r refresh  Esc close                                                             │                        │
 │                        └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                        │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

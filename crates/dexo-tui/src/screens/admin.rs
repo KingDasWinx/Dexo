@@ -289,9 +289,9 @@ impl AdminScreen {
         lines.push(String::new());
         lines.push(cut(
             if self.read_only {
-                "up/down pick  r refresh  esc close  (read-only: no terminate)"
+                "Up/Down pick  r refresh  Esc close  (read-only: no terminate)"
             } else {
-                "up/down pick  t terminate  r refresh  esc close"
+                "Up/Down pick  t terminate  r refresh  Esc close"
             },
             width,
         ));

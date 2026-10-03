@@ -25,7 +25,7 @@ demo  local  public
 │                          ││             │  foreign_keys: customer_id references customers(id)                      │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │ [Preview]   [Cancel]                                                     │                                         │
-│                          ││             │  tab/arrows move  enter preview  esc cancel                              │                                         │
+│                          ││             │  Tab/arrows move  Enter preview  Esc cancel                              │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │                                                                          │                                         │
 │                          ││             │                                                                          │                                         │

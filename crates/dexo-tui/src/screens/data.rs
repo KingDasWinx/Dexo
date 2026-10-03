@@ -266,7 +266,7 @@ impl CellEditForm {
                 mark("NULL", CellFocus::Null),
                 mark("Editor", CellFocus::Editor),
             ),
-            "Ctrl+N sets NULL  Ctrl+E opens $EDITOR  Esc cancels".to_string(),
+            "Ctrl+N set NULL  Ctrl+E open $EDITOR  Esc cancel".to_string(),
         ];
         // Typed in a field that is drawn with its marker on the line the cursor is on.
         if self.focus != CellFocus::Value {

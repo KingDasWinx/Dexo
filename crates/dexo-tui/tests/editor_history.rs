@@ -47,7 +47,7 @@ fn the_history_lists_each_statement_once_and_searches_as_you_type() {
     let screen = dexo_tui::render::render_to_string(&model, 120, 30);
     assert!(screen.contains("History · pg-dev"), "{screen}");
     assert!(screen.contains("search:"), "{screen}");
-    assert!(screen.contains("Enter opens it"), "{screen}");
+    assert!(screen.contains("Enter open in a new document"), "{screen}");
 
     type_text(&mut model, "COUNT");
     let found = model.editor.history_matches();

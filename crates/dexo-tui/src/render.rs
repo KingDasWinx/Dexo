@@ -1404,7 +1404,7 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     // The search stays on the top line, a blank under it, and only the list scrolls:
     // it used to scroll away with the list on the first PageDown.
-    let block = overlay_block(model, "Keybindings  Esc to close");
+    let block = overlay_block(model, "Keybindings  Esc close");
     let [search, _, list] = Layout::vertical([
         Constraint::Length(1),
         Constraint::Length(1),
@@ -1419,12 +1419,12 @@ fn render_help(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     show_input(frame, search, "Search: ", &model.help.query, false);
     frame.render_widget(Paragraph::new(lines.join("\n")).scroll((scroll, 0)), list);
     register_overlay(hits, popup);
-    // Over the title's own "Esc to close": on the first inner row it lay over the search.
+    // Over the title's own "Esc close": on the first inner row it lay over the search.
     register_label(
         hits,
         Rect::new(popup.x + 1, popup.y, popup.width.saturating_sub(2), 1),
-        "Keybindings  Esc to close",
-        "Esc to close",
+        "Keybindings  Esc close",
+        "Esc close",
         HitTarget::Button(HitButton::Close),
     );
 }
@@ -1637,7 +1637,7 @@ fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         action_lines.push("(empty)".into());
     }
 
-    let title = format!("Row {}  Esc to close", row + 1);
+    let title = format!("Row {}  Esc close", row + 1);
     let block = overlay_block(model, &title);
     let outer_inner = block.inner(layout.popup);
     let [detail_area, actions_area] =
@@ -1884,9 +1884,9 @@ fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     lines.push(footer.clone());
     lines.push(crate::model::truncate_cell(
         if diff.source_prompt {
-            "  Left/Right change a source  Enter compares  Esc cancels"
+            "  Left/Right change a source  Enter compare  Esc cancel"
         } else {
-            "  a/r/c filter  Enter opens the script  Esc closes"
+            "  a/r/c filter  Enter open the script  Esc close"
         },
         usize::from(inner.width),
     ));
@@ -2628,8 +2628,8 @@ fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             footer_line("Delete", *focus)
         }
         (None, Some(error)) => error.clone(),
-        (None, None) if picker.renaming.is_some() => "Enter renames · Esc keeps the name".into(),
-        (None, None) => "Enter open · F2 rename · Delete delete · Esc close".into(),
+        (None, None) if picker.renaming.is_some() => "Enter rename  Esc keep the name".into(),
+        (None, None) => "Enter open  F2 rename  Delete delete  Esc close".into(),
     };
     lines.push(footer);
     paint_popup(
@@ -2883,9 +2883,9 @@ fn render_object_overlay(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             lines.push(crate::widgets::form::footer_line("Save", *focus));
         }
         None if model.inspector.object.is_some() => {
-            lines.push("  up/down scroll  n note  esc close".into())
+            lines.push("  Up/Down scroll  n note  Esc close".into())
         }
-        None => lines.push("  up/down scroll  esc close".into()),
+        None => lines.push("  Up/Down scroll  Esc close".into()),
     }
     let max_scroll = lines
         .len()
@@ -2964,7 +2964,7 @@ fn render_schema_form(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let footer_index = lines.len();
     lines.push(footer.clone());
     lines.push(format!(
-        "  tab/arrows move  enter {}  esc cancel",
+        "  Tab/arrows move  Enter {}  Esc cancel",
         submit.to_lowercase()
     ));
     let title = match (editor.is_raw(), model.connection.name.as_str()) {
@@ -3589,7 +3589,7 @@ fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         };
         lines.push(line);
     }
-    lines.push("Enter opens it in a new document · Esc closes".into());
+    lines.push("Enter open in a new document  Esc close".into());
     let title = if name.is_empty() {
         "History".to_string()
     } else {

@@ -19,7 +19,7 @@ demo  local  public          1 Sidebar  [2 SQL]  3 Results
 │  foreign_keys: customer_id references customers(id)      │
 │                                                          │
 │ [Preview]   [Cancel]                                     │
-│  tab/arrows move  enter preview  esc cancel              │
+│  Tab/arrows move  Enter preview  Esc cancel              │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘

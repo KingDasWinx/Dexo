@@ -1,5 +1,6 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 12
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
@@ -21,7 +22,7 @@ default  no connection  —
 │                          ││                   │  Updates    [On]  Off                                        │                                               │
 │                          ││                   │                                                              │                                               │
 │                          ││                   │  [Reset to defaults]                                         │                                               │
-│                          ││                   │  up/down row  left/right change  e theme  r reset  esc close │                                               │
+│                          ││                   │  Up/Down row  Left/Right change  e theme  r reset  Esc close │                                               │
 │                          ││                   └──────────────────────────────────────────────────────────────┘                                               │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

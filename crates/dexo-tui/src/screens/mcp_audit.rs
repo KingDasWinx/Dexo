@@ -259,7 +259,7 @@ impl McpAuditScreen {
             footer.push(footer_line(label, deciding.focus));
         }
         footer.push(
-            "a approve  d deny  up/down pick  PgUp/PgDn scroll  R revoke all grants  esc close"
+            "a approve  d deny  Up/Down pick  PgUp/PgDn scroll  R revoke all grants  Esc close"
                 .into(),
         );
         AuditView {

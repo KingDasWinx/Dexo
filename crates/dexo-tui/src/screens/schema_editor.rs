@@ -1237,7 +1237,7 @@ mod tests {
         // The target scrolled out of view, and no field lies under the buttons.
         assert_eq!(hits.center(HitTarget::FormField(0)), (0, 0));
         for (y, row) in rows.iter().enumerate() {
-            if row.contains("[Cancel]") || row.contains("esc cancel") {
+            if row.contains("[Cancel]") || row.contains("Esc cancel") {
                 for x in 0..100 {
                     assert!(
                         !matches!(hits.at(x, y as u16), Some(HitTarget::FormField(_))),
