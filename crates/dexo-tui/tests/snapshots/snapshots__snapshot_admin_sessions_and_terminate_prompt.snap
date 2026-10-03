@@ -1,5 +1,6 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 268
 expression: "render_to_string(&model, 160, 50)"
 ---
 demo  local  public                                                                                                                                             
@@ -8,11 +9,6 @@ demo  local  public
 │  ● local▾                ││   1▸select 1                                                                                                                     │
 │>   ▸ public              ││                                                                                                                                  │
 │      mysql.… [restricted]││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                        ┌Sessions on local (every database on the server)────────────────────────────────────────────────────────────┐                        │
@@ -24,6 +20,11 @@ demo  local  public
 │                        │                                                                                                            │                        │
 │                        │up/down pick  t terminate  r refresh  esc close                                                             │                        │
 │                        └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                        │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │

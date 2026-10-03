@@ -1,11 +1,11 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 291
 expression: "render_to_string(&model, 60, 20)"
 ---
 demo  local  public          1 Sidebar  [2 SQL]  3 Results  
  scratch.sql ×  +                                           
 ┌▸ SQL · scratch.sql───────────────────────────────────────┐
-│   1▸select 1                                             │
 ┌Enable MCP profile────────────────────────────────────────┐
 │Enable assistant?                                         │
 │Agents that connect through it can then use what it allows│
@@ -13,6 +13,7 @@ demo  local  public          1 Sidebar  [2 SQL]  3 Results
 │                                                          │
 │ [Enable]  >[Cancel]                                      │
 └──────────────────────────────────────────────────────────┘
+│                                                          │
 │                                                          │
 │                                                          │
 │                                                          │

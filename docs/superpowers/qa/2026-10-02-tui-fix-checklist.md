@@ -366,7 +366,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **SL-20** `MINOR` Compact mode (< 80x24) shows one pane and the mouse cannot switch panes
 - [x] **SL-21** `MINOR` Help: any click closes the overlay, even a click on the Search field
 - [x] **SL-22** `MINOR` "Run destructive statements" is the title for a statement Dexo merely cannot parse, and it has no warning styling
-- [x] **SL-23** `MINOR` "Search History" is not searchable and shows duplicates
+- [=] ED-02 **SL-23** `MINOR` "Search History" is not searchable and shows duplicates
 - [x] **SL-24** `MINOR` Key hints behind and inside modals are inconsistent
 - [x] **SL-04** `COSMETIC` Modals sit at different heights and have different sizes
 - [x] **SL-11** `COSMETIC` Layout and settings commands give no feedback about what they did

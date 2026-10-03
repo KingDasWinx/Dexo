@@ -1,8 +1,12 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 42
 expression: "render_to_string(&model, 100, 30)"
 ---
-default  no connection  —                                                                           
+default  no connection  -                                                                           
+┌  Sidebar─────────────────┐ scratch.sql x  +                                                       
+│[n]ew [e]dit [a]ctions    │┌> SQL - scratch.sql───────────────────────────────────────────────────┐
+│No connections - press n  ││   1                                                                  │
 ┌MCP profiles──────────────────────────────────────────────────────────────────────────────────────┐
 │> assistant  disabled  1 grant                                                                    │
 │                                                                                                  │
@@ -29,6 +33,3 @@ default  no connection  —
 │e enable/disable  g new grant  r revoke grants  R revoke all  x delete  Up/Down pick  PgUp/PgDn   │
 │details  Esc close                                                                                │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          ││                                                                      │
-└──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-disconnected                                                                              Ctrl+P  F1

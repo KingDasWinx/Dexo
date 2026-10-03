@@ -1,5 +1,6 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
+assertion_line: 36
 expression: "render_to_string(&model, 160, 50)"
 ---
 default  no connection  —                                                                                                                                       
@@ -10,12 +11,6 @@ default  no connection  —
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
-│                          ││ ┌MCP profiles──────────────────────────────────────────────────────────────────────────────────────┐                             │
-│                          ││ │> assistant  disabled  1 grant                                                                    │                             │
-│                          ││ │                                                                                                  │                             │
-│                          ││ │assistant is disabled: agents cannot use it yet.                                                  │                             │
-│                          ││ │Connections: local                                                                                │                             │
-│                          ││ │Reads: structured tools only                                                                      │                             │
 │                          ││ ┌Agent activity────────────────────────────────────────────────────────────────────────────────────┐                             │
 │                          ││ │No agent's write is waiting for approval.                                                         │                             │
 │                          ││ │                                                                                                  │                             │
@@ -23,6 +18,12 @@ default  no connection  —
 │                          ││ │  assistant tools/call catalog_search allow db.public.items                                       │                             │
 │                          ││ │a approve  d deny  up/down pick  PgUp/PgDn scroll  R revoke all grants  esc close                 │                             │
 │                          ││ └──────────────────────────────────────────────────────────────────────────────────────────────────┘                             │
+│                          ││ │  never: db.public.secrets                                                                        │                             │
+│                          ││ │Tools set by hand: catalog_search, object_describe                                                │                             │
+│                          ││ │Grants (1): agents may write while they last                                                      │                             │
+│                          ││ │  data_insert on db.public.items (local): one write, then it is spent, ends in 15 min             │                             │
+│                          ││ │                                                                                                  │                             │
+│                          ││ │                                                                                                  │                             │
 │                          ││ │                                                                                                  │                             │
 │                          ││ │                                                                                                  │                             │
 │                          ││ │                                                                                                  │                             │

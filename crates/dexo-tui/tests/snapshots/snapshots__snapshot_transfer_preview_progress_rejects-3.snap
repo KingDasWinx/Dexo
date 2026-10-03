@@ -8,8 +8,7 @@ demo  local  public
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │  ● local▾                ││   1▸select 1                                                         │
 │>   ▸ public              ││                                                                      │
-│      mysql.… [restricted]││                                                                      │
-│             ┌Import data───────────────────────────────────────────────────────────┐             │
+│      mysql.…┌Import data───────────────────────────────────────────────────────────┐             │
 │             │Import a CSV, TSV, JSON or JSON Lines file into a table on local.     │             │
 │             │                                                                      │             │
 │             │> File:     orders.csv                                        [Browse]│             │
@@ -19,8 +18,9 @@ demo  local  public
 │             │preview:                                                              │             │
 │             │preview ready                                                         │             │
 │             │Line 3: invalid value                                                 │             │
-│             │ [Import]   [Cancel]                                                  │─────────────┘
-│             └──────────────────────────────────────────────────────────────────────┘─────────────┐
+│             │ [Import]   [Cancel]                                                  │             │
+│             └──────────────────────────────────────────────────────────────────────┘─────────────┘
+│                          │┌  Results─────────────────────────────────────────────────────────────┐
 │                          ││[Grid] Explain  Messages                                              │
 │                          ││                                                                      │
 │                          ││                                                                      │

@@ -1,7 +1,10 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 208
 expression: "render_to_string(&model, 60, 20)"
 ---
+demo  local  public          1 Sidebar  [2 SQL]  3 Results  
+ scratch.sql ×  +                                           
 ┌Compare Schema · prod@v1──────────────────────────────────┐
 │prod@v1 -> prod@v2: 3 differences                         │
 │Show: [x] added 1  [ ] removed 1  [x] changed 1   (a / r …│
@@ -20,5 +23,3 @@ expression: "render_to_string(&model, 60, 20)"
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-└──────────────────────────────────────────────────────────┘
-local                                             Ctrl+P  F1
