@@ -9623,7 +9623,7 @@ fn goto_definition(model: &mut Model) -> Vec<Effect> {
     let objects = if whole_catalog {
         model.catalog_objects.clone()
     } else {
-        flatten_explorer(&model.explorer)
+        model.explorer.flatten(&model.connection.name)
     };
     let catalog = dexo_app::SnapshotCatalog::new(objects);
     let Some(target) = dexo_sql::definition_at(&sql, cursor, &catalog) else {
@@ -9633,9 +9633,11 @@ fn goto_definition(model: &mut Model) -> Vec<Effect> {
         return Vec::new();
     };
     let wanted = target.display_unquoted();
-    if let Some(id) = find_qualified(&model.explorer, &wanted) {
-        model.explorer.reveal(&id);
-        model.explorer.select(id.clone());
+    if let Some(id) = find_qualified(&model.explorer, &model.connection.name, &wanted) {
+        model.explorer.reveal(&model.connection.name, &id);
+        model
+            .explorer
+            .select_in_connection(&model.connection.name, id.clone());
         model.panes.explorer_visible = true;
         model
             .messages
@@ -9676,14 +9678,10 @@ fn goto_definition(model: &mut Model) -> Vec<Effect> {
     }
 }
 
-fn flatten_explorer(
-    explorer: &crate::screens::explorer::ExplorerState,
-) -> Vec<dexo_driver_api::CatalogObject> {
-    explorer.flatten()
-}
-
+/// `qualified` in `connection`'s tree: objects of two connections share ids and names.
 fn find_qualified(
     explorer: &crate::screens::explorer::ExplorerState,
+    connection: &str,
     qualified: &str,
 ) -> Option<dexo_driver_api::ObjectId> {
     // The object itself, else one named like it, else the deepest container of it the tree
@@ -9720,7 +9718,7 @@ fn find_qualified(
         }
     }
     let mut best = None;
-    walk(&explorer.roots, qualified, &mut best);
+    walk(explorer.tree(connection), qualified, &mut best);
     best.map(|(_, id)| id.clone())
 }
 
@@ -11962,7 +11960,8 @@ fn load_object_view(model: &mut Model) -> Vec<Effect> {
         ResultsView::Structure | ResultsView::Ddl
             if model.inspector.qualified_name != qualified =>
         {
-            let Some(id) = find_qualified(&model.explorer, &qualified) else {
+            let Some(id) = find_qualified(&model.explorer, &model.connection.name, &qualified)
+            else {
                 return Vec::new();
             };
             model.inspector =

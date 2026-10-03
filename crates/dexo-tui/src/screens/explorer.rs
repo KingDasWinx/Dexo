@@ -688,7 +688,7 @@ impl ExplorerState {
         walk(tree, name, &ObjectKind::Schema).or_else(|| walk(tree, name, &ObjectKind::Catalog))
     }
 
-    pub fn reveal(&mut self, id: &ObjectId) -> bool {
+    pub fn reveal(&mut self, connection: &str, id: &ObjectId) -> bool {
         fn walk(nodes: &mut [ExplorerNode], id: &ObjectId) -> bool {
             for node in nodes {
                 if node.id == *id {
@@ -701,7 +701,7 @@ impl ExplorerState {
             }
             false
         }
-        walk(&mut self.roots, id)
+        walk(Self::tree_of(&mut self.roots, connection), id)
     }
 
     pub fn apply_children(&mut self, parent: &ObjectId, page: CatalogList) {
@@ -909,7 +909,8 @@ impl ExplorerState {
     /// it is drawn under -- because that link is what `SnapshotCatalog` matches columns
     /// on. Passing `None` here left every table with no columns, so completion after
     /// `alias.` had nothing to offer.
-    pub fn flatten(&self) -> Vec<CatalogObject> {
+    /// `connection`'s objects as the catalog lists them.
+    pub fn flatten(&self, connection: &str) -> Vec<CatalogObject> {
         let mut out = Vec::new();
         fn walk(nodes: &[ExplorerNode], parent: Option<&ObjectId>, out: &mut Vec<CatalogObject>) {
             for node in nodes {
@@ -938,7 +939,7 @@ impl ExplorerState {
                 walk(&node.children, Some(&node.id), out);
             }
         }
-        walk(&self.roots, None, &mut out);
+        walk(self.tree(connection), None, &mut out);
         out
     }
 

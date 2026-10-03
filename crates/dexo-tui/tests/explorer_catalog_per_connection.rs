@@ -219,3 +219,36 @@ fn a_schema_change_on_one_connection_leaves_the_others_tree_alone() {
     );
     assert_eq!(public_of(&model, "alpha"), &before);
 }
+
+/// Go To Definition shows the object in the tree of the connection the document runs
+/// on: `users` of the first connection listed was the one selected.
+#[test]
+fn go_to_definition_selects_the_object_of_the_connection_in_use() {
+    let mut model = both_with_public();
+    let users = ObjectId::new("pg:table:public.users");
+    for name in ["alpha", "beta"] {
+        model.explorer.apply_connection_children(
+            name,
+            &public(),
+            CatalogList {
+                objects: vec![object(&users, ObjectKind::Table, "users", public())],
+                restrictions: Vec::new(),
+            },
+        );
+    }
+    model.connection.name = "beta".into();
+    model.active_session = Some(session(2));
+    model.explorer.select(connection_id("alpha"));
+    model
+        .active_document_mut()
+        .sql
+        .insert(0, "select * from users")
+        .unwrap();
+    model.active_document_mut().sql.set_cursor(16).unwrap();
+
+    update(&mut model, Action::GoToDefinition);
+
+    let said: Vec<_> = model.messages.iter().map(|m| m.message.clone()).collect();
+    assert_eq!(model.explorer.selected.as_ref(), Some(&users), "{said:?}");
+    assert_eq!(model.explorer.selected_connection_name(), Some("beta"));
+}
