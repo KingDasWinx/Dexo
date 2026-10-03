@@ -4971,6 +4971,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.mcp_audit.open {
         use crate::widgets::form::{FooterFocus, FooterKey};
+        model.mcp_audit.notice = None;
         // A statement taller than the popup is read page by page, the confirmation open
         // or not.
         let page = i32::from((model.height / 3).max(1));

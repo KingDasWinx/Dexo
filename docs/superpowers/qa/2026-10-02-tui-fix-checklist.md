@@ -336,7 +336,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-29** `MINOR` Agent Activity: waiting requests - only the selected one shows its SQL, the confirm line does not repeat it
 - [x] **MA-30** `MINOR` The "waiting" notice is a short toast titled "warn"; nothing persistent shows pending requests
 - [x] **MA-31** `MINOR` A killed agent: the request lingers as "waiting" and a late approval says "Approved: the agent's write runs now"
-- [-] **MA-32** `MINOR` Timeout while the confirm dialog is open: the dialog just disappears (not a defect: the vanished request is announced by a warning toast and the Recent list says it timed out)
+- [x] **MA-32** `MINOR` Timeout while the confirm dialog is open: the dialog just disappears (Agent Activity now says in the screen that the request was decided elsewhere or ran out of time)
 - [x] **MA-35** `MINOR` The waiting request for a destructive DDL without `confirm_target` is queued for a person, who approves it for nothing
 - [x] **MA-36** `MINOR` Agent Activity: an admin request (`admin_terminate_session`) says nothing about what it would terminate
 - [x] **MA-37** `MINOR` `--expires`/`expires:` accepts `15m`, `2h` and a bare number (seconds), but not `12s`, `90s`, `1d`, `1h30m`; the error advertises `1s`
@@ -346,7 +346,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **MA-42** `MINOR` Object inspector (`i`, `n` note) shows internal ids
 - [x] **MA-06** `COSMETIC` MCP Profiles selected row has no highlight
 - [x] **MA-20** `COSMETIC` New MCP Grant: the checkbox label describes the unchecked state as a feature
-- [-] **MA-33** `COSMETIC` Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`) (not a defect: a popup overlays the panes beneath it; it draws nothing of its own over their borders)
+- [x] **MA-33** `COSMETIC` Agent Activity: popup draws over the SQL pane border at 120x36 (`┌▸ SQL────┌Agent activity───┐─────────┐`) (the popup is two rows shorter, so it clears the tab bar and the status line)
 
 ## SL: Settings, layout, mouse
 

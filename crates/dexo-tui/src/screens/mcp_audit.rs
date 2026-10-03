@@ -29,6 +29,9 @@ pub struct McpAuditScreen {
     pub now: i64,
     /// Requests already announced while the screen was closed.
     pub announced: Vec<uuid::Uuid>,
+    /// What the screen has to say about the last thing that happened to it, until a key is
+    /// pressed: a toast was the only word that a question had lost its request.
+    pub notice: Option<String>,
     /// Lines scrolled down from the picked request's first: PgUp/PgDn and the wheel read
     /// a statement taller than the popup.
     pub scroll: u16,
@@ -154,6 +157,10 @@ impl McpAuditScreen {
             .is_some_and(|deciding| self.pending.iter().all(|request| request.id != deciding.id));
         if gone {
             self.deciding = None;
+            self.notice = Some(
+                "That request was decided elsewhere or ran out of time; nothing was settled."
+                    .into(),
+            );
         }
         gone
     }
@@ -206,6 +213,9 @@ impl McpAuditScreen {
             push_wrapped(&mut body, "  ", "    ", event, width);
         }
         let mut footer = Vec::new();
+        if let Some(notice) = &self.notice {
+            push_wrapped(&mut footer, "", "", notice, width);
+        }
         if let Some(deciding) = &self.deciding {
             let question = if deciding.approve {
                 "Run this write now?"
@@ -393,5 +403,21 @@ mod tests {
         let lines = screen.lines().join("\n");
         assert!(lines.contains("values: note = small-term"), "{lines}");
         assert!(!lines.contains("{\""), "no raw JSON: {lines}");
+    }
+
+    /// A question whose request ran out of time says so on the screen, not only in a toast.
+    #[test]
+    fn a_question_that_lost_its_request_says_so_on_the_screen() {
+        let a = request("UPDATE a SET x = 1");
+        let mut screen = McpAuditScreen::default();
+        screen.load(vec![a.clone()], 1001);
+        screen.deciding = Some(Deciding {
+            id: a.id,
+            approve: true,
+            focus: FooterFocus::Cancel,
+        });
+        assert!(screen.load(Vec::new(), 1002));
+        let lines = screen.lines().join("\n");
+        assert!(lines.contains("ran out of time"), "{lines}");
     }
 }

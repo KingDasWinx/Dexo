@@ -3128,7 +3128,8 @@ fn render_mcp_audit(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         100,
         u16::try_from(wanted)
             .unwrap_or(u16::MAX)
-            .min(area.height.saturating_sub(2)),
+            // Two rows short of the screen's, so it clears the tab bar and the status line.
+            .min(area.height.saturating_sub(4)),
     );
     let inner = crate::mouse::popup_inner(popup);
     let footer_rows = (view.footer.len() as u16).min(inner.height);
