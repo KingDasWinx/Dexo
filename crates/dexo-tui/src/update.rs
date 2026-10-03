@@ -2307,24 +2307,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SearchHistory => {
             model.history_view = crate::screen::history::HistoryView::History;
             model.editor.history_confirm_clear = false;
-            model.editor.history_selected = 0;
-            model.editor.history_search.clear();
-            let mut effects = go_to_screen(model, crate::model::Screen::History);
-            // This connection's statements; with none connected, all of them.
-            effects.extend([Effect::LoadHistory {
-                connection_id: (!model.connection.name.is_empty())
-                    .then(|| model.connection.name.clone()),
-            }]);
-            effects
+            model.editor.clear_history_filters();
+            // Going there reads every connection's statements.
+            go_to_screen(model, crate::model::Screen::History)
         }
         Action::ClearHistory => confirm_clear_history(model),
-        Action::HistoryLoaded(mut entries) => {
-            // Newest first, so keeping the first of each statement keeps the latest run
-            // of it: the same query run ten times is one row.
-            let mut seen = std::collections::HashSet::new();
-            entries.retain(|row| seen.insert(row.sql.clone()));
+        Action::HistoryLoaded(entries) => {
             model.editor.history = entries;
-            model.editor.history_selected = 0;
+            model.editor.clamp_history();
             Vec::new()
         }
         Action::HistoryPick => open_history_entry(model),
@@ -4253,12 +4243,10 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 /// A click on a screen other than the workbench.
 fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
-    // A button: its key, pressed. A search being typed into ends first; a form or a
-    // question holding the keys keeps them.
+    // A click anywhere is done with a search being typed into; its box starts it again.
+    crate::screen::stop_typing(model);
+    // A button: its key, pressed. A form or a question holding the keys keeps them.
     if let Some(HitTarget::Press(code, shift)) = hit {
-        if model.shown_screen() == crate::model::Screen::Connections {
-            model.connections.search.typing = false;
-        }
         if crate::screen::held(model).is_some() {
             return Vec::new();
         }
@@ -5679,11 +5667,10 @@ fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
             new_schema_comparison(model)
         }
         crate::model::Screen::History => {
-            // This connection's statements; with none connected, all of them. And the
-            // project's saved queries.
+            // Every connection's statements, connected or not, filtered on screen; and
+            // the project's saved queries.
             let mut effects = vec![Effect::LoadHistory {
-                connection_id: (!model.connection.name.is_empty())
-                    .then(|| model.connection.name.clone()),
+                connection_id: None,
             }];
             if !model.project_id.is_empty() {
                 effects.push(Effect::LoadSavedQueries {
@@ -12907,14 +12894,71 @@ fn history_screen_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         return None;
     }
     match model.history_view {
-        HistoryView::History => {
-            if key.code == KeyCode::Enter {
-                return Some(update(model, Action::HistoryPick));
-            }
-            crate::screens::editor::handle_history_key(model, key).then(Vec::new)
-        }
+        HistoryView::History => history_list_key(model, key),
         HistoryView::Saved => saved_queries_key(model, key),
     }
+}
+
+/// History's list: `/` searches and its letters are then text; `c` and `f` filter by
+/// connection and by outcome; Esc clears the search, then the filters, then goes back.
+fn history_list_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
+    use crate::screens::editor::HISTORY_PAGE;
+    let editor = &mut model.editor;
+    if editor.history_search.typing && editor.history_search.key(key) {
+        editor.history_selected = 0;
+        return Some(Vec::new());
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    let count = editor.history_lines().len();
+    match key.code {
+        // With nothing shown, both at once: the Clear filters button under the list.
+        KeyCode::Esc => {
+            if editor.history_filtered() && count == 0 {
+                editor.clear_history_filters();
+            } else if !editor.history_search.input.is_empty() {
+                editor.history_search = Default::default();
+                editor.history_selected = 0;
+            } else if editor.history_filtered() {
+                editor.clear_history_filters();
+            } else {
+                return None;
+            }
+        }
+        KeyCode::Char('/') => editor.history_search.typing = true,
+        KeyCode::Char('c') => {
+            let connections = editor.history_connections(&model.connection.name);
+            editor.history_connection = match &editor.history_connection {
+                None => connections.first().cloned(),
+                Some(current) => connections
+                    .iter()
+                    .position(|connection| connection == current)
+                    .and_then(|at| connections.get(at + 1))
+                    .cloned(),
+            };
+            editor.history_selected = 0;
+        }
+        KeyCode::Char('f') => {
+            editor.history_status = editor.history_status.next();
+            editor.history_selected = 0;
+        }
+        KeyCode::Enter => return Some(update(model, Action::HistoryPick)),
+        KeyCode::Up => editor.history_selected = editor.history_selected.saturating_sub(1),
+        KeyCode::Down => editor.history_selected += 1,
+        KeyCode::PageUp => {
+            editor.history_selected = editor.history_selected.saturating_sub(HISTORY_PAGE);
+        }
+        KeyCode::PageDown => editor.history_selected += HISTORY_PAGE,
+        KeyCode::Home => editor.history_selected = 0,
+        KeyCode::End => editor.history_selected = count.saturating_sub(1),
+        _ => return None,
+    }
+    editor.clamp_history();
+    Some(Vec::new())
 }
 
 /// The Server screen's keys. None leaves the key to the keymap and Esc to going back.
@@ -13952,13 +13996,18 @@ fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
 /// saved query does, and does not run. It used to replace the active document, unsaved
 /// work included, and run at once.
 fn open_history_entry(model: &mut Model) -> Vec<Effect> {
-    let Some(sql) = crate::screens::editor::picked_history(model) else {
+    let Some(row) = crate::screens::editor::picked_history(model) else {
         return Vec::new();
     };
-    // The document is on the workbench, where it is read.
+    // The document is on the workbench, where it is read, on the connection it ran on.
     let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
     let name = suggested_document_name(model);
-    effects.extend(open_text_document(model, &name, &sql, None));
+    effects.extend(open_text_document(
+        model,
+        &name,
+        &row.sql,
+        row.connection_id.as_deref(),
+    ));
     effects
 }
 

@@ -70,12 +70,13 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
     use agents::AgentsView;
     use history::HistoryView;
     let question = "Answer the question first, or Esc.";
+    let form = model.shown_screen() == Screen::Connections && model.connection_form.open;
+    if !form && search(model).is_some_and(|search| search.typing) {
+        return Some((Section::List, "Enter keeps the search, Esc clears it."));
+    }
     match model.shown_screen() {
         Screen::Connections if model.connection_form.open => {
             Some((Section::Detail, "The form has the keys: Esc closes it."))
-        }
-        Screen::Connections if model.connections.search.typing => {
-            Some((Section::List, "Enter keeps the search, Esc clears it."))
         }
         Screen::Agents => match model.agents_view {
             AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
@@ -104,6 +105,27 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
             }
         }
         _ => None,
+    }
+}
+
+/// The shown screen's search, where it has one.
+pub fn search(model: &Model) -> Option<&widgets::Search> {
+    match model.shown_screen() {
+        Screen::Connections => Some(&model.connections.search),
+        Screen::History if model.history_view == history::HistoryView::History => {
+            Some(&model.editor.history_search)
+        }
+        _ => None,
+    }
+}
+
+/// Ends the typing into the shown screen's search, keeping what was typed: a click
+/// elsewhere on the screen is done with it.
+pub fn stop_typing(model: &mut Model) {
+    match model.shown_screen() {
+        Screen::Connections => model.connections.search.typing = false,
+        Screen::History => model.editor.history_search.typing = false,
+        _ => {}
     }
 }
 

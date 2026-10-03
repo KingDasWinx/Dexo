@@ -547,6 +547,41 @@ fn display_width_range(line: &str, from_col: usize, to_char: usize) -> usize {
     cols.saturating_sub(from_col)
 }
 
+/// `sql` in the editor's colours, each line cut to `width` columns: a statement shown
+/// outside the editor -- in History -- reads as it did when it was written.
+pub(crate) fn sql_lines(sql: &str, width: usize, dialect: dexo_sql::Dialect) -> Vec<Line<'static>> {
+    use unicode_width::UnicodeWidthChar;
+    let highlights = dexo_sql::ParserService::new(dialect).parse(sql).highlights;
+    let highlights: Vec<&dexo_sql::HighlightSpan> = highlights.iter().collect();
+    let width = width.max(1);
+    let mut lines = Vec::new();
+    let mut start = 0;
+    for line in sql.split('\n') {
+        let mut chunk = String::new();
+        let mut chunk_start = start;
+        let mut used = 0;
+        for ch in line.chars() {
+            let wide = ch.width().unwrap_or(0);
+            if used + wide > width && !chunk.is_empty() {
+                lines.push(Line::from(highlight_spans(
+                    &chunk,
+                    chunk_start,
+                    &highlights,
+                )));
+                chunk_start += chunk.len();
+                chunk.clear();
+                used = 0;
+            }
+            chunk.push(ch);
+            used += wide;
+        }
+        let chunk = chunk.trim_end_matches('\r');
+        lines.push(Line::from(highlight_spans(chunk, chunk_start, &highlights)));
+        start += line.len() + 1;
+    }
+    lines
+}
+
 #[cfg(test)]
 mod tests {
     use super::highlight_spans;

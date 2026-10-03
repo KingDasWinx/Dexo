@@ -1,4 +1,4 @@
-//! Search History and Clear History: the list is the connection's, can be searched, and
+//! Search History and Clear History: the list is every connection's, can be searched, and
 //! picking from it opens a document instead of replacing the one being written.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_tui::{Action, Effect, Focus, Model, update};
@@ -33,9 +33,11 @@ fn with_history() -> Model {
     assert!(
         effects.iter().any(|effect| matches!(
             effect,
-            Effect::LoadHistory { connection_id: Some(name) } if name == "pg-dev"
+            Effect::LoadHistory {
+                connection_id: None
+            }
         )),
-        "the history is the connection's: {effects:?}"
+        "the history is every connection's: {effects:?}"
     );
     update(
         &mut model,
@@ -50,22 +52,23 @@ fn with_history() -> Model {
 }
 
 #[test]
-fn the_history_lists_each_statement_once_and_searches_as_you_type() {
+fn the_history_lists_each_statement_once_and_searches_after_slash() {
     let mut model = with_history();
-    assert_eq!(model.editor.history_matches().len(), 3);
+    assert_eq!(model.editor.history_lines().len(), 3);
     let screen = dexo_tui::render::render_to_string(&model, 120, 30);
     assert!(screen.contains("[1 History]"), "{screen}");
-    assert!(screen.contains("Search:"), "{screen}");
+    assert!(screen.contains("/ search"), "{screen}");
     assert!(screen.contains("Enter open"), "{screen}");
 
-    type_text(&mut model, "COUNT");
-    let found = model.editor.history_matches();
+    press(&mut model, KeyCode::Char('/'));
+    type_text(&mut model, "count");
+    let found = model.editor.history_lines();
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].sql.as_str(), "select count(*) from customers");
+    assert_eq!(found[0].row.sql.as_str(), "select count(*) from customers");
     type_text(&mut model, "zzz");
-    assert!(model.editor.history_matches().is_empty());
+    assert!(model.editor.history_lines().is_empty());
     let screen = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(screen.contains("No statement matches"), "{screen}");
+    assert!(screen.contains("Nothing matches the filters"), "{screen}");
 }
 
 /// Enter opened the statement in the active document, unsaved work included, and ran
@@ -75,7 +78,9 @@ fn picking_opens_a_new_document_and_runs_nothing() {
     let mut model = with_history();
     let before = model.documents.len();
     let active_title = model.active_document().title.clone();
+    press(&mut model, KeyCode::Char('/'));
     type_text(&mut model, "update");
+    press(&mut model, KeyCode::Enter);
     let effects = press(&mut model, KeyCode::Enter);
     assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
     assert!(

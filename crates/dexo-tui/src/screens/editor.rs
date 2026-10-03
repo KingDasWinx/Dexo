@@ -50,14 +50,18 @@ pub struct EditorState {
     pub snippet_open: bool,
     pub snippet_selected: usize,
     pub snippet_pending: bool,
-    /// Newest first, one row per statement.
+    /// Every connection's runs, newest first.
     pub history: Vec<dexo_storage::HistoryRow>,
+    /// The pick among `history_lines`.
     pub history_selected: usize,
     pub history_confirm_clear: bool,
     /// The focus of the clear confirmation's two buttons.
     pub history_footer: crate::widgets::form::FooterFocus,
-    /// What the history list is narrowed to.
-    pub history_search: crate::widgets::text_input::TextInput,
+    /// What the history list is narrowed to: a text in the statement, a connection, how
+    /// the run went.
+    pub history_search: crate::screen::widgets::Search,
+    pub history_connection: Option<String>,
+    pub history_status: StatusFilter,
     pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
     /// The completion catalog, and the catalog and explorer revisions it was built from.
@@ -127,6 +131,8 @@ impl Clone for EditorState {
             history_confirm_clear: self.history_confirm_clear,
             history_footer: self.history_footer,
             history_search: self.history_search.clone(),
+            history_connection: self.history_connection.clone(),
+            history_status: self.history_status,
             history_policy: self.history_policy,
             catalog: self.catalog.clone(),
             catalog_key: None,
@@ -195,6 +201,8 @@ impl Default for EditorState {
             history_confirm_clear: false,
             history_footer: crate::widgets::form::FooterFocus::Cancel,
             history_search: Default::default(),
+            history_connection: None,
+            history_status: StatusFilter::All,
             history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::default(),
             catalog_key: None,
@@ -2043,72 +2051,131 @@ impl EditorState {
         }
     }
 
-    /// The history the search leaves, newest first; no search leaves all of it.
-    pub fn history_matches(&self) -> Vec<&dexo_storage::HistoryRow> {
-        let needle = self.history_search.as_str().trim().to_lowercase();
-        self.history
-            .iter()
-            .filter(|row| needle.is_empty() || row.sql.to_lowercase().contains(&needle))
-            .collect()
+    /// The history the filters leave, newest first, a statement run again on the same
+    /// connection once: its last run, and how many there were.
+    pub fn history_lines(&self) -> Vec<HistoryLine<'_>> {
+        let mut lines: Vec<HistoryLine<'_>> = Vec::new();
+        for row in &self.history {
+            if self
+                .history_connection
+                .as_ref()
+                .is_some_and(|connection| row.connection_id.as_ref() != Some(connection))
+                || !self.history_status.lets(row.outcome)
+                || !self.history_search.matches([row.sql.as_str()])
+            {
+                continue;
+            }
+            match lines
+                .iter_mut()
+                .find(|line| line.row.sql == row.sql && line.row.connection_id == row.connection_id)
+            {
+                Some(line) => line.ids.push(row.id.clone()),
+                None => lines.push(HistoryLine {
+                    row,
+                    ids: vec![row.id.clone()],
+                }),
+            }
+        }
+        lines
     }
 
-    /// Keeps the highlight on a row the search still lists.
+    /// Whether a filter is on: the search, a connection or a status.
+    pub fn history_filtered(&self) -> bool {
+        !self.history_search.input.is_empty()
+            || self.history_connection.is_some()
+            || self.history_status != StatusFilter::All
+    }
+
+    pub fn clear_history_filters(&mut self) {
+        self.history_search = Default::default();
+        self.history_connection = None;
+        self.history_status = StatusFilter::All;
+        self.history_selected = 0;
+    }
+
+    /// The connections the history has runs of, the one in use first.
+    pub fn history_connections(&self, in_use: &str) -> Vec<String> {
+        let mut connections: Vec<String> = Vec::new();
+        for connection in self
+            .history
+            .iter()
+            .filter_map(|row| row.connection_id.as_ref())
+        {
+            if !connections.contains(connection) {
+                connections.push(connection.clone());
+            }
+        }
+        if let Some(at) = connections
+            .iter()
+            .position(|connection| connection == in_use)
+        {
+            let current = connections.remove(at);
+            connections.insert(0, current);
+        }
+        connections
+    }
+
+    /// Keeps the highlight on a row the filters still list.
     pub fn clamp_history(&mut self) {
-        let count = self.history_matches().len();
+        let count = self.history_lines().len();
         self.history_selected = self.history_selected.min(count.saturating_sub(1));
     }
 }
 
-/// Rows the history list takes a PageUp or PageDown.
-const HISTORY_PAGE: usize = 8;
+/// A statement in the history list: its last run, and the ids of every run of it the
+/// filters leave.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct HistoryLine<'a> {
+    pub row: &'a dexo_storage::HistoryRow,
+    pub ids: Vec<String>,
+}
 
-pub fn handle_history_key(model: &mut Model, key: KeyEvent) -> bool {
-    let editor = &mut model.editor;
-    match key.code {
-        // A search is cleared first; with none, Esc leaves the screen.
-        KeyCode::Esc if !editor.history_search.is_empty() => {
-            editor.history_search.clear();
-            editor.history_selected = 0;
-            true
+/// Which runs the history shows by how they went.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum StatusFilter {
+    #[default]
+    All,
+    Ok,
+    /// Failed or cancelled: what did not run through.
+    Failed,
+}
+
+impl StatusFilter {
+    pub fn next(self) -> Self {
+        match self {
+            Self::All => Self::Ok,
+            Self::Ok => Self::Failed,
+            Self::Failed => Self::All,
         }
-        KeyCode::Esc => false,
-        KeyCode::Up => {
-            editor.history_selected = editor.history_selected.saturating_sub(1);
-            true
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Ok => "ok",
+            Self::Failed => "failed",
         }
-        KeyCode::Down => {
-            editor.history_selected += 1;
-            editor.clamp_history();
-            true
-        }
-        KeyCode::PageUp => {
-            editor.history_selected = editor.history_selected.saturating_sub(HISTORY_PAGE);
-            true
-        }
-        KeyCode::PageDown => {
-            editor.history_selected += HISTORY_PAGE;
-            editor.clamp_history();
-            true
-        }
-        // Anything else is the search, which edits like any input.
-        _ => {
-            if editor.history_search.handle_key(key) {
-                editor.history_selected = 0;
-                true
-            } else {
-                false
-            }
+    }
+
+    fn lets(self, outcome: dexo_storage::HistoryOutcome) -> bool {
+        match self {
+            Self::All => true,
+            Self::Ok => outcome == dexo_storage::HistoryOutcome::Ok,
+            Self::Failed => outcome != dexo_storage::HistoryOutcome::Ok,
         }
     }
 }
 
-/// The statement the highlight is on.
-pub fn picked_history(model: &Model) -> Option<String> {
+/// Rows the history list takes a PageUp or PageDown.
+pub const HISTORY_PAGE: usize = 8;
+
+/// The run the highlight is on.
+pub fn picked_history(model: &Model) -> Option<dexo_storage::HistoryRow> {
     model
         .editor
-        .history_matches()
+        .history_lines()
         .get(model.editor.history_selected)
-        .map(|row| row.sql.clone())
+        .map(|line| line.row.clone())
 }
 
 pub fn handle_snippet_key(model: &mut Model, key: KeyEvent) -> bool {

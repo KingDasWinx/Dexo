@@ -4,14 +4,14 @@
 
 use ratatui::Frame;
 use ratatui::layout::Rect;
-use ratatui::style::{Modifier, Style};
+use ratatui::style::Modifier;
 use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crossterm::event::KeyCode;
 
 use super::Button;
-use super::widgets::{self, Chip, FieldRow};
+use super::widgets::{self, Chip, Entry, FieldRow};
 use crate::model::Model;
 use crate::mouse::{HitButton, HitMap, HitTarget};
 use crate::screens::connections::{Item, State, driver_name, env_name};
@@ -193,15 +193,6 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     buttons
 }
 
-/// One line of the list: what it shows, what a click on it picks, whether the pick is on
-/// it, and whether it is a heading.
-struct Entry {
-    spans: Vec<Span<'static>>,
-    target: Option<HitTarget>,
-    picked: bool,
-    heading: bool,
-}
-
 /// The table's column widths in `width` cells. ADDRESS goes first when they do not fit,
 /// then DRIVER; what a dropped column held is in the detail.
 struct Columns {
@@ -338,18 +329,12 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
     }
     let cursor = screen.cursor(items);
     let mut entries: Vec<Entry> = Vec::new();
-    let line = |text: String, heading: bool| Entry {
-        spans: vec![Span::raw(text)],
-        target: None,
-        picked: false,
-        heading,
-    };
     let docker_heading = |entries: &mut Vec<Entry>| {
-        entries.push(line(String::new(), false));
-        entries.push(line("Found in Docker".into(), true));
+        entries.push(Entry::text(String::new(), false));
+        entries.push(Entry::text("Found in Docker", true));
         let saved = screen.saved_docker();
         if !saved.is_empty() {
-            entries.push(line(
+            entries.push(Entry::text(
                 format!("already saved as connections: {}", saved.join(", ")),
                 false,
             ));
@@ -428,37 +413,7 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
     if !docker && !screen.filtered() && !screen.saved_docker().is_empty() {
         docker_heading(&mut entries);
     }
-    let visible = usize::from(inner.height);
-    let picked = entries.iter().position(|entry| entry.picked).unwrap_or(0);
-    let offset = crate::palette::scroll_to_selection(picked, 0, entries.len(), visible);
-    let lines: Vec<Line> = entries
-        .iter()
-        .skip(offset)
-        .take(visible)
-        .map(|entry| {
-            // The pick is marked as well as reversed, so it reads without colour.
-            let marker = if entry.picked { "> " } else { "  " };
-            let mut spans = vec![Span::raw(marker)];
-            spans.extend(entry.spans.iter().cloned());
-            let mut line = Line::from(spans);
-            if entry.heading {
-                line = line.style(heading);
-            }
-            if entry.picked {
-                let used = line.width();
-                line.spans
-                    .push(Span::raw(" ".repeat(width.saturating_sub(used))));
-                line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
-            }
-            line
-        })
-        .collect();
-    for (line, entry) in entries.iter().skip(offset).take(visible).enumerate() {
-        if let Some(target) = entry.target {
-            hits.register(target, crate::mouse::line_rect(inner, line));
-        }
-    }
-    frame.render_widget(Paragraph::new(lines), inner);
+    widgets::entries(frame, inner, model, hits, &entries);
 }
 
 /// Add or Edit connection, in the pane the details were in.

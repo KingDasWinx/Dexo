@@ -313,7 +313,11 @@ pub fn toolbar(
         }
     } else if !chips.is_empty() {
         let on = chips.iter().filter(|chip| chip.active).count();
-        let text = format!("Filters ({on})");
+        let text = if on == 0 {
+            "Filters".to_string()
+        } else {
+            format!("Filters ({on})")
+        };
         x += text.chars().count() as u16 + 1;
         spans.push(Span::styled(text, if on > 0 { key_style } else { muted }));
     }
@@ -429,4 +433,66 @@ pub fn field_lines(model: &Model, rows: &[FieldRow], width: u16) -> Vec<Line<'st
         }
     }
     lines
+}
+
+/// One line of a list: what it shows, what a click on it picks, whether the pick is on
+/// it, and whether it is a heading.
+#[derive(Clone, Debug)]
+pub struct Entry {
+    pub spans: Vec<Span<'static>>,
+    pub target: Option<HitTarget>,
+    pub picked: bool,
+    pub heading: bool,
+}
+
+impl Entry {
+    /// A line no pick lands on: a heading, or a line of text under one.
+    pub fn text(text: impl Into<String>, heading: bool) -> Self {
+        Self {
+            spans: vec![Span::raw(text.into())],
+            target: None,
+            picked: false,
+            heading,
+        }
+    }
+}
+
+/// `entries` in `area`, scrolled to keep the pick in sight: the pick marked `>` as well as
+/// reversed, so it reads without colour; a heading dimmed; each row answering a click.
+pub fn entries(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, entries: &[Entry]) {
+    let width = usize::from(area.width);
+    let heading = model
+        .theme
+        .style(Role::Muted, model.capabilities)
+        .add_modifier(Modifier::BOLD);
+    let visible = usize::from(area.height);
+    let picked = entries.iter().position(|entry| entry.picked).unwrap_or(0);
+    let offset = crate::palette::scroll_to_selection(picked, 0, entries.len(), visible);
+    let lines: Vec<Line> = entries
+        .iter()
+        .skip(offset)
+        .take(visible)
+        .map(|entry| {
+            let marker = if entry.picked { "> " } else { "  " };
+            let mut spans = vec![Span::raw(marker)];
+            spans.extend(entry.spans.iter().cloned());
+            let mut line = Line::from(spans);
+            if entry.heading {
+                line = line.style(heading);
+            }
+            if entry.picked {
+                let used = line.width();
+                line.spans
+                    .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+                line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+            line
+        })
+        .collect();
+    for (line, entry) in entries.iter().skip(offset).take(visible).enumerate() {
+        if let Some(target) = entry.target {
+            hits.register(target, crate::mouse::line_rect(area, line));
+        }
+    }
+    frame.render_widget(Paragraph::new(lines), area);
 }
