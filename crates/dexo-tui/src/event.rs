@@ -1,7 +1,7 @@
 use crossterm::event::{Event, EventStream, KeyCode, KeyEvent, KeyEventKind, KeyModifiers};
 use dexo_app::DriverRegistry;
 use dexo_storage::AppPaths;
-use futures_util::{FutureExt, StreamExt};
+use futures_util::StreamExt;
 use ratatui::Terminal;
 use ratatui::backend::CrosstermBackend;
 use std::collections::VecDeque;
@@ -64,6 +64,22 @@ fn csi_key(params: &str, last: char) -> Option<KeyEvent> {
         _ => return None,
     };
     Some(KeyEvent::new(code, modifiers))
+}
+
+/// What came with an Esc in the same write, to tell a key glued to it from text. Asked
+/// with this task's waker: crossterm keeps the waker of the first poll that finds nothing
+/// until a key comes, and a `now_or_never` one woke nobody -- the key after the Esc
+/// waited for a timer.
+async fn glued_to_escape<S>(events: &mut S, batch: &mut Vec<Event>) -> std::io::Result<()>
+where
+    S: futures_util::Stream<Item = std::io::Result<Event>> + Unpin,
+{
+    while batch.len() < 16
+        && let Ok(Some(next)) = tokio::time::timeout(Duration::ZERO, events.next()).await
+    {
+        batch.push(next?);
+    }
+    Ok(())
 }
 
 /// An Esc and a key that reached the terminal in one write -- `ESC ESC [ 1 ~` -- are read
@@ -272,13 +288,7 @@ async fn run_loop(
                 let Some(event) = terminal_event else { break };
                 let mut batch = vec![event?];
                 if is_plain_escape(&batch[0]) {
-                    // What came with the Esc in the same write, to tell a key glued to it
-                    // from text.
-                    while batch.len() < 16
-                        && let Some(Some(next)) = events.next().now_or_never()
-                    {
-                        batch.push(next?);
-                    }
+                    glued_to_escape(&mut events, &mut batch).await?;
                     batch = unglue_escape(batch);
                 }
                 for event in batch {
@@ -499,6 +509,66 @@ mod tests {
         wanted.push(key(KeyCode::Down));
         wanted.extend(typed("z"));
         assert_eq!(super::unglue_escape(mixed), wanted);
+    }
+
+    /// The key after an Esc reaches the loop at once. crossterm keeps the waker of the
+    /// first poll that finds nothing until a key comes; the poll gathering what came
+    /// with the Esc gave it one that woke nobody, and the next key waited for a timer:
+    /// Ctrl+N after closing a dialog with Esc seemed to do nothing.
+    #[tokio::test]
+    async fn the_key_after_an_escape_wakes_the_loop() {
+        use futures_util::StreamExt;
+        use std::collections::VecDeque;
+        use std::sync::{Arc, Mutex};
+        use std::task::{Context, Poll, Waker};
+
+        struct Keys {
+            ready: Arc<Mutex<VecDeque<Event>>>,
+            waker: Arc<Mutex<Option<Waker>>>,
+        }
+        impl futures_util::Stream for Keys {
+            type Item = std::io::Result<Event>;
+            fn poll_next(
+                self: std::pin::Pin<&mut Self>,
+                cx: &mut Context<'_>,
+            ) -> Poll<Option<Self::Item>> {
+                if let Some(event) = self.ready.lock().unwrap().pop_front() {
+                    return Poll::Ready(Some(Ok(event)));
+                }
+                // The first waiter only, as crossterm's EventStream does.
+                self.waker
+                    .lock()
+                    .unwrap()
+                    .get_or_insert_with(|| cx.waker().clone());
+                Poll::Pending
+            }
+        }
+
+        let ready = Arc::new(Mutex::new(VecDeque::from([key(KeyCode::Esc)])));
+        let waker = Arc::new(Mutex::new(None::<Waker>));
+        let mut keys = Keys {
+            ready: ready.clone(),
+            waker: waker.clone(),
+        };
+        let mut batch = vec![keys.next().await.unwrap().unwrap()];
+        super::glued_to_escape(&mut keys, &mut batch).await.unwrap();
+        assert_eq!(batch, vec![key(KeyCode::Esc)]);
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(50));
+            ready.lock().unwrap().push_back(key(KeyCode::Down));
+            if let Some(waker) = waker.lock().unwrap().take() {
+                waker.wake();
+            }
+        });
+
+        let started = std::time::Instant::now();
+        let next = tokio::time::timeout(Duration::from_secs(2), keys.next()).await;
+
+        assert!(next.is_ok());
+        assert!(
+            started.elapsed() < Duration::from_secs(1),
+            "the key after the Esc woke nobody: it came with the timeout"
+        );
     }
 
     /// A toast that goes up after the clock sat idle waits a whole period for its first
