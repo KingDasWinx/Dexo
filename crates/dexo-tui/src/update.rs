@@ -1866,7 +1866,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::McpGrantFailed { message } => {
             match model.mcp_profiles.grant_form.as_mut() {
-                Some(form) => form.error = Some(message),
+                Some(form) => {
+                    form.focus_for_error(&message);
+                    form.error = Some(message);
+                }
                 None => model.messages.error(message),
             }
             Vec::new()
@@ -3794,6 +3797,7 @@ fn submit_grant_form(model: &mut Model) -> Vec<Effect> {
             vec![Effect::CreateMcpGrant { profile, request }]
         }
         Err(error) => {
+            form.focus_for_error(&error);
             form.error = Some(error);
             Vec::new()
         }

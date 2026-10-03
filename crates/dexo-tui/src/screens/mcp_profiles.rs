@@ -218,9 +218,33 @@ impl GrantForm {
         }
     }
 
+    /// Puts the focus on the field a refusal is about, so the fix is where the cursor is.
+    pub fn focus_for_error(&mut self, message: &str) {
+        let lower = message.to_lowercase();
+        let field = [
+            ("capability", GRANT_CAPABILITY),
+            ("a time", GRANT_EXPIRES),
+            ("lasts from", GRANT_EXPIRES),
+            ("tool", GRANT_TOOLS),
+            ("confirm", GRANT_CONFIRM),
+            ("selector", GRANT_SELECTOR),
+            ("profile allows", GRANT_SELECTOR),
+            ("narrow the profile", GRANT_SELECTOR),
+            ("connection", GRANT_CONNECTION),
+            ("approval timeout", GRANT_ASK_SECS),
+        ]
+        .into_iter()
+        .find(|(word, _)| lower.contains(word))
+        .map(|(_, field)| field);
+        if let Some(field) = field.filter(|field| self.shown(*field)) {
+            self.focus = field;
+        }
+    }
+
     /// Steps the focused choice.
     pub fn step(&mut self, delta: isize) {
         let wrap = |at: usize, len: usize| (at as isize + delta).rem_euclid(len as isize) as usize;
+        self.error = None;
         match self.focus {
             GRANT_PROFILE if !self.profiles.is_empty() => {
                 self.set_profile(wrap(self.profile, self.profiles.len()));
@@ -350,18 +374,32 @@ impl GrantForm {
             };
             lines.push(format!("{marker} {}: {value}", field.label));
         }
-        lines.push(format!(
-            "  tools for {}: {}",
-            self.capability_name(),
-            CAPABILITIES[self.capability].1
-        ));
-        lines.push("  expires: 90s, 15m, 2h, 1h30m (up to 24h)".into());
-        lines.push("  confirm: type the connection or the selector again".into());
+        // Wrapped, not cut: the tools of a capability are a long line.
+        for hint in [
+            format!(
+                "tools for {}: {}",
+                self.capability_name(),
+                CAPABILITIES[self.capability].1
+            ),
+            "expires: 90s, 15m, 2h, 1h30m (up to 24h)".to_string(),
+            "confirm: type the connection or the selector again".to_string(),
+        ] {
+            for (index, part) in crate::model::wrap_words(&hint, 86).into_iter().enumerate() {
+                lines.push(format!("{}{part}", if index == 0 { "  " } else { "    " }));
+            }
+        }
         // The row is always there, so the buttons do not move when a message comes.
-        lines.push(match &self.error {
-            Some(error) => format!("  {error}"),
-            None => String::new(),
-        });
+        let error = self.error.clone().unwrap_or_default();
+        let mut shown = crate::model::wrap_words(&error, 86);
+        shown.truncate(2);
+        shown.resize(2, String::new());
+        for part in shown {
+            lines.push(if part.is_empty() {
+                part
+            } else {
+                format!("  {part}")
+            });
+        }
         lines.push(footer_line("Create", self.footer_focus()));
         lines
     }
@@ -1023,5 +1061,29 @@ mod tests {
         );
         form.toggle_ask();
         assert!(form.lines().join("\n").contains("approval timeout"));
+    }
+
+    /// A refusal puts the cursor on the field it is about, and the form's size does not
+    /// change when it shows, so the buttons stay where they were.
+    #[test]
+    fn a_refusal_focuses_its_field_and_leaves_the_buttons_in_place() {
+        let choices = vec![ProfileChoice {
+            name: "a".into(),
+            connections: Vec::new(),
+        }];
+        let mut form = GrantForm::new(choices, 0);
+        let before = form.lines().len();
+        form.focus_for_error("a grant lasts from 1 second to 24 hours: write the time as 90s");
+        assert_eq!(form.focus, GRANT_EXPIRES);
+        form.focus_for_error(
+            "db.public.* is outside what the profile allows: a grant can only narrow the profile",
+        );
+        assert_eq!(form.focus, GRANT_SELECTOR);
+        form.focus_for_error("confirm: type local or db.public.t exactly as written above");
+        assert_eq!(form.focus, GRANT_CONFIRM);
+        form.error = Some("a refusal ".repeat(12));
+        assert_eq!(form.lines().len(), before, "the buttons do not move");
+        form.step(1);
+        assert!(form.error.is_none(), "a change takes the old refusal away");
     }
 }
