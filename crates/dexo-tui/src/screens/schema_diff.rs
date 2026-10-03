@@ -216,7 +216,8 @@ impl SchemaDiffScreen {
     }
 
     /// Opens on the sources to pick from. The first side starts on the active connection,
-    /// the second on the next thing that is not it.
+    /// the second on the next connection or snapshot after it -- a file, whose path has
+    /// to be typed, only when there is nothing else.
     pub fn open_picker(&mut self, options: Vec<DiffOption>, active: Option<&str>) {
         *self = Self {
             source_prompt: true,
@@ -231,14 +232,13 @@ impl SchemaDiffScreen {
                 })
             })
             .unwrap_or(0);
-        self.pick = [
-            first,
-            if self.options.len() > 1 {
-                (first + 1) % self.options.len()
-            } else {
-                0
-            },
-        ];
+        let count = self.options.len();
+        let second = (1..count)
+            .map(|step| (first + step) % count)
+            .find(|at| self.options[*at].kind != DiffOptionKind::File)
+            .or((count > 1).then(|| (first + 1) % count))
+            .unwrap_or(0);
+        self.pick = [first, second];
     }
 
     /// The snapshots saved since the picker opened, put after the connections.
@@ -728,6 +728,18 @@ mod tests {
 
         screen.pick = [1, 1];
         assert_eq!(screen.request().unwrap_err(), "Pick two different sources.");
+    }
+
+    /// The connection in use last in the list: the second side wrapped around to the
+    /// file, whose path then had to be typed, past the other connection.
+    #[test]
+    fn the_second_side_is_another_connection_before_a_file() {
+        let mut screen = SchemaDiffScreen::default();
+        let mut sources = options();
+        sources.retain(|option| option.kind != DiffOptionKind::Snapshot);
+        screen.open_picker(sources, Some("pg-b"));
+        assert_eq!(screen.option(0).unwrap().name, "pg-b");
+        assert_eq!(screen.option(1).unwrap().name, "pg-dev");
     }
 
     #[test]
