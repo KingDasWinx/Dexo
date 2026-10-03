@@ -112,7 +112,7 @@ Server (`Ctrl+G s`, or `s` in the sidebar) lists the sessions of the server the 
 
 ## Connections
 
-Connections (`Ctrl+G c`) lists the saved connections and the databases running in Docker, beside where the picked one goes: its address, where its password comes from, its tunnels and its rules. Enter connects, and on a Docker database fills a new connection from it. `n` and `e` -- here or in the sidebar -- open the form in that pane; saving or cancelling a form opened from the sidebar goes back to the sidebar. `d` duplicates, `t` tests, `x` deletes after asking, `c` closes the session, `r` looks for Docker again; each is also a click under the details.
+Connections (`Ctrl+G c`) lists the saved connections and the databases running in Docker, beside where the picked one goes: its address, where its password comes from, its tunnels and its rules. Enter connects, and on a Docker database fills a new connection from it. `n` and `e` -- here or in the sidebar -- open the form in that pane; saving or cancelling a form opened from the sidebar goes back to the sidebar. In the form Enter goes to the next field, and on [Submit], [Test] or [Cancel] does what the button says; Left and Right pick a driver or another value from a list, and Space opens the advanced options. `d` duplicates, `t` tests, `x` deletes after asking, `c` closes the session, `r` looks for Docker again; each is also a click under the details.
 
 ## Compare
 

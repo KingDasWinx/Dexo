@@ -191,7 +191,7 @@ const TALL: u16 = 24;
 
 pub fn hints(model: &Model) -> String {
     if model.connection_form.open {
-        "Tab next  Left/Right pick a value  Enter save  Esc cancel".into()
+        "Enter next  Left/Right pick a value  Space advanced  Esc cancel".into()
     } else if model.height >= TALL {
         "Up/Down pick  Esc back".into()
     } else {

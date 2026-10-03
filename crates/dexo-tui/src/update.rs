@@ -5765,7 +5765,7 @@ fn handle_palette_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 
 fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     match key.code {
-        KeyCode::Enter | KeyCode::Char(' ') if model.connection_form.on_advanced() => {
+        KeyCode::Char(' ') if model.connection_form.on_advanced() => {
             model.connection_form.toggle_advanced();
             Vec::new()
         }
@@ -5787,8 +5787,10 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::Enter if model.connection_form.on_test() => test_connection(model),
-        KeyCode::Enter => save_connection(model),
-        KeyCode::Tab | KeyCode::Down => {
+        KeyCode::Enter if model.connection_form.on_submit() => save_connection(model),
+        // On a field, Enter goes on to the next one: it saved from any field, half
+        // filled in.
+        KeyCode::Enter | KeyCode::Tab | KeyCode::Down => {
             model.connection_form.focus_next();
             Vec::new()
         }
