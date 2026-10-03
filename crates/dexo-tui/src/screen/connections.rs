@@ -119,7 +119,7 @@ fn picked_fields(model: &Model) -> (String, Vec<FieldRow>) {
 }
 
 /// What acts on the whole screen rather than the pick.
-fn toolbar_buttons() -> Vec<Button> {
+pub fn toolbar_buttons() -> Vec<Button> {
     vec![
         Button::new(KeyCode::Char('u'), "From URL"),
         Button::new(KeyCode::Char('n'), "New"),

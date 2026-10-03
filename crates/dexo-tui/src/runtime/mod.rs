@@ -972,6 +972,11 @@ impl WorkbenchRuntime {
             crate::Effect::ClearHistory { connection_id } => {
                 self.clear_history(connection_id).await
             }
+            crate::Effect::DeleteHistory { ids } => {
+                if let Some(storage) = &self.storage {
+                    let _ = storage.delete_history(ids);
+                }
+            }
             crate::Effect::PersistLayout { project_id, layout } => {
                 self.persist_layout(project_id, layout).await
             }

@@ -378,9 +378,11 @@ fn saved_queries_save_search_open_rename_and_delete() {
         "{screen}"
     );
     assert!(screen.contains("Users elsewhere · warehouse"), "{screen}");
+    update(&mut model, key(KeyCode::Char('/')));
     for ch in "users".chars() {
         update(&mut model, key(KeyCode::Char(ch)));
     }
+    update(&mut model, key(KeyCode::Enter));
     assert_eq!(model.saved_queries.filtered().len(), 2);
     update(&mut model, key(KeyCode::Down));
     assert_eq!(

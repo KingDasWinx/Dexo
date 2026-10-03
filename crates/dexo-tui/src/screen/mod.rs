@@ -25,6 +25,16 @@ use crate::theme::Role;
 pub fn buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
         Screen::Connections if !model.connection_form.open => connections::buttons(model),
+        Screen::History => history::buttons(model),
+        _ => Vec::new(),
+    }
+}
+
+/// The buttons on the shown screen's toolbar, which act on all of it.
+pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+    match model.shown_screen() {
+        Screen::Connections if !model.connection_form.open => connections::toolbar_buttons(),
+        Screen::History => history::toolbar_buttons(model),
         _ => Vec::new(),
     }
 }
@@ -112,9 +122,10 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
 pub fn search(model: &Model) -> Option<&widgets::Search> {
     match model.shown_screen() {
         Screen::Connections => Some(&model.connections.search),
-        Screen::History if model.history_view == history::HistoryView::History => {
-            Some(&model.editor.history_search)
-        }
+        Screen::History => Some(match model.history_view {
+            history::HistoryView::History => &model.editor.history_search,
+            history::HistoryView::Saved => &model.saved_queries.search,
+        }),
         _ => None,
     }
 }
@@ -124,7 +135,10 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
 pub fn stop_typing(model: &mut Model) {
     match model.shown_screen() {
         Screen::Connections => model.connections.search.typing = false,
-        Screen::History => model.editor.history_search.typing = false,
+        Screen::History => {
+            model.editor.history_search.typing = false;
+            model.saved_queries.search.typing = false;
+        }
         _ => {}
     }
 }

@@ -45,7 +45,9 @@ impl SaveQueryPrompt {
 pub struct SavedQueriesPicker {
     /// `None` until the list has been read.
     pub items: Option<Vec<SavedQuery>>,
-    pub search: TextInput,
+    pub search: crate::screen::widgets::Search,
+    /// Only the queries of this connection, by its id.
+    pub connection: Option<String>,
     /// Into what the search lets through.
     pub selected: usize,
     pub renaming: Option<TextInput>,
@@ -67,15 +69,39 @@ impl SavedQueriesPicker {
         self.items = Some(items);
     }
 
+    /// The queries the search and the connection filter let through. The search is
+    /// smart-case: a capital in it makes the case count.
     pub fn filtered(&self) -> Vec<&SavedQuery> {
-        let needle = self.search.as_str().trim().to_lowercase();
+        let needle = self.search.input.trim();
+        let exact = needle.chars().any(char::is_uppercase);
         self.items
             .iter()
             .flatten()
             .zip(&self.lowered)
-            .filter(|(_, lowered)| needle.is_empty() || lowered.contains(&needle))
+            .filter(|(query, lowered)| {
+                self.connection
+                    .as_ref()
+                    .is_none_or(|connection| &query.connection_id == connection)
+                    && (needle.is_empty()
+                        || if exact {
+                            query.name.contains(needle) || query.sql.contains(needle)
+                        } else {
+                            lowered.contains(needle)
+                        })
+            })
             .map(|(query, _)| query)
             .collect()
+    }
+
+    /// The connections the queries are of, by id, in the order they come.
+    pub fn connections(&self) -> Vec<String> {
+        let mut connections: Vec<String> = Vec::new();
+        for query in self.items.iter().flatten() {
+            if !connections.contains(&query.connection_id) {
+                connections.push(query.connection_id.clone());
+            }
+        }
+        connections
     }
 
     pub fn current(&self) -> Option<&SavedQuery> {
@@ -103,15 +129,18 @@ mod tests {
     }
 
     #[test]
-    fn the_search_matches_names_and_sql() {
+    fn the_search_matches_names_and_sql_in_smart_case() {
         let mut picker = SavedQueriesPicker::default();
         picker.set_items(vec![
             query("Top customers", "select * from customers"),
             query("Late orders", "select * from orders where late"),
         ]);
-        picker.search.set_text("ORDERS");
+        picker.search.input.set_text("orders");
         assert_eq!(picker.filtered().len(), 1);
-        picker.search.set_text("custom");
+        // A capital makes the case count.
+        picker.search.input.set_text("ORDERS");
+        assert!(picker.filtered().is_empty());
+        picker.search.input.set_text("custom");
         assert_eq!(
             picker.current().map(|query| query.name.as_str()),
             Some("Top customers")

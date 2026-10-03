@@ -190,3 +190,197 @@ fn nothing_matching_offers_to_clear_the_filters() {
     assert!(frame.contains("Nothing matches the filters."), "{frame}");
     assert!(frame.contains("[Esc Clear filters]"), "{frame}");
 }
+
+/// The history above, with pg-dev saved and the project open.
+fn history_with_connections() -> Model {
+    let mut model = history();
+    model.project_id = "project-1".into();
+    model
+        .connections
+        .load_profiles(vec![dexo_app::ConnectionProfile::new(
+            dexo_app::ConnectionId(uuid::Uuid::from_u128(7)),
+            None,
+            "pg-dev",
+            "postgres",
+            "development",
+            serde_json::json!({"host":"h","port":5432,"username":"u","database":"qa0"}),
+            dexo_app::SecretRef::new("r".into()),
+        )]);
+    paint(&mut model);
+    model
+}
+
+#[test]
+fn the_runs_buttons_are_over_its_detail() {
+    let mut model = history_with_connections();
+    let frame = paint(&mut model);
+    for button in [
+        "[⏎ Open]",
+        "[r Run again]",
+        "[y Copy]",
+        "[s Save…]",
+        "[x Delete]",
+        "[C Clear…]",
+    ] {
+        assert!(frame.contains(button), "{button}: {frame}");
+    }
+}
+
+#[test]
+fn open_and_run_again_put_the_statement_on_its_connection() {
+    let mut model = history_with_connections();
+    press(&mut model, KeyCode::Enter);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
+    assert_eq!(model.active_document().text(), "select * from nope");
+    let pg_dev = uuid::Uuid::from_u128(7).to_string();
+    assert_eq!(
+        model.active_document().connection_id.as_deref(),
+        Some(pg_dev.as_str())
+    );
+
+    let mut model = history_with_connections();
+    let effects = press(&mut model, KeyCode::Char('r'));
+    assert_eq!(model.active_document().text(), "select * from nope");
+    // pg-dev is not connected: it is dialled, once, and the run waits for it.
+    let dials = effects
+        .iter()
+        .filter(|effect| matches!(effect, Effect::ConnectProfile { .. }))
+        .count();
+    assert_eq!(dials, 1, "{effects:?}");
+    assert!(model.pending_execute.is_some());
+}
+
+#[test]
+fn copy_save_and_delete_act_on_the_pick() {
+    let mut model = history_with_connections();
+    let effects = press(&mut model, KeyCode::Char('y'));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CopyToClipboard { text } if text == "select * from nope"
+    )));
+    press(&mut model, KeyCode::Char('s'));
+    let prompt = model.save_query_prompt.as_ref().expect("asks for a name");
+    assert_eq!(prompt.sql, "select * from nope");
+    assert_eq!(prompt.connection_id, uuid::Uuid::from_u128(7).to_string());
+    model.save_query_prompt = None;
+
+    // count(*) ran twice on pg-dev: both runs go.
+    press(&mut model, KeyCode::Down);
+    let effects = press(&mut model, KeyCode::Char('x'));
+    let ids = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::DeleteHistory { ids } => Some(ids.clone()),
+            _ => None,
+        })
+        .expect("deletes");
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    assert!(
+        !model
+            .editor
+            .history_lines()
+            .iter()
+            .any(|line| line.row.sql == "select count(*) from orders")
+    );
+}
+
+#[test]
+fn a_statement_of_a_connection_no_longer_saved_cannot_be_saved_and_says_why() {
+    let mut model = history_with_connections();
+    // my-dev's statement: no such saved connection.
+    press(&mut model, KeyCode::Down);
+    press(&mut model, KeyCode::Down);
+    press(&mut model, KeyCode::Char('s'));
+    assert!(model.save_query_prompt.is_none());
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.message.contains("saved connection"))
+    );
+}
+
+#[test]
+fn clear_asks_naming_how_many_go_and_clears_what_is_shown() {
+    let mut model = history_with_connections();
+    press(&mut model, KeyCode::Char('c'));
+    assert_eq!(model.editor.history_connection.as_deref(), Some("pg-dev"));
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT)),
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("Clear the 2 statements shown?"), "{frame}");
+    // Cancel has the focus.
+    let kept = press(&mut model, KeyCode::Enter);
+    assert!(
+        !kept
+            .iter()
+            .any(|effect| matches!(effect, Effect::DeleteHistory { .. }))
+    );
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Char('C'), KeyModifiers::SHIFT)),
+    );
+    press(&mut model, KeyCode::Left);
+    let effects = press(&mut model, KeyCode::Enter);
+    let ids = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::DeleteHistory { ids } => Some(ids.clone()),
+            _ => None,
+        })
+        .expect("clears");
+    assert_eq!(ids.len(), 3, "pg-dev's three runs: {ids:?}");
+    assert_eq!(model.editor.history.len(), 2, "the others stay");
+}
+
+#[test]
+fn saved_queries_search_after_slash_filter_by_connection_and_take_letters() {
+    let mut model = history_with_connections();
+    press(&mut model, KeyCode::Tab);
+    let pg_dev = uuid::Uuid::from_u128(7).to_string();
+    let saved = |id: &str, name: &str, connection: &str| dexo_storage::SavedQuery {
+        id: id.into(),
+        connection_id: connection.into(),
+        name: name.into(),
+        sql: format!("select '{name}'"),
+    };
+    update(
+        &mut model,
+        Action::SavedQueriesLoaded(Ok(vec![
+            saved("q1", "Late orders", &pg_dev),
+            saved("q2", "Elsewhere", "another"),
+        ])),
+    );
+    let frame = paint(&mut model);
+    assert!(frame.contains("/ search"), "{frame}");
+    assert!(frame.contains("[c Connection: all]"), "{frame}");
+    for button in [
+        "[⏎ Open]",
+        "[r Run]",
+        "[y Copy]",
+        "[F2 Rename]",
+        "[x Delete]",
+    ] {
+        assert!(frame.contains(button), "{button}: {frame}");
+    }
+    press(&mut model, KeyCode::Char('c'));
+    assert_eq!(model.saved_queries.filtered().len(), 1);
+    press(&mut model, KeyCode::Char('c'));
+    press(&mut model, KeyCode::Char('c'));
+    assert_eq!(model.saved_queries.filtered().len(), 2);
+    press(&mut model, KeyCode::Char('/'));
+    for ch in "late".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    press(&mut model, KeyCode::Enter);
+    assert_eq!(model.saved_queries.filtered().len(), 1);
+    let effects = press(&mut model, KeyCode::Char('y'));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        Effect::CopyToClipboard { text } if text == "select 'Late orders'"
+    )));
+    press(&mut model, KeyCode::Char('x'));
+    assert!(model.saved_queries.deleting.is_some());
+}

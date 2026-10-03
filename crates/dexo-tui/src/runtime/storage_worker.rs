@@ -44,6 +44,9 @@ pub enum StorageCommand {
     ClearHistory {
         connection_id: String,
     },
+    DeleteHistory {
+        ids: Vec<String>,
+    },
     ListSnippets {
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_sql::Snippet>>>,
     },
@@ -186,6 +189,9 @@ impl StorageWorker {
                         } => {
                             let repo = HistoryRepository::new(db.connection());
                             let _ = reply.send(repo.entries(connection_id.as_deref()));
+                        }
+                        StorageCommand::DeleteHistory { ids } => {
+                            let _ = HistoryRepository::new(db.connection()).delete(&ids);
                         }
                         StorageCommand::ClearHistory { connection_id } => {
                             let repo = HistoryRepository::new(db.connection());
@@ -407,6 +413,11 @@ impl StorageWorker {
             reply,
         })?;
         receive.await?
+    }
+
+    pub fn delete_history(&self, ids: Vec<String>) -> anyhow::Result<()> {
+        self.tx.send(StorageCommand::DeleteHistory { ids })?;
+        Ok(())
     }
 
     pub fn clear_history(&self, connection_id: String) -> anyhow::Result<()> {

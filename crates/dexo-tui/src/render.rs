@@ -3112,14 +3112,30 @@ fn render_clear_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     }
     let name = model.connection.name.as_str();
     let popup = centered(area, 60, 7);
-    let question = if name.is_empty() {
-        "Clear all of the history?".to_string()
-    } else {
-        format!("Clear the history of {name}?")
+    let (question, what) = match &editor.history_clearing {
+        Some((statements, ids)) => (
+            format!(
+                "Clear the {statements} statement{} shown?",
+                if *statements == 1 { "" } else { "s" }
+            ),
+            format!(
+                "Their {} run{} are removed for good.",
+                ids.len(),
+                if ids.len() == 1 { "" } else { "s" }
+            ),
+        ),
+        None if name.is_empty() => (
+            "Clear all of the history?".to_string(),
+            "The statements it holds are removed for good.".to_string(),
+        ),
+        None => (
+            format!("Clear the history of {name}?"),
+            "The statements it holds are removed for good.".to_string(),
+        ),
     };
     let lines = vec![
         question,
-        "The statements it holds are removed for good.".into(),
+        what,
         String::new(),
         footer_line("Clear", editor.history_footer),
     ];
@@ -3443,11 +3459,12 @@ mod tests {
                 name: "monthly".into(),
                 sql: "select 1".into(),
             }]);
-        model.saved_queries.search = TextInput::new("mon");
-        model.saved_queries.search.select_all();
+        model.saved_queries.search.input = TextInput::new("mon");
+        model.saved_queries.search.input.select_all();
+        model.saved_queries.search.typing = true;
         assert!(reversed(&model).contains("mon"));
 
-        model.saved_queries.search.clear();
+        model.saved_queries.search = Default::default();
         let mut name = TextInput::new("monthly-sales");
         name.select_all();
         model.saved_queries.renaming = Some(name);

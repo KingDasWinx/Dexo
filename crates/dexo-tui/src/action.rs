@@ -1132,6 +1132,10 @@ pub enum Effect {
     ClearHistory {
         connection_id: String,
     },
+    /// These runs out of History.
+    DeleteHistory {
+        ids: Vec<String>,
+    },
     SwitchProject {
         name: String,
     },

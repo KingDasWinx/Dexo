@@ -184,20 +184,22 @@ pub struct Search {
 }
 
 impl Search {
-    /// A key while typing. False for the keys that still walk the list: Up and Down.
+    /// A key while typing. False for the keys that are not the search's: Up and Down,
+    /// which still walk the list, and those the input does nothing with.
     pub fn key(&mut self, key: KeyEvent) -> bool {
         match key.code {
-            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => return false,
-            KeyCode::Enter => self.typing = false,
+            KeyCode::Up | KeyCode::Down | KeyCode::PageUp | KeyCode::PageDown => false,
+            KeyCode::Enter => {
+                self.typing = false;
+                true
+            }
             KeyCode::Esc => {
                 self.input.clear();
                 self.typing = false;
+                true
             }
-            _ => {
-                self.input.handle_key(key);
-            }
+            _ => self.input.handle_key(key),
         }
-        true
     }
 
     /// Whether one of `fields` holds what was typed.
@@ -271,6 +273,8 @@ pub fn toolbar(
                 Style::default().add_modifier(Modifier::UNDERLINED),
             ));
             if search.typing {
+                let field = Rect::new(row.x, row.y, box_width, 1);
+                crate::render::paint_selection(frame, field, "/ ", &search.input, true);
                 frame.set_cursor_position(ratatui::layout::Position::new(
                     row.x + 2 + at as u16,
                     row.y,

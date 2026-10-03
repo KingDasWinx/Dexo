@@ -55,6 +55,10 @@ pub struct EditorState {
     /// The pick among `history_lines`.
     pub history_selected: usize,
     pub history_confirm_clear: bool,
+    /// What the clear confirmation asks about when History's Clear asked it: how many
+    /// statements are shown, and the ids of their runs. None is the palette's Clear
+    /// History, of the connection in use.
+    pub history_clearing: Option<(usize, Vec<String>)>,
     /// The focus of the clear confirmation's two buttons.
     pub history_footer: crate::widgets::form::FooterFocus,
     /// What the history list is narrowed to: a text in the statement, a connection, how
@@ -129,6 +133,7 @@ impl Clone for EditorState {
             history: self.history.clone(),
             history_selected: self.history_selected,
             history_confirm_clear: self.history_confirm_clear,
+            history_clearing: self.history_clearing.clone(),
             history_footer: self.history_footer,
             history_search: self.history_search.clone(),
             history_connection: self.history_connection.clone(),
@@ -199,6 +204,7 @@ impl Default for EditorState {
             history: Vec::new(),
             history_selected: 0,
             history_confirm_clear: false,
+            history_clearing: None,
             history_footer: crate::widgets::form::FooterFocus::Cancel,
             history_search: Default::default(),
             history_connection: None,

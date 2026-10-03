@@ -7,7 +7,6 @@ use dexo_storage::HistoryOutcome;
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::text::{Line, Span, Text};
-use ratatui::widgets::Paragraph;
 
 use super::Button;
 use super::widgets::{self, Chip, Entry, FieldRow};
@@ -64,29 +63,19 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         area.width - views_width,
         area.height,
     );
-    let rest = match model.history_view {
-        HistoryView::History => widgets::toolbar(
-            frame,
-            tools,
-            model,
-            hits,
-            Some(&model.editor.history_search),
-            &chips(model),
-            &[],
-        ),
-        HistoryView::Saved => {
-            // The search, typed into from anywhere on the screen.
-            let row = Rect::new(tools.x, tools.y, tools.width, 1.min(tools.height));
-            let search = &model.saved_queries.search;
-            let before = "Search: ";
-            frame.render_widget(Paragraph::new(format!("{before}{}", search.as_str())), row);
-            if model.saved_queries.renaming.is_none() {
-                crate::render::paint_selection(frame, row, before, search, true);
-                crate::render::show_input(frame, row, before, search, false);
-            }
-            tools
-        }
+    let search = match model.history_view {
+        HistoryView::History => &model.editor.history_search,
+        HistoryView::Saved => &model.saved_queries.search,
     };
+    let rest = widgets::toolbar(
+        frame,
+        tools,
+        model,
+        hits,
+        Some(search),
+        &chips(model),
+        &toolbar_buttons(model),
+    );
     let rest = Rect::new(
         area.x,
         rest.y,
@@ -113,9 +102,23 @@ fn draw_view(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 }
 
-/// The filters over the list: which connection's runs, and which outcome.
+/// The filters over the list: which connection's runs, and which outcome; a saved
+/// query's connection.
 fn chips(model: &Model) -> Vec<Chip> {
     let editor = &model.editor;
+    if model.history_view == HistoryView::Saved {
+        let connection = &model.saved_queries.connection;
+        return vec![Chip {
+            key: KeyCode::Char('c'),
+            label: format!(
+                "Connection: {}",
+                connection
+                    .as_ref()
+                    .map_or("all".to_string(), |id| connection_name(model, id))
+            ),
+            active: connection.is_some(),
+        }];
+    }
     vec![
         Chip {
             key: KeyCode::Char('c'),
@@ -131,6 +134,84 @@ fn chips(model: &Model) -> Vec<Chip> {
             active: editor.history_status != StatusFilter::All,
         },
     ]
+}
+
+/// What acts on all History shows: clearing it.
+pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+    match model.history_view {
+        HistoryView::History => vec![Button::new(KeyCode::Char('C'), "Clear…").enabled_if(
+            !model.editor.history_lines().is_empty(),
+            "Nothing is shown to clear.",
+        )],
+        HistoryView::Saved => Vec::new(),
+    }
+}
+
+/// What can be done to the pick: open it, run it, copy it, save or rename it, delete it.
+pub fn buttons(model: &Model) -> Vec<Button> {
+    match model.history_view {
+        HistoryView::History => {
+            let Some(row) = crate::screens::editor::picked_history(model) else {
+                return Vec::new();
+            };
+            let refusal = save_refusal(model, &row);
+            vec![
+                Button::new(KeyCode::Enter, "Open"),
+                Button::new(KeyCode::Char('r'), "Run again"),
+                Button::new(KeyCode::Char('y'), "Copy"),
+                Button::new(KeyCode::Char('s'), "Save…")
+                    .enabled_if(refusal.is_none(), refusal.unwrap_or_default()),
+                Button::new(KeyCode::Char('x'), "Delete"),
+            ]
+        }
+        HistoryView::Saved if model.saved_queries.current().is_some() => vec![
+            Button::new(KeyCode::Enter, "Open"),
+            Button::new(KeyCode::Char('r'), "Run"),
+            Button::new(KeyCode::Char('y'), "Copy"),
+            Button::new(KeyCode::F(2), "Rename"),
+            Button::new(KeyCode::Char('x'), "Delete"),
+        ],
+        HistoryView::Saved => Vec::new(),
+    }
+}
+
+/// The id of the saved connection a run was on: what a saved query belongs to.
+pub fn saved_connection_id(model: &Model, row: &dexo_storage::HistoryRow) -> Option<String> {
+    let name = row.connection_id.as_deref()?;
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|profile| profile.profile.name == name && !profile.temporary)
+        .map(|profile| profile.profile.id.0.to_string())
+}
+
+/// Why a run cannot be saved as a query, when it cannot.
+pub fn save_refusal(model: &Model, row: &dexo_storage::HistoryRow) -> Option<String> {
+    if model.project_id.is_empty() {
+        return Some("Saved queries belong to a project; open one first.".into());
+    }
+    if saved_connection_id(model, row).is_none() {
+        return Some(match row.connection_id.as_deref() {
+            Some(name) => {
+                format!("A saved query belongs to a saved connection, and {name} is not one.")
+            }
+            None => "A saved query belongs to a saved connection, and this ran on none.".into(),
+        });
+    }
+    None
+}
+
+/// A connection by its id, as people know it.
+fn connection_name(model: &Model, id: &str) -> String {
+    model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.id.0.to_string() == id)
+        .map_or("another connection".to_string(), |row| {
+            row.profile.name.clone()
+        })
 }
 
 fn history(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
@@ -189,7 +270,7 @@ fn history(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         model,
         hits,
         &title,
-        &[Button::new(KeyCode::Enter, "Open")],
+        &buttons(model),
         Text::from(text),
         usize::from(super::detail_scroll(model)),
         &[],
@@ -374,7 +455,15 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 None => "No saved queries yet; Save Query As saves one.".into(),
             }
         } else {
-            "No saved query matches.".into()
+            widgets::empty_with_buttons(
+                frame,
+                area,
+                model,
+                hits,
+                &["Nothing matches the filters.".to_string()],
+                &[Button::new(KeyCode::Esc, "Clear filters")],
+            );
+            return;
         };
         let mut lines = vec![line];
         lines.extend(picker.error.clone());
@@ -394,15 +483,7 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             if current.as_deref() == Some(query.connection_id.as_str()) {
                 name
             } else {
-                let owner = model
-                    .connections
-                    .profiles
-                    .iter()
-                    .find(|row| row.profile.id.0.to_string() == query.connection_id)
-                    .map_or("another connection".to_string(), |row| {
-                        row.profile.name.clone()
-                    });
-                format!("{name} · {owner}")
+                format!("{name} · {}", connection_name(model, &query.connection_id))
             }
         })
         .collect();
@@ -418,8 +499,35 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         &rows,
         Some(picked),
     );
-    let width = usize::from(detail.width.saturating_sub(2)).max(8);
-    let lines = statement_lines(&filtered[picked].sql, width);
+    let query = filtered[picked];
+    let width = detail.width.saturating_sub(2);
+    let driver = model
+        .connections
+        .profiles
+        .iter()
+        .find(|row| row.profile.id.0.to_string() == query.connection_id)
+        .map_or("postgres", |row| row.profile.driver.as_str());
+    let mut text: Vec<Line> = crate::widgets::editor::sql_lines(
+        &query.sql,
+        usize::from(width),
+        dexo_app::dialect_for_driver(driver),
+    )
+    .into_iter()
+    .map(|line| {
+        let mut spans = vec![Span::raw(" ")];
+        spans.extend(line.spans);
+        Line::from(spans)
+    })
+    .collect();
+    text.push(Line::default());
+    text.extend(widgets::field_lines(
+        model,
+        &[FieldRow::Field(
+            "Connection",
+            connection_name(model, &query.connection_id),
+        )],
+        width,
+    ));
     let mut footer = Vec::new();
     if let Some(focus) = picker.deleting {
         footer.push(format!(
@@ -430,13 +538,14 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     } else {
         footer.extend(picker.error.clone());
     }
-    let (footer_area, _, _) = super::text_pane(
+    let (footer_area, _, _) = super::detail_pane(
         frame,
         detail,
         model,
         hits,
-        &filtered[picked].name,
-        &lines,
+        &query.name,
+        &buttons(model),
+        Text::from(text),
         usize::from(super::detail_scroll(model)),
         &footer,
     );
@@ -456,13 +565,6 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             }
         }
     }
-}
-
-/// A statement whole, wrapped to `width`.
-fn statement_lines(sql: &str, width: usize) -> Vec<String> {
-    sql.lines()
-        .flat_map(|line| crate::model::wrap_display_text(line, width))
-        .collect()
 }
 
 fn one_line(sql: &str) -> String {
@@ -523,8 +625,7 @@ pub fn hints(model: &Model) -> String {
             "Type to search  Up/Down pick  Enter keep  Esc clear".into()
         }
         HistoryView::History => {
-            "Up/Down pick  Enter open  / search  c connection  f status  Tab saved  Esc back"
-                .into()
+            "Up/Down pick  Enter open  / search  c connection  f status  Tab saved  Esc back".into()
         }
         HistoryView::Saved if model.saved_queries.renaming.is_some() => {
             "type the name  Enter rename  Esc cancel".into()
@@ -532,8 +633,11 @@ pub fn hints(model: &Model) -> String {
         HistoryView::Saved if model.saved_queries.deleting.is_some() => {
             "Left/Right pick  Enter answer  Esc cancel".into()
         }
+        HistoryView::Saved if model.saved_queries.search.typing => {
+            "Type to search  Up/Down pick  Enter keep  Esc clear".into()
+        }
         HistoryView::Saved => {
-            "type to search  Up/Down pick  Enter open  F2 rename  Delete delete  Tab history  Esc back"
+            "Up/Down pick  Enter open  / search  c connection  F2 rename  Tab history  Esc back"
                 .into()
         }
     }

@@ -3776,6 +3776,7 @@ fn mouse_history(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::FooterSubmit) => confirm_clear_history(model),
         Some(HitTarget::FooterCancel) => {
             model.editor.history_confirm_clear = false;
+            model.editor.history_clearing = None;
             Vec::new()
         }
         _ => Vec::new(),
@@ -5079,6 +5080,7 @@ fn screen_press(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
         && let Some(button) = crate::screen::buttons(model)
             .into_iter()
+            .chain(crate::screen::toolbar_buttons(model))
             .find(|button| button.answers(key.code, shift))
         && let Err(why) = button.enabled
     {
@@ -10720,37 +10722,83 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         return Some(Vec::new());
     }
+    if picker.search.typing && picker.search.key(key) {
+        picker.selected = 0;
+        picker.error = None;
+        return Some(Vec::new());
+    }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    let count = picker.filtered().len();
     match key.code {
-        // A search is cleared first; with none, Esc leaves the screen.
-        KeyCode::Esc if !picker.search.is_empty() => {
-            picker.search.clear();
+        // The search goes first, then the connection, then the screen. With nothing
+        // shown, both at once: the Clear filters button under the list.
+        KeyCode::Esc => {
+            let searched = !picker.search.input.is_empty();
+            if searched && (count > 0 || picker.connection.is_none()) {
+                picker.search = Default::default();
+            } else if searched || picker.connection.is_some() {
+                picker.search = Default::default();
+                picker.connection = None;
+            } else {
+                return None;
+            }
             picker.selected = 0;
         }
-        KeyCode::Esc => return None,
+        KeyCode::Char('/') => picker.search.typing = true,
+        KeyCode::Char('c') => {
+            let connections = picker.connections();
+            picker.connection = match &picker.connection {
+                None => connections.first().cloned(),
+                Some(current) => connections
+                    .iter()
+                    .position(|connection| connection == current)
+                    .and_then(|at| connections.get(at + 1))
+                    .cloned(),
+            };
+            picker.selected = 0;
+        }
         KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
         KeyCode::Down => {
             picker.selected += 1;
             picker.clamp();
         }
+        KeyCode::PageUp => {
+            picker.selected = picker
+                .selected
+                .saturating_sub(crate::screens::editor::HISTORY_PAGE);
+        }
+        KeyCode::PageDown => {
+            picker.selected += crate::screens::editor::HISTORY_PAGE;
+            picker.clamp();
+        }
+        KeyCode::Home => picker.selected = 0,
+        KeyCode::End => picker.selected = count.saturating_sub(1),
         KeyCode::Enter => return Some(open_saved_query(model)),
+        KeyCode::Char('r') => {
+            let opened = open_saved_query(model);
+            return Some(run_opened(model, opened));
+        }
+        KeyCode::Char('y') => {
+            let sql = picker.current().map(|query| query.sql.clone());
+            return Some(copy_sql(model, sql));
+        }
         KeyCode::F(2) => {
             if let Some(name) = picker.current().map(|query| query.name.clone()) {
                 picker.renaming = Some(crate::widgets::text_input::TextInput::new(name));
                 picker.error = None;
             }
         }
-        KeyCode::Delete if picker.current().is_some() => {
+        KeyCode::Char('x') | KeyCode::Delete if picker.current().is_some() => {
             // Cancel holds the focus: Enter alone keeps the query.
             picker.deleting = Some(crate::widgets::form::FooterFocus::Cancel);
             picker.error = None;
         }
-        _ => {
-            if !picker.search.handle_key(key) {
-                return None;
-            }
-            picker.selected = 0;
-            picker.error = None;
-        }
+        _ => return None,
     }
     Some(Vec::new())
 }
@@ -12869,6 +12917,7 @@ fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         FooterKey::Submit => confirm_clear_history(model),
         FooterKey::Cancel => {
             model.editor.history_confirm_clear = false;
+            model.editor.history_clearing = None;
             Vec::new()
         }
         FooterKey::Moved | FooterKey::Pass => Vec::new(),
@@ -12914,6 +12963,18 @@ fn history_list_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     {
         return None;
     }
+    match key.code {
+        KeyCode::Char('r') => return Some(run_history_entry(model)),
+        KeyCode::Char('y') => {
+            let sql = crate::screens::editor::picked_history(model).map(|row| row.sql);
+            return Some(copy_sql(model, sql));
+        }
+        KeyCode::Char('s') => return Some(save_history_entry(model)),
+        KeyCode::Char('x') | KeyCode::Delete => return Some(delete_history_entry(model)),
+        KeyCode::Char('C') => return Some(ask_clear_shown_history(model)),
+        _ => {}
+    }
+    let editor = &mut model.editor;
     let count = editor.history_lines().len();
     match key.code {
         // With nothing shown, both at once: the Clear filters button under the list.
@@ -13973,6 +14034,7 @@ fn submit_parameter_prompt(model: &mut Model) -> Vec<Effect> {
 /// Asks first, whether or not the list has been read: the palette used to refuse with
 /// "history is empty" until Search History had loaded it.
 fn open_clear_history(model: &mut Model) -> Vec<Effect> {
+    model.editor.history_clearing = None;
     model.editor.history_confirm_clear = true;
     // Cancel holds the focus: an Enter out of habit keeps the history.
     model.editor.history_footer = crate::widgets::form::FooterFocus::Cancel;
@@ -13980,16 +14042,131 @@ fn open_clear_history(model: &mut Model) -> Vec<Effect> {
 }
 
 fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
-    let connection_id = model.connection.name.clone();
     model.editor.history_confirm_clear = false;
-    model.editor.history.clear();
-    model.editor.history_selected = 0;
+    // History's Clear: the runs it showed.
+    if let Some((statements, ids)) = model.editor.history_clearing.take() {
+        model.editor.history.retain(|row| !ids.contains(&row.id));
+        model.editor.clamp_history();
+        model.messages.info(format!(
+            "{statements} statement{} cleared from History.",
+            if statements == 1 { "" } else { "s" }
+        ));
+        return vec![Effect::DeleteHistory { ids }];
+    }
+    // The palette's: the connection in use's, or all of it with none. The list holds
+    // every connection's, and keeps the others'.
+    let connection_id = model.connection.name.clone();
+    if connection_id.is_empty() {
+        model.editor.history.clear();
+    } else {
+        model
+            .editor
+            .history
+            .retain(|row| row.connection_id.as_deref() != Some(connection_id.as_str()));
+    }
+    model.editor.clamp_history();
     model.messages.info(if connection_id.is_empty() {
         "History cleared.".into()
     } else {
         format!("History of {connection_id} cleared.")
     });
     vec![Effect::ClearHistory { connection_id }]
+}
+
+/// `r` in History: the statement opens on its connection and runs, once the connection
+/// is up when it has to be dialled.
+fn run_history_entry(model: &mut Model) -> Vec<Effect> {
+    let effects = open_history_entry(model);
+    run_opened(model, effects)
+}
+
+/// Runs the document just opened, after `opened` -- what opening it took. A connection it
+/// dialled runs it once it is up: running now would dial it a second time.
+fn run_opened(model: &mut Model, mut opened: Vec<Effect>) -> Vec<Effect> {
+    if model.screen != crate::model::Screen::Workbench {
+        return opened;
+    }
+    if opened
+        .iter()
+        .any(|effect| matches!(effect, Effect::ConnectProfile { .. }))
+    {
+        model.pending_execute = Some(crate::model::PendingExecute {
+            document: model.active_document().id.clone(),
+            action: Action::ExecuteDocument,
+            token: model.connect_token,
+        });
+        return opened;
+    }
+    opened.extend(update(model, Action::ExecuteDocument));
+    opened
+}
+
+/// `y`: `sql` on the clipboard.
+fn copy_sql(model: &mut Model, sql: Option<String>) -> Vec<Effect> {
+    let Some(text) = sql else {
+        return Vec::new();
+    };
+    model.messages.info("Copied the statement.".into());
+    vec![Effect::CopyToClipboard { text }]
+}
+
+/// `s` in History: Save Query As, for the picked statement on its connection.
+fn save_history_entry(model: &mut Model) -> Vec<Effect> {
+    let Some(row) = crate::screens::editor::picked_history(model) else {
+        return Vec::new();
+    };
+    if let Some(why) = crate::screen::history::save_refusal(model, &row) {
+        model.messages.warn(why);
+        return Vec::new();
+    }
+    let Some(connection_id) = crate::screen::history::saved_connection_id(model, &row) else {
+        return Vec::new();
+    };
+    model.save_query_prompt = Some(crate::screens::saved_queries::SaveQueryPrompt {
+        name: crate::widgets::text_input::TextInput::default(),
+        footer: crate::widgets::form::FooterFocus::Input,
+        error: None,
+        sql: row.sql,
+        connection_id,
+        source: "a statement from History",
+    });
+    Vec::new()
+}
+
+/// `x` in History: the statement out of it, with the runs of it the filters show.
+fn delete_history_entry(model: &mut Model) -> Vec<Effect> {
+    let Some(ids) = model
+        .editor
+        .history_lines()
+        .get(model.editor.history_selected)
+        .map(|line| line.ids.clone())
+    else {
+        return Vec::new();
+    };
+    model.editor.history.retain(|row| !ids.contains(&row.id));
+    model.editor.clamp_history();
+    model.messages.info(format!(
+        "Deleted from History, with {} run{}.",
+        ids.len(),
+        if ids.len() == 1 { "" } else { "s" }
+    ));
+    vec![Effect::DeleteHistory { ids }]
+}
+
+/// `C` in History: asks before clearing what the filters show, saying how much that is.
+fn ask_clear_shown_history(model: &mut Model) -> Vec<Effect> {
+    let lines = model.editor.history_lines();
+    let statements = lines.len();
+    let ids: Vec<String> = lines.iter().flat_map(|line| line.ids.clone()).collect();
+    if ids.is_empty() {
+        model.messages.info("Nothing is shown to clear.".into());
+        return Vec::new();
+    }
+    model.editor.history_clearing = Some((statements, ids));
+    model.editor.history_confirm_clear = true;
+    // Cancel holds the focus: an Enter out of habit keeps the history.
+    model.editor.history_footer = crate::widgets::form::FooterFocus::Cancel;
+    Vec::new()
 }
 
 /// Enter in the history: the statement opens in a new document of the connection, as a
