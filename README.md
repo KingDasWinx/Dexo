@@ -18,7 +18,7 @@ dexo --demo                         # a sample shop, nothing to connect to
 Dexo is a keyboard-driven workbench for PostgreSQL, MySQL, MariaDB and SQLite, with DuckDB as a build option: a terminal UI, a command line and an MCP server for AI agents. A `DELETE` without `WHERE` on production waits for you to type the connection's name, a read-only connection is read-only on the server too, and an agent writes only through a grant you make. Everything stays on your machine.
 
 <div align="center">
-  <img src="assets/guardrails.gif" width="100%" alt="Dexo holding a DELETE without WHERE on the production connection shop-prod: a wrong name runs nothing, the full name runs it and four rows are deleted; then an AI agent's UPDATE waits in Agent Activity until it is approved">
+  <img src="assets/guardrails.gif" width="100%" alt="Dexo holding a DELETE without WHERE on the production connection shop-prod: a wrong name runs nothing, the full name runs it and four rows are deleted; then an AI agent's UPDATE waits on the Agents screen until it is approved">
 </div>
 
 <div align="center">
