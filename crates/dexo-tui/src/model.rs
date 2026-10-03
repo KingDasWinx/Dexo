@@ -2020,6 +2020,8 @@ pub struct Model {
     /// How far the detail is read on a screen that keeps no scroll of its own; back to
     /// the top on anything but reading it.
     pub detail_scroll: u16,
+    /// The detail's button Left and Right have walked to, Enter presses.
+    pub screen_button: usize,
     pub focus: Focus,
     pub width: u16,
     pub height: u16,
@@ -2185,6 +2187,7 @@ impl Default for Model {
             history_view: Default::default(),
             sections: Default::default(),
             detail_scroll: 0,
+            screen_button: 0,
             focus: Focus::Editor,
             width: 160,
             height: 50,

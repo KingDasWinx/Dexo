@@ -8,6 +8,9 @@ use ratatui::style::{Modifier, Style};
 use ratatui::text::Line;
 use ratatui::widgets::Paragraph;
 
+use crossterm::event::KeyCode;
+
+use super::Button;
 use crate::model::Model;
 use crate::mouse::{HitButton, HitMap, HitTarget};
 
@@ -53,40 +56,51 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                     .map(|database| database.container.clone())
             })
             .unwrap_or_default();
-        // What can be done to the pick, each one a click, under its details -- on a
-        // short terminal the status line says them, and the details keep the rows.
-        let actions = if model.height >= TALL {
-            screen.footer_lines(usize::from(detail.width.saturating_sub(2)))
-        } else {
-            screen.error.clone().into_iter().collect()
-        };
-        let (footer, _, _) = super::text_pane(
+        // What can be done to the pick is buttons over its details.
+        let footer: Vec<String> = screen.error.clone().into_iter().collect();
+        super::detail_pane(
             frame,
             detail,
             model,
             hits,
             &title,
+            &buttons(model),
             &lines,
             usize::from(super::detail_scroll(model)),
-            &actions,
+            &footer,
         );
-        let buttons = [
-            HitButton::Connect,
-            HitButton::New,
-            HitButton::Edit,
-            HitButton::Duplicate,
-            HitButton::Test,
-            HitButton::Delete,
-            HitButton::CloseSession,
-            HitButton::Docker,
-        ];
-        for (index, line) in actions.iter().enumerate().take(usize::from(footer.height)) {
-            let rect = crate::mouse::line_rect(footer, index);
-            for (label, button) in crate::screens::connections::HINTS.iter().zip(buttons) {
-                crate::mouse::register_label(hits, rect, line, label, HitTarget::Button(button));
-            }
-        }
     }
+}
+
+/// What can be done to the picked connection: connect or use it, close its session, edit,
+/// duplicate, test or delete it; a database found in Docker is added as a connection.
+pub fn buttons(model: &Model) -> Vec<Button> {
+    let screen = &model.connections;
+    if screen.selected_docker().is_some() {
+        return vec![Button::new(KeyCode::Enter, "Add as connection")];
+    }
+    let Some(profile) = screen.selected() else {
+        return Vec::new();
+    };
+    let session = screen.session_for(&profile.name);
+    let in_use = session.is_some_and(|session| model.active_session == Some(session.id));
+    let open = match (session.is_some(), in_use) {
+        (false, _) => Button::new(KeyCode::Enter, "Connect"),
+        (true, false) => Button::new(KeyCode::Enter, "Use"),
+        (true, true) => Button::new(KeyCode::Enter, "Connect")
+            .disabled(format!("{} is the connection in use.", profile.name)),
+    };
+    vec![
+        open,
+        Button::new(KeyCode::Char('c'), "Disconnect").enabled_if(
+            session.is_some(),
+            format!("{} is not connected.", profile.name),
+        ),
+        Button::new(KeyCode::Char('e'), "Edit"),
+        Button::new(KeyCode::Char('d'), "Duplicate"),
+        Button::new(KeyCode::Char('t'), "Test"),
+        Button::new(KeyCode::Char('x'), "Delete"),
+    ]
 }
 
 /// The saved connections, then the Docker ones under their heading, the pick kept in
@@ -217,18 +231,10 @@ fn form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 }
 
-/// The height from which the actions are drawn under the details.
-const TALL: u16 = 24;
-
 pub fn hints(model: &Model) -> String {
     if model.connection_form.open {
         "Enter next  Left/Right pick a value  Space advanced  Esc cancel".into()
-    } else if model.height >= TALL {
-        "Up/Down pick  Esc back".into()
     } else {
-        format!(
-            "{}  Esc back",
-            crate::screens::connections::HINTS.join("  ")
-        )
+        "Up/Down pick  n new  r Docker  Esc back".into()
     }
 }

@@ -3640,22 +3640,6 @@ fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
                 Vec::new()
             }
         }
-        Some(HitTarget::Button(HitButton::New)) => update(model, Action::OpenConnectionForm),
-        Some(HitTarget::Button(HitButton::Edit)) => {
-            if let Some(profile) = model.connections.selected().cloned() {
-                model.connection_form =
-                    crate::screens::connection::ConnectionForm::open_edit(&profile);
-            }
-            Vec::new()
-        }
-        Some(HitTarget::Button(HitButton::Duplicate)) => update(model, Action::DuplicateConnection),
-        Some(HitTarget::Button(HitButton::Test)) => update(model, Action::TestConnection),
-        Some(HitTarget::Button(HitButton::Delete)) => update(model, Action::DeleteConnection),
-        Some(HitTarget::Button(HitButton::CloseSession)) => {
-            update(model, Action::CloseSelectedSession)
-        }
-        Some(HitTarget::Button(HitButton::Connect)) => choose_connection_intent(model),
-        Some(HitTarget::Button(HitButton::Docker)) => vec![Effect::DiscoverDocker],
         _ => Vec::new(),
     }
 }
@@ -4218,6 +4202,15 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 /// A click on a screen other than the workbench.
 fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    // A button: its key, pressed.
+    if let Some(HitTarget::Press(code, shift)) = hit {
+        let modifiers = if shift {
+            KeyModifiers::SHIFT
+        } else {
+            KeyModifiers::NONE
+        };
+        return screen_press(model, KeyEvent::new(code, modifiers));
+    }
     // A click in a section gives it the keys, unless a form or a question holds them.
     let clicked = match hit {
         Some(HitTarget::ScreenList | HitTarget::ListRow(_)) => Some(crate::screen::Section::List),
@@ -4988,6 +4981,34 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
 /// keymap's global chords -- only those that do not act on the hidden workbench.
 fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.pending_chord.keys.is_empty() {
+        // On the detail Left and Right walk its buttons and Enter presses the one walked
+        // to; Up and Down still read it.
+        if let Some(focus) = crate::screen::button_focus(model)
+            && !crate::screen::detail_is_form(model)
+            && key.modifiers.is_empty()
+        {
+            let buttons = crate::screen::buttons(model);
+            match key.code {
+                KeyCode::Left => {
+                    model.screen_button = focus.saturating_sub(1);
+                    return Vec::new();
+                }
+                KeyCode::Right => {
+                    model.screen_button = (focus + 1).min(buttons.len() - 1);
+                    return Vec::new();
+                }
+                KeyCode::Enter => {
+                    let button = &buttons[focus];
+                    let modifiers = if button.shift {
+                        KeyModifiers::SHIFT
+                    } else {
+                        KeyModifiers::NONE
+                    };
+                    return screen_press(model, KeyEvent::new(button.key, modifiers));
+                }
+                _ => {}
+            }
+        }
         if crate::screen::section(model) == crate::screen::Section::Detail
             && crate::screen::held(model).is_none()
             && !crate::screen::detail_is_form(model)
@@ -5003,6 +5024,29 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             crate::screen::set_detail_scroll(model, scroll);
             return Vec::new();
         }
+    }
+    screen_press(model, key)
+}
+
+/// A key that is one of the screen's buttons -- pressed, clicked, or Enter on it from the
+/// detail -- does what the key does, unless the button cannot act now: then it says why.
+fn screen_press(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+        && let Some(button) = crate::screen::buttons(model)
+            .into_iter()
+            .find(|button| button.answers(key.code, shift))
+        && let Err(why) = button.enabled
+    {
+        model.messages.info(why);
+        return Vec::new();
+    }
+    screen_own_key(model, key)
+}
+
+/// A key on a screen past what its detail takes: the screen's own, then the keymap's.
+fn screen_own_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    if model.pending_chord.keys.is_empty() {
         model.detail_scroll = 0;
         let own = match model.screen {
             crate::model::Screen::Agents => agents_key(model, key),
@@ -5147,6 +5191,7 @@ fn focus_section(model: &mut Model, index: usize) -> Vec<Effect> {
         return Vec::new();
     }
     model.sections[model.shown_screen().index()] = wanted;
+    model.screen_button = 0;
     Vec::new()
 }
 
@@ -5534,6 +5579,7 @@ fn grid_only(command: &str) -> bool {
 /// Goes to `screen`, the one left becoming the way back, and reads what it shows.
 fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
     model.pending_chord.keys.clear();
+    model.screen_button = 0;
     if model.screen != screen {
         model.previous_screen = model.screen;
         model.screen = screen;

@@ -7,6 +7,9 @@ pub mod compare;
 pub mod connections;
 pub mod history;
 pub mod server;
+pub mod widgets;
+
+pub use widgets::Button;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -17,6 +20,21 @@ use ratatui::widgets::{Block, Paragraph};
 use crate::model::{Model, Screen};
 use crate::mouse::{HitMap, HitTarget};
 use crate::theme::Role;
+
+/// The buttons over the shown screen's detail, for its picked item.
+pub fn buttons(model: &Model) -> Vec<Button> {
+    match model.shown_screen() {
+        Screen::Connections if !model.connection_form.open => connections::buttons(model),
+        _ => Vec::new(),
+    }
+}
+
+/// The detail's focused button: one only while the detail has the keys.
+pub fn button_focus(model: &Model) -> Option<usize> {
+    let count = buttons(model).len();
+    (count > 0 && section(model) == Section::Detail && held(model).is_none())
+        .then(|| model.screen_button.min(count - 1))
+}
 
 /// Commands a key may run while a screen other than the workbench is up. The rest act on
 /// the documents, the editor or the panes, none of which is on screen: Ctrl+W closed a
@@ -369,13 +387,42 @@ pub fn text_pane(
     scroll: usize,
     footer: &[String],
 ) -> (Rect, usize, u16) {
+    detail_pane(frame, area, model, hits, title, &[], lines, scroll, footer)
+}
+
+/// [`text_pane`] with the screen's buttons for the picked item on its first rows, where
+/// the item is: the actions were a run of text at the bottom of the pane.
+#[allow(clippy::too_many_arguments)]
+pub fn detail_pane(
+    frame: &mut Frame,
+    area: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    title: &str,
+    buttons: &[Button],
+    lines: &[String],
+    scroll: usize,
+    footer: &[String],
+) -> (Rect, usize, u16) {
     if area.width < 2 || area.height < 2 {
         return (Rect::default(), 0, 0);
     }
     let block: Block = crate::render::pane_block(model, title, section(model) == Section::Detail);
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenDetail, area);
+    if !buttons.is_empty() {
+        let focused = button_focus(model);
+        let used = widgets::action_bar(frame, inner, model, hits, buttons, focused);
+        // A blank row under the buttons, when there is room for it.
+        let gap = u16::from(inner.height > used + 3);
+        inner = Rect::new(
+            inner.x,
+            inner.y + used + gap,
+            inner.width,
+            inner.height.saturating_sub(used + gap),
+        );
+    }
     let footer_rows = (footer.len() as u16).min(inner.height);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - footer_rows);
     let max_scroll = lines.len().saturating_sub(usize::from(body.height));

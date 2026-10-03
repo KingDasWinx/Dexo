@@ -68,19 +68,6 @@ impl DeleteChoice {
     }
 }
 
-/// The key hints under the list. Rendering registers a click target on each, by label,
-/// so the line and its targets cannot drift apart.
-pub const HINTS: [&str; 8] = [
-    "Enter connect",
-    "n new",
-    "e edit",
-    "d duplicate",
-    "t test",
-    "x delete",
-    "c close",
-    "r docker",
-];
-
 impl ConnectionsScreen {
     pub fn load_profiles(&mut self, profiles: Vec<ConnectionProfile>) {
         // `ProfileSaved` hands the current rows back, temporary ones included.
@@ -215,26 +202,7 @@ impl ConnectionsScreen {
 
     pub fn lines(&self, active: Option<SessionId>) -> Vec<String> {
         let mut lines = self.profile_lines(active);
-        lines.push(String::new());
-        lines.extend(self.footer_lines(70));
-        lines
-    }
-
-    /// The hints, wrapped to `width` columns, and the last error if there is one.
-    pub fn footer_lines(&self, width: usize) -> Vec<String> {
-        let mut lines: Vec<String> = Vec::new();
-        for hint in HINTS {
-            match lines.last_mut() {
-                Some(line) if line.chars().count() + 2 + hint.chars().count() <= width => {
-                    line.push_str("  ");
-                    line.push_str(hint);
-                }
-                _ => lines.push(hint.to_string()),
-            }
-        }
-        if let Some(error) = &self.error {
-            lines.push(error.clone());
-        }
+        lines.extend(self.error.clone());
         lines
     }
 
@@ -536,7 +504,6 @@ mod tests {
         assert!(dump.contains("active"));
         assert!(dump.contains("> prod [local] active"));
         assert!(!dump.contains("/ prod"));
-        assert!(dump.contains("x delete"));
         assert!(!dump.contains("sessions:"));
         for line in dump.lines() {
             assert!(

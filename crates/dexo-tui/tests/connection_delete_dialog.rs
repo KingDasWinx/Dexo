@@ -131,19 +131,19 @@ fn the_buttons_take_a_click() {
     assert!(model.connections.delete_target.is_none());
 }
 
-/// The hint read `d dup` while the click target looked for `d duplicate`.
+/// Every action takes a click: its button over the details.
 #[test]
-fn every_hint_under_the_list_takes_a_click() {
+fn every_button_over_the_details_takes_a_click() {
     let mut model = with_connections(&["local"]);
     paint(&mut model, 100, 30);
-    let effects = click(&mut model, HitTarget::Button(HitButton::Duplicate));
+    let effects = click(&mut model, HitTarget::Press(KeyCode::Char('d'), false));
     assert!(
         effects
             .iter()
             .any(|effect| matches!(effect, Effect::DuplicateProfile { .. })),
         "{effects:?}"
     );
-    click(&mut model, HitTarget::Button(HitButton::Delete));
+    click(&mut model, HitTarget::Press(KeyCode::Char('x'), false));
     assert!(model.connections.delete_target.is_some());
 }
 
@@ -157,5 +157,5 @@ fn the_list_scrolls_to_the_selection() {
     model.connections.selected_profile = 37;
     let frame = paint(&mut model, 100, 30);
     assert!(frame.contains("> db37"), "{frame}");
-    assert!(frame.contains("x delete"), "{frame}");
+    assert!(frame.contains("[x Delete]"), "{frame}");
 }
