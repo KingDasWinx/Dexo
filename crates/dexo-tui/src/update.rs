@@ -922,7 +922,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     ));
             if capture {
                 if let Some(parent) = parent {
-                    model.explorer.apply_children(&parent, list);
+                    model
+                        .explorer
+                        .apply_connection_children(&model.connection.name, &parent, list);
                 } else if !model.connection.name.is_empty() {
                     model.explorer.replace_connection_catalog(
                         &model.connection.name,
@@ -933,7 +935,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     model.explorer.replace_roots(list);
                 }
             } else if let Some(parent) = parent {
-                model.explorer.apply_children(&parent, list);
+                model
+                    .explorer
+                    .apply_connection_children(&model.connection.name, &parent, list);
             }
             catalog_followup_effects(model, capture)
         }
@@ -947,7 +951,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         } => {
             if catalog_generation_matches(model, &session, generation) {
                 if let Some(parent) = parent {
-                    model.explorer.set_error(&parent, message, retryable);
+                    model
+                        .explorer
+                        .set_error(&model.connection.name, &parent, message, retryable);
                 } else {
                     model.messages.error(message);
                 }

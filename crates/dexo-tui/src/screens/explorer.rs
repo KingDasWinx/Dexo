@@ -709,6 +709,30 @@ impl ExplorerState {
         Self::apply_in(&mut self.roots, parent, page);
     }
 
+    /// What `connection`'s session listed under `parent`, put under that connection only:
+    /// objects of two connections share ids (`public` is `pg:schema:public` on every
+    /// server), and the other one's node of the same name was filled with this one's.
+    pub fn apply_connection_children(
+        &mut self,
+        connection: &str,
+        parent: &ObjectId,
+        page: CatalogList,
+    ) {
+        self.touch();
+        Self::apply_in(Self::tree_of(&mut self.roots, connection), parent, page);
+    }
+
+    /// `connection`'s tree, or every root when it lists no such connection.
+    fn tree_of<'a>(roots: &'a mut [ExplorerNode], connection: &str) -> &'a mut [ExplorerNode] {
+        match roots
+            .iter()
+            .position(|root| connection_name(&root.id) == Some(connection))
+        {
+            Some(index) => std::slice::from_mut(&mut roots[index]),
+            None => roots,
+        }
+    }
+
     pub fn replace_roots(&mut self, page: CatalogList) {
         self.touch();
         self.roots = page
@@ -723,8 +747,14 @@ impl ExplorerState {
         self.offline = false;
     }
 
-    pub fn set_error(&mut self, id: &ObjectId, message: String, retryable: bool) {
-        Self::set_error_in(&mut self.roots, id, message, retryable);
+    /// A read of `id` on `connection`'s session failed: its node of that connection says so.
+    pub fn set_error(&mut self, connection: &str, id: &ObjectId, message: String, retryable: bool) {
+        Self::set_error_in(
+            Self::tree_of(&mut self.roots, connection),
+            id,
+            message,
+            retryable,
+        );
     }
 
     fn set_error_in(nodes: &mut [ExplorerNode], id: &ObjectId, message: String, retryable: bool) {
