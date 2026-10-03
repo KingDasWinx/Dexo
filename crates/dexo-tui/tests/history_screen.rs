@@ -410,3 +410,21 @@ fn run_again_refuses_a_statement_whose_connection_is_gone() {
             .any(|message| message.message.contains("not a connection any more"))
     );
 }
+
+/// A paste into History's search goes into the search: it went into the hidden editor
+/// document, which kept the keys' focus behind the screen.
+#[test]
+fn a_paste_goes_into_the_search_not_the_hidden_document() {
+    let mut model = history();
+    let before = model.active_document().text();
+    press(&mut model, KeyCode::Char('/'));
+    update(&mut model, Action::Paste("count".into()));
+    assert_eq!(model.editor.history_search.input.as_str(), "count");
+    assert_eq!(model.active_document().text(), before);
+    // With no field typed in, a paste does nothing at all: its letters are not keys.
+    press(&mut model, KeyCode::Enter);
+    let effects = update(&mut model, Action::Paste("x".into()));
+    assert!(effects.is_empty());
+    assert_eq!(model.editor.history.len(), 5, "x deleted a statement");
+    assert_eq!(model.active_document().text(), before);
+}

@@ -883,6 +883,20 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::Focus(target) => focus_pane(model, target),
         Action::ActivateDocumentTab => activate_document_tab(model),
         Action::Paste(text) => {
+            // Off the workbench the editor is out of sight: a paste goes into the field
+            // being typed in, and nowhere else -- it went into the hidden document.
+            if model.shown_screen() != crate::model::Screen::Workbench
+                && crate::mouse::top_overlay(model).is_none()
+            {
+                if !crate::screen::takes_text(model) {
+                    model.messages.info(
+                        "Nothing here takes text: / starts a search, and a form takes it in its fields."
+                            .into(),
+                    );
+                    return Vec::new();
+                }
+                return paste_as_keys(model, &text);
+            }
             if crate::screens::editor::paste(model, &text) {
                 crate::screens::editor::refresh_intelligence(model, false);
                 return crate::screens::editor::take_completion_effects(model);
@@ -901,21 +915,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 );
                 return Vec::new();
             }
-            // Anywhere else -- a form field, a prompt -- the text is short and the
-            // widget only knows keys, so it is fed as the keys it stands for.
-            let mut effects = Vec::new();
-            for ch in text.chars().filter(|ch| !ch.is_control()) {
-                effects.extend(update(
-                    model,
-                    Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
-                ));
-            }
-            // A URL pasted into the connection form fills it at once: it is never drawn
-            // with its password.
-            if model.connection_form.open && model.connection_form.on_url() {
-                model.connection_form.apply_url();
-            }
-            effects
+            paste_as_keys(model, &text)
         }
         Action::PasteFromClipboard => vec![Effect::ReadClipboard],
         Action::EditorCopy => crate::screens::editor::copy(model)
@@ -14490,6 +14490,24 @@ fn run_opened(model: &mut Model, mut opened: Vec<Effect>) -> Vec<Effect> {
     }
     opened.extend(update(model, Action::ExecuteDocument));
     opened
+}
+
+/// A paste into a form field or a prompt: the text is short and the widget only knows
+/// keys, so it is fed as the keys it stands for.
+fn paste_as_keys(model: &mut Model, text: &str) -> Vec<Effect> {
+    let mut effects = Vec::new();
+    for ch in text.chars().filter(|ch| !ch.is_control()) {
+        effects.extend(update(
+            model,
+            Action::Key(KeyEvent::new(KeyCode::Char(ch), KeyModifiers::NONE)),
+        ));
+    }
+    // A URL pasted into the connection form fills it at once: it is never drawn with its
+    // password.
+    if model.connection_form.open && model.connection_form.on_url() {
+        model.connection_form.apply_url();
+    }
+    effects
 }
 
 /// `y`: `sql` on the clipboard.
