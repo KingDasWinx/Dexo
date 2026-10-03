@@ -279,12 +279,13 @@ async fn connection_folder_loads_driver_root_and_keeps_ui_parent() {
         })
         .await;
 
+    // Read off the loop: its answer says it is done.
+    let action = actions.recv().await.expect("catalog loaded action");
     assert_eq!(
         *fake.catalog_parents.lock().expect("catalog parents"),
         vec![None],
         "the synthetic sidebar folder must load the driver's catalog root"
     );
-    let action = actions.recv().await.expect("catalog loaded action");
     assert!(matches!(
         action,
         Action::CatalogLoaded { parent: Some(actual), .. } if actual == connection
@@ -294,7 +295,7 @@ async fn connection_folder_loads_driver_root_and_keeps_ui_parent() {
 #[tokio::test]
 async fn driver_owned_connection_prefixed_parent_is_not_treated_as_the_ui_folder() {
     let fake = Arc::new(FakeSession::default());
-    let (_dir, mut runtime, _actions) = runtime_with_named_session("prod", fake.clone()).await;
+    let (_dir, mut runtime, mut actions) = runtime_with_named_session("prod", fake.clone()).await;
     let session = runtime.sessions().ids()[0];
     let driver_parent = ObjectId::new("connection:remote");
 
@@ -309,6 +310,7 @@ async fn driver_owned_connection_prefixed_parent_is_not_treated_as_the_ui_folder
         })
         .await;
 
+    actions.recv().await.expect("catalog loaded action");
     assert_eq!(
         *fake.catalog_parents.lock().expect("catalog parents"),
         vec![Some(driver_parent)]

@@ -429,6 +429,25 @@ pub struct WorkbenchRuntime {
     /// Secrets typed at a prompt that the keychain gets once a connect has used them: the
     /// connect they belong to, the keychain key, and the secret.
     to_keychain: Vec<(u64, String, SecretString)>,
+    /// Reads from a database for the screen -- a catalog node, a table's page, an
+    /// object's details -- run one after another, in the order asked, off the loop that
+    /// draws the screen and reads the keys. Awaited there, each froze the screen for its
+    /// round trips: seconds on a server far away.
+    reads: tokio::sync::mpsc::UnboundedSender<futures_util::future::BoxFuture<'static, ()>>,
+}
+
+/// The queue `WorkbenchRuntime::reads` sends to: each read, run to its end before the
+/// next. ponytail: one lane for every session, so a slow server's read holds up another
+/// server's behind it, as the loop did; a lane per session if that shows.
+fn read_lane() -> tokio::sync::mpsc::UnboundedSender<futures_util::future::BoxFuture<'static, ()>> {
+    let (lane, mut queue) =
+        tokio::sync::mpsc::unbounded_channel::<futures_util::future::BoxFuture<'static, ()>>();
+    tokio::spawn(async move {
+        while let Some(read) = queue.recv().await {
+            read.await;
+        }
+    });
+    lane
 }
 
 /// A count's task, and once it has dialled, its connection and query: what a cancel
@@ -458,7 +477,13 @@ impl WorkbenchRuntime {
             transfer: transfer_manager::TransferManager::default(),
             counts: Arc::default(),
             to_keychain: Vec::new(),
+            reads: read_lane(),
         }
+    }
+
+    /// Queues `read` behind the reads asked for before it; see `reads`.
+    fn queue_read(&self, read: impl std::future::Future<Output = ()> + Send + 'static) {
+        let _ = self.reads.send(Box::pin(read));
     }
 
     pub fn sessions(&self) -> &SessionRegistry {
@@ -726,13 +751,12 @@ impl WorkbenchRuntime {
                 generation: _,
             } => {
                 if let Some(active) = self.sessions.get(session) {
-                    schema_manager::preview_live(
+                    self.queue_read(schema_manager::preview_live(
                         Arc::clone(&active.session),
                         session.0.to_string(),
                         change,
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::ApplyDdlChange {
@@ -785,11 +809,10 @@ impl WorkbenchRuntime {
                 generation: _,
             } => {
                 if let Some(active) = self.sessions.get(session) {
-                    Self::load_security_session(
+                    self.queue_read(Self::load_security_session(
                         Arc::clone(&active.session),
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::RunExplain {
@@ -985,7 +1008,7 @@ impl WorkbenchRuntime {
                     let driver_parent = parent.clone().filter(|id| {
                         id != &crate::screens::explorer::connection_id(&active.connection)
                     });
-                    catalog_manager::load_children(
+                    self.queue_read(catalog_manager::load_children(
                         Arc::clone(&active.session),
                         parent,
                         driver_parent,
@@ -995,8 +1018,7 @@ impl WorkbenchRuntime {
                         replace_roots,
                         include_system,
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::LoadObjectInspector {
@@ -1005,14 +1027,13 @@ impl WorkbenchRuntime {
                 generation,
             } => {
                 if let Some(active) = self.sessions.get(session) {
-                    catalog_manager::load_inspector(
+                    self.queue_read(catalog_manager::load_inspector(
                         Arc::clone(&active.session),
                         id,
                         generation,
                         session,
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::LoadTableData {
@@ -1022,15 +1043,14 @@ impl WorkbenchRuntime {
                 ticket,
             } => {
                 if let Some(active) = self.sessions.get(session) {
-                    data_manager::fetch_page(
+                    self.queue_read(data_manager::fetch_page(
                         Arc::clone(&active.session),
                         request,
                         generation,
                         ticket,
                         session,
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::LoadTableColumns {
@@ -1040,14 +1060,13 @@ impl WorkbenchRuntime {
                 ticket,
             } => {
                 if let Some(active) = self.sessions.get(session) {
-                    data_manager::fetch_table_columns(
+                    self.queue_read(data_manager::fetch_table_columns(
                         Arc::clone(&active.session),
                         target,
                         generation,
                         ticket,
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::FetchValue {
@@ -1058,15 +1077,14 @@ impl WorkbenchRuntime {
                 generation,
             } => {
                 if let Some(active) = self.sessions.get(session) {
-                    data_manager::fetch_value(
+                    self.queue_read(data_manager::fetch_value(
                         Arc::clone(&active.session),
                         value,
                         offset,
                         limit,
                         generation,
                         self.action_tx.clone(),
-                    )
-                    .await;
+                    ));
                 }
             }
             crate::Effect::ApplyMutations {
