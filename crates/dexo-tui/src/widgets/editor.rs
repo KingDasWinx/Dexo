@@ -551,10 +551,26 @@ fn display_width_range(line: &str, from_col: usize, to_char: usize) -> usize {
 /// outside the editor -- in History -- reads as it did when it was written.
 pub(crate) fn sql_lines(sql: &str, width: usize, dialect: dexo_sql::Dialect) -> Vec<Line<'static>> {
     use unicode_width::UnicodeWidthChar;
-    let highlights = dexo_sql::ParserService::new(dialect).parse(sql).highlights;
-    let highlights: Vec<&dexo_sql::HighlightSpan> = highlights.iter().collect();
+    let mut highlights = dexo_sql::ParserService::new(dialect).parse(sql).highlights;
+    highlights.sort_by_key(|span| span.byte_range.start);
     let width = width.max(1);
     let mut lines = Vec::new();
+    // The first span that may still reach the next chunk: the chunks come in order, so
+    // each span is passed over once, and a chunk is given only the spans on it. Every
+    // span against every character made a long script's whole view crawl.
+    let mut first = 0;
+    let mut paint = |chunk: &str, start: usize| -> Line<'static> {
+        let end = start + chunk.len();
+        while first < highlights.len() && highlights[first].byte_range.end <= start {
+            first += 1;
+        }
+        let on: Vec<&dexo_sql::HighlightSpan> = highlights[first..]
+            .iter()
+            .take_while(|span| span.byte_range.start < end)
+            .filter(|span| span.byte_range.end > start)
+            .collect();
+        Line::from(highlight_spans(chunk, start, &on))
+    };
     let mut start = 0;
     for line in sql.split('\n') {
         let mut chunk = String::new();
@@ -563,11 +579,7 @@ pub(crate) fn sql_lines(sql: &str, width: usize, dialect: dexo_sql::Dialect) -> 
         for ch in line.chars() {
             let wide = ch.width().unwrap_or(0);
             if used + wide > width && !chunk.is_empty() {
-                lines.push(Line::from(highlight_spans(
-                    &chunk,
-                    chunk_start,
-                    &highlights,
-                )));
+                lines.push(paint(&chunk, chunk_start));
                 chunk_start += chunk.len();
                 chunk.clear();
                 used = 0;
@@ -576,10 +588,41 @@ pub(crate) fn sql_lines(sql: &str, width: usize, dialect: dexo_sql::Dialect) -> 
             used += wide;
         }
         let chunk = chunk.trim_end_matches('\r');
-        lines.push(Line::from(highlight_spans(chunk, chunk_start, &highlights)));
+        lines.push(paint(chunk, chunk_start));
         start += line.len() + 1;
     }
     lines
+}
+
+#[cfg(test)]
+mod sql_lines_tests {
+    /// The colours land where they did when every span was tried on every character,
+    /// and a long script is drawn in time.
+    #[test]
+    fn colours_stay_on_their_words_and_a_long_script_is_quick() {
+        let lines = super::sql_lines("select 1\nfrom t", 80, dexo_sql::Dialect::Postgres);
+        let keyword = |line: &ratatui::text::Line<'_>, word: &str| {
+            line.spans
+                .iter()
+                .find(|span| span.content.contains(word))
+                .map(|span| span.style)
+        };
+        let select = keyword(&lines[0], "select").expect("select drawn");
+        assert_eq!(keyword(&lines[1], "from"), Some(select));
+        assert_ne!(keyword(&lines[0], "1"), Some(select));
+
+        let script: String = (0..4_000)
+            .map(|n| format!("ALTER TABLE public.t{n} ADD COLUMN note_{n} text;\n"))
+            .collect();
+        let started = std::time::Instant::now();
+        let lines = super::sql_lines(&script, 100, dexo_sql::Dialect::Postgres);
+        assert!(lines.len() >= 4_000);
+        assert!(
+            started.elapsed() < std::time::Duration::from_secs(2),
+            "{:?}",
+            started.elapsed()
+        );
+    }
 }
 
 #[cfg(test)]
