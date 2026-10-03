@@ -64,5 +64,5 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 - [ ] README GIF and screenshots re-recorded: the guardrails GIF shows the old Agent Activity
       dialog, the connection form screenshot the old popup, and every shot lacks the screen strip.
 - [x] Tests that named the old dialogs moved to the screens; snapshots reviewed.
-- [ ] QA pass through `qa.sh` on every screen at 160x45, 120x36, 80x24, 60x20, 40x12.
-- [ ] Full gate, `cargo deny check`, `cargo check --locked`.
+- [x] QA pass through `qa.sh` on every screen at 160x45, 120x36, 80x24, 60x20, 40x12.
+- [x] Full gate, `cargo deny check`, `cargo check --locked`.
