@@ -114,7 +114,11 @@ fn picking_a_disabled_row_explains_instead_of_running() {
     let effects = update(&mut model, Action::Key(enter()));
     assert!(effects.is_empty(), "a disabled row must not dispatch");
     assert!(!model.node_menu.open);
-    assert!(!model.admin.open, "the disabled screen opened anyway");
+    assert_ne!(
+        model.screen,
+        dexo_tui::model::Screen::Server,
+        "the disabled screen opened anyway"
+    );
 }
 
 #[test]
@@ -357,6 +361,10 @@ fn a_session_command_runs_on_the_connection_the_menu_is_for() {
         )),
         "the other connection is dialled first: {effects:?}"
     );
-    assert!(!model.admin.open, "nothing opened on the active session");
+    assert_ne!(
+        model.screen,
+        dexo_tui::model::Screen::Server,
+        "nothing opened on the active session"
+    );
     assert!(model.pending_menu.is_some(), "and the command waits for it");
 }

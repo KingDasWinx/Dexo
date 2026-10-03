@@ -1889,14 +1889,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             execute_on_document_connection(model, action)
         }
         Action::OpenAdmin => {
-            model.admin.open = true;
+            // Asked for from the workbench: the sessions of the connection in use.
+            model.admin.server = None;
             model.admin.selected = 0;
-            model.admin.offset = 0;
+            model.admin.detail_scroll = 0;
             model.admin.terminate = None;
             model.admin.last_error = None;
             model.admin.notice = None;
-            model.admin.read_only = model.connection.read_only;
-            load_admin_sessions(model)
+            go_to_screen(model, crate::model::Screen::Server)
         }
         Action::AdminTerminated { result } => {
             match result {
@@ -2368,7 +2368,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::AdminFailed { message } => {
             model.admin.loading = false;
-            if model.admin.open {
+            if model.screen == crate::model::Screen::Server {
                 model.admin.last_error = Some(message.clone());
             }
             model.messages.error(message);
@@ -2379,8 +2379,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             captured_at,
             blocking,
         } => {
-            // Closed while it was loading: the answer is not wanted any more.
-            if !model.admin.open {
+            // Left while it was loading: the answer is not wanted any more.
+            if model.screen != crate::model::Screen::Server {
+                model.admin.loading = false;
                 return Vec::new();
             }
             model.admin.loading = false;
@@ -2402,7 +2403,6 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 .admin
                 .selected
                 .min(model.admin.sessions.len().saturating_sub(1));
-            admin_scrolled(model);
             Vec::new()
         }
         Action::DiagnosticsReady { preview } => {
@@ -2437,10 +2437,23 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             Vec::new()
         }
-        Action::AgentActivityTick => {
+        Action::ScreenTick => {
             let mut effects = Vec::new();
             if model.screen == crate::model::Screen::Agents {
                 effects.push(Effect::LoadMcpAudit);
+            }
+            // The sessions are read again every two seconds, not under a question, not
+            // while one reading is on its way, and not while paused.
+            let admin = &mut model.admin;
+            if model.screen == crate::model::Screen::Server
+                && !admin.paused
+                && !admin.loading
+                && admin.terminate.is_none()
+            {
+                admin.ticks += 1;
+                if admin.ticks >= crate::screens::admin::REFRESH_SECS {
+                    effects.extend(load_admin_sessions(model));
+                }
             }
             // The profiles follow what `dexo mcp` changes while they are shown, but not
             // under a form or a question being answered.
@@ -3216,7 +3229,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::SchemaDiff) => mouse_schema_diff(model, hit),
         Some(OverlayKind::Transfer) => mouse_transfer(model, hit),
         Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
-        Some(OverlayKind::Admin) => mouse_admin(model, hit),
         Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
         Some(OverlayKind::SchemaForm) => match hit {
             Some(HitTarget::FormField(index))
@@ -3710,16 +3722,11 @@ fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     if let Some(HitTarget::ListRow(index)) = hit
         && index < model.admin.sessions.len()
     {
-        model.admin.selected = index;
-        admin_scrolled(model);
+        model
+            .admin
+            .move_by(index as isize - model.admin.selected as isize);
     }
     Vec::new()
-}
-
-/// Keeps the pick in view after it moved or the list changed.
-fn admin_scrolled(model: &mut Model) {
-    let rows = model.admin.visible_rows(model.height);
-    model.admin.offset = model.admin.window_start(rows);
 }
 
 fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -4115,6 +4122,7 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 fn mouse_screen(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match model.screen {
         crate::model::Screen::Agents => mouse_agents(model, hit),
+        crate::model::Screen::Server => mouse_admin(model, hit),
         _ => Vec::new(),
     }
 }
@@ -4622,10 +4630,21 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if overlay == Some(OverlayKind::Admin) {
-        if model.admin.terminate.is_none() {
-            model.admin.move_selection(delta > 0);
-            admin_scrolled(model);
+    if overlay.is_none() && model.screen == crate::model::Screen::Server {
+        // The wheel over the list picks; over the session it reads on.
+        if matches!(
+            model.hits.at(mouse.column, mouse.row),
+            Some(HitTarget::ListRow(_))
+        ) {
+            if model.admin.terminate.is_none() {
+                model.admin.move_selection(delta > 0);
+            }
+        } else {
+            model.admin.detail_scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::Sessions,
+                model.admin.detail_scroll,
+                delta,
+            );
         }
         return Vec::new();
     }
@@ -4777,6 +4796,7 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.pending_chord.keys.is_empty() {
         let own = match model.screen {
             crate::model::Screen::Agents => agents_key(model, key),
+            crate::model::Screen::Server => server_key(model, key),
             _ => None,
         };
         if let Some(effects) = own {
@@ -5040,12 +5060,23 @@ fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
 
 /// What a screen reads when it comes up: the state it kept is shown at once, and the
 /// data under it is read again.
-fn enter_screen(_model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
+fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
     match screen {
         crate::model::Screen::Agents => vec![Effect::LoadMcpAudit, Effect::LoadMcpProfiles],
+        crate::model::Screen::Server => {
+            // The server shown before, while its session is still open; else the
+            // connection in use.
+            let kept = model.admin.server.clone().filter(|server| {
+                model
+                    .connections
+                    .sessions
+                    .iter()
+                    .any(|row| row.id == server.session)
+            });
+            show_server(model, kept)
+        }
         crate::model::Screen::Workbench
         | crate::model::Screen::Connections
-        | crate::model::Screen::Server
         | crate::model::Screen::Compare
         | crate::model::Screen::History => Vec::new(),
     }
@@ -5244,9 +5275,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             return start_query(model);
         }
         return Vec::new();
-    }
-    if model.admin.open {
-        return handle_admin_key(model, key);
     }
     if model.schema_editor.preview.is_some() {
         return ddl_preview_key(model, key);
@@ -11857,10 +11885,11 @@ fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     Vec::new()
 }
 
-fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+/// The Server screen's keys. None leaves the key to the keymap and Esc to going back.
+fn server_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     use crate::widgets::form::{FooterKey, footer_key};
     if let Some(prompt) = model.admin.terminate.as_mut() {
-        return match footer_key(&mut prompt.footer, &key) {
+        return Some(match footer_key(&mut prompt.footer, &key) {
             FooterKey::Submit => submit_terminate(model),
             FooterKey::Cancel => {
                 model.admin.terminate = None;
@@ -11874,85 +11903,140 @@ fn handle_admin_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 }
                 Vec::new()
             }
-        };
+        });
     }
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+    {
+        return None;
+    }
+    let page = (model.height / 3).max(1) as isize;
+    let admin = &mut model.admin;
     match key.code {
-        KeyCode::Esc => {
-            model.admin.open = false;
-            Vec::new()
+        KeyCode::Up | KeyCode::Char('k') => admin.move_selection(false),
+        KeyCode::Down | KeyCode::Char('j') => admin.move_selection(true),
+        KeyCode::Home => admin.select_first(),
+        KeyCode::End => admin.select_last(),
+        KeyCode::PageUp => admin.move_by(-page),
+        KeyCode::PageDown => admin.move_by(page),
+        KeyCode::Char('p') => {
+            admin.paused = !admin.paused;
+            admin.ticks = 0;
         }
-        KeyCode::Up | KeyCode::Char('k') => {
-            model.admin.move_selection(false);
-            admin_scrolled(model);
-            Vec::new()
-        }
-        KeyCode::Down | KeyCode::Char('j') => {
-            model.admin.move_selection(true);
-            admin_scrolled(model);
-            Vec::new()
-        }
-        KeyCode::Home => {
-            model.admin.select_first();
-            admin_scrolled(model);
-            Vec::new()
-        }
-        KeyCode::End => {
-            model.admin.select_last();
-            admin_scrolled(model);
-            Vec::new()
-        }
-        KeyCode::PageUp | KeyCode::PageDown => {
-            let page = model.admin.visible_rows(model.height).max(1) as isize;
-            model.admin.move_by(if key.code == KeyCode::PageUp {
-                -page
-            } else {
-                page
-            });
-            admin_scrolled(model);
-            Vec::new()
-        }
-        KeyCode::Char('r') => load_admin_sessions(model),
-        KeyCode::Char('t') => open_terminate(model),
-        _ => Vec::new(),
+        KeyCode::Char('r') => return Some(load_admin_sessions(model)),
+        KeyCode::Char('t') => return Some(open_terminate(model)),
+        KeyCode::Char('c') => return Some(next_server(model)),
+        _ => return None,
     }
+    Some(Vec::new())
+}
+
+/// The connections whose server's sessions can be listed: open, and with a driver that
+/// lists them.
+fn servers(model: &Model) -> Vec<crate::screens::admin::ServerTarget> {
+    model
+        .connections
+        .sessions
+        .iter()
+        .filter(|row| {
+            !model.unavailable.get(&row.id).is_some_and(|lacking| {
+                lacking
+                    .iter()
+                    .any(|(capability, _)| *capability == dexo_driver_api::Capability::Admin)
+            })
+        })
+        .map(|row| crate::screens::admin::ServerTarget {
+            session: row.id,
+            generation: row.generation,
+            connection: row.connection.clone(),
+            environment: row.environment.clone(),
+            read_only: row.read_only,
+        })
+        .collect()
+}
+
+/// `c`: the next open connection's server.
+fn next_server(model: &mut Model) -> Vec<Effect> {
+    let servers = servers(model);
+    if servers.len() < 2 {
+        model.admin.notice = Some("No other open connection lists its sessions.".into());
+        return Vec::new();
+    }
+    let at = model.admin.server.as_ref().and_then(|current| {
+        servers
+            .iter()
+            .position(|server| server.session == current.session)
+    });
+    let next = servers[at.map_or(0, |at| (at + 1) % servers.len())].clone();
+    show_server(model, Some(next))
+}
+
+/// Shows `server`'s sessions, the connection in use when there is none.
+fn show_server(
+    model: &mut Model,
+    server: Option<crate::screens::admin::ServerTarget>,
+) -> Vec<Effect> {
+    let server = server.or_else(|| {
+        let active = model.active_session?;
+        servers(model)
+            .into_iter()
+            .find(|server| server.session == active)
+    });
+    let changed = model.admin.server.as_ref().map(|current| current.session)
+        != server.as_ref().map(|server| server.session);
+    if changed {
+        model.admin.sessions.clear();
+        model.admin.blocking.clear();
+        model.admin.selected = 0;
+        model.admin.detail_scroll = 0;
+        model.admin.terminate = None;
+        model.admin.last_error = None;
+        model.admin.notice = None;
+    }
+    model.admin.read_only = server.as_ref().is_some_and(|server| server.read_only);
+    model.admin.server = server;
+    load_admin_sessions(model)
 }
 
 fn load_admin_sessions(model: &mut Model) -> Vec<Effect> {
-    let Some(session) = model.active_session else {
+    model.admin.ticks = 0;
+    let Some(server) = &model.admin.server else {
         model.admin.loading = false;
         return Vec::new();
     };
     model.admin.loading = true;
     vec![Effect::LoadAdminSessions {
-        session,
-        generation: model.session_generation,
+        session: server.session,
+        generation: server.generation,
     }]
 }
 
 /// Ending a session is a write on the server: the connection's policy is asked first,
 /// then the picked session's id has to be typed.
 fn open_terminate(model: &mut Model) -> Vec<Effect> {
-    let Some(session) = model.admin.picked().cloned() else {
+    let (Some(session), Some(server)) = (model.admin.picked().cloned(), model.admin.server.clone())
+    else {
         return Vec::new();
     };
     let action = dexo_driver_api::AdminAction::TerminateSession {
         session_id: session.id.clone(),
     };
     let policy = dexo_app::admin_service::AdminPolicy {
-        production: dexo_app::Environment::parse_strict(&model.connection.environment)
+        production: dexo_app::Environment::parse_strict(&server.environment)
             == dexo_app::Environment::Production,
-        read_only: model.connection.read_only,
+        read_only: server.read_only,
     };
     let decision = dexo_app::admin_service::evaluate(&action, "", &policy);
     if !decision.allowed {
         model.admin.last_error = Some(format!(
             "Not terminated: {} is read-only.",
-            model.connection.name
+            server.connection
         ));
         return Vec::new();
     }
     let mut prompt = crate::screens::admin::TerminatePrompt::new(session);
-    prompt.connection = model.connection.name.clone();
+    prompt.connection = server.connection;
     model.admin.terminate = Some(prompt);
     Vec::new()
 }
@@ -11969,9 +12053,12 @@ fn submit_terminate(model: &mut Model) -> Vec<Effect> {
     let target = prompt.session.id.clone();
     let connection = prompt.connection.clone();
     model.admin.terminate = None;
-    match model.active_session {
-        Some(session) if connection == model.connection.name => {
-            vec![Effect::AdminTerminate { session, target }]
+    match &model.admin.server {
+        Some(server) if connection == server.connection => {
+            vec![Effect::AdminTerminate {
+                session: server.session,
+                target,
+            }]
         }
         _ => {
             model.admin.last_error =
@@ -13856,7 +13943,7 @@ mod tests {
             [Effect::SettleApproval { approve: false, .. }]
         ));
         assert!(matches!(
-            update(&mut model, Action::AgentActivityTick).as_slice(),
+            update(&mut model, Action::ScreenTick).as_slice(),
             [Effect::LoadMcpAudit]
         ));
     }

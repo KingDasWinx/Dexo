@@ -76,6 +76,11 @@ fn sessions_model(read_only: bool) -> dexo_tui::Model {
     model.connection.read_only = read_only;
     update(&mut model, Action::OpenAdmin);
     model.admin = dexo_tui::screens::admin::AdminScreen::fixture();
+    // The sessions are of the server the screen shows, and its policy is that one's.
+    if let Some(server) = model.admin.server.as_mut() {
+        server.read_only = read_only;
+    }
+    model.admin.read_only = read_only;
     model
 }
 
@@ -200,8 +205,19 @@ fn open_admin_emits_load_when_session_ready() {
         session_generation: 1,
         ..Model::default()
     };
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1)),
+            connection: "shop".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
     let effects = update(&mut model, Action::OpenAdmin);
-    assert!(model.admin.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Server);
     assert!(
         effects
             .iter()
@@ -277,51 +293,56 @@ fn a_session_the_server_ended_is_closed_and_said_so() {
     );
 }
 
-/// A list longer than the box scrolls with Home, End and the paging keys, and the pick
-/// stays on a row that is drawn.
+/// A long list moves its pick with Home, End and the paging keys.
 #[test]
-fn the_sessions_list_scrolls_by_key() {
+fn the_sessions_list_moves_by_key() {
     use crossterm::event::KeyCode;
     let mut model = sessions_model(false);
     model.height = 20;
     model.admin.sessions = (1..=17).map(|n| session_info(&n.to_string())).collect();
     model.admin.blocking.clear();
-    let rows = model.admin.visible_rows(model.height);
 
     press_key(&mut model, KeyCode::End);
     assert_eq!(model.admin.selected, 16);
-    assert!(model.admin.offset > 0);
     press_key(&mut model, KeyCode::Home);
-    assert_eq!((model.admin.selected, model.admin.offset), (0, 0));
+    assert_eq!(model.admin.selected, 0);
     press_key(&mut model, KeyCode::PageDown);
-    assert_eq!(model.admin.selected, rows);
-    let shown = model.admin.lines(58, rows).join("\n");
+    let page = model.admin.selected;
+    assert!(page > 0);
+    let shown = dexo_tui::render::render_to_string(&model, 80, 20);
     assert!(
-        shown.contains(&format!("> {:<7}", model.admin.sessions[rows].id)),
+        shown.contains(&format!("> {:<7}", model.admin.sessions[page].id)),
         "{shown}"
     );
     press_key(&mut model, KeyCode::PageUp);
     assert_eq!(model.admin.selected, 0);
 }
 
-/// The list loads in the background: the dialog says so, shows why when it cannot load,
-/// and an answer that lands after Esc does not bring the dialog back.
+/// The list loads in the background: the screen says so, shows why when it cannot load,
+/// and an answer that lands after leaving does not change what is shown.
 #[test]
-fn the_sessions_dialog_shows_loading_failures_and_ignores_a_late_answer() {
+fn the_sessions_screen_shows_loading_failures_and_ignores_a_late_answer() {
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1));
     let mut model = Model {
-        active_session: Some(dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1))),
+        active_session: Some(session),
         session_generation: 1,
         ..Model::default()
     };
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "shop".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
     update(&mut model, Action::OpenAdmin);
     assert!(model.admin.loading);
-    assert!(
-        model
-            .admin
-            .lines(80, 5)
-            .join("\n")
-            .contains("Loading sessions")
-    );
+    let screen = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(screen.contains("Reading the server's sessions"), "{screen}");
 
     update(
         &mut model,
@@ -343,16 +364,16 @@ fn the_sessions_dialog_shows_loading_failures_and_ignores_a_late_answer() {
 
     update(&mut model, Action::OpenAdmin);
     press_key(&mut model, crossterm::event::KeyCode::Esc);
-    assert!(!model.admin.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
     update(
         &mut model,
         Action::AdminSessionsLoaded {
-            sessions: Vec::new(),
+            sessions: vec![session_info("9")],
             captured_at: "now".into(),
             blocking: Vec::new(),
         },
     );
-    assert!(!model.admin.open, "a late answer reopened the dialog");
+    assert!(model.admin.sessions.is_empty(), "a late answer was taken");
 }
 
 fn choose(model: &mut Model, query: &str) {

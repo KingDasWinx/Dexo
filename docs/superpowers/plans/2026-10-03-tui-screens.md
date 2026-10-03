@@ -35,7 +35,7 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 
 ## 3. Server
 
-- [ ] S1 `admin` becomes the Server screen: sessions table at full width, detail pane (full query,
+- [x] S1 `admin` becomes the Server screen: sessions table at full width, detail pane (full query,
       blocking chain), refresh every 2 s while shown, `p` pause, `r` now, `c` pick the connection.
 
 ## 4. Connections

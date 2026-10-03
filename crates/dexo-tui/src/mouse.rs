@@ -117,7 +117,6 @@ pub enum OverlayKind {
     SchemaDiff,
     Transfer,
     Security,
-    Admin,
     ValueViewer,
     ObjectOverlay,
     SchemaForm,
@@ -168,6 +167,7 @@ pub enum ScrollArea {
     Messages,
     DdlPreview,
     McpProfiles,
+    Sessions,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -302,7 +302,6 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.config_transfer.open, OverlayKind::ConfigTransfer),
         (model.projects.open, OverlayKind::Projects),
         (model.connections.open, OverlayKind::Connections),
-        (model.admin.open, OverlayKind::Admin),
         (model.security.open, OverlayKind::Security),
         (model.transfer.open, OverlayKind::Transfer),
         (model.schema_diff.open, OverlayKind::SchemaDiff),

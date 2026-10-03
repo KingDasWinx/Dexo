@@ -3,6 +3,7 @@
 //! they grew out of kept it.
 
 pub mod agents;
+pub mod server;
 
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
@@ -101,6 +102,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     match model.screen {
         Screen::Agents => agents::render(frame, area, model, hits),
+        Screen::Server => server::render(frame, area, model, hits),
         Screen::Workbench => {}
         _ => {
             let muted = model.theme.style(Role::Muted, model.capabilities);
@@ -120,6 +122,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
 pub fn hints(model: &Model) -> String {
     match model.screen {
         Screen::Agents => agents::hints(model),
+        Screen::Server => server::hints(model),
         _ => "Esc back".into(),
     }
 }

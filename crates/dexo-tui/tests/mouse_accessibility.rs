@@ -145,7 +145,7 @@ fn keyboard_opens_overlays_without_mouse() {
     update(&mut model, Action::OpenSettings);
     assert!(model.settings.open);
     update(&mut model, Action::OpenAdmin);
-    assert!(model.admin.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Server);
     update(&mut model, Action::OpenRecovery);
     assert!(model.recovery.open);
 }

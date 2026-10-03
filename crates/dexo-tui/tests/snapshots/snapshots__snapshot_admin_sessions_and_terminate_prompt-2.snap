@@ -3,33 +3,33 @@ source: crates/dexo-tui/tests/snapshots.rs
 assertion_line: 275
 expression: "render_to_string(&model, 100, 30)"
 ---
-[Workbench] Connections  Agents  Server  Compare  History   demo  local  public                     
-┌  Sidebar─────────────────┐ scratch.sql ×  +                                                       
-│[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
-│  ● local▾                ││   1▸select 1                                                         │
-│>   ▸ public              ││                                                                      │
-│┌Sessions on ┌Terminate session─────────────────────────────────────────────────────┐────────────┐│
-││  ID       U│Session 11 · dexo@dexo · idle in transaction                          │            ││
-││  10       d│  lock table items                                                    │lect 1      ││
-││> 11       d│                                                                      │able items  ││
-││            │Type 11 to end this session and roll back its work.                   │            ││
-││  Session 11│id: █                                                                 │            ││
-││            │ [Terminate]   [Cancel]                                               │            ││
-││Up/Down pick└──────────────────────────────────────────────────────────────────────┘            ││
-│└────────────────────────────────────────────────────────────────────────────────────────────────┘│
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          │└──────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results─────────────────────────────────────────────────────────────┐
-│                          ││[Grid] Explain  Messages                                              │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-│                          ││                                                                      │
-└──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local                                                                                     Ctrl+P  F1
+ Workbench  Connections  Agents [Server] Compare  History   demo  local  public                     
+local · 2 sessions · 1 blocked · every 2s                                                           
+┌▸ Sessions (2)────────────────────────────────────────────────────────────────────────────────────┐
+│  ID       USER         DATABASE     STATE                  TIME  QUERY                           │
+│  10       dexo         dexo         active                 1.2s  [blocked by 11] select 1        │
+│> 11       dexo         dexo         idle in transaction    4.0s  [blocks 10] lock table items    │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌  Session 11──────────────────────────────────────────────────────────────────────────────────────┐
+│Session 11 · dexo@dexo · idle in transaction · 4.0s                                               │
+│Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                    │
+│                                                                                                  │
+│lock table items                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│                                                                                                  │
+│Type 11 to end this session and roll back its work.                                               │
+│id: █                                                                                             │
+│ [Terminate]   [Cancel]                                                                           │
+└──────────────────────────────────────────────────────────────────────────────────────────────────┘
+Server  type the id  Enter terminate  Esc cancel                                          Ctrl+P  F1

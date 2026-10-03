@@ -651,8 +651,8 @@ pub enum Action {
         pending: Vec<dexo_app::mcp::Approval>,
         now: i64,
     },
-    /// The Agents screen reads the database again while it is on screen.
-    AgentActivityTick,
+    /// A second on a screen that reads again on its own: Agents, Server.
+    ScreenTick,
     /// The writes waiting for approval, looked at from the other screens.
     ApprovalsWaiting(Vec<dexo_app::mcp::Approval>),
     DocumentLoaded {

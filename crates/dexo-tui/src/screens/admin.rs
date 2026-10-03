@@ -3,27 +3,43 @@ use dexo_driver_api::{BlockingEdge, SessionInfo};
 use crate::widgets::form::{FooterFocus, footer_line};
 use crate::widgets::text_input::TextInput;
 
+/// The connection the Server screen reads: a session of it, open in Dexo.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ServerTarget {
+    pub session: crate::runtime::SessionId,
+    pub generation: u64,
+    pub connection: String,
+    pub environment: String,
+    pub read_only: bool,
+}
+
 /// The server's sessions, one picked with the arrows; `t` ends the picked one once its
 /// id is typed.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct AdminScreen {
-    pub open: bool,
+    pub server: Option<ServerTarget>,
     pub sessions: Vec<SessionInfo>,
     pub blocking: Vec<BlockingEdge>,
     pub captured_at: String,
     pub selected: usize,
     pub terminate: Option<TerminatePrompt>,
     pub last_error: Option<String>,
-    /// A read of the server's sessions is on its way; the list shows "Loading" until it
-    /// lands, and Esc closes the dialog meanwhile.
+    /// A read of the server's sessions is on its way.
     pub loading: bool,
-    /// The first session row drawn, once the list is longer than the box.
-    pub offset: usize,
     /// The connection refuses writes: the keys line does not offer `t`.
     pub read_only: bool,
-    /// What the last end-session did, in the dialog where the person looked for it.
+    /// What the last end-session did, where the person looked for it.
     pub notice: Option<String>,
+    /// The list is not read again on its own while this is set.
+    pub paused: bool,
+    /// Seconds since the list was last asked for, toward the next reading.
+    pub ticks: u8,
+    /// Lines the picked session's details are scrolled down.
+    pub detail_scroll: u16,
 }
+
+/// How often the Server screen reads the sessions again on its own, in seconds.
+pub const REFRESH_SECS: u8 = 2;
 
 /// Asked before a session is ended: its id typed, as `dexo sessions terminate
 /// --confirm-target` asks for it.
@@ -52,27 +68,12 @@ impl TerminatePrompt {
         self.typed.as_str() == self.session.id
     }
 
-    pub fn lines(&self, width: usize) -> Vec<String> {
-        let session = &self.session;
+    /// The question, under the session it ends: the pane above already says which.
+    pub fn lines(&self) -> Vec<String> {
         let mut lines = vec![
             format!(
-                "Session {} · {}@{} · {}",
-                session.id,
-                session.user.as_deref().unwrap_or("-"),
-                session.database.as_deref().unwrap_or("-"),
-                session.state
-            ),
-            format!(
-                "  {}",
-                cut(
-                    session.current_query.as_deref().unwrap_or("-"),
-                    width.saturating_sub(2)
-                )
-            ),
-            String::new(),
-            format!(
                 "Type {} to end this session and roll back its work.",
-                session.id
+                self.session.id
             ),
             self.typed
                 .inline_line("id: ", self.footer == FooterFocus::Input),
@@ -88,7 +89,13 @@ impl TerminatePrompt {
 impl AdminScreen {
     pub fn fixture() -> Self {
         Self {
-            open: true,
+            server: Some(ServerTarget {
+                session: crate::runtime::SessionId(uuid::Uuid::nil()),
+                generation: 1,
+                connection: "local".into(),
+                environment: "local".into(),
+                read_only: false,
+            }),
             captured_at: "1710000000".into(),
             sessions: vec![
                 SessionInfo {
@@ -119,17 +126,10 @@ impl AdminScreen {
                     session_id: "10".into(),
                 },
             }],
-            selected: 0,
-            terminate: None,
-            last_error: None,
-            loading: false,
-            offset: 0,
-            read_only: false,
-            notice: None,
+            ..Self::default()
         }
     }
 
-    /// The session the arrows are on.
     pub fn picked(&self) -> Option<&SessionInfo> {
         self.sessions.get(self.selected)
     }
@@ -138,55 +138,100 @@ impl AdminScreen {
         self.move_by(if down { 1 } else { -1 });
     }
 
-    /// Moves the pick `delta` rows, stopping at the ends of the list.
     pub fn move_by(&mut self, delta: isize) {
         let last = self.sessions.len().saturating_sub(1);
-        self.selected = self.selected.saturating_add_signed(delta).min(last);
+        let moved = self.selected.saturating_add_signed(delta).min(last);
+        if moved != self.selected {
+            self.detail_scroll = 0;
+        }
+        self.selected = moved;
     }
 
     pub fn select_first(&mut self) {
-        self.selected = 0;
+        self.move_by(-(self.sessions.len() as isize));
     }
 
     pub fn select_last(&mut self) {
-        self.selected = self.sessions.len().saturating_sub(1);
+        self.move_by(self.sessions.len() as isize);
     }
 
-    const MAX_BLOCKING: usize = 3;
-
-    /// The lines around the list: the header, who blocks whom, a message, the keys.
-    fn chrome(&self) -> usize {
-        let blocking = self.blocking.len();
-        let blocking_rows = if blocking == 0 {
-            0
+    /// The column names, `narrow` dropping who and where: the id, state and query
+    /// still say which.
+    pub fn header(narrow: bool) -> String {
+        if narrow {
+            format!("{:<7} {:<19} {:>7}  QUERY", "ID", "STATE", "TIME")
         } else {
-            1 + blocking.min(Self::MAX_BLOCKING) + usize::from(blocking > Self::MAX_BLOCKING)
-        };
-        1 + blocking_rows
-            + 2 * usize::from(self.last_error.is_some())
-            + usize::from(self.notice.is_some())
-            + 2
-    }
-
-    /// How many session rows a terminal `height` rows tall leaves room for: the popup
-    /// keeps a row of margin above and below, and a border.
-    pub fn visible_rows(&self, height: u16) -> usize {
-        let room = (height as usize).saturating_sub(4 + self.chrome()).max(3);
-        // A list that does not fit says which rows are on show.
-        if self.sessions.len() > room {
-            room - 1
-        } else {
-            room
+            format!(
+                "{:<8} {:<12} {:<12} {:<19} {:>7}  QUERY",
+                "ID", "USER", "DATABASE", "STATE", "TIME"
+            )
         }
     }
 
-    /// The first row drawn: the window moves only when the pick leaves it.
-    pub fn window_start(&self, rows: usize) -> usize {
-        crate::palette::scroll_to_selection(self.selected, self.offset, self.sessions.len(), rows)
+    /// A session in one row: its query on one line, after who it blocks or waits for.
+    pub fn row(&self, session: &SessionInfo, narrow: bool) -> String {
+        let time = session
+            .duration_ms
+            .map(duration)
+            .unwrap_or_else(|| "-".into());
+        let query = one_line(session.current_query.as_deref().unwrap_or("-"));
+        let query = match self.blocking_note(&session.id) {
+            Some(note) => format!("[{note}] {query}"),
+            None => query,
+        };
+        if narrow {
+            format!(
+                "{:<7} {:<19} {:>7}  {query}",
+                cut(&session.id, 7),
+                cut(&session.state, 19),
+                time
+            )
+        } else {
+            format!(
+                "{:<8} {:<12} {:<12} {:<19} {:>7}  {query}",
+                cut(&session.id, 8),
+                cut(session.user.as_deref().unwrap_or("-"), 12),
+                cut(session.database.as_deref().unwrap_or("-"), 12),
+                cut(&session.state, 19),
+                time
+            )
+        }
+    }
+
+    /// The picked session in full, `width` cells wide: who, where, what blocks it or
+    /// what it blocks, and its whole query -- the list cuts it at the column's end.
+    pub fn detail_lines(&self, width: usize) -> Vec<String> {
+        let Some(session) = self.picked() else {
+            return Vec::new();
+        };
+        let mut lines = vec![format!(
+            "Session {} · {}@{} · {} · {}",
+            session.id,
+            session.user.as_deref().unwrap_or("-"),
+            session.database.as_deref().unwrap_or("-"),
+            session.state,
+            session
+                .duration_ms
+                .map(duration)
+                .unwrap_or_else(|| "-".into())
+        )];
+        for line in self.blocking_lines() {
+            if line.contains(&format!("Session {} ", session.id))
+                || line.contains(&format!("blocks {}:", session.id))
+            {
+                lines.push(line);
+            }
+        }
+        lines.push(String::new());
+        let query = session.current_query.as_deref().unwrap_or("-");
+        for line in query.lines() {
+            lines.extend(crate::model::wrap_display_text(line, width.max(8)));
+        }
+        lines
     }
 
     /// What each blocking edge says, in words: who waits, for what, and what frees it.
-    fn blocking_lines(&self) -> Vec<String> {
+    pub fn blocking_lines(&self) -> Vec<String> {
         self.blocking
             .iter()
             .map(|edge| {
@@ -197,105 +242,52 @@ impl AdminScreen {
                     _ => "a lock".to_string(),
                 };
                 format!(
-                    "  Session {} blocks {}: it waits for {what}. Ending {} frees it.",
+                    "Session {} blocks {}: it waits for {what}. Ending {} frees it.",
                     edge.blocker, edge.blocked, edge.blocker
                 )
             })
             .collect()
     }
 
-    /// The session list as a table, the picked row marked, then who blocks whom and the
-    /// keys. `width` is the popup's inner width, `rows` how many sessions fit.
-    pub fn lines(&self, width: usize, rows: usize) -> Vec<String> {
-        // A narrow terminal drops who and where: the id, state and query still say which.
-        let narrow = width < 84;
-        let mut lines = vec![if narrow {
-            format!("  {:<7} {:<19} {:>7}  QUERY", "ID", "STATE", "TIME")
+    /// The line over the list: whose sessions, how many, and whether they are kept fresh.
+    pub fn summary(&self) -> String {
+        let Some(server) = &self.server else {
+            return String::new();
+        };
+        let count = self.sessions.len();
+        let blocked = self.blocking.len();
+        let mut text = format!(
+            "{} · {count} session{}",
+            server.connection,
+            if count == 1 { "" } else { "s" }
+        );
+        if blocked > 0 {
+            text.push_str(&format!(" · {blocked} blocked"));
+        }
+        // Only the first reading says so: each one after it would flicker the line.
+        text.push_str(if self.paused {
+            " · paused"
+        } else if self.loading && self.sessions.is_empty() {
+            " · reading"
         } else {
+            " · every 2s"
+        });
+        text
+    }
+
+    /// The keys, as the status line says them.
+    pub fn keys(&self) -> String {
+        if self.terminate.is_some() {
+            return "type the id  Enter terminate  Esc cancel".into();
+        }
+        let pause = if self.paused { "p resume" } else { "p pause" };
+        if self.read_only {
             format!(
-                "  {:<8} {:<12} {:<12} {:<19} {:>7}  QUERY",
-                "ID", "USER", "DATABASE", "STATE", "TIME"
+                "Up/Down pick  r refresh  {pause}  c connection  Esc back  (read-only: no terminate)"
             )
-        }];
-        if self.sessions.is_empty() {
-            lines.push(if self.loading {
-                "  Loading sessions...".into()
-            } else {
-                "  No sessions.".into()
-            });
+        } else {
+            format!("Up/Down pick  t terminate  r refresh  {pause}  c connection  Esc back")
         }
-        let start = self.window_start(rows);
-        for (index, session) in self.sessions.iter().enumerate().skip(start).take(rows) {
-            let mark = if index == self.selected { ">" } else { " " };
-            let time = session
-                .duration_ms
-                .map(duration)
-                .unwrap_or_else(|| "-".into());
-            let query = session
-                .current_query
-                .as_deref()
-                .unwrap_or("-")
-                .split_whitespace()
-                .collect::<Vec<_>>()
-                .join(" ");
-            let query = match self.blocking_note(&session.id) {
-                Some(note) => format!("[{note}] {query}"),
-                None => query,
-            };
-            let row = if narrow {
-                format!(
-                    "{mark} {:<7} {:<19} {:>7}  {query}",
-                    cut(&session.id, 7),
-                    cut(&session.state, 19),
-                    time
-                )
-            } else {
-                format!(
-                    "{mark} {:<8} {:<12} {:<12} {:<19} {:>7}  {query}",
-                    cut(&session.id, 8),
-                    cut(session.user.as_deref().unwrap_or("-"), 12),
-                    cut(session.database.as_deref().unwrap_or("-"), 12),
-                    cut(&session.state, 19),
-                    time
-                )
-            };
-            lines.push(cut(&row, width));
-        }
-        if self.sessions.len() > rows {
-            lines.push(format!(
-                "  Sessions {}-{} of {}",
-                start + 1,
-                (start + rows).min(self.sessions.len()),
-                self.sessions.len()
-            ));
-        }
-        if !self.blocking.is_empty() {
-            lines.push(String::new());
-            let all = self.blocking_lines();
-            for line in all.iter().take(Self::MAX_BLOCKING) {
-                lines.push(cut(line, width));
-            }
-            if all.len() > Self::MAX_BLOCKING {
-                lines.push(format!("  and {} more", all.len() - Self::MAX_BLOCKING));
-            }
-        }
-        if let Some(error) = &self.last_error {
-            lines.push(String::new());
-            lines.push(cut(error, width));
-        }
-        if let Some(notice) = &self.notice {
-            lines.push(cut(notice, width));
-        }
-        lines.push(String::new());
-        lines.push(cut(
-            if self.read_only {
-                "Up/Down pick  r refresh  Esc close  (read-only: no terminate)"
-            } else {
-                "Up/Down pick  t terminate  r refresh  Esc close"
-            },
-            width,
-        ));
-        lines
     }
 
     /// `blocks 764` or `blocked by 419` for a session in the way of another.
@@ -310,6 +302,10 @@ impl AdminScreen {
             }
         })
     }
+}
+
+fn one_line(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
 /// `1.2s`, `4m03s`, `2h05m`.
@@ -349,68 +345,57 @@ mod tests {
         }
     }
 
-    fn long_list() -> AdminScreen {
-        AdminScreen {
-            open: true,
+    /// The pick moves within the list, whatever the key, and leaves the detail at its top.
+    #[test]
+    fn the_pick_stays_on_the_list() {
+        let mut admin = AdminScreen {
             sessions: (1..=17).map(session).collect(),
             ..AdminScreen::default()
-        }
-    }
-
-    /// 17 sessions in a 20-row terminal: the list scrolls with the pick, whatever the
-    /// key, and the line under it says which rows are on show.
-    #[test]
-    fn the_pick_is_always_on_a_row_that_is_drawn() {
-        let mut admin = long_list();
-        let rows = admin.visible_rows(20);
-        assert!(rows < 17);
-        for _ in 0..16 {
-            admin.move_selection(true);
-            admin.offset = admin.window_start(rows);
-            let shown = admin.lines(58, rows).join("\n");
-            let id = &admin.picked().unwrap().id;
-            assert!(shown.contains(&format!("> {id:<7}")), "{shown}");
-        }
-        assert!(admin.lines(58, rows).join("\n").contains("of 17"));
-        admin.select_first();
-        admin.offset = admin.window_start(rows);
-        assert!(admin.lines(58, rows).join("\n").contains("> 1 "));
+        };
         admin.move_by(100);
         assert_eq!(admin.selected, 16);
-    }
-
-    /// The list's lines never outgrow the terminal they were sized for.
-    #[test]
-    fn the_box_fits_the_terminal() {
-        let mut admin = long_list();
-        admin.last_error = Some("Not terminated: x".into());
-        admin.notice = Some("Session 4 terminated.".into());
-        for height in [14u16, 20, 24, 36] {
-            let rows = admin.visible_rows(height);
-            let lines = admin.lines(58, rows).len();
-            assert!(
-                lines + 4 <= height as usize,
-                "{lines} lines in {height} rows"
-            );
-        }
+        admin.detail_scroll = 3;
+        admin.select_first();
+        assert_eq!((admin.selected, admin.detail_scroll), (0, 0));
     }
 
     #[test]
     fn a_blocking_edge_names_the_waiter_and_what_frees_it() {
-        let admin = AdminScreen::fixture();
-        let text = admin.lines(110, 5).join("\n");
+        let mut admin = AdminScreen::fixture();
+        let text = admin.detail_lines(110).join("\n");
         assert!(text.contains("Session 11 blocks 10"), "{text}");
         assert!(text.contains("a lock on public.items"), "{text}");
         assert!(text.contains("Ending 11 frees it"), "{text}");
-        assert!(text.contains("[blocks 10]"), "{text}");
-        assert!(text.contains("[blocked by 11]"), "{text}");
+        assert!(
+            admin
+                .row(&admin.sessions[0], false)
+                .contains("[blocked by 11]")
+        );
+        assert!(admin.row(&admin.sessions[1], false).contains("[blocks 10]"));
+        admin.selected = 1;
+        assert!(
+            admin
+                .detail_lines(110)
+                .join("\n")
+                .contains("Ending 11 frees it")
+        );
     }
 
     #[test]
     fn a_read_only_connection_does_not_offer_terminate() {
         let mut admin = AdminScreen::fixture();
-        assert!(admin.lines(110, 5).join("\n").contains("t terminate"));
+        assert!(admin.keys().contains("t terminate"));
         admin.read_only = true;
-        assert!(!admin.lines(110, 5).join("\n").contains("t terminate"));
+        assert!(!admin.keys().contains("t terminate"));
+    }
+
+    /// The query is shown whole in the detail, where the list cuts it at its column.
+    #[test]
+    fn the_picked_query_is_shown_whole() {
+        let mut admin = AdminScreen::fixture();
+        let long = format!("select {} from t", "x, ".repeat(60));
+        admin.sessions[0].current_query = Some(long.clone());
+        let text = admin.detail_lines(40).join("");
+        assert!(text.contains("from t"), "{text}");
     }
 }

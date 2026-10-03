@@ -3,53 +3,53 @@ source: crates/dexo-tui/tests/snapshots.rs
 assertion_line: 268
 expression: "render_to_string(&model, 160, 50)"
 ---
-[Workbench] Connections  Agents  Server  Compare  History   demo  local  public                                                                                 
-┌  Sidebar─────────────────┐ scratch.sql ×  +                                                                                                                   
-│[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│  ● local▾                ││   1▸select 1                                                                                                                     │
-│>   ▸ public              ││                                                                                                                                  │
-│      mysql.u… [no access]││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                        ┌Sessions on local (every database on the server)────────────────────────────────────────────────────────────┐                        │
-│                        │  ID       USER         DATABASE     STATE                  TIME  QUERY                                     │                        │
-│                        │> 10       dexo         dexo         active                 1.2s  [blocked by 11] select 1                  │                        │
-│                        │  11       dexo         dexo         idle in transaction    4.0s  [blocks 10] lock table items              │                        │
-│                        │                                                                                                            │                        │
-│                        │  Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                            │                        │
-│                        │                                                                                                            │                        │
-│                        │Up/Down pick  t terminate  r refresh  Esc close                                                             │                        │
-│                        └────────────────────────────────────────────────────────────────────────────────────────────────────────────┘                        │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          │└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-│                          │┌  Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│                          ││[Grid] Explain  Messages                                                                                                          │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-│                          ││                                                                                                                                  │
-└──────────────────────────┘└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
-local                                                                                                                                                 Ctrl+P  F1
+ Workbench  Connections  Agents [Server] Compare  History   demo  local  public                                                                                 
+local · 2 sessions · 1 blocked · every 2s                                                                                                                       
+┌▸ Sessions (2)────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│  ID       USER         DATABASE     STATE                  TIME  QUERY                                                                                       │
+│> 10       dexo         dexo         active                 1.2s  [blocked by 11] select 1                                                                    │
+│  11       dexo         dexo         idle in transaction    4.0s  [blocks 10] lock table items                                                                │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+┌  Session 10──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│Session 10 · dexo@dexo · active · 1.2s                                                                                                                        │
+│Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                                                                                │
+│                                                                                                                                                              │
+│select 1                                                                                                                                                      │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
+└──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
+Server  Up/Down pick  t terminate  r refresh  p pause  c connection  Esc back                                                                         Ctrl+P  F1

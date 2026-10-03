@@ -189,9 +189,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if let Some(preview) = &model.schema_editor.preview {
         render_ddl_preview(frame, model, preview, hits);
     }
-    if model.admin.open {
-        render_admin(frame, model, hits);
-    }
     // A dialog opened over another is drawn alone: the one under it, taller, showed its
     // bottom border as a second box edge under the new one.
     if model.connections.open && !model.connection_form.open && !model.secret_prompt.open {
@@ -2223,64 +2220,6 @@ fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             hits.register(HitTarget::ListRow(source_index), rect);
         }
     });
-}
-
-fn render_admin(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    if area.width < 10 || area.height < 5 {
-        return;
-    }
-    let width = 110.min(area.width.saturating_sub(2));
-    let rows = model.admin.visible_rows(area.height);
-    let lines = model.admin.lines(width.saturating_sub(2) as usize, rows);
-    let height = (lines.len() as u16 + 2).min(area.height.saturating_sub(2));
-    let popup = centered(area, width, height);
-    paint_popup(
-        frame,
-        model,
-        popup,
-        Block::bordered().title(format!(
-            "Sessions on {} (every database on the server)",
-            model.connection.name
-        )),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    // Row 0 is the header; each session's row below it picks that session, from the
-    // first one the list has scrolled to.
-    let start = model.admin.window_start(rows);
-    let shown = model.admin.sessions.len().saturating_sub(start).min(rows);
-    for_popup_lines(popup, &lines, |index, _, rect| {
-        if index >= 1 && index <= shown {
-            hits.register(HitTarget::ListRow(start + index - 1), rect);
-            if start + index - 1 == model.admin.selected {
-                paint_reversed(frame, rect, 0, rect.width as usize);
-            }
-        }
-    });
-    if let Some(prompt) = &model.admin.terminate {
-        let width = 72.min(area.width);
-        let lines = prompt.lines(width.saturating_sub(2) as usize);
-        let popup = centered(area, width, lines.len() as u16 + 2);
-        paint_popup(
-            frame,
-            model,
-            popup,
-            Block::bordered().title("Terminate session"),
-            lines.join("\n"),
-        );
-        register_overlay(hits, popup);
-        for_popup_lines(popup, &lines, |_, line, rect| {
-            if line.starts_with("id:") {
-                let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
-                paint_selection(frame, rect, "id: ", &prompt.typed, focused);
-                hits.register(HitTarget::FormField(0), rect);
-            }
-            if line.contains("[Cancel]") {
-                crate::widgets::form::register_footer(hits, rect, line, "Terminate");
-            }
-        });
-    }
 }
 
 /// The saved connections, sized to them: the list scrolls to keep the selection in
