@@ -316,7 +316,7 @@ fn render_close_prompt(
             format!("{marker}{label}")
         })
         .collect::<Vec<_>>()
-        .join("  ");
+        .join(" ");
     let lines = [
         format!("{name} has changes that are not saved."),
         "Closing it without saving loses them.".to_string(),

@@ -69,6 +69,17 @@ fn help_spells_keys_like_the_palette_and_groups_layout_keys() {
     assert!(!frame.contains("[Editor]"), "{frame}");
 }
 
+/// The close prompt spaced its buttons with three spaces; every other dialog uses the
+/// marker slot and two.
+#[test]
+fn the_close_prompt_spaces_its_buttons_like_the_other_dialogs() {
+    let mut model = Model::default();
+    model.documents[0].sql.insert(0, "select 1").unwrap();
+    update(&mut model, Action::CloseDocument);
+    let frame = dexo_tui::render::render_to_string(&model, 100, 30);
+    assert!(frame.contains(">[Save]  [Don't save]  [Cancel]"), "{frame}");
+}
+
 #[test]
 fn a_click_in_the_help_search_does_not_close_help() {
     let mut model = Model::default();
