@@ -1,9 +1,11 @@
-use dexo_storage::{ConnectionRepository, Database, apply_pending, read_schema_version};
+use dexo_storage::{
+    ConnectionRepository, Database, LATEST_SCHEMA_VERSION, apply_pending, read_schema_version,
+};
 
 #[test]
 fn fresh_database_reaches_schema_four() {
     let db = Database::open_in_memory().unwrap();
-    assert_eq!(db.schema_version().unwrap(), 17);
+    assert_eq!(db.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
 }
 
 #[test]
@@ -100,7 +102,7 @@ fn table_exists(conn: &rusqlite::Connection, table: &str) -> bool {
 fn migration_9_scopes_snippets_history_and_recent_items() {
     let db = database_at_version(8);
     apply_pending(db.connection()).unwrap();
-    assert_eq!(db.schema_version().unwrap(), 17);
+    assert_eq!(db.schema_version().unwrap(), LATEST_SCHEMA_VERSION);
     assert!(column_exists(db.connection(), "snippets", "project_id"));
     assert!(column_exists(db.connection(), "sql_history", "project_id"));
     assert!(table_exists(db.connection(), "recent_items"));
@@ -111,7 +113,7 @@ fn migration_10_adds_project_object_usage() {
     let db = database_at_version(9);
     apply_pending(db.connection()).unwrap();
     assert!(table_exists(db.connection(), "object_usage"));
-    assert_eq!(read_schema_version(db.connection()), 17);
+    assert_eq!(read_schema_version(db.connection()), LATEST_SCHEMA_VERSION);
 }
 
 #[test]
@@ -119,5 +121,5 @@ fn migration_11_adds_explain_plans() {
     let db = database_at_version(10);
     apply_pending(db.connection()).unwrap();
     assert!(table_exists(db.connection(), "explain_plans"));
-    assert_eq!(read_schema_version(db.connection()), 17);
+    assert_eq!(read_schema_version(db.connection()), LATEST_SCHEMA_VERSION);
 }

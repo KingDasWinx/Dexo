@@ -469,6 +469,17 @@ pub struct ResultTab {
     /// A page of the statement run again with the bars (`LIMIT`/`OFFSET`): its rows are
     /// one page, not the whole result, and n and p turn it.
     pub paged: bool,
+    /// What History keeps of the statement, for one the user ran.
+    pub history: Option<HistoryRun>,
+}
+
+/// A statement the user ran, as History keeps it once it ends: its text, and since when
+/// it runs.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryRun {
+    pub sql: String,
+    pub started: Option<std::time::Instant>,
+    pub recorded: bool,
 }
 
 impl ResultTab {
@@ -485,6 +496,7 @@ impl ResultTab {
             source_offset: None,
             truncated: false,
             paged: false,
+            history: None,
         }
     }
 }

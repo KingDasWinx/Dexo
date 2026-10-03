@@ -225,7 +225,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         // there when they come back.
         Action::QueryResultSetStarted { key, index } => {
             if let Some((results, _)) = document_output(model, &key) {
-                ensure_tab_in(results, &key, index).grid.clear();
+                let tab = ensure_tab_in(results, &key, index);
+                tab.grid.clear();
+                if let Some(run) = tab.history.as_mut() {
+                    run.started.get_or_insert_with(std::time::Instant::now);
+                }
                 results.active = index;
             }
             Vec::new()
@@ -272,7 +276,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 tab.truncated = truncated;
                 tab.status = crate::model::OperationStatus::Finished;
             }
-            Vec::new()
+            record_statement(model, &key, index, dexo_storage::HistoryOutcome::Ok, None)
         }
         Action::ScriptFinished { key } => {
             model.active_task = None;
@@ -294,7 +298,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if operation_matches(model, &key) {
                 model.results.view = crate::model::ResultsView::Grid;
             }
-            effects.extend(persist_history_effect(model));
+            // A statement that ended without a result set's end is kept as it ran too.
+            let ran = document_output(model, &key).map_or(0, |(results, _)| results.tabs.len());
+            for index in 0..ran {
+                effects.extend(record_statement(
+                    model,
+                    &key,
+                    index,
+                    dexo_storage::HistoryOutcome::Ok,
+                    None,
+                ));
+            }
             effects
         }
         Action::QueryFailed {
@@ -311,6 +325,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             if let Some(tab) = result_tab_mut(model, &key, index) {
                 tab.status = crate::model::OperationStatus::Failed;
             }
+            let stopped = cancelled || message.eq_ignore_ascii_case("query cancelled");
+            let outcome = if stopped {
+                dexo_storage::HistoryOutcome::Cancelled
+            } else {
+                dexo_storage::HistoryOutcome::Failed
+            };
+            let mut effects = record_statement(model, &key, index, outcome, Some(message.clone()));
             apply_sql_transactions(model, key.operation, index);
             if !cancelled {
                 point_at_failure(model, &key, index, &message, position);
@@ -330,9 +351,10 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             }
             // A run the user stopped did not fail: `error query cancelled` in red said it
             // had, and the grid has nothing to explain.
-            if cancelled || message.eq_ignore_ascii_case("query cancelled") {
+            if stopped {
                 model.messages.info("Query cancelled.".into());
-                return finish_schema_run(model, key.operation, Some(index));
+                effects.extend(finish_schema_run(model, key.operation, Some(index)));
+                return effects;
             }
             // The statement that failed is Dexo's wrapper around the user's clause: its
             // position, and the line it quotes, mean nothing in what the user typed.
@@ -361,7 +383,8 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 model.results.messages_scroll =
                     u16::try_from(model.messages.newest_offset()).unwrap_or(u16::MAX);
             }
-            finish_schema_run(model, key.operation, Some(index))
+            effects.extend(finish_schema_run(model, key.operation, Some(index)));
+            effects
         }
         Action::CheckpointTick => {
             let mut effects = checkpoint_session(model);
@@ -7704,32 +7727,65 @@ fn checkpoint_dirty(model: &Model) -> Vec<Effect> {
         .collect()
 }
 
-fn persist_history_effect(model: &Model) -> Vec<Effect> {
-    let sql = model.active_document().text();
-    if sql.trim().is_empty() {
+/// Keeps statement `index` of a run in History once it ends: how it went, how long it
+/// took, the rows it returned or changed, and on which connection and database. Only a
+/// statement the user ran, and each once.
+fn record_statement(
+    model: &mut Model,
+    key: &crate::runtime::OperationKey,
+    index: usize,
+    outcome: dexo_storage::HistoryOutcome,
+    error: Option<String>,
+) -> Vec<Effect> {
+    let connection = model
+        .connections
+        .sessions
+        .iter()
+        .find(|row| row.id.0.to_string() == key.session)
+        .map(|row| row.connection.clone())
+        .or_else(|| (!model.connection.name.is_empty()).then(|| model.connection.name.clone()));
+    let database = connection
+        .as_deref()
+        .and_then(|name| {
+            model
+                .connections
+                .profiles
+                .iter()
+                .find(|row| row.profile.name == name)
+        })
+        .and_then(|row| row.profile.config.get("database"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|database| !database.is_empty())
+        .map(str::to_string);
+    let project_id = (!model.project_id.is_empty()).then(|| model.project_id.clone());
+    let Some(tab) = result_tab_mut(model, key, index) else {
         return Vec::new();
-    }
-    let entry = dexo_sql::HistoryEntry {
+    };
+    let Some(run) = tab.history.as_mut().filter(|run| !run.recorded) else {
+        return Vec::new();
+    };
+    run.recorded = true;
+    let duration_ms = run
+        .started
+        .map(|started| u64::try_from(started.elapsed().as_millis()).unwrap_or(u64::MAX));
+    let sql = run.sql.clone();
+    let rows = (outcome == dexo_storage::HistoryOutcome::Ok)
+        .then(|| {
+            tab.rows_affected
+                .or_else(|| (!tab.grid.columns().is_empty()).then(|| tab.grid.row_count() as u64))
+        })
+        .flatten();
+    vec![Effect::PersistHistory(dexo_storage::NewHistoryEntry {
+        project_id,
+        connection_id: connection,
         sql,
-        parameters: None,
-    }
-    .for_storage(model.editor.history_policy);
-    // Sensitive parameter values are never stored; HistoryPolicy::SqlOnly is the default.
-    vec![Effect::PersistHistory(
-        crate::action::PersistHistoryRequest {
-            project_id: if model.project_id.is_empty() {
-                None
-            } else {
-                Some(model.project_id.clone())
-            },
-            connection_id: if model.connection.name.is_empty() {
-                None
-            } else {
-                Some(model.connection.name.clone())
-            },
-            sql: entry.sql,
-        },
-    )]
+        outcome,
+        duration_ms,
+        rows,
+        error,
+        database,
+        ..dexo_storage::NewHistoryEntry::default()
+    })]
 }
 
 fn profile_by_uuid(model: &Model, id: &str) -> Option<dexo_app::ConnectionProfile> {
@@ -8312,6 +8368,11 @@ fn launch_script(model: &mut Model, statements: Vec<String>) -> Vec<Effect> {
             // result of anything else keeps no statement to run, and shows no bars.
             tab.source_sql = dexo_sql::is_read(sql, dialect).then(|| sql.clone());
             tab.source_offset = offsets[index];
+            tab.history = Some(crate::model::HistoryRun {
+                sql: sql.clone(),
+                started: None,
+                recorded: false,
+            });
             tab
         })
         .collect();

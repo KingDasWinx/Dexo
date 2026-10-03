@@ -2424,7 +2424,7 @@ impl WorkbenchRuntime {
 
     async fn persist_history(&mut self, request: PersistHistoryRequest) {
         if let Some(storage) = &self.storage {
-            let _ = storage.persist_history(request.project_id, request.connection_id, request.sql);
+            let _ = storage.persist_history(request);
         }
     }
 

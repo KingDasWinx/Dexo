@@ -36,11 +36,7 @@ pub enum StorageCommand {
     Bootstrap {
         reply: tokio::sync::oneshot::Sender<anyhow::Result<BootstrapState>>,
     },
-    PersistHistory {
-        project_id: Option<String>,
-        connection_id: Option<String>,
-        sql: String,
-    },
+    PersistHistory(dexo_storage::NewHistoryEntry),
     ListHistory {
         connection_id: Option<String>,
         reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_storage::HistoryRow>>>,
@@ -178,19 +174,10 @@ impl StorageWorker {
                         StorageCommand::Bootstrap { reply } => {
                             let _ = reply.send(bootstrap_state(&db));
                         }
-                        StorageCommand::PersistHistory {
-                            project_id,
-                            connection_id,
-                            sql,
-                        } => {
+                        StorageCommand::PersistHistory(mut entry) => {
                             let repo = HistoryRepository::new(db.connection());
-                            let id = Uuid::new_v4().to_string();
-                            let _ = repo.insert_scoped(
-                                &id,
-                                project_id.as_deref(),
-                                connection_id.as_deref(),
-                                &sql,
-                            );
+                            entry.id = Uuid::new_v4().to_string();
+                            let _ = repo.record(&entry);
                             let _ = repo.prune(500);
                         }
                         StorageCommand::ListHistory {
@@ -405,17 +392,8 @@ impl StorageWorker {
         receive.await?
     }
 
-    pub fn persist_history(
-        &self,
-        project_id: Option<String>,
-        connection_id: Option<String>,
-        sql: String,
-    ) -> anyhow::Result<()> {
-        self.tx.send(StorageCommand::PersistHistory {
-            project_id,
-            connection_id,
-            sql,
-        })?;
+    pub fn persist_history(&self, entry: dexo_storage::NewHistoryEntry) -> anyhow::Result<()> {
+        self.tx.send(StorageCommand::PersistHistory(entry))?;
         Ok(())
     }
 

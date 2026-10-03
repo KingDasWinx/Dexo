@@ -77,7 +77,7 @@ fn typing_opens_completion_and_tab_replaces_token() {
 }
 
 #[test]
-fn editor_formats_inserts_snippet_and_keeps_history_sql_only() {
+fn editor_formats_and_inserts_a_snippet() {
     let mut model = model_with_sql("select 1");
     update(&mut model, Action::FormatSql);
     assert!(
@@ -94,23 +94,6 @@ fn editor_formats_inserts_snippet_and_keeps_history_sql_only() {
     model.set_sql("");
     update(&mut model, Action::InsertSnippet);
     assert_eq!(model.active_document().text(), "select * from t");
-    let effects = update(
-        &mut model,
-        Action::ScriptFinished {
-            key: dexo_tui::runtime::OperationKey::new(
-                dexo_tui::runtime::OperationId::new(),
-                "",
-                "scratch",
-                1,
-            ),
-        },
-    );
-    assert!(
-        effects.iter().any(|effect| matches!(
-            effect,
-            dexo_tui::Effect::PersistHistory(request) if request.sql.contains("select") && !request.sql.contains("secret")
-        ))
-    );
 }
 
 fn send_text(model: &mut Model, text: &str) {

@@ -795,12 +795,8 @@ pub struct RecoveryCheckpointRequest {
     pub content: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct PersistHistoryRequest {
-    pub project_id: Option<String>,
-    pub connection_id: Option<String>,
-    pub sql: String,
-}
+/// A statement's run for History; the storage worker gives it its id.
+pub type PersistHistoryRequest = dexo_storage::NewHistoryEntry;
 
 #[derive(Clone, Debug)]
 pub enum TransferRequest {

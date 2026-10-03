@@ -228,7 +228,7 @@ mod tests {
         }
 
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 17);
+        assert_eq!(db.schema_version().unwrap(), 18);
         assert!(unsupported_archive_path(&path, 23).exists());
     }
 
@@ -247,7 +247,7 @@ mod tests {
         }
 
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 17);
+        assert_eq!(db.schema_version().unwrap(), 18);
         assert!(unsupported_archive_path(&path, 23).exists());
     }
 
@@ -329,7 +329,7 @@ mod tests {
                 .unwrap();
         }
         let db = Database::open(&path).unwrap();
-        assert_eq!(db.schema_version().unwrap(), 17);
+        assert_eq!(db.schema_version().unwrap(), 18);
         assert!(backup_path(&path).exists());
     }
 

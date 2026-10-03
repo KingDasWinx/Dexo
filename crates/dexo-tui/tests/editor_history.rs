@@ -18,6 +18,7 @@ fn row(sql: &str) -> dexo_storage::HistoryRow {
         sql: sql.into(),
         connection_id: Some("pg-dev".into()),
         created_at: "2026-10-03 12:00:00".into(),
+        ..Default::default()
     }
 }
 
