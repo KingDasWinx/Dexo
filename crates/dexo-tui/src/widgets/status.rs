@@ -364,6 +364,19 @@ fn footer_hint(model: &Model) -> Option<String> {
             Some(keyed_hint(model, &[("results.cycle_view", "view")]))
                 .map(|view| format!("Up/Down read  n note  {view}"))
         }
+        // The plan and the log are read, not edited: the grid's keys say nothing there.
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Explain =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  i try an index  {view}"))
+        }
+        crate::model::Focus::Results
+            if model.results.view == crate::model::ResultsView::Messages =>
+        {
+            Some(keyed_hint(model, &[("results.cycle_view", "view")]))
+                .map(|view| format!("Up/Down read  {view}"))
+        }
         crate::model::Focus::Results if model.results.view == crate::model::ResultsView::Ddl => {
             Some(keyed_hint(model, &[("results.cycle_view", "view")]))
                 .map(|view| format!("Up/Down read  {view}"))

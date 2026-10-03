@@ -14,6 +14,10 @@ The workbench -- explorer, editor and results -- is one of six screens. The othe
 
 `Ctrl+G` then a letter goes to a screen: `w` workbench, `c` connections, `a` agents, `s` server, `d` compare, `h` history; `Ctrl+G Ctrl+G` goes back and forth between the last two. After `Ctrl+G` a small list shows what can follow, as it does for any chord that waits for a second key. A click on a name and the palette's "Go to …" commands go there too, and the keys and commands that opened the old dialogs -- `s` in the sidebar, Search History, MCP Profiles -- open their screen. Esc first clears what the screen has open, a search or a form, then goes back to the screen you came from. A screen keeps its state while Dexo runs; Dexo starts on the workbench. On another screen, a key that acts on the workbench (Ctrl+W, Ctrl+S) says so instead of acting on what is hidden; the palette's workbench commands go to the workbench and run there.
 
+## Keys
+
+A key does one thing where you press it. The palette (Ctrl+P), help (F1), quitting (Ctrl+Q) and the screens (Ctrl+G) work everywhere. On the workbench, what acts on the document or the connection works from any pane: new, open, save and close a document (Ctrl+N, Ctrl+O, Ctrl+S, Ctrl+W), the next and previous one (Ctrl+Tab, Alt+Left and Alt+Right), the panes (Alt+0 to Alt+3), the transactions (Alt+B, Alt+C, Alt+Z), cancelling a run (Ctrl+F2), explaining (F7). The rest belongs to the pane: F2 renames the document in the editor and on the tab strip, edits the cell under the cursor in a table's rows, and does nothing elsewhere; in the explorer Alt+Left and Alt+Right size the explorer instead; on a table's Structure, DDL or Privileges, a plan or the log, the grid's keys say they work on the grid view. Each other screen has its own letters, shown on its status line. F1 lists every key by where it works.
+
 ## Themes
 
 Settings' Theme row (`e`, or "Cycle Theme" in a keymap) steps through Dexo's own theme, five presets -- Dracula, Gruvbox, Nord, Catppuccin and Tokyo Night -- and your own files, applying each as it is shown. Mode and Accent belong to Dexo's own theme, and changing either goes back to it.

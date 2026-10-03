@@ -5154,6 +5154,29 @@ pub(crate) fn chord_context(model: &Model) -> crate::keymap::KeyContext {
 /// What a command for a table's own rows says on a query's result.
 pub(crate) const TABLE_ONLY: &str = "This is a query's result: edit and browse rows in the table's own document (o in the sidebar).";
 
+/// Commands that act on the grid's rows and cells. On another view of the Results pane --
+/// a table's structure, a plan, the log -- they acted on rows nobody could see.
+fn grid_only(command: &str) -> bool {
+    (command.starts_with("data.")
+        || command.starts_with("results.")
+        || command == "transfer.export")
+        && !matches!(
+            command,
+            "results.cycle_view"
+                | "results.collapse"
+                | "results.up"
+                | "results.down"
+                | "results.pageup"
+                | "results.pagedown"
+                | "results.top"
+                | "results.bottom"
+                | "results.first_column"
+                | "results.last_column"
+                | "data.review"
+                | "data.discard_all"
+        )
+}
+
 /// Goes to `screen`, the one left becoming the way back, and reads what it shows.
 fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
     model.pending_chord.keys.clear();
@@ -5600,6 +5623,21 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             } else {
                 command
             };
+            if model.effective_focus() == Focus::Results
+                && model.results.view != crate::model::ResultsView::Grid
+                && grid_only(command)
+            {
+                let title = crate::palette::command_spec(command)
+                    .map(|spec| spec.title)
+                    .unwrap_or(command);
+                let view = crate::palette::shortcut_for(model, "results.cycle_view", None)
+                    .map(|key| format!(": {key} goes there"))
+                    .unwrap_or_default();
+                model
+                    .messages
+                    .info(format!("{title} works on the Grid view{view}."));
+                return Vec::new();
+            }
             if let Some(invocation) = crate::palette::invocation_by_id(model, command) {
                 return invoke_palette(model, invocation);
             }
