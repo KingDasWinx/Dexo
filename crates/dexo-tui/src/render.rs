@@ -1759,7 +1759,7 @@ fn render_results_menu(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         .take(detail_rows)
         .collect::<Vec<_>>();
 
-    let items = crate::palette::results_menu_items();
+    let items = crate::palette::results_menu_items(model.active_document().kind.is_table());
     let action_rows = layout.actions.height.max(1) as usize;
     let action_offset =
         scroll_to_selection(model.results_menu.selected, 0, items.len(), action_rows);

@@ -518,6 +518,14 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         model
     }
 
+    /// A command for a table's own rows runs on a table's document.
+    fn on_a_table(id: &str, model: &mut Model) {
+        if dexo_tui::palette::table_only(id) {
+            model.active_document_mut().kind =
+                dexo_tui::model::DocumentKind::Table(dexo_app::parse_qualified("public.orders"));
+        }
+    }
+
     fn apply_transaction_context(id: &str, model: &mut Model) {
         match id {
             "transaction.savepoint"
@@ -538,6 +546,7 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         let requirements = command_spec(id).unwrap().requirements;
         let mut ready_model = model_satisfying(requirements);
         apply_transaction_context(id, &mut ready_model);
+        on_a_table(id, &mut ready_model);
         let ready = palette_entries(&ready_model)
             .into_iter()
             .find(|entry| entry.id == id)
@@ -545,7 +554,8 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         assert!(ready.disabled_reason.is_none(), "{id}");
 
         for requirement in requirements {
-            let blocked_model = model_missing(requirements, *requirement);
+            let mut blocked_model = model_missing(requirements, *requirement);
+            on_a_table(id, &mut blocked_model);
             let blocked = palette_entries(&blocked_model)
                 .into_iter()
                 .find(|entry| entry.id == id)

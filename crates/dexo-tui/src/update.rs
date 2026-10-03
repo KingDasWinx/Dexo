@@ -4591,7 +4591,8 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
                 model.results_menu.offset = (model.results_menu.offset + 1).min(max_detail_offset);
             }
         } else {
-            let count = crate::palette::results_menu_items().len();
+            let count =
+                crate::palette::results_menu_items(model.active_document().kind.is_table()).len();
             if count > 0 {
                 if delta < 0 {
                     model.results_menu.selected = model.results_menu.selected.saturating_sub(1);
@@ -5149,6 +5150,9 @@ pub(crate) fn chord_context(model: &Model) -> crate::keymap::KeyContext {
         crate::keymap::KeyContext::Global
     }
 }
+
+/// What a command for a table's own rows says on a query's result.
+pub(crate) const TABLE_ONLY: &str = "This is a query's result: edit and browse rows in the table's own document (o in the sidebar).";
 
 /// Goes to `screen`, the one left becoming the way back, and reads what it shows.
 fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
@@ -6786,7 +6790,7 @@ fn mouse_node_menu(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 fn handle_results_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    let count = crate::palette::results_menu_items().len();
+    let count = crate::palette::results_menu_items(model.active_document().kind.is_table()).len();
     let area = Rect::new(0, 0, model.width, model.height);
     let layout = crate::render::results_menu_layout(area);
     let row = model.results.cursor_row().unwrap_or(0);
@@ -6833,8 +6837,8 @@ fn handle_results_menu_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 }
 
 fn pick_results_menu(model: &mut Model) -> Vec<Effect> {
-    let items = crate::palette::results_menu_items();
-    let Some((id, _)) = items.get(model.results_menu.selected) else {
+    let items = crate::palette::results_menu_items(model.active_document().kind.is_table());
+    let Some((id, _)) = items.get(model.results_menu.selected).copied() else {
         model.results_menu.open = false;
         return Vec::new();
     };
@@ -8269,10 +8273,11 @@ const CELL_EDIT_DOCUMENT: &str = "\u{0}cell-edit";
 /// anything is typed: a connection that is read-only, a table whose rows have no key, a
 /// column the row is found by, a row already going away.
 fn open_cell_edit(model: &mut Model) -> Vec<Effect> {
-    // F2 is Rename on a document's own panes, and only a table's cells are edited: on the
-    // results of a statement it renames, as it does from everywhere else.
+    // Only a table's cells are edited. On a query's result this renamed the document,
+    // from the row's menu and from F2 alike.
     if !model.active_document().kind.is_table() {
-        return update(model, Action::RenameDocument);
+        model.messages.warn(TABLE_ONLY.into());
+        return Vec::new();
     }
     if edits_refused(model, "Edit") {
         return Vec::new();
@@ -14852,13 +14857,15 @@ mod tests {
     }
 
     /// The row's Actions menu says each action's key, and has the sort, the count and
-    /// the way back.
+    /// the way back -- on a table's rows, which a query's result does not offer.
     #[test]
     fn the_row_menu_says_its_keys() {
         let mut model = Model {
             focus: Focus::Results,
             ..Model::default()
         };
+        model.active_document_mut().kind =
+            crate::model::DocumentKind::Table(dexo_app::parse_qualified("public.orders"));
         model.results.set_columns(vec![dexo_driver_api::ColumnMeta {
             name: "id".into(),
             type_name: "int".into(),

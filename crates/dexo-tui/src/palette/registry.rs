@@ -1794,6 +1794,9 @@ fn contextual_reason(model: &Model, id: &str) -> Option<String> {
     {
         return Some("connection is read-only".into());
     }
+    if crate::palette::table_only(id) && !model.active_document().kind.is_table() {
+        return Some(crate::update::TABLE_ONLY.into());
+    }
     match id {
         "transaction.begin" if model.transaction != TransactionState::Idle => {
             Some("a transaction is already open: commit or roll it back first".into())

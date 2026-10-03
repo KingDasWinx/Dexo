@@ -168,26 +168,42 @@ pub fn node_menu_entries(model: &Model, kind: NodeMenuKind) -> Vec<PaletteEntry>
         .collect()
 }
 
-pub fn results_menu_items() -> &'static [(&'static str, &'static str)] {
-    &[
-        ("data.edit_cell", "Edit cell"),
-        ("data.copy.cell", "Copy cell"),
-        ("data.copy.text", "Copy as Text"),
-        ("data.copy.json", "Copy as JSON"),
-        ("data.copy.csv", "Copy as CSV"),
-        ("data.copy.markdown", "Copy as Markdown"),
-        ("data.copy.sql", "Copy as SQL"),
-        ("data.inspect", "Inspect value"),
-        ("data.filter", "Filter rows (WHERE)"),
-        ("data.sort", "Sort rows (ORDER BY)"),
-        ("results.sort_column", "Sort by this column"),
-        ("results.sort_add_column", "Add column to sort"),
-        ("results.count", "Count rows"),
-        ("data.related", "Related rows…"),
-        ("data.nav_back", "Back from related rows"),
-        ("data.refresh", "Refresh table data"),
-    ]
+/// What a row's menu offers: a table's rows offer what only a table's can do, a query's
+/// result does not -- "Edit cell" there renamed the document.
+pub fn results_menu_items(table: bool) -> Vec<(&'static str, &'static str)> {
+    ALL_RESULTS_MENU_ITEMS
+        .iter()
+        .copied()
+        .filter(|(id, _)| table || !table_only(id))
+        .collect()
 }
+
+/// Commands that act on a table's own rows, which a query's result is not.
+pub fn table_only(id: &str) -> bool {
+    matches!(
+        id,
+        "data.edit_cell" | "data.related" | "data.nav_back" | "data.refresh"
+    )
+}
+
+const ALL_RESULTS_MENU_ITEMS: &[(&str, &str)] = &[
+    ("data.edit_cell", "Edit cell"),
+    ("data.copy.cell", "Copy cell"),
+    ("data.copy.text", "Copy as Text"),
+    ("data.copy.json", "Copy as JSON"),
+    ("data.copy.csv", "Copy as CSV"),
+    ("data.copy.markdown", "Copy as Markdown"),
+    ("data.copy.sql", "Copy as SQL"),
+    ("data.inspect", "Inspect value"),
+    ("data.filter", "Filter rows (WHERE)"),
+    ("data.sort", "Sort rows (ORDER BY)"),
+    ("results.sort_column", "Sort by this column"),
+    ("results.sort_add_column", "Add column to sort"),
+    ("results.count", "Count rows"),
+    ("data.related", "Related rows…"),
+    ("data.nav_back", "Back from related rows"),
+    ("data.refresh", "Refresh table data"),
+];
 
 /// Rows the popup spends on itself: two borders, the query line, and the footer that
 /// carries why the selected command cannot run.

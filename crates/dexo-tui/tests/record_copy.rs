@@ -5,7 +5,7 @@ use dexo_tui::model::GridModel;
 use dexo_tui::{Effect, Model, update};
 
 fn copied_from_menu(id: &str) -> Option<String> {
-    let index = dexo_tui::palette::results_menu_items()
+    let index = dexo_tui::palette::results_menu_items(false)
         .iter()
         .position(|(item, _)| *item == id)
         .unwrap_or_else(|| panic!("no {id} in the menu"));
@@ -143,4 +143,37 @@ fn a_finished_copy_says_so() {
     );
     let toast = format!("{:?}", model.messages);
     assert!(toast.contains("copied 3 lines to clipboard"), "{toast}");
+}
+
+/// On a query's result there is no cell to edit: the row's menu does not offer it, and F2
+/// says why. Both renamed the document.
+#[test]
+fn a_query_result_offers_no_cell_edit_and_f2_renames_nothing() {
+    assert!(
+        !dexo_tui::palette::results_menu_items(false)
+            .iter()
+            .any(|(id, _)| *id == "data.edit_cell")
+    );
+    assert!(
+        dexo_tui::palette::results_menu_items(true)
+            .iter()
+            .any(|(id, _)| *id == "data.edit_cell")
+    );
+    let mut model = Model {
+        focus: dexo_tui::Focus::Results,
+        ..Model::default()
+    };
+    *model.results = GridModel::sample_rows(3);
+    model.results.select_cell(1, 0);
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::F(2), KeyModifiers::NONE)),
+    );
+    assert!(!model.document_name_prompt.open);
+    assert!(
+        model
+            .messages
+            .last()
+            .is_some_and(|message| message.message.contains("query's result"))
+    );
 }

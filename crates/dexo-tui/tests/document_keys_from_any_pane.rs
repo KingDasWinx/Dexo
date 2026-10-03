@@ -1,7 +1,7 @@
-//! Closing, switching and renaming a document are workbench actions, not editor ones.
-//! They were bound in `[editor]` only, and a table document puts the grid in the
-//! editor's slot -- its effective focus is the results pane -- so Ctrl+W could not close
-//! the tab you were looking at, nor could Ctrl+Tab leave it or F2 rename it.
+//! Closing and switching a document are workbench actions, not editor ones. They were
+//! bound in `[editor]` only, and a table document puts the grid in the editor's slot --
+//! its effective focus is the results pane -- so Ctrl+W could not close the tab you were
+//! looking at, nor could Ctrl+Tab leave it. Renaming is the pane's: F2.
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers as M};
 use dexo_tui::action::Action;
 use dexo_tui::model::{EditorDocument, Focus, Model};
@@ -62,21 +62,23 @@ fn ctrl_tab_leaves_the_document_from_every_pane() {
     }
 }
 
-/// F2 renames the document wherever the focus is -- except in the grid of a table's
-/// rows, where it edits the cell under the cursor.
+/// F2 is the pane's: the editor and the tab strip rename the document, the grid of a
+/// table's rows edits the cell under the cursor, and the results of a query, the console
+/// and the sidebar rename nothing -- F2 there renamed the document behind them.
 #[test]
-fn f2_renames_the_document_from_every_pane() {
-    for (table, focus) in every_pane() {
-        if table && matches!(focus, Focus::Editor | Focus::Results) {
-            continue;
-        }
+fn f2_belongs_to_the_pane() {
+    let mut panes = every_pane();
+    panes.extend([(false, Focus::DocumentTabs), (false, Focus::Explorer)]);
+    for (table, focus) in panes {
         let mut model = workbench(table, focus);
         update(
             &mut model,
             Action::Key(KeyEvent::new(KeyCode::F(2), M::NONE)),
         );
-        assert!(
-            model.document_name_prompt.open,
+        // A table's document puts its grid in the editor's slot.
+        let renames = matches!(focus, Focus::DocumentTabs) || (focus == Focus::Editor && !table);
+        assert_eq!(
+            model.document_name_prompt.open, renames,
             "F2 from {focus:?}, table={table}"
         );
     }
