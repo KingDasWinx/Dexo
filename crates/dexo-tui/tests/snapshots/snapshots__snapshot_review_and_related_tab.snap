@@ -32,4 +32,4 @@ demo  local  public
 │                          ││                                                                      │
 │                          ││                                                                      │
 └──────────────────────────┘└──────────────────────────────────────────────────────────────────────┘
-local  Enter actions  Ctrl+S review changes  v view  n/p page  Ctrl+W close               Ctrl+P  F1
+local  Enter actions  Ctrl+S review changes  v view  e export  n/p page  Ctrl+W close     Ctrl+P  F1

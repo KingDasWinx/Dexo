@@ -351,13 +351,20 @@ fn every_write_path_asks_for_the_name_on_production() {
     assert!(applied(&confirm_production(&mut model, "shop")));
 
     // Import and restore.
+    let dir = tempfile::tempdir().unwrap();
+    let file = dir.path().join("rows.csv");
+    std::fs::write(&file, "id\n1\n").unwrap();
     for mode in [TransferMode::Import, TransferMode::Restore] {
         let mut model = live("production", false, "");
         model.data.target = dexo_app::parse_qualified("public.items");
         model.transfer.open = true;
         model.transfer.mode = mode;
-        model.transfer.path.set_text("/tmp/rows.csv");
-        model.transfer.confirm_restore = true;
+        model.transfer.path.set_text(file.display().to_string());
+        model.transfer.table.set_text("public.items");
+        // The restore's own question was answered yes in the dialog.
+        if mode == TransferMode::Restore {
+            model.transfer.confirm = Some(dexo_tui::screens::transfer::TransferConfirm::Restore);
+        }
         let started = |effects: &[Effect]| {
             effects
                 .iter()

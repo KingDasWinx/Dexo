@@ -48,6 +48,7 @@ fn fail(model: &mut Model, index: usize, position: Option<u32>) {
             message: "no such table".into(),
             details: Vec::new(),
             position,
+            cancelled: false,
         },
     );
 }

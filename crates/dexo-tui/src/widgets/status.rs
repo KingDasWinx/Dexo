@@ -266,12 +266,17 @@ fn keyed_hint(model: &Model, parts: &[(&str, &str)]) -> String {
 
 /// `Running 12s - Ctrl+F2 cancels` while a statement runs.
 fn running_text(model: &Model) -> Option<String> {
-    let elapsed = model.running_for()?;
+    // From the moment a run is sent; its time once the runtime says it started.
+    let elapsed = model.running_for();
+    if elapsed.is_none() && (model.active_query.is_none() || model.active_operation.is_none()) {
+        return None;
+    }
+    let time = elapsed.map_or(String::new(), |elapsed| format!(" {}s", elapsed.as_secs()));
     let cancel = keyed_hint(model, &[("query.cancel", "cancels")]);
     Some(if cancel.is_empty() {
-        format!("Running {}s", elapsed.as_secs())
+        format!("Running{time}")
     } else {
-        format!("Running {}s - {cancel}", elapsed.as_secs())
+        format!("Running{time} - {cancel}")
     })
 }
 
@@ -462,7 +467,9 @@ mod tests {
         model.set_active_document(1);
         assert_eq!(
             footer_hint(&model).as_deref(),
-            Some("Enter actions  i insert  Delete delete  v view  e export  n/p page  Ctrl+W close")
+            Some(
+                "Enter actions  i insert  Delete delete  v view  e export  n/p page  Ctrl+W close"
+            )
         );
 
         model.set_active_document(0);

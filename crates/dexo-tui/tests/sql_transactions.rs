@@ -56,7 +56,7 @@ fn begin_in_the_editor_is_tracked_and_quitting_asks() {
 
     assert_eq!(model.transaction, TransactionState::Active);
     let frame = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(frame.contains("tx:active"), "{frame}");
+    assert!(frame.contains("Transaction"), "{frame}");
     update(&mut model, Action::Quit);
     assert!(model.quit_prompt.is_some(), "quit did not ask");
     let frame = dexo_tui::render::render_to_string(&model, 120, 30);
@@ -102,6 +102,7 @@ fn a_statement_after_the_begin_that_fails_keeps_the_begin() {
             message: "column \"nope\" does not exist".into(),
             details: Vec::new(),
             position: None,
+            cancelled: false,
         },
     );
     assert_eq!(model.transaction, TransactionState::Active);

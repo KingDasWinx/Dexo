@@ -10950,8 +10950,7 @@ fn run_transfer(model: &mut Model) -> Vec<Effect> {
         )),
         TransferMode::Restore => Some(format!(
             "Restore {} into the database of {}.",
-            shown,
-            model.connection.name
+            shown, model.connection.name
         )),
         _ => None,
     };

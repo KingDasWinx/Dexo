@@ -391,6 +391,7 @@ struct SideDial {
     factory: Arc<dyn dexo_driver_api::ConnectionFactory>,
     profile: ConnectionProfile,
     password: Password,
+    ssh: SshSecrets,
     memory: Arc<MemorySecretStore>,
 }
 
@@ -400,11 +401,13 @@ impl SideDial {
             self.factory,
             &self.profile,
             self.password,
+            self.ssh,
             &self.memory,
             false,
         )
         .await
         .map(|(session, ..)| session)
+        .map_err(|error| error.to_string())
     }
 }
 
@@ -1363,10 +1366,15 @@ impl WorkbenchRuntime {
             .drivers
             .get(&profile.driver)
             .map_err(|error| error.to_string())?;
+        // A tunnel's secrets are the ones the session was opened with.
+        let ssh = self
+            .ssh_secrets(&profile)
+            .map_err(|_| "the SSH secret is not at hand; connect again".to_string())?;
         Ok(SideDial {
             factory,
             profile,
             password,
+            ssh,
             memory: Arc::clone(&self.secrets.memory),
         })
     }

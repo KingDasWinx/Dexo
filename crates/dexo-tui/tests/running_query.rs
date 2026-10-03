@@ -51,14 +51,14 @@ fn last_message(model: &Model) -> String {
 fn the_status_bar_says_a_query_is_running_and_how_to_stop_it() {
     let mut model = connected();
     let idle = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(!idle.contains("running"), "{idle}");
+    assert!(!idle.to_lowercase().contains("running"), "{idle}");
 
     model.set_sql("select pg_sleep(20);");
     update(&mut model, Action::ExecuteStatement);
 
     let busy = dexo_tui::render::render_to_string(&model, 120, 30);
     let status = busy.lines().last().unwrap_or_default();
-    assert!(status.contains("running"), "{status}");
+    assert!(status.to_lowercase().contains("running"), "{status}");
     assert!(status.contains("Ctrl+F2"), "{status}");
 }
 
@@ -125,6 +125,7 @@ fn a_cancelled_query_is_reported_as_cancelled_not_as_an_error() {
             message: "query cancelled".into(),
             details: Vec::new(),
             position: None,
+            cancelled: true,
         },
     );
 
