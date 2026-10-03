@@ -57,6 +57,7 @@ Command ids are the palette's. A chord that starts a longer one where both apply
 | Key | Action |
 | --- | --- |
 | Ctrl+F / Ctrl+H | Find / find and replace in the document. Enter or F3 next, Shift+Enter previous, Alt+C case, Alt+W whole word, Alt+A replace all, Esc close. Where the terminal sends Ctrl+Backspace as Ctrl+H, Alt+R in the find bar opens the replace row. |
+| Ctrl+O | Open a SQL file: the recent ones first, then the folder's folders and SQL files. Typing finds them, in this folder and those below it (not in `.git`, `node_modules`, `target` and the like); a path typed (`~/sql/`, `reports/q.sql`) goes there; Left or Backspace with nothing typed goes up a folder; Alt+H shows hidden files. The save, export and import dialogs work the same, typing the file's name instead. |
 | Ctrl+/ | Comment the line or selection out with `--`, or back in |
 | Ctrl+Shift+D | Duplicate the line or selection |
 | Ctrl+Shift+Up / Down | Move the line or selection up or down |

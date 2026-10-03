@@ -3190,8 +3190,26 @@ fn render_file_picker(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
             }
             Some(crate::screens::file_picker::FilePickerLineKind::Name) => {
                 let picker = &model.file_picker;
-                let focused = picker.focus == crate::screens::file_picker::FilePickerFocus::Name;
-                paint_selection(frame, rect, "> name: ", &picker.name, focused);
+                // Open's field is typed into from the list; the others' when focused.
+                let focused = if picker.finding {
+                    !matches!(
+                        picker.focus,
+                        crate::screens::file_picker::FilePickerFocus::Submit
+                            | crate::screens::file_picker::FilePickerFocus::Cancel
+                    )
+                } else {
+                    picker.focus == crate::screens::file_picker::FilePickerFocus::Name
+                };
+                let label = if picker.finding {
+                    picker.field_label().to_string()
+                } else {
+                    format!(
+                        "{} {}",
+                        if focused { ">" } else { " " },
+                        picker.field_label()
+                    )
+                };
+                paint_selection(frame, rect, &label, &picker.name, focused);
                 hits.register(HitTarget::FormField(0), rect);
             }
             Some(crate::screens::file_picker::FilePickerLineKind::Footer)

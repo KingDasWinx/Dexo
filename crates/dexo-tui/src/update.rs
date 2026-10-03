@@ -12829,6 +12829,30 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             FooterKey::Moved | FooterKey::Pass => Vec::new(),
         };
     }
+    let on_list = model.file_picker.focus == FilePickerFocus::List;
+    // Alt+H: hidden files. It was `h`, which Open's finding types.
+    if key.code == KeyCode::Char('h') && key.modifiers == KeyModifiers::ALT {
+        model.file_picker.toggle_hidden();
+        return Vec::new();
+    }
+    // Open finds as it is typed into, from the list: what is typed narrows the folder,
+    // Backspace with nothing typed goes up a folder. The arrows still walk the list.
+    if model.file_picker.finding
+        && on_list
+        && crate::widgets::text_input::TextInput::owns(&key)
+        && !matches!(
+            key.code,
+            KeyCode::Left | KeyCode::Right | KeyCode::Home | KeyCode::End
+        )
+    {
+        if key.code == KeyCode::Backspace && model.file_picker.name.is_empty() {
+            model.file_picker.parent();
+        } else {
+            let _ = model.file_picker.name.handle_key(key);
+            model.file_picker.apply_find();
+        }
+        return Vec::new();
+    }
     match key.code {
         KeyCode::Esc => cancel_file_picker(model),
         KeyCode::Tab => {
@@ -12901,23 +12925,35 @@ fn handle_file_picker_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             model.file_picker.parent();
             Vec::new()
         }
-        KeyCode::Char('h')
-            if model.file_picker.focus == FilePickerFocus::List
-                && model.file_picker.section
-                    == crate::screens::file_picker::FilePickerSection::Browser =>
-        {
-            model.file_picker.toggle_hidden();
-            Vec::new()
-        }
-        KeyCode::Char(ch)
+        // Typing on the list names the file: the name field takes it from there.
+        KeyCode::Char(_)
             if model.file_picker.focus == FilePickerFocus::List
                 && (key.modifiers.is_empty() || key.modifiers == KeyModifiers::SHIFT) =>
         {
-            model.file_picker.jump_to(ch, rows);
+            model.file_picker.focus = FilePickerFocus::Name;
+            let _ = model.file_picker.name.handle_key(key);
             Vec::new()
         }
         KeyCode::Enter if model.file_picker.focus == FilePickerFocus::Cancel => {
             cancel_file_picker(model)
+        }
+        // A path typed into Open's field goes there: a folder is entered, a file opened.
+        KeyCode::Enter
+            if model.file_picker.finding
+                && model.file_picker.focus != FilePickerFocus::Cancel
+                && crate::screens::file_picker::looks_like_path(model.file_picker.name.trim()) =>
+        {
+            let Some(path) = model.file_picker.chosen_path() else {
+                return Vec::new();
+            };
+            match model.file_picker.enter_path(path) {
+                Ok(_) => file_picker_submit(model),
+                Err(_) => {
+                    model.file_picker.name.clear();
+                    model.file_picker.apply_find();
+                    Vec::new()
+                }
+            }
         }
         KeyCode::Enter if model.file_picker.focus == FilePickerFocus::List => {
             if model.file_picker.activate_selected().is_some() {
@@ -13698,6 +13734,8 @@ fn diagnostics_bundle(model: &Model) -> dexo_app::diagnostic_service::Diagnostic
 
 fn open_file_picker(model: &mut Model, mode: crate::screens::file_picker::FilePickerMode) {
     model.file_picker_mode = mode;
+    // Open lists SQL files and finds among them as it is typed into.
+    model.file_picker.finding = mode == crate::screens::file_picker::FilePickerMode::Open;
     let recents = if mode == crate::screens::file_picker::FilePickerMode::Open {
         model.recent_sql_files.as_slice()
     } else {

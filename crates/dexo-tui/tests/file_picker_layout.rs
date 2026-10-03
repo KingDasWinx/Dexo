@@ -22,13 +22,15 @@ fn crowded(dir: &std::path::Path, height: u16) -> Model {
     };
     model.file_picker.open = true;
     model.file_picker.cwd = dir.to_path_buf();
+    model.file_picker.finding = true;
     model.file_picker.open_browser_with_recents(&recent);
     model.file_picker.fit_recents(inner_rows(height));
     model
 }
 
-/// With recent files and a long folder the list filled the dialog and pushed the name
-/// field and the buttons out of it, out of the mouse's reach too.
+/// With recent files and a long folder the list filled the dialog and pushed the field
+/// and the buttons out of it, out of the mouse's reach too. The keys are on the status
+/// line.
 #[test]
 fn the_name_and_the_buttons_stay_in_the_dialog_over_a_long_list() {
     let dir = tempfile::tempdir().unwrap();
@@ -36,7 +38,7 @@ fn the_name_and_the_buttons_stay_in_the_dialog_over_a_long_list() {
 
     let frame = dexo_tui::render::render_to_string(&model, 80, 24);
 
-    for wanted in ["name:", "[Open]", "[Cancel]", "Esc cancel", "Recent files"] {
+    for wanted in ["Find:", "[Open]", "[Cancel]", "Esc cancel", "│Recent"] {
         assert!(
             frame.contains(wanted),
             "{wanted} is not on screen:\n{frame}"
@@ -47,11 +49,11 @@ fn the_name_and_the_buttons_stay_in_the_dialog_over_a_long_list() {
 #[test]
 fn a_short_terminal_gives_the_recent_files_up_for_the_list() {
     let dir = tempfile::tempdir().unwrap();
-    let model = crowded(dir.path(), 14);
+    let model = crowded(dir.path(), 12);
 
-    let frame = dexo_tui::render::render_to_string(&model, 80, 14);
+    let frame = dexo_tui::render::render_to_string(&model, 80, 12);
 
-    assert!(!frame.contains("Recent files"), "{frame}");
+    assert!(!frame.contains("│Recent"), "{frame}");
     assert!(frame.contains("[Open]"), "{frame}");
 }
 

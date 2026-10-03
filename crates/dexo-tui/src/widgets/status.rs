@@ -307,6 +307,19 @@ fn doors(model: &Model) -> String {
 fn footer_hint(model: &Model) -> Option<String> {
     // Behind a dialog the editor's keys are not the ones that answer: Settings and Help
     // ignore Ctrl+J and Ctrl+W, and the hints for them stayed up.
+    // The file picker's keys are said here, not in the picker, which kept a row for them.
+    if crate::mouse::top_overlay(model) == Some(crate::mouse::OverlayKind::FilePicker)
+        && model.file_picker.confirm.is_none()
+    {
+        return Some(if model.file_picker.finding {
+            "type to find  Enter open  Left up  Esc cancel".into()
+        } else {
+            format!(
+                "type the name  Enter {}  Left up  Esc cancel",
+                model.file_picker_mode.submit_label().to_lowercase()
+            )
+        });
+    }
     if crate::mouse::top_overlay(model).is_some() {
         return None;
     }
