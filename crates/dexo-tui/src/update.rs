@@ -14894,6 +14894,30 @@ mod tests {
         );
     }
 
+    /// On a table's Privileges view `i` opened the insert form for rows nobody could see;
+    /// the grid's keys there say where they work.
+    #[test]
+    fn grid_keys_on_another_view_say_where_they_work() {
+        let mut model = Model {
+            focus: Focus::Results,
+            ..Model::default()
+        };
+        model.active_document_mut().kind =
+            crate::model::DocumentKind::Table(dexo_app::parse_qualified("public.orders"));
+        model.results.view = crate::model::ResultsView::Privileges;
+        update(
+            &mut model,
+            Action::Key(KeyEvent::new(KeyCode::Char('i'), KeyModifiers::NONE)),
+        );
+        assert!(!model.data.insert_form.open);
+        assert!(
+            model
+                .messages
+                .last()
+                .is_some_and(|message| message.message.contains("works on the Grid view"))
+        );
+    }
+
     /// The row's Actions menu says each action's key, and has the sort, the count and
     /// the way back -- on a table's rows, which a query's result does not offer.
     #[test]
