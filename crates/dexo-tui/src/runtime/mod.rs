@@ -1102,24 +1102,26 @@ impl WorkbenchRuntime {
                     .await;
                 }
             }
-            // ponytail: the read runs on the loop; spawn it if a Wayland round trip
-            // ever shows up as a stutter the way the connect did.
-            crate::Effect::ReadClipboard => match clipboard::read_text() {
-                Ok(text) if !text.is_empty() => self.emit(Action::Paste(text)).await,
-                Ok(_) => {}
-                Err(_) => self.emit(Action::ClipboardUnreadable).await,
-            },
+            // Off the loop: on X11 arboard waits up to four seconds for whoever holds the
+            // clipboard to answer, and Ctrl+V froze the editor that long.
+            crate::Effect::ReadClipboard => self.off_the_loop(|| match clipboard::read_text() {
+                Ok(text) if !text.is_empty() => vec![Action::Paste(text)],
+                Ok(_) => Vec::new(),
+                Err(_) => vec![Action::ClipboardUnreadable],
+            }),
             // Both paths, always: arboard can report success and still reach no other
-            // program (XWayland, tmux, SSH), and the terminal cannot report at all.
+            // program (XWayland, tmux, SSH), and the terminal cannot report at all. The
+            // terminal's is written here, beside the frames; arboard's off the loop, as
+            // it hands the text over to a clipboard manager.
             crate::Effect::CopyToClipboard { text } => {
-                let terminal = clipboard::copy_via_terminal(&text);
-                match clipboard::copy_text(text.clone()) {
-                    Ok(()) => self.emit(Action::ClipboardWritten { text }).await,
-                    Err(_) if terminal.is_ok() => {
-                        self.emit(Action::ClipboardWritten { text }).await
-                    }
-                    Err(message) => self.emit(Action::ClipboardFailed { message }).await,
-                }
+                let terminal = clipboard::copy_via_terminal(&text).is_ok();
+                self.off_the_loop(move || {
+                    vec![match clipboard::copy_text(text.clone()) {
+                        Ok(()) => Action::ClipboardWritten { text },
+                        Err(_) if terminal => Action::ClipboardWritten { text },
+                        Err(message) => Action::ClipboardFailed { message },
+                    }]
+                });
             }
             crate::Effect::CaptureCatalogSnapshot {
                 connection_id,
