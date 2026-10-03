@@ -164,3 +164,32 @@ fn a_right_click_on_the_editor_focuses_it() {
     );
     assert_eq!(model.focus, Focus::Editor);
 }
+
+/// Behind Settings and Help the status bar kept the editor's hints.
+#[test]
+fn a_dialog_clears_the_status_bar_hints() {
+    let mut model = Model::default();
+    update(
+        &mut model,
+        Action::Resize {
+            width: 120,
+            height: 36,
+        },
+    );
+    update(&mut model, Action::NewDocument);
+    update(
+        &mut model,
+        Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),
+    );
+    let before = dexo_tui::render::render_to_string(&model, 120, 36);
+    assert!(
+        before.lines().last().unwrap_or_default().contains("run"),
+        "{before}"
+    );
+    model.settings.open = true;
+    let behind = dexo_tui::render::render_to_string(&model, 120, 36);
+    assert!(
+        !behind.lines().last().unwrap_or_default().contains(" run"),
+        "{behind}"
+    );
+}

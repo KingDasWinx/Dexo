@@ -290,6 +290,11 @@ fn doors(model: &Model) -> String {
 }
 
 fn footer_hint(model: &Model) -> Option<String> {
+    // Behind a dialog the editor's keys are not the ones that answer: Settings and Help
+    // ignore Ctrl+J and Ctrl+W, and the hints for them stayed up.
+    if crate::mouse::top_overlay(model).is_some() {
+        return None;
+    }
     if matches!(model.layout_mode, crate::layout::LayoutMode::Compact)
         && matches!(
             model.effective_focus(),
