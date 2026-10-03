@@ -61,8 +61,8 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 ## 8. Finish
 
 - [x] Docs pages (`docs/src`): screens, keys, MCP, sessions, connections.
-- [ ] README GIF and screenshots re-recorded: the guardrails GIF shows the old Agent Activity
-      dialog, the connection form screenshot the old popup, and every shot lacks the screen strip.
+- [x] README GIF and screenshots re-recorded (10ea557f). `demo.gif` keeps its old header: its
+      recorder is gone and it was recorded against `pg-commerce-lab`, which is not to be touched.
 - [x] Tests that named the old dialogs moved to the screens; snapshots reviewed.
 - [x] QA pass through `qa.sh` on every screen at 160x45, 120x36, 80x24, 60x20, 40x12.
 - [x] Full gate, `cargo deny check`, `cargo check --locked`.
