@@ -755,10 +755,14 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             effects
         }
         Action::ProfileDeleted { name } => {
-            model
-                .connections
-                .profiles
-                .retain(|row| row.profile.name != name);
+            let screen = &mut model.connections;
+            screen.profiles.retain(|row| row.profile.name != name);
+            // The pick goes to the row before when it was on the last connection: past
+            // the saved ones are the databases in Docker.
+            if screen.selected_profile >= screen.profiles.len() {
+                screen.pick(screen.profiles.len().saturating_sub(1));
+            }
+            screen.keep_pick_shown();
             let closing: Vec<_> = model
                 .connections
                 .sessions

@@ -484,3 +484,39 @@ fn the_buttons_follow_the_connections_state() {
     assert!(frame.contains("[⏎ Open SQL]"), "{frame}");
     assert!(!frame.contains("[s New SQL]"), "{frame}");
 }
+
+/// Disconnected with "Connected only" on, the picked row leaves the list and the pick
+/// goes to one still on it: the detail went blank, its buttons gone.
+#[test]
+fn the_pick_stays_on_the_list_when_its_row_leaves_it() {
+    let mut model = four_connections();
+    model.connections.upsert_session(SessionRow {
+        id: SessionId(uuid::Uuid::from_u128(2)),
+        connection: "my-dev".into(),
+        transaction: TransactionState::Idle,
+        generation: 1,
+        environment: "development".into(),
+        read_only: false,
+        driver: "mysql".into(),
+    });
+    press(&mut model, KeyCode::Char('o'));
+    while picked(&model).as_deref() != Some("pg-dev") {
+        press(&mut model, KeyCode::Down);
+    }
+    model
+        .connections
+        .remove_session(SessionId(uuid::Uuid::from_u128(1)));
+    assert_eq!(picked(&model).as_deref(), Some("my-dev"));
+}
+
+/// The last connection deleted, the pick goes to the one before it, not into Docker's.
+#[test]
+fn deleting_the_last_connection_picks_the_one_before() {
+    let mut model = four_connections();
+    press(&mut model, KeyCode::End);
+    let last = model.connections.selected_profile;
+    let name = model.connections.profiles[last].profile.name.clone();
+    update(&mut model, Action::ProfileDeleted { name });
+    assert!(model.connections.picked().is_some());
+    assert_eq!(model.connections.selected_profile, last - 1);
+}

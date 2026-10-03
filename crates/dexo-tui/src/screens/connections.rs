@@ -181,6 +181,7 @@ impl ConnectionsScreen {
         } else if self.selected_profile >= self.profiles.len() {
             self.selected_profile = 0;
         }
+        self.keep_pick_shown();
     }
 
     /// The Docker database the selection is on, when it is past the saved connections.
@@ -240,6 +241,8 @@ impl ConnectionsScreen {
             self.sessions.push(row);
         }
         self.refresh_session_counts();
+        // "Connected only" lists what is connected: the pick stays on the list.
+        self.keep_pick_shown();
     }
 
     pub fn remove_session(&mut self, id: SessionId) {
@@ -248,6 +251,7 @@ impl ConnectionsScreen {
             self.selected_session = None;
         }
         self.refresh_session_counts();
+        self.keep_pick_shown();
     }
 
     fn refresh_session_counts(&mut self) {
