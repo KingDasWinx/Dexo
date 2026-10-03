@@ -1,25 +1,24 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 208
 expression: "render_to_string(&model, 60, 20)"
 ---
 [Compare]  demo  local  public                              
-prod@v1 -> prod@v2: 3 differences                           
-Show: [x] added 1  [ ] removed 1  [x] changed 1   (a / r / …
-┌▸ Differences (2)─────────────────────────────────────────┐
-│> added    table db.public.orders_new                     │
-│  changed  column db.public.users.age  (may lose data, ca…│
-│                                                          │
-└──────────────────────────────────────────────────────────┘
-┌  Statement───────────────────────────────────────────────┐
-│added table db.public.orders_new                          │
-│                                                          │
-│No statement: this difference is left to be made by hand. │
-│                                                          │
-│                                                          │
-│                                                          │
-│                                                          │
+ From ‹ prod@v1 › ⇄  To ‹ prod@v2 ›  Filters (1)            
+┌▸ Differences (2 of 3)────────────────────────────────────┐
+│  Tables                                                  │
+│> + db.public.orders_new                                  │
+│  Columns                                                 │
+│  ~ db.public.users.age  may lose data, cannot be undone  │
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
-Compare  a/r/c filter  Up/Down pick               Ctrl+P  F1
+┌  db.public.orders_new────────────────────────────────────┐
+│ [⏎ Open script]  [w Whole script]  [y Copy]              │
+│                                                          │
+│ Change  added                                            │
+│ Object  table db.public.orders_new                       │
+│ Risk    none                                             │
+│                                                          │
+│ No statement: this difference is left to be made by hand.│
+└──────────────────────────────────────────────────────────┘
+Compare  Up/Down pick  a/r/c filter  p sources    Ctrl+P  F1

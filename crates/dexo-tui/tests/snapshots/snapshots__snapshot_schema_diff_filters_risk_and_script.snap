@@ -1,18 +1,17 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 206
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections  Agents  Server [Compare] History   demo  local  public                                                                                 
-prod@v1 -> prod@v2: 3 differences                                                                                                                               
-Show: [x] added 1  [x] removed 1  [x] changed 1   (a / r / c)                                                                                                   
-┌▸ Differences (3)────────────────────────────────────────────────┐┌  Statement────────────────────────────────────────────────────────────────────────────────┐
-│> added    table db.public.orders_new                            ││added table db.public.orders_new                                                           │
-│  removed  table db.public.gone  (drops it, may lose data, canno…││                                                                                           │
-│  changed  column db.public.users.age  (may lose data, cannot be…││No statement: this difference is left to be made by hand.                                  │
+ From ‹ prod@v1 › ⇄  To ‹ prod@v2 ›  [a +1 added] [r −1 removed] [c ~1 changed]                                                            [s Swap]  [e Compare]
+┌▸ Differences (3)────────────────────────────────────────────────┐┌  db.public.orders_new─────────────────────────────────────────────────────────────────────┐
+│  Tables                                                         ││ [⏎ Open script]  [w Whole script]  [y Copy]                                               │
+│> + db.public.orders_new                                         ││                                                                                           │
+│  − db.public.gone  drops it, may lose data, cannot be undone    ││ Change  added                                                                             │
+│  Columns                                                        ││ Object  table db.public.orders_new                                                        │
+│  ~ db.public.users.age  may lose data, cannot be undone         ││ Risk    none                                                                              │
 │                                                                 ││                                                                                           │
-│                                                                 ││                                                                                           │
-│                                                                 ││                                                                                           │
+│                                                                 ││ No statement: this difference is left to be made by hand.                                 │
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
@@ -52,4 +51,4 @@ Show: [x] added 1  [x] removed 1  [x] changed 1   (a / r / c)
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
 └─────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────────────────────────────┘
-Compare  a/r/c filter  Up/Down pick  w whole script  Enter open the script  e new comparison  Esc back                                                Ctrl+P  F1
+Compare  Up/Down pick  a/r/c filter  p sources  PgUp/PgDn read  Esc back                                                                              Ctrl+P  F1

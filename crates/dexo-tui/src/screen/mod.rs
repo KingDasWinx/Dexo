@@ -36,6 +36,7 @@ pub fn buttons(model: &Model) -> Vec<Button> {
             agents::approval_buttons(model)
         }
         Screen::Server => server::buttons(model),
+        Screen::Compare => compare::buttons(model),
         _ => Vec::new(),
     }
 }
@@ -47,6 +48,7 @@ pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
         Screen::History => history::toolbar_buttons(model),
         Screen::Agents => agents::toolbar_buttons(model),
         Screen::Server => server::toolbar_buttons(model),
+        Screen::Compare => compare::toolbar_buttons(model),
         _ => Vec::new(),
     }
 }

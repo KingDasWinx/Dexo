@@ -24,6 +24,35 @@ pub struct DiffEntry {
     pub risk: String,
 }
 
+impl DiffEntry {
+    /// The kind of object it is: `table`, `index`, the first word of `object`.
+    pub fn object_kind(&self) -> &str {
+        self.object.split_once(' ').map_or("", |(kind, _)| kind)
+    }
+
+    /// The object without its kind.
+    pub fn name(&self) -> &str {
+        self.object
+            .split_once(' ')
+            .map_or(self.object.as_str(), |(_, name)| name)
+    }
+}
+
+/// A kind of object as a heading: `Tables`, `Indexes`.
+pub fn kind_heading(kind: &str) -> String {
+    let mut heading: String = kind
+        .chars()
+        .enumerate()
+        .map(|(at, ch)| if at == 0 { ch.to_ascii_uppercase() } else { ch })
+        .collect();
+    heading.push_str(if heading.ends_with('x') || heading.ends_with('s') {
+        "es"
+    } else {
+        "s"
+    });
+    heading.replace('_', " ")
+}
+
 /// What a side of the comparison can be.
 #[derive(Clone, Debug, PartialEq)]
 pub enum DiffOptionKind {
@@ -75,6 +104,8 @@ pub struct SchemaDiffScreen {
     pub whole_script: bool,
     /// Lines the detail is scrolled down.
     pub scroll: u16,
+    /// A result is there, under the sources being picked again.
+    pub compared: bool,
 }
 
 impl Default for SchemaDiffScreen {
@@ -100,6 +131,7 @@ impl Default for SchemaDiffScreen {
             from_connection: None,
             whole_script: false,
             scroll: 0,
+            compared: false,
         }
     }
 }
@@ -152,6 +184,7 @@ impl SchemaDiffScreen {
             entries,
             script,
             ordered: ordered.to_vec(),
+            compared: true,
             ..Self::default()
         }
     }
@@ -237,6 +270,41 @@ impl SchemaDiffScreen {
         self.options.get(self.pick[side])
     }
 
+    /// A side as the toolbar names it.
+    pub fn side_name(&self, side: usize) -> String {
+        match self.option(side) {
+            Some(option) if option.kind == DiffOptionKind::File => {
+                let path = self.file.trim();
+                if path.is_empty() {
+                    "a file".into()
+                } else {
+                    format!("file {path}")
+                }
+            }
+            Some(option) => option.name.clone(),
+            None if side == 0 && !self.from_label.is_empty() => self.from_label.clone(),
+            None if side == 1 && !self.to_label.is_empty() => self.to_label.clone(),
+            None => "-".into(),
+        }
+    }
+
+    /// From and To exchanged.
+    pub fn swap(&mut self) {
+        self.pick.swap(0, 1);
+        std::mem::swap(&mut self.from_label, &mut self.to_label);
+        self.error = None;
+    }
+
+    /// The result of comparing, over the sources it came from: they stay to be looked at,
+    /// swapped, or compared again.
+    pub fn with_sources(mut self, sources: Self) -> Self {
+        self.options = sources.options;
+        self.pick = sources.pick;
+        self.file = sources.file;
+        self.from_connection = sources.from_connection;
+        self
+    }
+
     /// Whether a typed path is part of the question.
     pub fn uses_file(&self) -> bool {
         (0..2).any(|side| {
@@ -289,16 +357,61 @@ impl SchemaDiffScreen {
         Ok((side(from)?, side(to)?))
     }
 
-    pub fn filtered(&self) -> Vec<&DiffEntry> {
-        self.entries
-            .iter()
-            .filter(|entry| match entry.kind {
+    /// The differences the filters leave, as listed: by the kind of object, the kinds in
+    /// the order the script takes them.
+    pub fn shown_indices(&self) -> Vec<usize> {
+        let mut kinds: Vec<&str> = Vec::new();
+        for entry in &self.entries {
+            if !kinds.contains(&entry.object_kind()) {
+                kinds.push(entry.object_kind());
+            }
+        }
+        let mut shown: Vec<usize> = (0..self.entries.len())
+            .filter(|index| match self.entries[*index].kind {
                 "added" => self.show_added,
                 "removed" => self.show_removed,
                 "changed" => self.show_changed,
                 _ => true,
             })
+            .collect();
+        shown.sort_by_key(|index| {
+            kinds
+                .iter()
+                .position(|kind| *kind == self.entries[*index].object_kind())
+        });
+        shown
+    }
+
+    pub fn filtered(&self) -> Vec<&DiffEntry> {
+        self.shown_indices()
+            .into_iter()
+            .map(|index| &self.entries[index])
             .collect()
+    }
+
+    /// Whether a kind of difference is hidden.
+    pub fn filtering(&self) -> bool {
+        !(self.show_added && self.show_removed && self.show_changed)
+    }
+
+    /// The statement for the picked difference, or the whole script; empty when there is
+    /// none to show.
+    pub fn shown_sql(&self) -> String {
+        if self.whole_script {
+            return self.script.clone();
+        }
+        self.shown_indices()
+            .get(self.selected)
+            .and_then(|index| self.ordered.get(*index))
+            .map(|change| generate_script(std::slice::from_ref(change), render_unquoted).forward)
+            .unwrap_or_default()
+    }
+
+    /// The picked difference.
+    pub fn picked(&self) -> Option<&DiffEntry> {
+        self.shown_indices()
+            .get(self.selected)
+            .and_then(|index| self.entries.get(*index))
     }
 
     pub fn toggle_added(&mut self) {
@@ -321,38 +434,6 @@ impl SchemaDiffScreen {
         self.scroll = 0;
     }
 
-    /// What the detail shows: the picked difference's part of the script, or all of it.
-    pub fn detail_lines(&self) -> Vec<String> {
-        if self.whole_script || self.filtered().is_empty() {
-            return self.script.lines().map(str::to_string).collect();
-        }
-        let picked = self
-            .entries
-            .iter()
-            .enumerate()
-            .filter(|(_, entry)| self.filtered().contains(entry))
-            .map(|(index, _)| index)
-            .nth(self.selected);
-        let Some(entry) = picked.and_then(|index| self.entries.get(index)) else {
-            return Vec::new();
-        };
-        let mut lines = vec![format!("{} {}", entry.kind, entry.object)];
-        if !entry.risk.is_empty() {
-            lines.push(entry.risk.clone());
-        }
-        lines.push(String::new());
-        let part = picked
-            .and_then(|index| self.ordered.get(index))
-            .map(|change| generate_script(std::slice::from_ref(change), render_unquoted).forward)
-            .unwrap_or_default();
-        if part.trim().is_empty() {
-            lines.push("No statement: this difference is left to be made by hand.".into());
-        } else {
-            lines.extend(part.lines().map(str::to_string));
-        }
-        lines
-    }
-
     /// The button the footer's first stop is: it compares while picking and, with a
     /// result, opens the script in a document.
     pub fn submit_label(&self) -> &'static str {
@@ -361,135 +442,6 @@ impl SchemaDiffScreen {
         } else {
             "Open script"
         }
-    }
-
-    fn count(&self, kind: &str) -> usize {
-        self.entries
-            .iter()
-            .filter(|entry| entry.kind == kind)
-            .count()
-    }
-
-    /// The body above the buttons, the line of the selected difference, and the line the
-    /// differences start on. Lines are `width` columns wide at most.
-    pub fn body(&self, width: usize) -> (Vec<String>, Option<usize>, usize) {
-        use crate::model::truncate_cell;
-        let mut lines = Vec::new();
-        if self.source_prompt {
-            lines.push("The script makes From like To.".into());
-            lines.push(String::new());
-            let on_rows = self.footer == FooterFocus::Input;
-            for (side, name) in ["From", "To  "].into_iter().enumerate() {
-                let marker = if on_rows && self.row == side {
-                    ">"
-                } else {
-                    " "
-                };
-                let label = self
-                    .option(side)
-                    .map_or("(nothing to pick)".to_string(), |option| {
-                        option.label.clone()
-                    });
-                lines.push(truncate_cell(
-                    &format!("{marker} {name}: \u{2039} {label} \u{203a}"),
-                    width,
-                ));
-            }
-            if self.uses_file() {
-                let focused = on_rows && self.row == 2;
-                lines.push(self.file.inline_line_within(
-                    &format!("{} File: ", if focused { ">" } else { " " }),
-                    focused,
-                    width,
-                ));
-            }
-            lines.push(String::new());
-            match &self.error {
-                Some(error) if !self.loading => lines.push(error.clone()),
-                _ if self.loading => lines.push("Reading both schemas...".into()),
-                _ if self.options.len() < 2 => lines.push(
-                    "Connect a second connection or save a snapshot (dexo schema snapshot) to compare."
-                        .into(),
-                ),
-                _ => {}
-            }
-            return (lines, None, 0);
-        }
-        lines.push(truncate_cell(
-            &format!(
-                "{} -> {}: {}",
-                self.from_label,
-                self.to_label,
-                match self.entries.len() {
-                    0 => "no differences".to_string(),
-                    1 => "1 difference".to_string(),
-                    n => format!("{n} differences"),
-                }
-            ),
-            width,
-        ));
-        lines.push(truncate_cell(
-            &format!(
-                "Show: [{}] added {}  [{}] removed {}  [{}] changed {}   (a / r / c)",
-                if self.show_added { "x" } else { " " },
-                self.count("added"),
-                if self.show_removed { "x" } else { " " },
-                self.count("removed"),
-                if self.show_changed { "x" } else { " " },
-                self.count("changed"),
-            ),
-            width,
-        ));
-        if let Some(error) = &self.error {
-            lines.push(error.clone());
-        }
-        lines.push(String::new());
-        let entries_from = lines.len();
-        let shown = self.filtered();
-        let on_list = self.footer == FooterFocus::Input;
-        for (index, entry) in shown.iter().enumerate() {
-            let marker = if on_list && index == self.selected {
-                ">"
-            } else {
-                " "
-            };
-            let risk = if entry.risk.is_empty() {
-                String::new()
-            } else {
-                format!("  ({})", entry.risk)
-            };
-            lines.push(truncate_cell(
-                &format!("{marker} {:<8} {}{risk}", entry.kind, entry.object),
-                width,
-            ));
-        }
-        if self.entries.is_empty() {
-            lines.push("The two schemas are the same.".into());
-        } else if shown.is_empty() {
-            lines.push("Every difference is filtered out; a, r and c bring them back.".into());
-        }
-        let selected_line =
-            (!shown.is_empty()).then(|| entries_from + self.selected.min(shown.len() - 1));
-        if !self.script.is_empty() {
-            lines.push(String::new());
-            lines.push("Migration script".into());
-            lines.extend(self.script.lines().map(|line| format!("  {line}")));
-        }
-        (lines, selected_line, entries_from)
-    }
-
-    /// The whole dialog as text: the body, then the buttons.
-    pub fn lines(&self) -> Vec<String> {
-        let (mut lines, _, _) = self.body(200);
-        lines.push(crate::widgets::form::footer_line(
-            self.submit_label(),
-            if self.footer == FooterFocus::Input {
-                FooterFocus::Submit
-            } else {
-                self.footer
-            },
-        ));
-        lines
     }
 }
 
@@ -500,6 +452,11 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     if model.schema_diff.source_prompt {
         let rows = model.schema_diff.rows();
         let row = model.schema_diff.row;
+        // `s` exchanges the sides from anywhere but the file's path, which it is typed in.
+        if key.code == KeyCode::Char('s') && !(on_rows && row == 2) {
+            model.schema_diff.swap();
+            return Some(Vec::new());
+        }
         if on_rows {
             match key.code {
                 KeyCode::Tab | KeyCode::Down if row + 1 < rows => {
@@ -524,7 +481,12 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         let before = model.schema_diff.footer;
         return Some(match footer_key(&mut model.schema_diff.footer, &key) {
-            // Cancel leaves the screen.
+            // Cancel goes back to the result there is, else leaves the screen.
+            FooterKey::Cancel if model.schema_diff.compared => {
+                model.schema_diff.source_prompt = false;
+                model.schema_diff.footer = FooterFocus::Input;
+                Vec::new()
+            }
             FooterKey::Cancel => return None,
             FooterKey::Submit => request(model),
             FooterKey::Moved => {
@@ -543,6 +505,13 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     }
     let diff = &mut model.schema_diff;
     match key.code {
+        // The kinds hidden come back first; then the screen is left.
+        KeyCode::Esc if diff.filtering() => {
+            diff.show_added = true;
+            diff.show_removed = true;
+            diff.show_changed = true;
+            diff.clamp_selection();
+        }
         KeyCode::Up => {
             diff.selected = diff.selected.saturating_sub(1);
             diff.scroll = 0;
@@ -576,10 +545,39 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             );
         }
         KeyCode::Enter => return Some(open_script(model)),
-        KeyCode::Char('e') => return Some(crate::update::new_schema_comparison(model)),
+        KeyCode::Char('y') => {
+            let sql = diff.shown_sql();
+            if sql.trim().is_empty() {
+                return Some(Vec::new());
+            }
+            model.messages.info("Copied the script.".into());
+            return Some(vec![Effect::CopyToClipboard { text: sql }]);
+        }
+        // Compared again, the sides exchanged.
+        KeyCode::Char('s') => {
+            diff.swap();
+            return Some(compare_again(model));
+        }
+        KeyCode::Char('e') => return Some(compare_again(model)),
+        // Other sources: the pickers have the keys.
+        KeyCode::Char('p') => {
+            diff.source_prompt = true;
+            diff.row = 0;
+            diff.footer = FooterFocus::Input;
+            diff.error = None;
+        }
         _ => return None,
     }
     Some(Vec::new())
+}
+
+/// The sources compared again, as they are picked now; with none kept -- a comparison
+/// made before they were -- the pickers open.
+fn compare_again(model: &mut Model) -> Vec<Effect> {
+    if model.schema_diff.options.is_empty() {
+        return crate::update::new_schema_comparison(model);
+    }
+    request(model)
 }
 
 /// Reads both sides and compares them.
@@ -642,6 +640,16 @@ pub fn open_script(model: &mut Model) -> Vec<Effect> {
 mod tests {
     use super::*;
 
+    /// The Compare screen with `screen` on it, as drawn.
+    fn shown(screen: SchemaDiffScreen) -> String {
+        let mut model = Model {
+            screen: crate::model::Screen::Compare,
+            ..Model::default()
+        };
+        model.schema_diff = screen;
+        crate::render::render_to_string(&model, 140, 30)
+    }
+
     fn options() -> Vec<DiffOption> {
         let live = |name: &str, id: u128| DiffOption {
             label: format!("{name}  (connected)"),
@@ -678,12 +686,12 @@ mod tests {
             .collect();
         assert!(!visible.iter().any(|object| object.contains("gone")));
         assert!(visible.iter().any(|object| object.contains("orders_new")));
-        let dump = screen.lines().join("\n");
-        assert!(dump.contains("prod@v1 -> prod@v2: 3 differences"), "{dump}");
-        assert!(dump.contains("[ ] removed 1"), "{dump}");
-        assert!(dump.contains("Migration script"), "{dump}");
-        assert!(dump.contains("[Open script]"), "{dump}");
-        for raw in ["destructive=", "apply=", "confirm=", "Live(", "sources "] {
+        let dump = shown(screen);
+        assert!(dump.contains("From ‹ prod@v1 ›"), "{dump}");
+        assert!(dump.contains("To ‹ prod@v2 ›"), "{dump}");
+        assert!(dump.contains("−1 removed (hidden)"), "{dump}");
+        assert!(dump.contains("[⏎ Open script]"), "{dump}");
+        for raw in ["destructive=", "apply=", "confirm=", "Live(", "sources ["] {
             assert!(!dump.contains(raw), "{raw}: {dump}");
         }
     }
@@ -703,12 +711,9 @@ mod tests {
         screen.open_picker(options(), Some("pg-b"));
         assert_eq!(screen.option(0).unwrap().name, "pg-b");
         assert_ne!(screen.option(1).unwrap().name, "pg-b");
-        let shown = screen.lines().join("\n");
-        assert!(
-            shown.contains("From: \u{2039} pg-b  (connected)"),
-            "{shown}"
-        );
-        assert!(shown.contains("[Compare]"), "{shown}");
+        let dump = shown(screen.clone());
+        assert!(dump.contains("From ‹ pg-b ›"), "{dump}");
+        assert!(dump.contains("[Compare]"), "{dump}");
         let (from, to) = screen.request().expect("two different sources");
         assert!(matches!(from, DiffSide::Live { ref name, .. } if name == "pg-b"));
         assert!(matches!(

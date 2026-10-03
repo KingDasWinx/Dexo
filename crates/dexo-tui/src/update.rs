@@ -1834,11 +1834,11 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             ordered,
         } => {
             // The sources stay for another look, with the result over them.
-            let from_connection = model.schema_diff.from_connection.take();
+            let sources = std::mem::take(&mut model.schema_diff);
             model.schema_diff = crate::screens::schema_diff::SchemaDiffScreen::from_ordered(
                 from_label, to_label, &ordered,
-            );
-            model.schema_diff.from_connection = from_connection;
+            )
+            .with_sources(sources);
             Vec::new()
         }
         Action::SchemaDiffFailed { message } => {
@@ -3947,23 +3947,20 @@ fn mouse_ddl_preview(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(HitTarget::Button(HitButton::ToggleAdded)) => {
-            model.schema_diff.toggle_added();
+        // A source's name picks it to change with the keys; its arrows step it.
+        Some(HitTarget::FormField(side)) if side < 2 => {
+            let diff = &mut model.schema_diff;
+            diff.source_prompt = true;
+            diff.footer = crate::widgets::form::FooterFocus::Input;
+            diff.row = side;
             Vec::new()
         }
-        Some(HitTarget::Button(HitButton::ToggleRemoved)) => {
-            model.schema_diff.toggle_removed();
-            Vec::new()
-        }
-        Some(HitTarget::Button(HitButton::ToggleChanged)) => {
-            model.schema_diff.toggle_changed();
-            Vec::new()
-        }
-        // A click on a source steps to the next one; the keys step either way.
-        Some(HitTarget::FormField(side)) if model.schema_diff.source_prompt && side < 2 => {
-            model.schema_diff.footer = crate::widgets::form::FooterFocus::Input;
-            model.schema_diff.row = side;
-            model.schema_diff.cycle(side, 1);
+        Some(HitTarget::FormChoice { index, step }) if index < 2 => {
+            let diff = &mut model.schema_diff;
+            diff.source_prompt = true;
+            diff.footer = crate::widgets::form::FooterFocus::Input;
+            diff.row = index;
+            diff.cycle(index, isize::from(step));
             Vec::new()
         }
         Some(HitTarget::FormField(2)) if model.schema_diff.source_prompt => {
