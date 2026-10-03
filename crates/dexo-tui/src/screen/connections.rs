@@ -176,7 +176,11 @@ pub fn buttons(model: &Model) -> Vec<Button> {
         buttons.push(Button::new(KeyCode::Char('s'), "New SQL"));
     }
     buttons.extend([
-        Button::new(KeyCode::Char('b'), "Browse"),
+        // The explorer shows what a session reads: offline there is nothing to browse.
+        Button::new(KeyCode::Char('b'), "Browse").enabled_if(
+            session.is_some(),
+            format!("{} is not connected: Enter connects it.", profile.name),
+        ),
         Button::new(KeyCode::Char('c'), "Disconnect").enabled_if(
             session.is_some(),
             format!("{} is not connected.", profile.name),

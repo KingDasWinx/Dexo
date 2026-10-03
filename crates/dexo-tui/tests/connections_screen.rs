@@ -433,10 +433,25 @@ fn copy_url_leaves_the_password_out() {
 #[test]
 fn browse_goes_to_the_explorer_on_the_connection() {
     let mut model = four_connections();
-    pick(&mut model, "pg-prod");
+    pick(&mut model, "pg-dev");
     press(&mut model, KeyCode::Char('b'));
     assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
-    assert_eq!(model.explorer.selected_connection_name(), Some("pg-prod"));
+    assert_eq!(model.explorer.selected_connection_name(), Some("pg-dev"));
+}
+
+/// Offline, Browse is dimmed and says why: there is no session to browse.
+#[test]
+fn browse_waits_for_a_connection() {
+    let mut model = four_connections();
+    pick(&mut model, "pg-prod");
+    press(&mut model, KeyCode::Char('b'));
+    assert_eq!(model.screen, dexo_tui::model::Screen::Connections);
+    assert!(
+        model
+            .messages
+            .iter()
+            .any(|message| message.message.contains("pg-prod is not connected"))
+    );
 }
 
 #[test]
