@@ -7411,8 +7411,11 @@ fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::Re
             .iter_mut()
             .find(|document| document.id == recovered.id)
         {
+            // Only the text and title are checkpointed: what the document is bound to,
+            // and what kind it is, stay as stored.
             recovered.path = existing.path.clone();
             recovered.connection_id = existing.connection_id.clone();
+            recovered.kind = existing.kind.clone();
             *existing = recovered;
         } else {
             model.documents.push(recovered);
@@ -7422,6 +7425,14 @@ fn restore_recovery_documents(model: &mut Model, documents: Vec<dexo_storage::Re
         .active_document
         .min(model.documents.len().saturating_sub(1));
 }
+
+pub fn restore_recovery_documents_for_test(
+    model: &mut Model,
+    documents: Vec<dexo_storage::RecoveryDocument>,
+) {
+    restore_recovery_documents(model, documents);
+}
+
 /// A connection's console lives at `sql/<connection uuid>/console.sql`, so a document
 /// stored before the binding column existed still says which connection it belongs to.
 /// Reading it back beats leaving every console from before the migration unlabelled.

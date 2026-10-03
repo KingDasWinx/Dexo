@@ -84,7 +84,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ED-24** `MINOR` Clicking an item in the completion popup does not accept it
 - [x] **ED-27** `MINOR` History is not scoped to the connection, but "Clear History" is
 - [=] SL-16 **ED-28** `MINOR` After the window was shrunk to 60x20, explorer and results stay hidden when it grows again
-- [ ] **ED-32** `MINOR` Tabs of documents on an offline connection do not say which connection they belong to
+- [x] **ED-32** `MINOR` Tabs of documents on an offline connection do not say which connection they belong to
 - [x] **ED-08** `COSMETIC` Find bar hint is cut off at the right edge
 - [x] **ED-11** `COSMETIC` Ctrl+Home / Ctrl+End do not go to the start / end of the document
 - [x] **ED-20** `COSMETIC` SQLite errors are printed with `SQLSTATE 1`

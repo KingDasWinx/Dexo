@@ -439,3 +439,26 @@ fn editing_where_a_live_connection_goes_closes_its_session() {
         "an unchanged profile closed its session"
     );
 }
+
+/// A recovery checkpoint holds the text and title only; replacing the stored document
+/// with it dropped the binding, so a restored tab lost its connection prefix.
+#[test]
+fn a_recovered_document_keeps_its_connection() {
+    let mut model = two_connections();
+    let mut stored = EditorDocument::new_unique("sl.sql", None, Some(uuid_of(1)));
+    stored.title = "sl.sql".into();
+    let id = stored.id.clone();
+    model.documents.push(stored);
+    dexo_tui::update::restore_recovery_documents_for_test(
+        &mut model,
+        vec![dexo_storage::RecoveryDocument {
+            id: id.clone(),
+            project_id: String::new(),
+            title: "sl.sql".into(),
+            content: "select 1".into(),
+            updated_at: String::new(),
+        }],
+    );
+    let restored = model.documents.iter().find(|d| d.id == id).unwrap();
+    assert_eq!(restored.connection_id.as_deref(), Some(uuid_of(1).as_str()));
+}
