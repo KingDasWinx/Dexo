@@ -226,3 +226,30 @@ fn the_first_visit_opens_on_setup() {
 
     assert_eq!(model.agents_view, AgentsView::Setup);
 }
+
+/// Back from [Cancel] and in again, the form starts at its first row: it kept the one
+/// left, and two Downs landed on Cancel again.
+#[test]
+fn the_form_is_entered_from_its_top() {
+    let mut model = setup();
+    press(&mut model, KeyCode::Enter);
+    for _ in 0..20 {
+        if model.mcp_setup.footer == dexo_tui::widgets::form::FooterFocus::Cancel {
+            break;
+        }
+        press(&mut model, KeyCode::Down);
+    }
+    press(&mut model, KeyCode::Enter);
+    assert_eq!(
+        dexo_tui::screen::section(&model),
+        dexo_tui::screen::Section::List
+    );
+
+    press(&mut model, KeyCode::Enter);
+
+    assert_eq!(model.mcp_setup.row, 0);
+    assert_eq!(
+        model.mcp_setup.focused(),
+        Some(dexo_tui::screens::mcp_setup::Row::Profile)
+    );
+}

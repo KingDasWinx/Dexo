@@ -5275,8 +5275,10 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                 KeyCode::Down => setup.select(1),
                 KeyCode::Home => setup.select(-(setup.clients.len() as isize)),
                 KeyCode::End => setup.select(setup.clients.len() as isize),
-                // The form beside the list.
+                // The form beside the list, from its first row.
                 KeyCode::Enter => {
+                    setup.row = 0;
+                    setup.footer = crate::widgets::form::FooterFocus::Input;
                     model.sections[crate::model::Screen::Agents.index()] =
                         crate::screen::Section::Detail;
                 }
