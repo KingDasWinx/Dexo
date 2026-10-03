@@ -132,7 +132,7 @@ fn a_new_document_belongs_to_the_connection_under_the_explorer_cursor() {
 
     update(&mut model, Action::NewDocument);
     let dialog = dexo_tui::render::render_to_string(&model, 100, 30);
-    assert!(dialog.contains("connection: beta"), "{dialog}");
+    assert!(dialog.contains("connection: < beta >"), "{dialog}");
     update(&mut model, key(KeyCode::Enter, KeyModifiers::NONE));
 
     assert_eq!(model.documents.len(), 3);

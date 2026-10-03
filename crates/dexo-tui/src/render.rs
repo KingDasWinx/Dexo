@@ -2396,9 +2396,27 @@ fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitM
     let prompt = &model.document_name_prompt;
     for_popup_lines(popup, &lines, |_, line, rect| {
         if line.starts_with("name:") {
-            let focused = prompt.footer == crate::widgets::form::FooterFocus::Input;
-            paint_selection(frame, rect, "name: ", &prompt.name, focused);
+            paint_selection(frame, rect, "name: ", &prompt.name, prompt.on_name());
             hits.register(HitTarget::FormField(0), rect);
+        }
+        // The connection, a choice when there is more than one: its row is a click, and
+        // so is each arrow.
+        if line.starts_with("connection:") && prompt.picks_connection() {
+            if prompt.on_connection {
+                frame
+                    .buffer_mut()
+                    .set_style(rect, model.theme.style(Role::Focus, model.capabilities));
+            }
+            hits.register(HitTarget::FormField(1), rect);
+            for (needle, step) in [("< ", -1), (" >", 1)] {
+                crate::mouse::register_label(
+                    hits,
+                    rect,
+                    line,
+                    needle,
+                    HitTarget::FormChoice { index: 1, step },
+                );
+            }
         }
         if line.contains("[Cancel]") {
             crate::widgets::form::register_footer(hits, rect, line, prompt.submit_label());
@@ -3350,6 +3368,7 @@ mod tests {
                 crate::screens::document_name_prompt::DocumentNamePrompt::open_create(
                     "query-1.sql".into(),
                     None,
+                    Vec::new(),
                 ),
             ..Model::default()
         };

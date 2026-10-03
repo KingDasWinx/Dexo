@@ -3474,7 +3474,15 @@ fn mouse_insert_row(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 fn mouse_document_name(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
     match hit {
-        Some(HitTarget::FormField(_)) => {
+        Some(HitTarget::FormChoice { step, .. }) => {
+            let prompt = &mut model.document_name_prompt;
+            prompt.on_connection = true;
+            prompt.footer = crate::widgets::form::FooterFocus::Input;
+            prompt.cycle_connection(step as isize);
+            Vec::new()
+        }
+        Some(HitTarget::FormField(field)) => {
+            model.document_name_prompt.on_connection = field == 1;
             model.document_name_prompt.footer = crate::widgets::form::FooterFocus::Input;
             Vec::new()
         }
@@ -6561,7 +6569,38 @@ fn handle_transaction_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect
 }
 
 fn handle_document_name_prompt_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    use crate::widgets::form::{FooterKey, footer_key};
+    use crate::widgets::form::{FooterFocus, FooterKey, footer_key};
+    // The connection's row sits above the name: Left and Right pick, Enter or Down go on
+    // to the name. The walk is connection, name, the buttons, and round.
+    let prompt = &mut model.document_name_prompt;
+    if prompt.picks_connection() {
+        if prompt.on_connection {
+            match key.code {
+                KeyCode::Left => prompt.cycle_connection(-1),
+                KeyCode::Right => prompt.cycle_connection(1),
+                KeyCode::Down | KeyCode::Tab | KeyCode::Enter => prompt.on_connection = false,
+                KeyCode::Up | KeyCode::BackTab => {
+                    prompt.on_connection = false;
+                    prompt.footer = FooterFocus::Cancel;
+                }
+                KeyCode::Esc => {
+                    prompt.open = false;
+                    prompt.error = None;
+                }
+                _ => {}
+            }
+            return Vec::new();
+        }
+        let up = matches!(key.code, KeyCode::Up | KeyCode::BackTab);
+        let down = matches!(key.code, KeyCode::Down | KeyCode::Tab);
+        if (prompt.footer == FooterFocus::Input && up)
+            || (prompt.footer == FooterFocus::Cancel && down)
+        {
+            prompt.on_connection = true;
+            prompt.footer = FooterFocus::Input;
+            return Vec::new();
+        }
+    }
     match footer_key(&mut model.document_name_prompt.footer, &key) {
         FooterKey::Cancel => {
             model.document_name_prompt.open = false;
@@ -10873,10 +10912,18 @@ fn suggested_document_name(model: &Model) -> String {
 fn open_new_document_prompt(model: &mut Model) {
     let default_name = suggested_document_name(model);
     let connection = new_document_connection(model);
+    // Any saved connection can be picked instead of the one suggested.
+    let connections = model
+        .connections
+        .profiles
+        .iter()
+        .map(|row| (row.profile.id.0.to_string(), row.profile.name.clone()))
+        .collect();
     model.document_name_prompt =
         crate::screens::document_name_prompt::DocumentNamePrompt::open_create(
             default_name,
             connection,
+            connections,
         );
 }
 
