@@ -213,3 +213,28 @@ fn a_click_on_cancel_goes_back_to_the_result() {
     assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
     assert!(!model.schema_diff.source_prompt);
 }
+
+/// `/` searches the differences, as it searches every screen's list.
+#[test]
+fn slash_searches_the_differences() {
+    let mut model = compared();
+    let frame = paint(&mut model);
+    assert!(frame.contains("/ search"), "{frame}");
+    press(&mut model, KeyCode::Char('/'));
+    for ch in "legacy".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    let shown: Vec<String> = model
+        .schema_diff
+        .filtered()
+        .iter()
+        .map(|entry| entry.object.clone())
+        .collect();
+    assert_eq!(shown, ["table db.public.legacy"]);
+    // The letters were the search's: `a` hid no kind.
+    assert!(model.schema_diff.show_added);
+    press(&mut model, KeyCode::Enter);
+    press(&mut model, KeyCode::Esc);
+    assert_eq!(model.schema_diff.filtered().len(), 4);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
+}

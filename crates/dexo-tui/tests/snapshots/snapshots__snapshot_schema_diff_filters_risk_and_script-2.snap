@@ -4,12 +4,12 @@ expression: "render_to_string(&model, 60, 20)"
 ---
 [Compare]  demo  local  public                              
  From ‹ prod@v1 › ⇄  To ‹ prod@v2 ›  Filters (1)            
+/ search                                                    
 ┌▸ Differences (2 of 3)────────────────────────────────────┐
 │  Tables                                                  │
 │> + db.public.orders_new                                  │
 │  Columns                                                 │
 │  ~ db.public.users.age  may lose data, cannot be undone  │
-│                                                          │
 │                                                          │
 │                                                          │
 │                                                          │

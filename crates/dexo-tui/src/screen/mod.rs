@@ -151,6 +151,7 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
             Some(&model.mcp_audit.search)
         }
         Screen::Server => Some(&model.admin.search),
+        Screen::Compare if !model.schema_diff.source_prompt => Some(&model.schema_diff.search),
         _ => None,
     }
 }
@@ -197,6 +198,7 @@ pub fn stop_typing(model: &mut Model) {
         }
         Screen::Agents => model.mcp_audit.search.typing = false,
         Screen::Server => model.admin.search.typing = false,
+        Screen::Compare => model.schema_diff.search.typing = false,
         _ => {}
     }
 }

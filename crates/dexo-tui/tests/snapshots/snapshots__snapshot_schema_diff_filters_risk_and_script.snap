@@ -4,6 +4,7 @@ expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections  Agents  Server [Compare] History   demo  local  public                                                                                 
  From ‹ prod@v1 › ⇄  To ‹ prod@v2 ›  [a +1 added] [r −1 removed] [c ~1 changed]                                                            [s Swap]  [e Compare]
+/ search                                                                                                                                                        
 ┌▸ Differences (3)────────────────────────────────────────────────┐┌  db.public.orders_new─────────────────────────────────────────────────────────────────────┐
 │  Tables                                                         ││ [⏎ Open script]  [w Whole script]  [y Copy]                                               │
 │> + db.public.orders_new                                         ││                                                                                           │
@@ -49,6 +50,5 @@ expression: "render_to_string(&model, 160, 50)"
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
-│                                                                 ││                                                                                           │
 └─────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────────────────────────────┘
-Compare  Up/Down pick  a/r/c filter  p sources  PgUp/PgDn read  Esc back                                                                              Ctrl+P  F1
+Compare  Up/Down pick  / search  a/r/c filter  p sources  PgUp/PgDn read  Esc back                                                                    Ctrl+P  F1

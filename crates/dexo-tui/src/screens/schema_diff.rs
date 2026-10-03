@@ -112,6 +112,8 @@ pub struct SchemaDiffScreen {
     /// A comparison asked for and not answered yet: its sources, and the connection its
     /// script would be for. The result shown keeps its own until the answer comes.
     pub requested: Option<([usize; 2], Option<String>)>,
+    /// Narrows the differences to those whose object, kind or risk holds it.
+    pub search: crate::screen::widgets::Search,
 }
 
 impl Default for SchemaDiffScreen {
@@ -140,6 +142,7 @@ impl Default for SchemaDiffScreen {
             compared: false,
             compared_pick: [0, 0],
             requested: None,
+            search: Default::default(),
         }
     }
 }
@@ -393,6 +396,11 @@ impl SchemaDiffScreen {
                 "changed" => self.show_changed,
                 _ => true,
             })
+            .filter(|index| {
+                let entry = &self.entries[*index];
+                self.search
+                    .matches([entry.object.as_str(), entry.kind, entry.risk.as_str()])
+            })
             .collect();
         shown.sort_by_key(|index| {
             kinds
@@ -412,6 +420,20 @@ impl SchemaDiffScreen {
     /// Whether a kind of difference is hidden.
     pub fn filtering(&self) -> bool {
         !(self.show_added && self.show_removed && self.show_changed)
+    }
+
+    /// Whether a filter is on: the search or a kind hidden.
+    pub fn filtered_any(&self) -> bool {
+        self.filtering() || !self.search.input.is_empty()
+    }
+
+    /// Every difference shown again.
+    pub fn clear_filters(&mut self) {
+        self.search = Default::default();
+        self.show_added = true;
+        self.show_removed = true;
+        self.show_changed = true;
+        self.clamp_selection();
     }
 
     /// The statement for the picked difference, or the whole script; empty when there is
@@ -530,8 +552,22 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         });
     }
     let diff = &mut model.schema_diff;
+    if diff.search.typing && diff.search.key(key) {
+        diff.selected = 0;
+        diff.scroll = 0;
+        return Some(Vec::new());
+    }
     match key.code {
-        // The kinds hidden come back first; then the screen is left.
+        KeyCode::Char('/') => diff.search.typing = true,
+        // The search goes first, then the kinds hidden, then the screen; with nothing
+        // shown, all of them at once.
+        KeyCode::Esc if diff.filtered_any() && diff.filtered().is_empty() => {
+            diff.clear_filters();
+        }
+        KeyCode::Esc if !diff.search.input.is_empty() => {
+            diff.search = Default::default();
+            diff.clamp_selection();
+        }
         KeyCode::Esc if diff.filtering() => {
             diff.show_added = true;
             diff.show_removed = true;

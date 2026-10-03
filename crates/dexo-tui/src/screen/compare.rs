@@ -24,6 +24,12 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         picking(frame, rest, model, hits);
         return;
     }
+    // The differences' search, on the row under the sources.
+    let rest = if diff.entries.is_empty() {
+        rest
+    } else {
+        widgets::toolbar(frame, rest, model, hits, Some(&diff.search), &[], &[])
+    };
     let shown = diff.filtered();
     if shown.is_empty() {
         if diff.loading {
@@ -38,8 +44,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 rest,
                 model,
                 hits,
-                &["Every difference is hidden.".to_string()],
-                &[Button::new(KeyCode::Esc, "Show all")],
+                &["Nothing matches the filters.".to_string()],
+                &[Button::new(KeyCode::Esc, "Clear filters")],
             );
         }
         return;
@@ -260,7 +266,7 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
     let diff = &model.schema_diff;
     let shown = diff.filtered();
-    let title = if diff.filtering() {
+    let title = if diff.filtered_any() {
         format!("Differences ({} of {})", shown.len(), diff.entries.len())
     } else {
         format!("Differences ({})", shown.len())
@@ -384,6 +390,6 @@ pub fn hints(model: &Model) -> String {
     if diff.source_prompt {
         "Up/Down row  Left/Right change a source  s swap  Enter compare  Esc back".into()
     } else {
-        "Up/Down pick  a/r/c filter  p sources  PgUp/PgDn read  Esc back".into()
+        "Up/Down pick  / search  a/r/c filter  p sources  PgUp/PgDn read  Esc back".into()
     }
 }
