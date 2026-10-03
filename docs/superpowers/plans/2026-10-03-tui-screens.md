@@ -45,7 +45,7 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 
 ## 5. Compare
 
-- [ ] D1 Schema diff as a screen: setup row, differences list with filters, DDL of the picked one,
+- [x] D1 Schema diff as a screen: setup row, differences list with filters, DDL of the picked one,
       whole script on `s`, Enter opens it on the From connection.
 
 ## 6. History

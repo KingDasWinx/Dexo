@@ -47,7 +47,6 @@ pub struct DiffOption {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SchemaDiffScreen {
-    pub open: bool,
     /// Picking the two sources, rather than reading the result.
     pub source_prompt: bool,
     pub from_label: String,
@@ -72,12 +71,15 @@ pub struct SchemaDiffScreen {
     /// The connection the first side was, if it was one: the script makes it like the
     /// second, so it is the one the script is for.
     pub from_connection: Option<String>,
+    /// The detail shows the whole script, not only the picked difference's part.
+    pub whole_script: bool,
+    /// Lines the detail is scrolled down.
+    pub scroll: u16,
 }
 
 impl Default for SchemaDiffScreen {
     fn default() -> Self {
         Self {
-            open: false,
             source_prompt: false,
             from_label: String::new(),
             to_label: String::new(),
@@ -96,6 +98,8 @@ impl Default for SchemaDiffScreen {
             file: TextInput::default(),
             footer: FooterFocus::Input,
             from_connection: None,
+            whole_script: false,
+            scroll: 0,
         }
     }
 }
@@ -143,7 +147,6 @@ impl SchemaDiffScreen {
             })
             .collect();
         Self {
-            open: true,
             from_label: from_label.into(),
             to_label: to_label.into(),
             entries,
@@ -155,7 +158,6 @@ impl SchemaDiffScreen {
 
     pub fn fixture() -> Self {
         Self {
-            open: true,
             from_label: "prod@v1".into(),
             to_label: "prod@v2".into(),
             entries: vec![
@@ -184,7 +186,6 @@ impl SchemaDiffScreen {
     /// the second on the next thing that is not it.
     pub fn open_picker(&mut self, options: Vec<DiffOption>, active: Option<&str>) {
         *self = Self {
-            open: true,
             source_prompt: true,
             file: std::mem::take(&mut self.file),
             options,
@@ -317,6 +318,39 @@ impl SchemaDiffScreen {
 
     pub fn clamp_selection(&mut self) {
         self.selected = self.selected.min(self.filtered().len().saturating_sub(1));
+        self.scroll = 0;
+    }
+
+    /// What the detail shows: the picked difference's part of the script, or all of it.
+    pub fn detail_lines(&self) -> Vec<String> {
+        if self.whole_script || self.filtered().is_empty() {
+            return self.script.lines().map(str::to_string).collect();
+        }
+        let picked = self
+            .entries
+            .iter()
+            .enumerate()
+            .filter(|(_, entry)| self.filtered().contains(entry))
+            .map(|(index, _)| index)
+            .nth(self.selected);
+        let Some(entry) = picked.and_then(|index| self.entries.get(index)) else {
+            return Vec::new();
+        };
+        let mut lines = vec![format!("{} {}", entry.kind, entry.object)];
+        if !entry.risk.is_empty() {
+            lines.push(entry.risk.clone());
+        }
+        lines.push(String::new());
+        let part = picked
+            .and_then(|index| self.ordered.get(index))
+            .map(|change| generate_script(std::slice::from_ref(change), render_unquoted).forward)
+            .unwrap_or_default();
+        if part.trim().is_empty() {
+            lines.push("No statement: this difference is left to be made by hand.".into());
+        } else {
+            lines.extend(part.lines().map(str::to_string));
+        }
+        lines
     }
 
     /// The button the footer's first stop is: it compares while picking and, with a
@@ -461,7 +495,7 @@ impl SchemaDiffScreen {
 
 /// The keys of the dialog: the rows (or the list), Left and Right on a row, the filters,
 /// Enter, Esc.
-pub fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+pub fn handle_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     let on_rows = model.schema_diff.footer == FooterFocus::Input;
     if model.schema_diff.source_prompt {
         let rows = model.schema_diff.rows();
@@ -470,30 +504,28 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             match key.code {
                 KeyCode::Tab | KeyCode::Down if row + 1 < rows => {
                     model.schema_diff.row += 1;
-                    return Vec::new();
+                    return Some(Vec::new());
                 }
                 KeyCode::BackTab | KeyCode::Up if row > 0 => {
                     model.schema_diff.row -= 1;
-                    return Vec::new();
+                    return Some(Vec::new());
                 }
                 KeyCode::Left | KeyCode::Right if row < 2 => {
                     let delta = if key.code == KeyCode::Left { -1 } else { 1 };
                     model.schema_diff.cycle(row, delta);
-                    return Vec::new();
+                    return Some(Vec::new());
                 }
                 _ if row == 2 && model.schema_diff.file.handle_key(key) => {
                     model.schema_diff.error = None;
-                    return Vec::new();
+                    return Some(Vec::new());
                 }
                 _ => {}
             }
         }
         let before = model.schema_diff.footer;
-        return match footer_key(&mut model.schema_diff.footer, &key) {
-            FooterKey::Cancel => {
-                model.schema_diff.open = false;
-                Vec::new()
-            }
+        return Some(match footer_key(&mut model.schema_diff.footer, &key) {
+            // Cancel leaves the screen.
+            FooterKey::Cancel => return None,
             FooterKey::Submit => request(model),
             FooterKey::Moved => {
                 // Walking back up from the buttons lands on the row it came in from.
@@ -507,42 +539,47 @@ pub fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 Vec::new()
             }
             FooterKey::Pass => Vec::new(),
-        };
+        });
     }
-    if on_rows {
-        match key.code {
-            KeyCode::Up => {
-                model.schema_diff.selected = model.schema_diff.selected.saturating_sub(1);
-                return Vec::new();
-            }
-            KeyCode::Down => {
-                let last = model.schema_diff.filtered().len().saturating_sub(1);
-                model.schema_diff.selected = (model.schema_diff.selected + 1).min(last);
-                return Vec::new();
-            }
-            KeyCode::Char('a') => {
-                model.schema_diff.toggle_added();
-                return Vec::new();
-            }
-            KeyCode::Char('r') => {
-                model.schema_diff.toggle_removed();
-                return Vec::new();
-            }
-            KeyCode::Char('c') => {
-                model.schema_diff.toggle_changed();
-                return Vec::new();
-            }
-            _ => {}
+    let diff = &mut model.schema_diff;
+    match key.code {
+        KeyCode::Up => {
+            diff.selected = diff.selected.saturating_sub(1);
+            diff.scroll = 0;
         }
-    }
-    match footer_key(&mut model.schema_diff.footer, &key) {
-        FooterKey::Cancel => {
-            model.schema_diff.open = false;
-            Vec::new()
+        KeyCode::Down => {
+            let last = diff.filtered().len().saturating_sub(1);
+            diff.selected = (diff.selected + 1).min(last);
+            diff.scroll = 0;
         }
-        FooterKey::Submit => open_script(model),
-        FooterKey::Moved | FooterKey::Pass => Vec::new(),
+        KeyCode::Char('a') => diff.toggle_added(),
+        KeyCode::Char('r') => diff.toggle_removed(),
+        KeyCode::Char('c') => diff.toggle_changed(),
+        KeyCode::Char('w') => {
+            diff.whole_script = !diff.whole_script;
+            diff.scroll = 0;
+        }
+        KeyCode::PageDown | KeyCode::PageUp => {
+            let page = i32::from(model.hits.page(
+                crate::mouse::ScrollArea::SchemaDiff,
+                (model.height / 3).max(1),
+            ));
+            let delta = if key.code == KeyCode::PageDown {
+                page
+            } else {
+                -page
+            };
+            model.schema_diff.scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::SchemaDiff,
+                model.schema_diff.scroll,
+                delta,
+            );
+        }
+        KeyCode::Enter => return Some(open_script(model)),
+        KeyCode::Char('e') => return Some(crate::update::new_schema_comparison(model)),
+        _ => return None,
     }
+    Some(Vec::new())
 }
 
 /// Reads both sides and compares them.
@@ -582,13 +619,23 @@ pub fn open_script(model: &mut Model) -> Vec<Effect> {
             .info("There is no script: the two schemas are the same.".into());
         return Vec::new();
     }
-    model.schema_diff.open = false;
     let text = format!(
         "-- Makes {} like {}.\n{}",
         model.schema_diff.from_label, model.schema_diff.to_label, model.schema_diff.script
     );
     let connection = model.schema_diff.from_connection.clone();
-    crate::update::open_text_document(model, "migration.sql", &text, connection.as_deref())
+    // The document is on the workbench, where it is read.
+    let mut effects = crate::update::update(
+        model,
+        crate::action::Action::GoToScreen(crate::model::Screen::Workbench),
+    );
+    effects.extend(crate::update::open_text_document(
+        model,
+        "migration.sql",
+        &text,
+        connection.as_deref(),
+    ));
+    effects
 }
 
 #[cfg(test)]

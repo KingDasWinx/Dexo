@@ -16,6 +16,8 @@ pub enum HitTarget {
     ScreenTab(crate::model::Screen),
     /// One of a screen's views, on the row under the header.
     ScreenView(usize),
+    /// A screen's detail pane: the wheel over it reads on, elsewhere it moves the pick.
+    ScreenDetail,
     ResultTab(usize),
     ResultsView(usize),
     DocumentTab(usize),
@@ -114,7 +116,6 @@ pub enum OverlayKind {
     DeleteConnection,
     Review,
     DdlPreview,
-    SchemaDiff,
     Transfer,
     Security,
     ValueViewer,
@@ -167,6 +168,7 @@ pub enum ScrollArea {
     DdlPreview,
     McpProfiles,
     Sessions,
+    SchemaDiff,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -302,7 +304,6 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.projects.open, OverlayKind::Projects),
         (model.security.open, OverlayKind::Security),
         (model.transfer.open, OverlayKind::Transfer),
-        (model.schema_diff.open, OverlayKind::SchemaDiff),
         (model.data.review.is_some(), OverlayKind::Review),
         (model.results_menu.open, OverlayKind::ResultsMenu),
         (model.node_menu.open, OverlayKind::NodeMenu),

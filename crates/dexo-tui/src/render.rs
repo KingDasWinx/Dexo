@@ -176,9 +176,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.data.cell_edit.is_some() {
         render_cell_edit(frame, model, hits);
     }
-    if model.schema_diff.open {
-        render_schema_diff(frame, model, hits);
-    }
     if model.transfer.open {
         render_transfer(frame, model, hits);
     }
@@ -2026,81 +2023,6 @@ fn centered(area: Rect, max_width: u16, max_height: u16) -> Rect {
     // depending on their height. A tall one still moves up to fit.
     let y = area.y + (area.height / 6).min(area.height.saturating_sub(height));
     Rect::new(x, y, width, height)
-}
-
-fn render_schema_diff(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    let area = frame.area();
-    if area.width < 10 || area.height < 5 {
-        return;
-    }
-    let diff = &model.schema_diff;
-    let popup = centered(area, 88, area.height.saturating_sub(2).min(24));
-    let inner = popup_inner(popup);
-    let (body, selected_line, entries_from) = diff.body(usize::from(inner.width));
-    // Two rows keep the bottom: the buttons and what the keys do.
-    let room = usize::from(inner.height).saturating_sub(2).max(1);
-    let offset = scroll_to_selection(selected_line.unwrap_or(0), 0, body.len(), room);
-    let mut lines: Vec<String> = body.iter().skip(offset).take(room).cloned().collect();
-    let footer_row = lines.len();
-    let footer = crate::widgets::form::footer_line(diff.submit_label(), diff.footer);
-    lines.push(footer.clone());
-    lines.push(crate::model::truncate_cell(
-        if diff.source_prompt {
-            "  Left/Right change a source  Enter compare  Esc cancel"
-        } else {
-            "  a/r/c filter  Enter open the script  Esc close"
-        },
-        usize::from(inner.width),
-    ));
-    let title = if diff.source_prompt {
-        "Compare Schema".to_string()
-    } else {
-        format!("Compare Schema \u{b7} {}", diff.from_label)
-    };
-    paint_popup(
-        frame,
-        model,
-        popup,
-        overlay_block(model, &title),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    let shown = filter_count(diff);
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if i == footer_row {
-            crate::widgets::form::register_footer(hits, rect, &footer, diff.submit_label());
-            return;
-        }
-        let at = offset + i;
-        if diff.source_prompt {
-            if (2..=4).contains(&at) {
-                hits.register(HitTarget::FormField(at - 2), rect);
-                if at == 4 && diff.uses_file() && diff.row == 2 {
-                    paint_selection(frame, rect, "> File: ", &diff.file, true);
-                }
-            }
-            return;
-        }
-        if line.starts_with("Show:") {
-            for (needle, button) in [
-                ("[x] added", HitButton::ToggleAdded),
-                ("[ ] added", HitButton::ToggleAdded),
-                ("[x] removed", HitButton::ToggleRemoved),
-                ("[ ] removed", HitButton::ToggleRemoved),
-                ("[x] changed", HitButton::ToggleChanged),
-                ("[ ] changed", HitButton::ToggleChanged),
-            ] {
-                register_label(hits, rect, line, needle, HitTarget::Button(button));
-            }
-        } else if at >= entries_from && at < entries_from + shown {
-            hits.register(HitTarget::ListRow(at - entries_from), rect);
-        }
-    });
-}
-
-/// How many differences the filters let through.
-fn filter_count(diff: &crate::screens::schema_diff::SchemaDiffScreen) -> usize {
-    diff.filtered().len()
 }
 
 fn render_transfer(frame: &mut Frame, model: &Model, hits: &mut HitMap) {

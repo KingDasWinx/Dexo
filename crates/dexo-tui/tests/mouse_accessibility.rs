@@ -572,6 +572,7 @@ fn label_hits_use_terminal_column_widths() {
 #[test]
 fn wheel_moves_schema_diff_selection() {
     let mut model = Model {
+        screen: dexo_tui::model::Screen::Compare,
         schema_diff: dexo_tui::screens::schema_diff::SchemaDiffScreen::fixture(),
         ..Model::default()
     };
@@ -613,8 +614,8 @@ fn wheel_moves_security_selection() {
 #[test]
 fn wheel_keeps_schema_diff_and_security_selection_in_the_popup_viewport() {
     let mut schema_model = Model {
+        screen: dexo_tui::model::Screen::Compare,
         schema_diff: dexo_tui::screens::schema_diff::SchemaDiffScreen {
-            open: true,
             entries: (0..30)
                 .map(|index| dexo_tui::screens::schema_diff::DiffEntry {
                     kind: "added",

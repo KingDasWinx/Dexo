@@ -316,7 +316,7 @@ fn press(model: &mut dexo_tui::Model, code: crossterm::event::KeyCode) -> Vec<de
 fn schema_diff_command_starts_loading_instead_of_opening_empty_default() {
     let mut model = connected_model();
     choose(&mut model, "schema.diff");
-    assert!(model.schema_diff.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Compare);
     assert!(model.schema_diff.source_prompt);
     assert!(model.schema_diff.entries.is_empty());
 }

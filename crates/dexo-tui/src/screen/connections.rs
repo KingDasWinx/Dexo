@@ -49,7 +49,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             .unwrap_or_default();
         // What can be done to the pick, each one a click, under its details.
         let actions = screen.footer_lines(usize::from(detail.width.saturating_sub(2)));
-        let (footer, _, _) = super::text_pane(frame, detail, model, &title, &lines, 0, &actions);
+        let (footer, _, _) =
+            super::text_pane(frame, detail, model, hits, &title, &lines, 0, &actions);
         let buttons = [
             HitButton::Connect,
             HitButton::New,

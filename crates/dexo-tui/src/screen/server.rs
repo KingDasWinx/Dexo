@@ -87,6 +87,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         frame,
         detail,
         model,
+        hits,
         &title,
         &lines,
         usize::from(admin.detail_scroll),

@@ -3,19 +3,18 @@ source: crates/dexo-tui/tests/snapshots.rs
 assertion_line: 208
 expression: "render_to_string(&model, 60, 20)"
 ---
-demo  local  public          1 Sidebar  [2 SQL]  3 Results  
- scratch.sql ×  +                                           
-┌Compare Schema · prod@v1──────────────────────────────────┐
-│prod@v1 -> prod@v2: 3 differences                         │
-│Show: [x] added 1  [ ] removed 1  [x] changed 1   (a / r …│
-│                                                          │
+[Compare]  demo  local  public                              
+prod@v1 -> prod@v2: 3 differences                           
+Show: [x] added 1  [ ] removed 1  [x] changed 1   (a / r / …
+┌▸ Differences (2)─────────────────────────────────────────┐
 │> added    table db.public.orders_new                     │
 │  changed  column db.public.users.age  (may lose data, ca…│
 │                                                          │
-│Migration script                                          │
-│  DROP TABLE db.public.gone;                              │
-│ [Open script]   [Cancel]                                 │
-│  a/r/c filter  Enter open the script  Esc close          │
+└──────────────────────────────────────────────────────────┘
+┌  Statement───────────────────────────────────────────────┐
+│added table db.public.orders_new                          │
+│                                                          │
+│No statement: this difference is left to be made by hand. │
 │                                                          │
 │                                                          │
 │                                                          │
@@ -23,3 +22,4 @@ demo  local  public          1 Sidebar  [2 SQL]  3 Results
 │                                                          │
 │                                                          │
 └──────────────────────────────────────────────────────────┘
+Compare  a/r/c filter  Up/Down pick               Ctrl+P  F1

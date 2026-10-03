@@ -1751,7 +1751,12 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.schema_editor.focus_next();
             Vec::new()
         }
-        Action::OpenSchemaDiff => open_schema_diff(model),
+        Action::OpenSchemaDiff => {
+            // A new comparison, on the sources open now: with the last one cleared, the
+            // screen comes up on the sources to pick.
+            model.schema_diff = Default::default();
+            go_to_screen(model, crate::model::Screen::Compare)
+        }
         Action::SchemaDiffToggleAdded => {
             model.schema_diff.toggle_added();
             Vec::new()
@@ -1767,7 +1772,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::SchemaDiffOpenScript => crate::screens::schema_diff::open_script(model),
         Action::SchemaSourcesLoaded(snapshots) => {
             use crate::screens::schema_diff::{DiffOption, DiffOptionKind};
-            if model.schema_diff.open && model.schema_diff.source_prompt {
+            if model.schema_diff.source_prompt {
                 model.schema_diff.add_snapshots(
                     snapshots
                         .into_iter()
@@ -3245,7 +3250,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
         Some(OverlayKind::ResultsMenu) => mouse_results_menu(model, hit),
         Some(OverlayKind::Review) => mouse_review(model, hit),
         Some(OverlayKind::DdlPreview) => mouse_ddl_preview(model, hit),
-        Some(OverlayKind::SchemaDiff) => mouse_schema_diff(model, hit),
         Some(OverlayKind::Transfer) => mouse_transfer(model, hit),
         Some(OverlayKind::Security) => mouse_security(model, hit, doubled),
         Some(OverlayKind::ObjectOverlay) => mouse_inspector(model, hit),
@@ -3798,10 +3802,7 @@ fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             crate::screens::schema_diff::request(model)
         }
         Some(HitTarget::FooterSubmit) => crate::screens::schema_diff::open_script(model),
-        Some(HitTarget::FooterCancel) => {
-            model.schema_diff.open = false;
-            Vec::new()
-        }
+        Some(HitTarget::FooterCancel) => update(model, Action::ScreenBack),
         _ => Vec::new(),
     }
 }
@@ -4144,6 +4145,7 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
         crate::model::Screen::Agents => mouse_agents(model, hit),
         crate::model::Screen::Server => mouse_admin(model, hit),
         crate::model::Screen::Connections => mouse_connections(model, hit, doubled),
+        crate::model::Screen::Compare => mouse_schema_diff(model, hit),
         _ => Vec::new(),
     }
 }
@@ -4630,7 +4632,18 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         }
         return Vec::new();
     }
-    if overlay == Some(OverlayKind::SchemaDiff) {
+    if overlay.is_none() && model.screen == crate::model::Screen::Compare {
+        if matches!(
+            model.hits.at(mouse.column, mouse.row),
+            Some(HitTarget::ScreenDetail)
+        ) {
+            model.schema_diff.scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::SchemaDiff,
+                model.schema_diff.scroll,
+                delta,
+            );
+            return Vec::new();
+        }
         let count = model.schema_diff.filtered().len();
         if count > 0 {
             if delta < 0 {
@@ -4652,10 +4665,10 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     if overlay.is_none() && model.screen == crate::model::Screen::Server {
-        // The wheel over the list picks; over the session it reads on.
-        if matches!(
+        // The wheel over the session reads on; elsewhere it picks.
+        if !matches!(
             model.hits.at(mouse.column, mouse.row),
-            Some(HitTarget::ListRow(_))
+            Some(HitTarget::ScreenDetail)
         ) {
             if model.admin.terminate.is_none() {
                 model.admin.move_selection(delta > 0);
@@ -4691,9 +4704,9 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
     }
     if overlay.is_none() && model.screen == crate::model::Screen::Agents {
         use crate::screen::agents::AgentsView;
-        let over_list = matches!(
+        let over_list = !matches!(
             model.hits.at(mouse.column, mouse.row),
-            Some(HitTarget::ListRow(_))
+            Some(HitTarget::ScreenDetail)
         );
         match model.agents_view {
             // The wheel over the list picks; over the request it reads on.
@@ -4819,6 +4832,16 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             crate::model::Screen::Agents => agents_key(model, key),
             crate::model::Screen::Server => server_key(model, key),
             crate::model::Screen::Connections => connections_key(model, key),
+            crate::model::Screen::Compare => {
+                if key
+                    .modifiers
+                    .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+                {
+                    None
+                } else {
+                    crate::screens::schema_diff::handle_key(model, key)
+                }
+            }
             _ => None,
         };
         if let Some(effects) = own {
@@ -5098,6 +5121,14 @@ fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
             show_server(model, kept)
         }
         crate::model::Screen::Connections => vec![Effect::DiscoverDocker],
+        // The last comparison is kept to read again; with none, the sources to pick.
+        crate::model::Screen::Compare
+            if model.schema_diff.entries.is_empty()
+                && model.schema_diff.script.is_empty()
+                && !model.schema_diff.loading =>
+        {
+            new_schema_comparison(model)
+        }
         crate::model::Screen::Workbench
         | crate::model::Screen::Compare
         | crate::model::Screen::History => Vec::new(),
@@ -5297,9 +5328,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.schema_editor.preview.is_some() {
         return ddl_preview_key(model, key);
-    }
-    if model.schema_diff.open {
-        return crate::screens::schema_diff::handle_key(model, key);
     }
     if model.security.open {
         return match key.code {
@@ -11664,7 +11692,7 @@ fn stop_transfer(model: &mut Model) -> Vec<Effect> {
 
 /// Compare Schema opens on the connections that are open and the snapshots saved, to pick
 /// two from. It took both sides from the one selected connection.
-fn open_schema_diff(model: &mut Model) -> Vec<Effect> {
+pub(crate) fn new_schema_comparison(model: &mut Model) -> Vec<Effect> {
     use crate::screens::schema_diff::{DiffOption, DiffOptionKind};
     let mut options: Vec<DiffOption> = model
         .connections

@@ -98,6 +98,7 @@ fn approvals(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         frame,
         detail,
         model,
+        hits,
         "Request",
         &lines,
         usize::from(audit.scroll),
@@ -202,7 +203,7 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 if event.rows == 1 { "" } else { "s" }
             ),
         ];
-        super::text_pane(frame, detail, model, "Call", &lines, 0, &[]);
+        super::text_pane(frame, detail, model, hits, "Call", &lines, 0, &[]);
     }
 }
 
@@ -252,6 +253,7 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         frame,
         detail,
         model,
+        hits,
         &screen.name,
         &lines,
         screen.detail_scroll,

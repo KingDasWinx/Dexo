@@ -3,6 +3,7 @@
 //! they grew out of kept it.
 
 pub mod agents;
+pub mod compare;
 pub mod connections;
 pub mod server;
 
@@ -104,6 +105,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     match model.shown_screen() {
         Screen::Agents => agents::render(frame, area, model, hits),
         Screen::Connections => connections::render(frame, area, model, hits),
+        Screen::Compare => compare::render(frame, area, model, hits),
         Screen::Server => server::render(frame, area, model, hits),
         Screen::Workbench => {}
         _ => {
@@ -125,6 +127,7 @@ pub fn hints(model: &Model) -> String {
     match model.shown_screen() {
         Screen::Agents => agents::hints(model),
         Screen::Connections => connections::hints(model),
+        Screen::Compare => compare::hints(model),
         Screen::Server => server::hints(model),
         _ => "Esc back".into(),
     }
@@ -252,10 +255,12 @@ pub fn list_pane(
 /// A bordered pane of text, scrolled `scroll` lines, with `footer` pinned to its bottom
 /// rows. Returns the inner rect of the footer, how far the text can scroll and how many
 /// of its lines show at once.
+#[allow(clippy::too_many_arguments)]
 pub fn text_pane(
     frame: &mut Frame,
     area: Rect,
     model: &Model,
+    hits: &mut HitMap,
     title: &str,
     lines: &[String],
     scroll: usize,
@@ -267,6 +272,7 @@ pub fn text_pane(
     let block: Block = crate::render::pane_block(model, title, false);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenDetail, area);
     let footer_rows = (footer.len() as u16).min(inner.height);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - footer_rows);
     let max_scroll = lines.len().saturating_sub(usize::from(body.height));
