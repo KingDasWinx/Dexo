@@ -260,3 +260,19 @@ fn a_restricted_row_says_what_it_is() {
         .expect("a restricted row");
     assert_eq!(node.label, "Users");
 }
+
+/// A menu that lists an action shows the key that does it.
+#[test]
+fn every_row_of_the_node_menus_shows_its_key() {
+    use dexo_tui::palette::{NodeMenuKind, node_menu_entries};
+    let model = Model::default();
+    for kind in [
+        NodeMenuKind::Connection,
+        NodeMenuKind::Relation,
+        NodeMenuKind::Object,
+    ] {
+        for entry in node_menu_entries(&model, kind) {
+            assert!(entry.shortcut.is_some(), "{} has no key", entry.title);
+        }
+    }
+}

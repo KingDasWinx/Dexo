@@ -175,7 +175,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **ES-08** `MINOR` Palette fuzzy search: "favor" lists unrelated commands above the exact matches
 - [x] **ES-12** `MINOR` Inspect Object shows only 4 of the 7 table privileges and no owner / comment / size / columns / keys / indexes
 - [x] **ES-13** `MINOR` Single click on a connection row connects/toggles it, on every other node it only selects
-- [ ] **ES-14** `MINOR` Actions menu on a connection has 18 entries and no keys for most of them
+- [x] **ES-14** `MINOR` Actions menu on a connection has 18 entries and no keys for most of them
 - [x] **ES-18** `MINOR` Toggle System Objects gives no sign of its state, and turning it on is only half-applied
 - [x] **ES-19** `MINOR` Show Favorites Only: header is a raw filter string, and there is no way back except the palette
 - [x] **ES-21** `MINOR` MySQL tree shows two rows `mysql.users [restricted]` and `mysql.roles [restricted]` with no explanation

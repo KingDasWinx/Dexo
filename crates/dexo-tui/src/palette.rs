@@ -119,6 +119,7 @@ pub fn node_menu_items(kind: NodeMenuKind) -> &'static [&'static str] {
             "explorer.copy_name",
             "connection.test",
             "explorer.refresh",
+            "explorer.refresh_all",
             "editor.history",
             "schema.security",
             "admin.sessions",
