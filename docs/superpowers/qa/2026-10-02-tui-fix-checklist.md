@@ -373,7 +373,7 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **SL-12** `COSMETIC` Command name case differs: "Reset layout" vs "Cycle Layout" / "Reset Settings"
 - [x] **SL-13** `COSMETIC` Settings footer does not list `e` (cycle theme) which the docs describe
 - [x] **SL-14** `COSMETIC` Explain placeholder is cut off at the pane edge instead of wrapped
-- [ ] **SL-15** `COSMETIC` Right click: grid and tree respond, editor, tabs and status bar do not
+- [x] **SL-15** `COSMETIC` Right click: grid and tree respond, editor, tabs and status bar do not
 - [ ] **SL-25** `COSMETIC` Button rows differ between dialogs
 - [ ] **SL-26** `COSMETIC` Muted text and Light-mode accents have low contrast
 - [ ] **SL-27** `COSMETIC` Compact status bar, 40x12 cut-offs

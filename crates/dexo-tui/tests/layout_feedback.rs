@@ -130,3 +130,37 @@ fn home_and_end_walk_the_document_strip() {
     update(&mut model, key(KeyCode::Home));
     assert_eq!(model.active_document, 0);
 }
+
+/// A right click on a tab or in the editor did nothing, not even move the focus.
+#[test]
+fn a_right_click_on_the_editor_focuses_it() {
+    use dexo_tui::model::Focus;
+    let mut model = Model {
+        focus: Focus::Explorer,
+        ..Model::default()
+    };
+    update(
+        &mut model,
+        Action::Resize {
+            width: 120,
+            height: 36,
+        },
+    );
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 36)).unwrap();
+    let mut hits = dexo_tui::mouse::HitMap::default();
+    terminal
+        .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let (column, row) = model.hits.center(dexo_tui::mouse::HitTarget::Editor);
+    update(
+        &mut model,
+        Action::Mouse(crossterm::event::MouseEvent {
+            kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Right),
+            column,
+            row,
+            modifiers: KeyModifiers::NONE,
+        }),
+    );
+    assert_eq!(model.focus, Focus::Editor);
+}

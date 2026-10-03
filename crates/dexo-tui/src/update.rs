@@ -4328,6 +4328,12 @@ fn handle_mouse_right_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> 
                 Vec::new()
             }
         }
+        // The editor and the tabs answer a right click too, with what a left click does:
+        // the focus moves, or the tab opens. They ignored it.
+        Some(HitTarget::Editor) => update(model, Action::Focus(FocusTarget::Editor)),
+        Some(HitTarget::DocumentTab(index) | HitTarget::DocumentTabClose(index)) => {
+            update(model, Action::SelectDocument { index })
+        }
         _ => Vec::new(),
     }
 }
