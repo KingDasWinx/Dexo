@@ -116,6 +116,12 @@ fn under_80_columns_one_column_enter_for_the_detail_esc_back() {
             "{name}: the detail is drawn too: {frame}"
         );
         assert!(frame.contains("Enter details"), "{name}: {frame}");
+        let status = frame.lines().last().unwrap_or_default();
+        assert_eq!(
+            status.matches("Enter").count(),
+            1,
+            "{name}: Enter is said for one thing: {status}"
+        );
         press(&mut model, KeyCode::Enter);
         let frame = paint(&mut model, 60, 20);
         assert!(frame.contains(button), "{name}: no detail: {frame}");

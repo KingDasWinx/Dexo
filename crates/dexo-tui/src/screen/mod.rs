@@ -346,7 +346,12 @@ pub fn hints(model: &Model, hits: &HitMap) -> String {
             hints
         }
     } else if folded {
-        format!("Enter details  {hints}")
+        // Enter shows the detail here; what it does there is said there.
+        let rest: Vec<&str> = hints
+            .split("  ")
+            .filter(|hint| !hint.starts_with("Enter "))
+            .collect();
+        format!("Enter details  {}", rest.join("  "))
     } else {
         hints
     }
