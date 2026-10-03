@@ -5181,7 +5181,9 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 /// detail -- does what the key does, unless the button cannot act now: then it says why.
 fn screen_press(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+    // Typed into a field, a letter is text, whatever button has it for a key.
     if crate::screen::held(model).is_none()
+        && !crate::screen::takes_text(model)
         && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
         && let Some(button) = crate::screen::buttons(model)
             .into_iter()

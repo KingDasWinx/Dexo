@@ -370,3 +370,20 @@ fn what_set_up_did_is_a_line_each() {
         .expect("the mark and the path on one line");
     assert!(done.contains("written"), "{done}");
 }
+
+/// A letter typed into the name is the name's, whatever button it is the key of: with
+/// Codex picked, whose file cannot be read, `s` (Set up, dimmed) was dropped from it.
+#[test]
+fn the_name_takes_the_letters_of_dimmed_buttons() {
+    let mut model = setup();
+    press(&mut model, KeyCode::Down);
+    press(&mut model, KeyCode::Enter);
+    press(&mut model, KeyCode::Down);
+    for _ in 0.."assistant".len() {
+        press(&mut model, KeyCode::Backspace);
+    }
+    for ch in "sys".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    assert_eq!(model.mcp_setup.name.as_str(), "sys");
+}

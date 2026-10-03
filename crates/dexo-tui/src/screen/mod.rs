@@ -155,6 +155,37 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
     }
 }
 
+/// Whether a field has the keys on the shown screen, being typed in: a letter there is
+/// text, never a button's key, and a paste goes into it.
+pub fn takes_text(model: &Model) -> bool {
+    use crate::widgets::form::FooterFocus;
+    if search(model).is_some_and(|search| search.typing) {
+        return true;
+    }
+    match model.shown_screen() {
+        Screen::Connections => {
+            let form = &model.connection_form;
+            form.open && form.focus < form.fields.len() && !form.on_choice()
+        }
+        Screen::Agents => {
+            (model.agents_view == agents::AgentsView::Setup
+                && section(model) == Section::Detail
+                && model.mcp_setup.focused() == Some(crate::screens::mcp_setup::Row::Name))
+                || model.mcp_profiles.grant_form.is_some()
+        }
+        Screen::Compare => {
+            let diff = &model.schema_diff;
+            diff.source_prompt
+                && diff.uses_file()
+                && diff.row == 2
+                && diff.footer == FooterFocus::Input
+        }
+        Screen::Server => model.admin.terminate.is_some(),
+        Screen::History => model.saved_queries.renaming.is_some(),
+        Screen::Workbench => false,
+    }
+}
+
 /// Ends the typing into the shown screen's search, keeping what was typed: a click
 /// elsewhere on the screen is done with it.
 pub fn stop_typing(model: &mut Model) {
