@@ -4182,12 +4182,10 @@ fn mouse_workbench(
                     model.connections.selected_profile = profile_index;
                 }
             }
-            let activate = doubled
-                || model
-                    .explorer
-                    .selected_node()
-                    .is_some_and(crate::screens::explorer::is_connection_node);
-            if activate {
+            // One rule for every row: a click selects, a double click opens (the arrow in
+            // front of the name opens with one). A connection used to connect on the
+            // first click.
+            if doubled {
                 activate_connection_or_catalog(model)
             } else {
                 Vec::new()

@@ -184,3 +184,50 @@ fn favorites_only_lists_a_star_in_a_closed_schema() {
         vec![ObjectId::new("table:orders")]
     );
 }
+
+/// One rule for every row: a click selects, a double click opens.
+#[test]
+fn a_connection_row_connects_on_a_double_click_like_every_other_row() {
+    use dexo_tui::mouse::{HitMap, HitTarget};
+    let profile = dexo_app::ConnectionProfile::new(
+        dexo_app::ConnectionId(uuid::Uuid::nil()),
+        None,
+        "prod",
+        "postgres",
+        "local",
+        serde_json::json!({}),
+        dexo_app::SecretRef::new("ref".into()),
+    );
+    let mut model = Model::default();
+    model.apply_size(120, 30);
+    model.connections.profiles = vec![dexo_tui::screens::connections::ConnectionRow {
+        temporary: false,
+        profile,
+        sessions: 0,
+    }];
+    model
+        .explorer
+        .sync_connection_roots(&model.connections.profiles, "prod");
+    let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
+    let mut hits = HitMap::default();
+    terminal
+        .draw(|frame| dexo_tui::render::render(frame, &model, &mut hits))
+        .unwrap();
+    model.hits = hits;
+    let (x, y) = model.hits.center(HitTarget::ExplorerNode(0));
+    let click = |model: &mut Model| {
+        update(
+            model,
+            Action::Mouse(crossterm::event::MouseEvent {
+                kind: crossterm::event::MouseEventKind::Down(crossterm::event::MouseButton::Left),
+                column: x,
+                row: y,
+                modifiers: KeyModifiers::NONE,
+            }),
+        )
+    };
+    let first = click(&mut model);
+    assert!(first.is_empty(), "one click dialled: {first:?}");
+    let second = click(&mut model);
+    assert!(!second.is_empty(), "a double click did nothing");
+}
