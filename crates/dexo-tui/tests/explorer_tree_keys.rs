@@ -63,9 +63,29 @@ fn a_click_on_the_arrow_opens_the_node() {
         profile,
         sessions: 0,
     }];
+    // Live and folded by hand: the arrow of a connection not dialled dials it instead
+    // (`explorer_open_connection.rs`).
+    let session = dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(1));
+    model
+        .connections
+        .upsert_session(dexo_tui::screens::connections::SessionRow {
+            id: session,
+            connection: "prod".into(),
+            transaction: dexo_driver_api::TransactionState::Idle,
+            generation: 1,
+            environment: "local".into(),
+            read_only: false,
+            driver: "postgres".into(),
+        });
+    model.connection.name = "prod".into();
+    model.active_session = Some(session);
+    model.session_generation = 1;
     model
         .explorer
         .sync_connection_roots(&model.connections.profiles, "prod");
+    model
+        .explorer
+        .collapse(&dexo_tui::screens::explorer::connection_id("prod"));
     let mut terminal = ratatui::Terminal::new(ratatui::backend::TestBackend::new(120, 30)).unwrap();
     let mut hits = HitMap::default();
     terminal

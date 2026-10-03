@@ -8142,6 +8142,35 @@ fn expand_selected_catalog(model: &mut Model) -> Vec<Effect> {
     let Some(id) = model.explorer.selected.clone() else {
         return Vec::new();
     };
+    // The catalog is read through the active session: a node to read whose connection is
+    // not on it -- not dialled, or another one -- brings that connection up first, as
+    // Enter on it does. It was asked of the wrong session, or of none and said
+    // `[loading]` for ever.
+    let owner_session = |model: &Model, owner: &str| {
+        model
+            .connections
+            .session_for(owner)
+            .map(|session| session.id)
+    };
+    if let Some(owner) = model.explorer.selected_connection_name().map(str::to_owned)
+        && model
+            .explorer
+            .selected_node()
+            .is_some_and(|node| node.children.is_empty())
+        && (owner_session(model, &owner).is_none()
+            || owner_session(model, &owner) != model.active_session)
+    {
+        let mut effects = activate_connection_node(model);
+        // Switched to a live one: the node read is still the one asked for.
+        if id != crate::screens::explorer::connection_id(&owner)
+            && owner_session(model, &owner)
+                .is_some_and(|session| model.active_session == Some(session))
+        {
+            model.explorer.select_in_connection(&owner, id);
+            effects.extend(expand_selected_catalog(model));
+        }
+        return effects;
+    }
     let operation = crate::runtime::OperationId::new();
     if model.explorer.expand_with(&id, operation) {
         catalog_load_effect(model, Some(id), operation, false)
