@@ -122,7 +122,7 @@ impl AdministrationProvider for PostgresSession {
                         CASE WHEN relation IS NULL THEN NULL ELSE relation::regclass::text END,
                         mode::text, granted, pid::text
                  FROM pg_locks
-                 WHERE pid IS NOT NULL",
+                 WHERE pid IS NOT NULL AND pid <> pg_backend_pid()",
                 &[],
             )
             .await

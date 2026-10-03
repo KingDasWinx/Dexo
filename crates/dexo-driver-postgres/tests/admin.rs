@@ -133,6 +133,25 @@ async fn sessions_locks_sizes_stats_variables_and_blocker() {
         drain(stream).await;
     });
     tokio::time::sleep(std::time::Duration::from_millis(400)).await;
+    // The locks are the others': the session that reads them takes some to read, which
+    // are not what anyone looks for.
+    let locks = provider.list_locks().await.unwrap();
+    assert!(
+        locks
+            .items
+            .iter()
+            .any(|lock| lock.relation.as_deref() == Some("admin_lock")),
+        "{:?}",
+        locks.items
+    );
+    assert!(
+        !locks
+            .items
+            .iter()
+            .any(|lock| lock.relation.as_deref() == Some("pg_locks")),
+        "the reader's own: {:?}",
+        locks.items
+    );
     let graph = provider.blocking_graph().await.unwrap();
     assert!(
         graph
