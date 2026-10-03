@@ -11012,6 +11012,8 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         KeyCode::F(2) => {
             if let Some(name) = picker.current().map(|query| query.name.clone()) {
+                // The name has the keys now; the search keeps what was typed.
+                picker.search.typing = false;
                 picker.renaming = Some(crate::widgets::text_input::TextInput::new(name));
                 picker.error = None;
             }

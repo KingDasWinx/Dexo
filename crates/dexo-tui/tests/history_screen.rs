@@ -456,3 +456,27 @@ fn delete_takes_the_runs_the_filters_hide() {
     press(&mut model, KeyCode::Esc);
     assert!(!shown(&model).contains(&"select count(*) from orders".to_string()));
 }
+
+/// F2 while the search is typed in: the rename has the keys, not the search under it.
+#[test]
+fn rename_ends_the_typing_into_the_search() {
+    let mut model = history_with_connections();
+    press(&mut model, KeyCode::Tab);
+    let pg_dev = uuid::Uuid::from_u128(7).to_string();
+    update(
+        &mut model,
+        Action::SavedQueriesLoaded(Ok(vec![dexo_storage::SavedQuery {
+            id: "q1".into(),
+            connection_id: pg_dev,
+            name: "Late orders".into(),
+            sql: "select 1".into(),
+        }])),
+    );
+    press(&mut model, KeyCode::Char('/'));
+    press(&mut model, KeyCode::Char('l'));
+    press(&mut model, KeyCode::F(2));
+    assert!(model.saved_queries.renaming.is_some());
+    assert!(!model.saved_queries.search.typing);
+    let frame = paint(&mut model);
+    assert!(!frame.contains("Enter keeps the search"), "{frame}");
+}
