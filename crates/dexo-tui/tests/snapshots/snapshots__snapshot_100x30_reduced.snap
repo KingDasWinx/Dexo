@@ -1,5 +1,6 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
+assertion_line: 114
 expression: "render_to_string(&snapshot_model(), 100, 30)"
 ---
 demo  local  public                                                                                 
@@ -7,7 +8,7 @@ demo  local  public
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────┐
 │  ● local▾                ││   1▸select 1                                                         │
 │>   ▸ public              ││                                                                      │
-│      mysql.… [restricted]││                                                                      │
+│      mysql.u… [no access]││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │
 │                          ││                                                                      │

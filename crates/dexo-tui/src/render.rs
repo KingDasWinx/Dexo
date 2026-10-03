@@ -4070,7 +4070,7 @@ mod tests {
         model.security.principals = vec!["reporter".into()];
         let text = render_to_string(&model, 100, 30);
         let role = text.find("> reporter").expect("the role");
-        let hint = text.find("Esc closes").expect("the hint");
+        let hint = text.find("Esc close").expect("the hint");
         assert!(role < hint, "{text}");
     }
 

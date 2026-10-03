@@ -8,7 +8,7 @@ demo  local  public
 │[n]ew [e]dit [a]ctions    │┌▸ Results─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  ● local▾                ││[Grid] Explain  Messages                                                                                                          │
 │>   ▸ public              ││WHERE w to filter                                                ORDER BY o to sort                                               │
-│      mysql.… [restricted]││                                                                                                                                  │
+│      mysql.u… [no access]││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
