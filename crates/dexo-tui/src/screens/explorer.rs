@@ -208,6 +208,9 @@ pub struct ExplorerState {
     /// tree; doing that for every character typed is the kind of cost that shows up as a
     /// stutter, so it rebuilds only when this moves.
     pub revision: u64,
+    /// Every id the user starred on the connection, as the store has them: the tree only
+    /// carries the stars of the nodes it has read.
+    pub stored_favorites: Vec<String>,
 }
 
 impl ExplorerState {
@@ -433,6 +436,60 @@ impl ExplorerState {
             let child_kind = child.kind.clone();
             Self::attach_offline_descendants(child, &child_id, &child_kind, by_parent);
         }
+    }
+
+    /// Whether every starred object is somewhere in the tree.
+    pub fn has_all_favorites(&self) -> bool {
+        let present = self.all_ids();
+        self.stored_favorites
+            .iter()
+            .all(|id| present.iter().any(|known| known.as_str() == id))
+    }
+
+    fn all_ids(&self) -> Vec<ObjectId> {
+        fn walk(nodes: &[ExplorerNode], out: &mut Vec<ObjectId>) {
+            for node in nodes {
+                out.push(node.id.clone());
+                walk(&node.children, out);
+            }
+        }
+        let mut out = Vec::new();
+        walk(&self.roots, &mut out);
+        out
+    }
+
+    /// Fills the connection's whole tree from a catalog snapshot, keeping what is open and
+    /// whatever is live: Show Favorites Only could not list a favorite whose schema had
+    /// never been expanded.
+    pub fn graft_catalog(&mut self, connection_name: &str, objects: Vec<CatalogObject>) {
+        self.touch();
+        let id = connection_id(connection_name);
+        let mut by_parent: std::collections::HashMap<Option<ObjectId>, Vec<CatalogObject>> =
+            std::collections::HashMap::new();
+        for object in objects {
+            by_parent
+                .entry(object.parent.clone())
+                .or_default()
+                .push(object);
+        }
+        let top_level = by_parent.remove(&None).unwrap_or_default();
+        let mut fresh: Vec<ExplorerNode> = top_level
+            .into_iter()
+            .map(|object| {
+                let child_id = object.id.clone();
+                let kind = object.kind.clone();
+                let mut node = ExplorerNode::from_object(object);
+                Self::attach_offline_descendants(&mut node, &child_id, &kind, &mut by_parent);
+                node
+            })
+            .collect();
+        if let Some(node) = Self::find_mut(&mut self.roots, &id) {
+            let before = std::mem::take(&mut node.children);
+            keep_expanded(&mut fresh, before);
+            node.children = fresh;
+        }
+        let favorites = self.stored_favorites.clone();
+        self.apply_favorites(&favorites);
     }
 
     pub fn replace_connection_catalog(
@@ -759,7 +816,7 @@ impl ExplorerState {
             if self.matches(node) {
                 out.push((owner.map(str::to_owned), node.id.clone()));
             }
-            if node.expanded {
+            if node.expanded || self.favorites_only {
                 self.collect_visible(&node.children, owner, out);
             }
         }
@@ -845,6 +902,7 @@ impl ExplorerState {
 
     pub fn apply_favorites(&mut self, ids: &[String]) {
         self.touch();
+        self.stored_favorites = ids.to_vec();
         fn walk(nodes: &mut [ExplorerNode], ids: &[String]) {
             for node in nodes {
                 node.favorite = ids.iter().any(|id| id == node.id.as_str());

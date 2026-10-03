@@ -1465,6 +1465,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         Action::ToggleFavorite => toggle_favorite(model),
         Action::ToggleFavoritesOnly => {
             model.explorer.favorites_only = !model.explorer.favorites_only;
+            // A starred table in a schema nobody opened is in the catalog snapshot, not in
+            // the tree yet: the tree is filled from it so the list is whole.
+            if model.explorer.favorites_only
+                && !model.explorer.has_all_favorites()
+                && model.catalog_connection == model.connection.name
+                && !model.catalog_objects.is_empty()
+            {
+                let objects = model.catalog_objects.clone();
+                let name = model.connection.name.clone();
+                model.explorer.graft_catalog(&name, objects);
+            }
             model.messages.info(if model.explorer.favorites_only {
                 "Showing favorites only; run Show Favorites Only again to see everything.".into()
             } else {

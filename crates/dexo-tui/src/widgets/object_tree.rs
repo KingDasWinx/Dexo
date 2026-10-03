@@ -303,13 +303,15 @@ fn collect(
             };
             lines.push(format!("{cursor} {}{label}", "  ".repeat(depth)));
         }
-        if node.expanded {
+        // Favorites only reads the whole tree: a starred table in a closed schema is listed,
+        // and the closed parents that are not starred take no indent.
+        if node.expanded || state.favorites_only {
             collect(
                 &node.children,
                 state,
                 profiles,
                 owner,
-                depth + 1,
+                depth + usize::from(!state.favorites_only || state.matches(node)),
                 lines,
                 marks,
                 active,

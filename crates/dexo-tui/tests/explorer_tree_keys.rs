@@ -137,3 +137,50 @@ fn the_welcome_leaves_the_focus_on_the_explorer_when_no_document_is_open() {
     assert!(!model.onboarding.open);
     assert_eq!(model.focus, Focus::Explorer);
 }
+
+/// A starred table in a schema nobody opened is listed by Show Favorites Only.
+#[test]
+fn favorites_only_lists_a_star_in_a_closed_schema() {
+    use dexo_driver_api::{CatalogObject, ObjectId, ObjectKind, QualifiedName};
+    let profile = dexo_app::ConnectionProfile::new(
+        dexo_app::ConnectionId(uuid::Uuid::nil()),
+        None,
+        "prod",
+        "postgres",
+        "local",
+        serde_json::json!({}),
+        dexo_app::SecretRef::new("ref".into()),
+    );
+    let mut model = Model::default();
+    model.connections.profiles = vec![dexo_tui::screens::connections::ConnectionRow {
+        temporary: false,
+        profile,
+        sessions: 1,
+    }];
+    model
+        .explorer
+        .sync_connection_roots(&model.connections.profiles, "prod");
+    let schema = CatalogObject::new(
+        ObjectId::new("schema:public"),
+        ObjectKind::Schema,
+        QualifiedName::new(None::<String>, Some("public"), "public"),
+        None,
+    );
+    let table = CatalogObject::new(
+        ObjectId::new("table:orders"),
+        ObjectKind::Table,
+        QualifiedName::new(None::<String>, Some("public"), "orders"),
+        Some(ObjectId::new("schema:public")),
+    );
+    model
+        .explorer
+        .apply_favorites(&["table:orders".to_string()]);
+    assert!(!model.explorer.has_all_favorites());
+    model.explorer.graft_catalog("prod", vec![schema, table]);
+    assert!(model.explorer.has_all_favorites());
+    model.explorer.favorites_only = true;
+    assert_eq!(
+        model.explorer.visible_ids(),
+        vec![ObjectId::new("table:orders")]
+    );
+}
