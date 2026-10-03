@@ -1,6 +1,6 @@
 use dexo_driver_api::QualifiedName;
 
-use crate::completion::{Catalog, resolve_source};
+use crate::completion::{Catalog, named_table, resolve_source};
 use crate::context::analyze;
 use crate::dialect::Dialect;
 
@@ -17,27 +17,26 @@ pub fn definition_at(sql: &str, cursor: usize, catalog: &dyn Catalog) -> Option<
         // The same FROM-list resolution completion uses: this file carried a copy of
         // the old `sql.contains("users u")` scan, with the same two defects.
         let context = analyze(sql, cursor, Dialect::Postgres);
-        let source = context
+        if let Some(table) = context
             .row_sources
             .iter()
-            .find(|source| source.qualifier().eq_ignore_ascii_case(alias))?;
-        let table = resolve_source(source, catalog)?;
-        if table
-            .columns
-            .iter()
-            .any(|column| column.eq_ignore_ascii_case(name))
+            .find(|source| source.qualifier().eq_ignore_ascii_case(alias))
+            .and_then(|source| resolve_source(source, catalog))
         {
-            return Some(split_target(&table.qualified, Some(name)));
+            if table
+                .columns
+                .iter()
+                .any(|column| column.eq_ignore_ascii_case(name))
+            {
+                return Some(split_target(&table.qualified, Some(name)));
+            }
+            return Some(split_target(&table.qualified, None));
         }
-        return Some(split_target(&table.qualified, None));
     }
-    catalog.tables().into_iter().find_map(|table| {
-        if table.name.eq_ignore_ascii_case(name) || table.qualified.eq_ignore_ascii_case(token) {
-            Some(split_target(&table.qualified, None))
-        } else {
-            None
-        }
-    })
+    // No alias: the table the name spells, `orders` or `public.orders` -- `public` was
+    // looked for as an alias and nothing else.
+    let parts: Vec<String> = token.split('.').map(str::to_string).collect();
+    named_table(&parts, catalog).map(|table| split_target(&table.qualified, None))
 }
 
 fn token_around(sql: &str, cursor: usize) -> &str {
@@ -93,5 +92,13 @@ mod tests {
     fn goto_definition_resolves_qualified_and_aliased_names() {
         let target = definition_at("select o.id from public.orders o", 9, &catalog()).unwrap();
         assert_eq!(target.display_unquoted(), "db.public.orders.id");
+    }
+
+    /// A table named with its schema: `public` was taken for an alias, none was found,
+    /// and Go To Definition said there was no definition.
+    #[test]
+    fn goto_definition_resolves_a_schema_qualified_table() {
+        let target = definition_at("select * from public.orders", 24, &catalog()).unwrap();
+        assert_eq!(target.display_unquoted(), "db.public.orders");
     }
 }
