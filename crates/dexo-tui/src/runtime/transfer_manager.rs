@@ -5,9 +5,9 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use dexo_app::transfer::{
-    ErrorStrategy, ExportError, ExportProgress, FormatOptions, NativeHandle, NativeStatus,
-    NativeToolKind, NativeToolRequest, NativeToolRunner, RecordingSink, TokioProcessRunner,
-    decode_document, export_row_batches, export_rows, fit_to_table, import_rows, target_columns,
+    ErrorStrategy, ExportError, ExportProgress, FormatOptions, ImportRequest, ImportSource,
+    NativeHandle, NativeStatus, NativeToolKind, NativeToolRequest, NativeToolRunner, RecordingSink,
+    TokioProcessRunner, export_row_batches, export_rows,
 };
 use dexo_driver_api::{DbValue, QualifiedName, Session};
 use secrecy::SecretString;
@@ -277,8 +277,8 @@ async fn run_import(
     }
 }
 
-/// Reads `path`, fits its rows to the table and writes them. The error is a sentence for
-/// the dialog.
+/// Reads `path` a batch at a time, fits its rows to the table and writes them. The error
+/// is a sentence for the dialog.
 #[allow(clippy::too_many_arguments)]
 async fn import_file(
     session: &Arc<dyn Session>,
@@ -295,54 +295,22 @@ async fn import_file(
         || path.display().to_string(),
         |name| name.to_string_lossy().into_owned(),
     );
-    let decoded = tokio::task::spawn_blocking({
-        let path = path.to_path_buf();
-        let name = name.clone();
-        move || {
-            let bytes = std::fs::read(&path)
-                .map_err(|error| format!("{} cannot be read: {error}.", path.display()))?;
-            decode_document(format, &FormatOptions::default(), &bytes).map_err(|error| {
-                format!(
-                    "{name} could not be read as {}: {error}. Choose the format that matches the file.",
-                    format_name(format)
-                )
-            })
-        }
-    })
-    .await
-    .map_err(|error| error.to_string())??;
-    let (mut columns, mut rows) = decoded;
     let table = target.display_unquoted();
-    // The table's own columns: the file's are checked against them and spelled as the
-    // table spells them, and a blank cell in a number column is NULL.
-    if let Some(catalog) = session.catalog() {
-        let known = target_columns(catalog, &table).await?;
-        (columns, rows) = fit_to_table(&table, columns, rows, &known)?;
-    }
-    // The line of the file each row is on: the header is the first line of a CSV or TSV.
-    let first_line = match format {
-        dexo_app::transfer::TransferFormat::Csv | dexo_app::transfer::TransferFormat::Tsv => 2,
-        _ => 1,
-    };
-    let rows: Vec<(usize, Vec<DbValue>, Vec<String>)> = rows
-        .into_iter()
-        .enumerate()
-        .map(|(index, values)| {
-            let original = values.iter().map(original_text).collect();
-            (index + first_line, values, original)
-        })
-        .collect();
     let rejects = (strategy == ErrorStrategy::RejectFile)
         .then(|| path.with_file_name(format!("{name}.rejects.csv")));
     let tx = runtime.map(|access| access.action_tx.clone());
-    let report = import_rows(
+    let report = dexo_app::transfer::import_file(
         writer,
-        target,
-        &columns,
-        rows,
-        strategy,
+        session.catalog(),
+        ImportRequest {
+            source: ImportSource::File(path.to_path_buf()),
+            format,
+            target: target.clone(),
+            mapping: Vec::new(),
+            strategy,
+            reject_path: rejects.clone(),
+        },
         cancel,
-        rejects.as_deref(),
         |rows| {
             if let Some(tx) = &tx {
                 let _ = tx.try_send(Action::TransferProgress {
@@ -366,38 +334,6 @@ async fn import_file(
         ));
     }
     Ok(message)
-}
-
-fn format_name(format: dexo_app::transfer::TransferFormat) -> &'static str {
-    use dexo_app::transfer::TransferFormat;
-    match format {
-        TransferFormat::Csv => "CSV",
-        TransferFormat::Tsv => "TSV",
-        TransferFormat::Json => "JSON",
-        TransferFormat::Jsonl => "JSON Lines",
-        TransferFormat::Sql => "SQL",
-    }
-}
-
-/// A cell as the rejects file shows it.
-fn original_text(value: &DbValue) -> String {
-    match value {
-        DbValue::Null => "NULL".into(),
-        DbValue::Bool(value) => value.to_string(),
-        DbValue::I64(value) => value.to_string(),
-        DbValue::U64(value) => value.to_string(),
-        DbValue::Decimal(text) | DbValue::Text(text) | DbValue::Json(text) => text.clone(),
-        DbValue::Native { text, .. } => text.clone(),
-        DbValue::Bytes(bytes) => {
-            format!(
-                "\\x{}",
-                bytes
-                    .iter()
-                    .map(|byte| format!("{byte:02x}"))
-                    .collect::<String>()
-            )
-        }
-    }
 }
 
 async fn run_native(

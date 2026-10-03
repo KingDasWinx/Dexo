@@ -345,3 +345,69 @@ fn params_bind_by_name() {
         .success()
         .stdout("{\"a\":\"1\",\"again\":\"2\",\"b\":\"2\"}\n");
 }
+
+/// `import` reads its file a batch at a time through the TUI's own path: columns go to
+/// the table's by name, `--mapping` renames or leaves one out, a rejected row goes to a
+/// file beside the input, and JSON Lines comes from standard input too.
+#[test]
+fn import_maps_by_name_sets_rejects_aside_and_reads_standard_input() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    let dexo = || {
+        let mut command = Command::cargo_bin("dexo").unwrap();
+        command.env("DEXO_DATA_HOME", &data).env("HOME", dir.path());
+        command
+    };
+    dexo()
+        .args(["connections", "add", "--name", "lite", "--driver", "sqlite"])
+        .args(["--environment", "local", "--path"])
+        .arg(dir.path().join("lite.db"))
+        .assert()
+        .success();
+    dexo()
+        .args(["query", "--connection", "lite", "--non-interactive"])
+        .args([
+            "--sql",
+            "create table t (id int primary key, email text, qty int)",
+        ])
+        .assert()
+        .success();
+    let csv = dir.path().join("in.csv");
+    std::fs::write(
+        &csv,
+        "junk,mail,ID,qty\nz,a@x,1,5\nz,b@x,2,6\nz,dup@x,1,7\n",
+    )
+    .unwrap();
+    let rejects = dir.path().join("in.csv.rejects.csv");
+    dexo()
+        .args(["import", "--connection", "lite", "--table", "t"])
+        .args(["--mapping", "mail=email", "--mapping", "junk="])
+        .args(["--on-error", "reject", "--file"])
+        .arg(&csv)
+        .assert()
+        .success()
+        .stdout(format!(
+            "committed=2 skipped=0 rejected=1 rejects={}\n",
+            rejects.display()
+        ));
+    let set_aside = std::fs::read_to_string(&rejects).unwrap();
+    assert!(
+        set_aside.starts_with("line,error,fields\n4,"),
+        "{set_aside}"
+    );
+    dexo()
+        .args(["import", "--connection", "lite", "--table", "t"])
+        .args(["--format", "jsonl", "--mapping", "mail=email"])
+        .write_stdin("{\"id\":3,\"mail\":\"c@x\"}\n")
+        .assert()
+        .success()
+        .stdout("committed=1 skipped=0 rejected=0\n");
+    dexo()
+        .args(["query", "--connection", "lite", "--non-interactive"])
+        .args(["--format", "jsonl", "--sql", "select id, email, qty from t order by id"])
+        .assert()
+        .success()
+        .stdout(
+            "{\"email\":\"a@x\",\"id\":1,\"qty\":5}\n{\"email\":\"b@x\",\"id\":2,\"qty\":6}\n{\"email\":\"c@x\",\"id\":3,\"qty\":null}\n",
+        );
+}

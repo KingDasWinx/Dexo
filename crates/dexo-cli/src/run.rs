@@ -344,60 +344,42 @@ fn run_import(
     non_interactive: bool,
 ) -> anyhow::Result<()> {
     let _ = non_interactive;
-    let bytes = if let Some(path) = file {
-        std::fs::read(path)?
-    } else {
-        let mut buf = Vec::new();
-        std::io::Read::read_to_end(&mut std::io::stdin(), &mut buf)?;
-        buf
-    };
-    let mut options = dexo_app::transfer::FormatOptions::default();
-    if format == TransferCliFormat::Tsv {
-        options.delimiter = b'\t';
-    }
-    let detected = dexo_app::transfer::detect(&bytes);
-    let _ = detected;
-    let (columns, decoded) =
-        dexo_app::transfer::decode_document(to_transfer_format(format), &options, &bytes)
-            .map_err(|error| anyhow::anyhow!(error))?;
     let mapping =
         dexo_app::transfer::parse_mapping(&mapping).map_err(|error| anyhow::anyhow!(error))?;
-    let (mapped, sources) = dexo_app::transfer::map_columns(&columns, &mapping)
-        .map_err(|error| anyhow::anyhow!(error))?;
     let strategy = match on_error {
         OnError::Stop => dexo_app::transfer::ErrorStrategy::Stop,
         OnError::Skip => dexo_app::transfer::ErrorStrategy::Skip,
         OnError::Reject => dexo_app::transfer::ErrorStrategy::RejectFile,
     };
-    let rows: Vec<_> = decoded
-        .into_iter()
-        .enumerate()
-        .map(|(index, values)| {
-            let values: Vec<_> = sources
-                .iter()
-                .map(|&source| {
-                    values
-                        .get(source)
-                        .cloned()
-                        .unwrap_or(dexo_driver_api::DbValue::Null)
-                })
-                .collect();
-            let original = values.iter().map(|value| format!("{value:?}")).collect();
-            (index + 2, values, original)
-        })
-        .collect();
-    tokio::runtime::Runtime::new()?.block_on(import_live(
-        registry, connection, table, mapped, rows, strategy,
-    ))
+    // Beside the file, as the TUI writes it; read from standard input, in this folder.
+    let reject_path =
+        (strategy == dexo_app::transfer::ErrorStrategy::RejectFile).then(|| match &file {
+            Some(path) => {
+                let mut name = path.file_name().unwrap_or_default().to_os_string();
+                name.push(".rejects.csv");
+                path.with_file_name(name)
+            }
+            None => std::path::PathBuf::from("stdin.rejects.csv"),
+        });
+    let source = match file {
+        Some(path) => dexo_app::transfer::ImportSource::File(path),
+        None => dexo_app::transfer::ImportSource::Stream(Box::new(std::io::stdin())),
+    };
+    let request = dexo_app::transfer::ImportRequest {
+        source,
+        format: to_transfer_format(format),
+        target: dexo_app::parse_qualified(&table),
+        mapping,
+        strategy,
+        reject_path,
+    };
+    tokio::runtime::Runtime::new()?.block_on(import_live(registry, connection, request))
 }
 
 async fn import_live(
     registry: DriverRegistry,
     connection: String,
-    table: String,
-    columns: Vec<String>,
-    rows: Vec<(usize, Vec<dexo_driver_api::DbValue>, Vec<String>)>,
-    strategy: dexo_app::transfer::ErrorStrategy,
+    request: dexo_app::transfer::ImportRequest,
 ) -> anyhow::Result<()> {
     let paths = AppPaths::discover()?;
     let db = Database::open(&paths.database)?;
@@ -420,20 +402,26 @@ async fn import_live(
     let writer = session
         .bulk()
         .ok_or_else(|| AppError::new(ErrorCategory::Capability, "bulk import is unavailable"))?;
-    let target = dexo_app::parse_qualified(&table);
-    let report = dexo_app::transfer::import_rows(
+    let reject_path = request.reject_path.clone();
+    let report = dexo_app::transfer::import_file(
         writer,
-        &target,
-        &columns,
-        rows,
-        strategy,
+        session.catalog(),
+        request,
         &std::sync::atomic::AtomicBool::new(false),
-        None,
         |_| {},
     )
     .await
     .map_err(|error| anyhow::anyhow!(error))?;
-    println!("committed={} skipped={}", report.committed, report.skipped);
+    print!(
+        "committed={} skipped={} rejected={}",
+        report.committed,
+        report.skipped,
+        report.rejected.len()
+    );
+    match reject_path.filter(|_| !report.rejected.is_empty()) {
+        Some(path) => println!(" rejects={}", path.display()),
+        None => println!(),
+    }
     Ok(())
 }
 

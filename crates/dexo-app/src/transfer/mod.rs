@@ -6,11 +6,15 @@ pub mod map;
 pub mod native_tool;
 pub mod rejects;
 
-pub use codec::{FormatOptions, StreamEncoder, TransferFormat, decode_document, encode_document};
+pub use codec::{
+    Decoded, FormatOptions, StreamEncoder, TransferFormat, decode_document, decode_stream,
+    encode_document,
+};
 pub use detect::{Detection, detect};
 pub use export::{ExportError, ExportProgress, RecordingSink, export_row_batches, export_rows};
 pub use import::{
-    ErrorStrategy, ImportReport, TargetColumn, fit_to_table, import_rows, target_columns,
+    ErrorStrategy, ImportReport, ImportRequest, ImportSource, TargetColumn, import_file,
+    import_rows, target_columns,
 };
 pub use map::{ColumnMapping, map_columns, parse_mapping};
 pub use native_tool::{

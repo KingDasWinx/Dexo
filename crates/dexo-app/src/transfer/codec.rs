@@ -1,3 +1,5 @@
+use std::io::Read;
+
 use dexo_driver_api::DbValue;
 
 use crate::data::copy::{SqlDialect, sql_literal};
@@ -9,6 +11,19 @@ pub enum TransferFormat {
     Json,
     Jsonl,
     Sql,
+}
+
+impl TransferFormat {
+    /// As a person names it.
+    pub fn name(self) -> &'static str {
+        match self {
+            TransferFormat::Csv => "CSV",
+            TransferFormat::Tsv => "TSV",
+            TransferFormat::Json => "JSON",
+            TransferFormat::Jsonl => "JSON Lines",
+            TransferFormat::Sql => "SQL",
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -63,18 +78,172 @@ pub fn decode_document(
     options: &FormatOptions,
     bytes: &[u8],
 ) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
-    let text = decode_text(options.encoding, bytes)?;
+    let mut columns = Vec::new();
+    let mut rows = Vec::new();
+    decode_stream(
+        format,
+        options,
+        &mut || -> std::io::Result<Box<dyn Read + '_>> { Ok(Box::new(bytes)) },
+        usize::MAX,
+        &mut |decoded| {
+            match decoded {
+                Decoded::Columns(names) => columns = names,
+                Decoded::Rows(batch) => rows.extend(batch.into_iter().map(|(_, values)| values)),
+            }
+            true
+        },
+    )?;
+    Ok((columns, rows))
+}
+
+/// What a file read a batch at a time hands on: its columns, once and first, then its
+/// rows, each with the line of the file it starts on -- in a JSON array, its place there.
+#[derive(Debug, PartialEq)]
+pub enum Decoded {
+    Columns(Vec<String>),
+    Rows(Vec<(usize, Vec<DbValue>)>),
+}
+
+/// Reads what `open` opens and hands it to `send` as it goes, `batch` rows at a time, so
+/// no file is held whole; `send` returns false to stop. JSON is opened twice: its
+/// columns are every key of every object, which takes reading them all first.
+pub fn decode_stream<'a>(
+    format: TransferFormat,
+    options: &FormatOptions,
+    open: &mut dyn FnMut() -> std::io::Result<Box<dyn Read + 'a>>,
+    batch: usize,
+    send: &mut dyn FnMut(Decoded) -> bool,
+) -> Result<(), String> {
+    let mut open = || {
+        open()
+            .map(|inner| Decoding::new(inner, options.encoding))
+            .map_err(|error| error.to_string())
+    };
     match format {
-        TransferFormat::Csv => decode_delimited(&text, options.delimiter, options),
+        TransferFormat::Csv => read_delimited(open()?, options.delimiter, options, batch, send),
         // The format says the delimiter, as it does when writing: a caller that forgot
         // to set one read a whole header line as a single column.
-        TransferFormat::Tsv => decode_delimited(&text, b'\t', options),
-        TransferFormat::Json => decode_json(&text, true),
-        TransferFormat::Jsonl => decode_jsonl(&text),
+        TransferFormat::Tsv => read_delimited(open()?, b'\t', options, batch, send),
+        TransferFormat::Json | TransferFormat::Jsonl => {
+            let mut columns: Vec<String> = Vec::new();
+            each_object(format, open()?, &mut |_, object| {
+                for key in object.keys() {
+                    if !columns.contains(key) {
+                        columns.push(key.clone());
+                    }
+                }
+                true
+            })?;
+            if !send(Decoded::Columns(columns.clone())) {
+                return Ok(());
+            }
+            let mut rows = Batch::new(batch, send);
+            each_object(format, open()?, &mut |line, object| {
+                let values = columns
+                    .iter()
+                    .map(|column| json_to_value(object.get(column).unwrap_or(&serde_json::Value::Null)))
+                    .collect();
+                rows.push(line, values)
+            })?;
+            rows.finish();
+            Ok(())
+        }
         TransferFormat::Sql => Err(
             "an SQL file is a script, not data to import: run it with `dexo run --file`, or import CSV or JSON"
                 .into(),
         ),
+    }
+}
+
+/// Rows gathered until there are `size` of them, then sent on.
+struct Batch<'s> {
+    size: usize,
+    rows: Vec<(usize, Vec<DbValue>)>,
+    send: &'s mut dyn FnMut(Decoded) -> bool,
+    stopped: bool,
+}
+
+impl<'s> Batch<'s> {
+    fn new(size: usize, send: &'s mut dyn FnMut(Decoded) -> bool) -> Self {
+        Self {
+            size,
+            rows: Vec::new(),
+            send,
+            stopped: false,
+        }
+    }
+
+    /// Whether to go on.
+    fn push(&mut self, line: usize, values: Vec<DbValue>) -> bool {
+        self.rows.push((line, values));
+        if self.rows.len() >= self.size {
+            self.stopped = !(self.send)(Decoded::Rows(std::mem::take(&mut self.rows)));
+        }
+        !self.stopped
+    }
+
+    fn finish(self) {
+        if !self.stopped && !self.rows.is_empty() {
+            (self.send)(Decoded::Rows(self.rows));
+        }
+    }
+}
+
+/// Reads `inner` as text in `encoding` and gives it out as UTF-8, its byte order mark
+/// left out.
+struct Decoding<R> {
+    inner: R,
+    decoder: encoding_rs::Decoder,
+    input: Vec<u8>,
+    output: Vec<u8>,
+    at: usize,
+    done: bool,
+}
+
+impl<R: Read> Decoding<R> {
+    fn new(inner: R, encoding: &'static encoding_rs::Encoding) -> Self {
+        Self {
+            inner,
+            decoder: encoding.new_decoder(),
+            input: vec![0; 64 * 1024],
+            output: Vec::new(),
+            at: 0,
+            done: false,
+        }
+    }
+}
+
+impl<R: Read> Read for Decoding<R> {
+    fn read(&mut self, buf: &mut [u8]) -> std::io::Result<usize> {
+        while self.at == self.output.len() {
+            if self.done {
+                return Ok(0);
+            }
+            let read = self.inner.read(&mut self.input)?;
+            let last = read == 0;
+            let room = self
+                .decoder
+                .max_utf8_buffer_length(read)
+                .ok_or_else(|| std::io::Error::other("input too large to decode"))?;
+            self.output.clear();
+            self.output.resize(room, 0);
+            let (_, _, written, had_errors) =
+                self.decoder
+                    .decode_to_utf8(&self.input[..read], &mut self.output, last);
+            if had_errors {
+                return Err(std::io::Error::new(
+                    std::io::ErrorKind::InvalidData,
+                    "input is not valid in the declared encoding",
+                ));
+            }
+            self.output.truncate(written);
+            self.at = 0;
+            self.done = last;
+        }
+        let count = buf.len().min(self.output.len() - self.at);
+        buf[..count].copy_from_slice(&self.output[self.at..self.at + count]);
+        self.at += count;
+        Ok(count)
     }
 }
 
@@ -285,24 +454,18 @@ pub(crate) fn sql_insert(
     format!("INSERT INTO {table} ({cols}) VALUES ({values});")
 }
 
-fn decode_text(encoding: &'static encoding_rs::Encoding, bytes: &[u8]) -> Result<String, String> {
-    let (text, _, had_errors) = encoding.decode(bytes);
-    if had_errors {
-        return Err("input is not valid in the declared encoding".into());
-    }
-    Ok(text.into_owned())
-}
-
-fn decode_delimited(
-    text: &str,
+fn read_delimited(
+    reader: impl Read,
     delimiter: u8,
     options: &FormatOptions,
-) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
+    batch: usize,
+    send: &mut dyn FnMut(Decoded) -> bool,
+) -> Result<(), String> {
     let mut reader = csv::ReaderBuilder::new()
         .delimiter(delimiter)
         .has_headers(options.header)
-        .from_reader(text.as_bytes());
-    let columns = if options.header {
+        .from_reader(reader);
+    let mut columns: Vec<String> = if options.header {
         reader
             .headers()
             .map_err(|error| error.to_string())?
@@ -312,23 +475,40 @@ fn decode_delimited(
     } else {
         Vec::new()
     };
-    let mut rows = Vec::new();
-    for (index, record) in reader.records().enumerate() {
-        let record = record.map_err(|error| format!("line {}: {error}", index + 2))?;
+    let mut record = csv::StringRecord::new();
+    let mut line = next_record(&mut reader, &mut record)?;
+    if !options.header && line.is_some() {
+        columns = (0..record.len()).map(|i| format!("c{i}")).collect();
+    }
+    if !send(Decoded::Columns(columns)) {
+        return Ok(());
+    }
+    let mut rows = Batch::new(batch, send);
+    while let Some(at) = line {
         let values = record
             .iter()
             .map(|field| parse_field(field, options))
             .collect();
-        rows.push(values);
+        if !rows.push(at, values) {
+            return Ok(());
+        }
+        line = next_record(&mut reader, &mut record)?;
     }
-    let columns = if columns.is_empty() {
-        (0..rows.first().map(Vec::len).unwrap_or(0))
-            .map(|i| format!("c{i}"))
-            .collect()
-    } else {
-        columns
-    };
-    Ok((columns, rows))
+    rows.finish();
+    Ok(())
+}
+
+/// Reads the next record into `record` and says the line it starts on; None at the end.
+fn next_record(
+    reader: &mut csv::Reader<impl Read>,
+    record: &mut csv::StringRecord,
+) -> Result<Option<usize>, String> {
+    let line = reader.position().line() as usize;
+    match reader.read_record(record) {
+        Ok(true) => Ok(Some(line)),
+        Ok(false) => Ok(None),
+        Err(error) => Err(format!("line {line}: {error}")),
+    }
 }
 
 fn parse_field(field: &str, options: &FormatOptions) -> DbValue {
@@ -348,56 +528,70 @@ fn decode_hex(text: &str) -> Vec<u8> {
         .collect()
 }
 
-fn decode_json(text: &str, array: bool) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
-    let value: serde_json::Value = serde_json::from_str(text).map_err(|error| error.to_string())?;
-    let rows = if array {
-        value
-            .as_array()
-            .ok_or_else(|| "JSON export must be an array".to_string())?
-            .clone()
-    } else {
-        vec![value]
-    };
-    json_rows(rows)
-}
-
-fn decode_jsonl(text: &str) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
-    let mut rows = Vec::new();
-    for (index, line) in text.lines().enumerate() {
-        if line.trim().is_empty() {
-            continue;
-        }
-        let value: serde_json::Value =
-            serde_json::from_str(line).map_err(|error| format!("line {}: {error}", index + 1))?;
-        rows.push(value);
-    }
-    json_rows(rows)
-}
-
-fn json_rows(objects: Vec<serde_json::Value>) -> Result<(Vec<String>, Vec<Vec<DbValue>>), String> {
-    let mut columns = Vec::new();
-    for object in &objects {
-        if let Some(map) = object.as_object() {
-            for key in map.keys() {
-                if !columns.contains(key) {
-                    columns.push(key.clone());
-                }
+/// Hands `visit` each object of a JSON array, with its place in it, or of a JSON Lines
+/// file, with its line, until `visit` returns false.
+fn each_object(
+    format: TransferFormat,
+    reader: impl Read,
+    visit: &mut dyn FnMut(usize, &serde_json::Map<String, serde_json::Value>) -> bool,
+) -> Result<(), String> {
+    let reader = std::io::BufReader::new(reader);
+    if format == TransferFormat::Jsonl {
+        for (index, line) in std::io::BufRead::lines(reader).enumerate() {
+            let line = line.map_err(|error| format!("line {}: {error}", index + 1))?;
+            if line.trim().is_empty() {
+                continue;
+            }
+            let value: serde_json::Value = serde_json::from_str(&line)
+                .map_err(|error| format!("line {}: {error}", index + 1))?;
+            let object = value
+                .as_object()
+                .ok_or_else(|| format!("line {}: JSON row must be an object", index + 1))?;
+            if !visit(index + 1, object) {
+                break;
             }
         }
+        return Ok(());
     }
-    let mut rows = Vec::new();
-    for object in objects {
-        let map = object
+    let mut stopped = false;
+    let mut take = |place: usize, value: serde_json::Value| -> Result<bool, String> {
+        let object = value
             .as_object()
-            .ok_or_else(|| "JSON row must be an object".to_string())?;
-        rows.push(
-            columns
-                .iter()
-                .map(|column| json_to_value(map.get(column).unwrap_or(&serde_json::Value::Null)))
-                .collect(),
-        );
+            .ok_or_else(|| format!("item {place}: JSON row must be an object"))?;
+        stopped = !visit(place, object);
+        Ok(!stopped)
+    };
+    let mut deserializer = serde_json::Deserializer::from_reader(reader);
+    let read = serde::Deserializer::deserialize_seq(&mut deserializer, Elements(&mut take))
+        .and_then(|()| deserializer.end());
+    match read {
+        Ok(()) => Ok(()),
+        // What is left after a stop is not read, and not an error.
+        Err(_) if stopped => Ok(()),
+        Err(error) => Err(error.to_string()),
     }
-    Ok((columns, rows))
+}
+
+/// A JSON array read one element at a time, never whole.
+struct Elements<'v>(&'v mut dyn FnMut(usize, serde_json::Value) -> Result<bool, String>);
+
+impl<'de> serde::de::Visitor<'de> for Elements<'_> {
+    type Value = ();
+
+    fn expecting(&self, formatter: &mut std::fmt::Formatter) -> std::fmt::Result {
+        formatter.write_str("a JSON array of objects")
+    }
+
+    fn visit_seq<A: serde::de::SeqAccess<'de>>(self, mut seq: A) -> Result<(), A::Error> {
+        let mut place = 0;
+        while let Some(value) = seq.next_element::<serde_json::Value>()? {
+            place += 1;
+            if !(self.0)(place, value).map_err(serde::de::Error::custom)? {
+                break;
+            }
+        }
+        Ok(())
+    }
 }
 
 fn json_to_value(value: &serde_json::Value) -> DbValue {
