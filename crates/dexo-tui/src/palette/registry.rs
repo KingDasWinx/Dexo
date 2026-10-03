@@ -678,6 +678,17 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::OpenAdmin),
         },
         CommandSpec {
+            id: "mcp.setup",
+            title: "Set Up an Agent (MCP)…",
+            keywords: &[
+                "mcp", "agent", "claude", "codex", "cursor", "gemini", "windsurf", "vscode",
+                "install", "connect",
+            ],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::OpenMcpSetup),
+        },
+        CommandSpec {
             id: "mcp.profiles",
             title: "MCP Profiles",
             keywords: &["mcp", "allowlist", "policy", "grant"],

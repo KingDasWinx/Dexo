@@ -713,8 +713,8 @@ mod tests {
     fn palette_exposes_only_curated_commands() {
         let entries = palette_entries(&Model::default());
         let ids: std::collections::BTreeSet<_> = entries.iter().map(|entry| entry.id).collect();
-        assert_eq!(entries.len(), 159);
-        assert_eq!(ids.len(), 159);
+        assert_eq!(entries.len(), 160);
+        assert_eq!(ids.len(), 160);
     }
 
     #[test]

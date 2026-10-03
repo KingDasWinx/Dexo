@@ -2455,8 +2455,41 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.messages.info(preview);
             Vec::new()
         }
+        Action::McpClientsLoaded {
+            clients,
+            command,
+            project,
+        } => {
+            let setup = &mut model.mcp_setup;
+            setup.clients = clients;
+            setup.command = command;
+            setup.project = project;
+            setup.selected = setup.selected.min(setup.clients.len().saturating_sub(1));
+            prepare_mcp_setup(model);
+            Vec::new()
+        }
+        Action::McpClientSetUp { result } => {
+            model.mcp_setup.busy = false;
+            model.mcp_setup.outcome = Some(result);
+            Vec::new()
+        }
+        Action::OpenMcpSetup => {
+            model.agents_view = crate::screen::agents::AgentsView::Setup;
+            go_to_screen(model, crate::model::Screen::Agents)
+        }
         Action::McpProfilesLoaded { profiles } => {
+            // With no profile yet, the Agents screen opens on setting one up, not on an
+            // empty list of approvals.
+            let first_time = profiles.is_empty()
+                && model.mcp_profiles.profiles.is_empty()
+                && model.screen == crate::model::Screen::Agents
+                && model.agents_view == crate::screen::agents::AgentsView::Approvals
+                && model.mcp_audit.pending.is_empty();
             model.mcp_profiles.load_profiles(profiles);
+            prepare_mcp_setup(model);
+            if first_time {
+                model.agents_view = crate::screen::agents::AgentsView::Setup;
+            }
             if std::mem::take(&mut model.mcp_profiles.grant_when_loaded) {
                 open_grant_form(model);
             }
@@ -4211,10 +4244,10 @@ fn mouse_agents(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         && let Some(view) = AgentsView::ALL.get(index).copied()
     {
         model.agents_view = view;
-        return if view == AgentsView::Profiles {
-            vec![Effect::LoadMcpProfiles]
-        } else {
-            Vec::new()
+        return match view {
+            AgentsView::Profiles => vec![Effect::LoadMcpProfiles],
+            AgentsView::Setup => vec![Effect::LoadMcpClients],
+            _ => Vec::new(),
         };
     }
     match model.agents_view {
@@ -4226,7 +4259,36 @@ fn mouse_agents(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
             Vec::new()
         }
         AgentsView::Profiles => mouse_mcp_profiles(model, hit),
+        AgentsView::Setup => mouse_mcp_setup(model, hit),
     }
+}
+
+/// A client picked from the list; a row of the form focused, or changed by its arrows;
+/// the buttons.
+fn mouse_mcp_setup(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    use crate::widgets::form::FooterFocus;
+    let profiles = mcp_profile_names(model);
+    let setup = &mut model.mcp_setup;
+    match hit {
+        Some(HitTarget::ListRow(index)) if index != setup.selected => {
+            setup.select(index as isize - setup.selected as isize);
+        }
+        Some(HitTarget::FormField(row)) => {
+            setup.row = row;
+            setup.footer = FooterFocus::Input;
+        }
+        Some(HitTarget::FormChoice { index, step }) => {
+            setup.row = index;
+            setup.footer = FooterFocus::Input;
+            setup.change(isize::from(step), &profiles);
+        }
+        Some(HitTarget::FooterSubmit) => return submit_mcp_setup(model),
+        Some(HitTarget::FooterCancel) => {
+            model.sections[crate::model::Screen::Agents.index()] = crate::screen::Section::List;
+        }
+        _ => {}
+    }
+    Vec::new()
 }
 
 fn mouse_mcp_audit(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
@@ -4655,6 +4717,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
     if overlay.is_none()
         && model.screen != crate::model::Screen::Workbench
         && crate::screen::held(model).is_none()
+        && !crate::screen::detail_is_form(model)
         && matches!(
             model.hits.at(mouse.column, mouse.row),
             Some(HitTarget::ScreenDetail)
@@ -4792,6 +4855,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
             Some(HitTarget::ScreenDetail)
         );
         match model.agents_view {
+            AgentsView::Setup => model.mcp_setup.select(delta.signum() as isize),
             // The wheel over the list picks; over the request it reads on.
             AgentsView::Approvals if over_list => model.mcp_audit.select(delta.signum() as isize),
             AgentsView::Approvals => {
@@ -4922,6 +4986,7 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.pending_chord.keys.is_empty() {
         if crate::screen::section(model) == crate::screen::Section::Detail
             && crate::screen::held(model).is_none()
+            && !crate::screen::detail_is_form(model)
             && model.hits.has(HitTarget::ScreenDetail)
             && key.modifiers.is_empty()
             && let Some(delta) = reading_delta(model, key.code)
@@ -5166,6 +5231,19 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         }
         _ => {}
     }
+    // Setup's form takes the keys while it has them: its name is typed into.
+    if model.agents_view == AgentsView::Setup
+        && crate::screen::section(model) == crate::screen::Section::Detail
+    {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && !crate::widgets::text_input::TextInput::owns(&key)
+        {
+            return None;
+        }
+        return Some(mcp_setup_form_key(model, key));
+    }
     // Ctrl and Alt chords are the keymap's: Ctrl+G and Ctrl+P work here too.
     if key
         .modifiers
@@ -5175,21 +5253,50 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     }
     // The views: their digits, and the brackets to step through them.
     let view = match key.code {
-        KeyCode::Char(digit @ '1'..='3') => Some(AgentsView::ALL[usize::from(digit as u8 - b'1')]),
+        KeyCode::Char(digit @ '1'..='4') => Some(AgentsView::ALL[usize::from(digit as u8 - b'1')]),
         KeyCode::Char(']') => Some(model.agents_view.step(1)),
         KeyCode::Char('[') => Some(model.agents_view.step(-1)),
         _ => None,
     };
     if let Some(view) = view {
         model.agents_view = view;
-        return Some(if view == AgentsView::Profiles {
-            vec![Effect::LoadMcpProfiles]
-        } else {
-            Vec::new()
+        return Some(match view {
+            AgentsView::Profiles => vec![Effect::LoadMcpProfiles],
+            AgentsView::Setup => vec![Effect::LoadMcpClients],
+            _ => Vec::new(),
         });
     }
     let page = (model.height / 3).max(1);
     match model.agents_view {
+        AgentsView::Setup => {
+            let setup = &mut model.mcp_setup;
+            match key.code {
+                KeyCode::Up => setup.select(-1),
+                KeyCode::Down => setup.select(1),
+                KeyCode::Home => setup.select(-(setup.clients.len() as isize)),
+                KeyCode::End => setup.select(setup.clients.len() as isize),
+                // The form beside the list.
+                KeyCode::Enter => {
+                    model.sections[crate::model::Screen::Agents.index()] =
+                        crate::screen::Section::Detail;
+                }
+                KeyCode::Char('c') => {
+                    let Some(text) = setup
+                        .current()
+                        .and_then(|row| row.client.by_hand(&setup.command, &setup.profile_name()))
+                    else {
+                        model.messages.info(
+                            "This agent has no command of its own for it: Enter sets it up.".into(),
+                        );
+                        return Some(Vec::new());
+                    };
+                    model.messages.info("Copied the command.".into());
+                    return Some(vec![Effect::CopyToClipboard { text }]);
+                }
+                _ => return None,
+            }
+            Some(Vec::new())
+        }
         AgentsView::Approvals => {
             let screen = &mut model.mcp_audit;
             match key.code {
@@ -5240,6 +5347,16 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             let page = usize::from(page);
             match key.code {
                 KeyCode::Char('g') => return Some(update(model, Action::OpenMcpGrantForm)),
+                // A new profile is made where an agent is set up with it.
+                KeyCode::Char('n') => {
+                    model.agents_view = AgentsView::Setup;
+                    model.mcp_setup.profile = None;
+                    model.mcp_setup.row = 1;
+                    model.mcp_setup.footer = crate::widgets::form::FooterFocus::Input;
+                    model.sections[crate::model::Screen::Agents.index()] =
+                        crate::screen::Section::Detail;
+                    return Some(vec![Effect::LoadMcpClients]);
+                }
                 KeyCode::Char('e') => return Some(update(model, Action::ToggleMcpProfile)),
                 KeyCode::Char('r') => return Some(update(model, Action::RevokeProfileGrants)),
                 KeyCode::Char('R') => screen.ask_revoke_all(),
@@ -5268,6 +5385,107 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                 _ => return None,
             }
             Some(Vec::new())
+        }
+    }
+}
+
+/// The names of the MCP profiles made.
+fn mcp_profile_names(model: &Model) -> Vec<String> {
+    model
+        .mcp_profiles
+        .profiles
+        .iter()
+        .map(|profile| profile.name.clone())
+        .collect()
+}
+
+/// The Setup form's defaults, from the profiles and the saved connections MCP serves.
+fn prepare_mcp_setup(model: &mut Model) {
+    let profiles = mcp_profile_names(model);
+    let connections = model
+        .connections
+        .profiles
+        .iter()
+        .filter(|row| !row.temporary)
+        .filter(|row| {
+            matches!(
+                dexo_driver_api::DriverDescriptor::family(&row.profile.driver),
+                "postgres" | "mysql"
+            )
+        })
+        .map(|row| row.profile.name.clone())
+        .collect();
+    let in_use = model.connection.name.clone();
+    model.mcp_setup.prepare(&profiles, connections, &in_use);
+}
+
+/// The Setup form's keys: Up and Down walk it, Left, Right and Space change a row, Enter
+/// goes on and sets up on [Set up]; Esc goes back to the list.
+fn mcp_setup_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    use crate::screens::mcp_setup::Row;
+    use crate::widgets::form::FooterFocus;
+    let profiles = mcp_profile_names(model);
+    let back = |model: &mut Model| {
+        model.sections[crate::model::Screen::Agents.index()] = crate::screen::Section::List;
+        model.mcp_setup.footer = FooterFocus::Input;
+    };
+    let setup = &mut model.mcp_setup;
+    let on_name = setup.focused() == Some(Row::Name);
+    match key.code {
+        KeyCode::Esc => back(model),
+        KeyCode::Up | KeyCode::BackTab => setup.move_focus(-1),
+        KeyCode::Down | KeyCode::Tab => setup.move_focus(1),
+        KeyCode::Enter if setup.footer == FooterFocus::Submit => return submit_mcp_setup(model),
+        KeyCode::Enter if setup.footer == FooterFocus::Cancel => back(model),
+        KeyCode::Enter => setup.move_focus(1),
+        KeyCode::Left | KeyCode::Right if setup.footer != FooterFocus::Input => {
+            setup.footer = if setup.footer == FooterFocus::Submit {
+                FooterFocus::Cancel
+            } else {
+                FooterFocus::Submit
+            };
+        }
+        KeyCode::Left if !on_name => setup.change(-1, &profiles),
+        KeyCode::Right | KeyCode::Char(' ') if !on_name => setup.change(1, &profiles),
+        _ if on_name => {
+            setup.name.handle_key(key);
+            setup.outcome = None;
+        }
+        _ => {}
+    }
+    Vec::new()
+}
+
+/// [Set up]: the profile and the agent's config, or why not yet.
+fn submit_mcp_setup(model: &mut Model) -> Vec<Effect> {
+    let profiles = mcp_profile_names(model);
+    let setup = &mut model.mcp_setup;
+    if setup.busy {
+        return Vec::new();
+    }
+    let Some(row) = setup.current().cloned() else {
+        return Vec::new();
+    };
+    if let dexo_app::mcp::clients::ClientState::Unusable(why) = &row.state {
+        setup.outcome = Some(Err(format!(
+            "{} is left as it is: {why}. Fix it or move it away, then set up again.",
+            row.path
+        )));
+        return Vec::new();
+    }
+    match setup.request(&profiles) {
+        Err(message) => {
+            setup.outcome = Some(Err(message));
+            Vec::new()
+        }
+        Ok(profile) => {
+            setup.busy = true;
+            setup.outcome = None;
+            vec![Effect::SetUpMcpClient {
+                client: row.client,
+                profile,
+                skill: setup.skill && row.skill.is_some(),
+            }]
         }
     }
 }
@@ -5325,7 +5543,11 @@ fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
             // The toast that announced a waiting write said what the screen now shows,
             // and lay over the request it announced.
             model.messages.dismiss();
-            vec![Effect::LoadMcpAudit, Effect::LoadMcpProfiles]
+            vec![
+                Effect::LoadMcpAudit,
+                Effect::LoadMcpProfiles,
+                Effect::LoadMcpClients,
+            ]
         }
         crate::model::Screen::Server => {
             // The server shown before, while its session is still open; else the

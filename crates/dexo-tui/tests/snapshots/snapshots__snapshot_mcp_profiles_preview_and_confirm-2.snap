@@ -3,7 +3,7 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 [Agents]  demo  local  public                               
- 1 Approvals   2 Activity  [3 Profiles]                     
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup            
 ┌  Profiles (1)────────────────────────────────────────────┐
 │> assistant  disabled  1 grant                            │
 │                                                          │

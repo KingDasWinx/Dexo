@@ -1,10 +1,9 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 286
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   demo  local  public                                                                                 
- 1 Approvals   2 Activity  [3 Profiles]                                                                                                                         
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                                                                                
 ┌▸ Profiles (1)───────────────────────────────────────────────────┐┌  assistant────────────────────────────────────────────────────────────────────────────────┐
 │> assistant  disabled  1 grant                                   ││assistant is disabled: agents cannot use it yet.                                           │
 │                                                                 ││Connections: local                                                                         │
@@ -52,4 +51,4 @@ expression: "render_to_string(&model, 160, 50)"
 │                                                                 ││                                                                                           │
 │                                                                 ││                                                                                           │
 └─────────────────────────────────────────────────────────────────┘└───────────────────────────────────────────────────────────────────────────────────────────┘
-Agents  e enable  g grant  r revoke  R revoke all  x delete  PgUp/PgDn read  1-3 views  Esc back                                                      Ctrl+P  F1
+Agents  n new  e enable  g grant  r revoke  R revoke all  x delete  PgUp/PgDn read  1-4 views  Esc back                                               Ctrl+P  F1

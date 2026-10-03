@@ -86,6 +86,12 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
     }
 }
 
+/// Whether the detail is a form, whose keys are its own rather than reading it: Agents'
+/// Setup.
+pub fn detail_is_form(model: &Model) -> bool {
+    model.shown_screen() == Screen::Agents && model.agents_view == agents::AgentsView::Setup
+}
+
 /// How many sections the screen drew: its list and its detail, one alone, or none on an
 /// empty screen.
 pub fn section_count(model: &Model) -> usize {
@@ -219,7 +225,7 @@ pub fn hints(model: &Model) -> String {
         _ => "Esc back".into(),
     };
     // On the detail the arrows read it; the letters still act on the pick.
-    if section(model) == Section::Detail && held(model).is_none() {
+    if section(model) == Section::Detail && held(model).is_none() && !detail_is_form(model) {
         match hints.find("Up/Down pick") {
             Some(_) => hints.replacen("Up/Down pick", "Up/Down read", 1),
             None => format!("Up/Down read  {hints}"),

@@ -495,6 +495,8 @@ pub enum Action {
     RunExplainAnalyze,
     OpenAdmin,
     OpenMcpProfiles,
+    /// Agents' Setup view: an agent pointed at Dexo's MCP server.
+    OpenMcpSetup,
     ToggleMcpProfile,
     RevokeAllMcpGrants,
     RevokeProfileGrants,
@@ -647,6 +649,16 @@ pub enum Action {
     },
     McpProfilesLoaded {
         profiles: Vec<crate::screens::mcp_profiles::McpProfileSummary>,
+    },
+    /// What each agent's config says of Dexo, and what an entry would run.
+    McpClientsLoaded {
+        clients: Vec<crate::screens::mcp_setup::ClientRow>,
+        command: String,
+        project: String,
+    },
+    /// What Set up wrote, or why it could not.
+    McpClientSetUp {
+        result: Result<Vec<String>, String>,
     },
     McpAuditLoaded {
         events: Vec<crate::screens::mcp_audit::AuditLine>,
@@ -1085,6 +1097,14 @@ pub enum Effect {
         target: String,
     },
     LoadMcpProfiles,
+    /// Reads each agent's config for Dexo's entry.
+    LoadMcpClients,
+    /// Makes or enables the profile, then writes the agent's config.
+    SetUpMcpClient {
+        client: dexo_app::mcp::clients::McpClient,
+        profile: crate::screens::mcp_setup::SetupProfile,
+        skill: bool,
+    },
     LoadConnectionProfiles,
     LoadMcpAudit,
     SetMcpProfileEnabled {

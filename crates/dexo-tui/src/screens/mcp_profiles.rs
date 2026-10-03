@@ -812,13 +812,10 @@ impl McpProfilesScreen {
     }
 
     /// What the screen says with no profile to show: how to make one.
-    pub const EMPTY: [&'static str; 6] = [
+    pub const EMPTY: [&'static str; 3] = [
         "No MCP profiles yet.",
-        "Agents connect through a profile, which says what they may see. Make one in a terminal:",
-        "  dexo mcp profile create --name assistant",
-        "  dexo mcp profile set --name assistant --connection NAME",
-        "  dexo mcp allow --profile assistant --selector db.schema.*",
-        "Then come back here to enable it and give it writes.",
+        "Agents connect through a profile, which says what they may see.",
+        "n -- or 4, Setup -- makes one and sets up Claude Code, Codex, Cursor and the rest with it.",
     ];
 
     /// The list and the picked profile's details as text, the way they read on screen.
@@ -915,7 +912,7 @@ mod tests {
     fn an_empty_screen_says_how_to_make_a_profile() {
         let screen = McpProfilesScreen::default();
         let text = screen.lines().join("\n");
-        assert!(text.contains("dexo mcp profile create"), "{text}");
+        assert!(text.contains("Setup"), "{text}");
     }
 
     #[test]

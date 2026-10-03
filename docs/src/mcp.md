@@ -8,6 +8,8 @@ A profile decides what a client may do: which saved connections it may use, whic
 
 ## Set up
 
+The TUI does all of this on the Agents screen's Setup view (`Ctrl+G a`, then `4`): pick the agent, the connections the profile may use, and [Set up]. A profile made there sees every object of its connections, read-only; narrow it with `mcp allow` and `--deny` below. From a shell:
+
 ```sh
 dexo mcp profile create --name assistant
 dexo mcp profile set --name assistant --connection local --query-mode raw-read

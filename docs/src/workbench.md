@@ -98,11 +98,12 @@ For any other object, `i` opens the inspector: its properties, what the connecte
 
 ## Agents
 
-Agents (`Ctrl+G a`, or `Ctrl+Alt+A`) has three views, switched with `1`-`3` or `[` and `]`:
+Agents (`Ctrl+G a`, or `Ctrl+Alt+A`) has four views, switched with `1`-`4` or `[` and `]`:
 
 - **Approvals** lists the writes MCP agents are waiting to make under grants that ask before each write, oldest first, each with what it would do; the picked one is shown whole beside the list, with the time it has left. `a` approves after a second confirmation -- Cancel holds the focus, so an Enter out of habit decides nothing -- and `d` denies; PgUp and PgDn read a long statement, the question open or not. A request decided elsewhere or out of time closes its confirmation and settles nothing, and a write is approved only while its agent still waits for the answer. `R` revokes every grant, which denies their waiting requests too.
 - **Activity** is the audit log as a table -- time, profile, tool, target, outcome, duration -- newest first; `/` filters it, and the picked call is shown in full under it.
-- **Profiles** lists the MCP profiles beside the picked one's connections, scopes, tools and grants: `e` enables or disables it, `g` makes a grant in that pane, with an "ask before each write" switch, `r` revokes its grants, `R` all of them, `x` deletes it.
+- **Profiles** lists the MCP profiles beside the picked one's connections, scopes, tools and grants: `e` enables or disables it, `g` makes a grant in that pane, with an "ask before each write" switch, `r` revokes its grants, `R` all of them, `x` deletes it, and `n` makes a new one in Setup.
+- **Setup** points an agent at Dexo: Claude Code, Codex, Cursor, Claude Desktop, Gemini CLI, Windsurf and VS Code are listed with what their config says of Dexo. Enter opens the form beside the list: a new profile -- its name, the saved Postgres and MySQL connections it may use, and whether it may run read-only SQL -- or one already made, and whether to write the skill file. [Set up] makes the profile, enables it, and merges Dexo's entry into the agent's file, the old file kept beside it; restart the agent to load it. `c` in the list copies the agent's own command for the same thing, for Claude Code, Codex and Gemini CLI. With no profile yet, Agents opens here, and the palette's Set Up an Agent (MCP)… comes here too.
 
 A write that starts waiting while you are elsewhere puts its count beside Agents on the top line and says so once. Grants are also made with `dexo mcp grant create`; see [MCP](mcp.md).
 

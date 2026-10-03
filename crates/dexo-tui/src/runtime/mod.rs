@@ -849,6 +849,26 @@ impl WorkbenchRuntime {
                 self.admin_on_side_connection(session, Some(target)).await
             }
             crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
+            crate::Effect::LoadMcpClients => {
+                let action_tx = self.action_tx.clone();
+                tokio::task::spawn_blocking(move || {
+                    let _ = action_tx.blocking_send(mcp_clients());
+                });
+            }
+            crate::Effect::SetUpMcpClient {
+                client,
+                profile,
+                skill,
+            } => {
+                let action_tx = self.action_tx.clone();
+                let _ = tokio::task::spawn_blocking(move || {
+                    let result = set_up_mcp_client(client, profile, skill);
+                    let _ = action_tx.blocking_send(Action::McpClientSetUp { result });
+                    let _ = action_tx.blocking_send(mcp_clients());
+                })
+                .await;
+                self.load_mcp_profiles().await;
+            }
             crate::Effect::LoadConnectionProfiles => {
                 match self.with_repo(|repo| repo.list().map_err(|error| error.to_string())) {
                     Ok(profiles) => self.emit(Action::ProfilesLoaded(profiles)).await,
@@ -2774,6 +2794,138 @@ fn grant_lines(
 
 /// New MCP Grant: the grant `dexo mcp grant create` would make with the same answers,
 /// written where the MCP server reads it. Says what was made, or why not.
+/// Each agent's config as it is now, and what an entry would run.
+fn mcp_clients() -> Action {
+    use dexo_app::mcp::clients::{McpClient, Places, dexo_command};
+    let Ok(places) = Places::discover() else {
+        return Action::McpClientsLoaded {
+            clients: Vec::new(),
+            command: String::new(),
+            project: String::new(),
+        };
+    };
+    let clients = McpClient::ALL
+        .into_iter()
+        .map(|client| crate::screens::mcp_setup::ClientRow {
+            client,
+            path: home_relative(&client.config_path(&places), &places.home),
+            skill: client
+                .skill_path(&places)
+                .map(|path| home_relative(&path, &places.home)),
+            state: client.state(&places),
+        })
+        .collect();
+    Action::McpClientsLoaded {
+        clients,
+        command: dexo_command().unwrap_or_else(|_| "dexo".into()),
+        project: home_relative(&places.project, &places.home),
+    }
+}
+
+/// A path as people read it: under the home folder, from `~`.
+fn home_relative(path: &std::path::Path, home: &std::path::Path) -> String {
+    match path.strip_prefix(home) {
+        Ok(rest) if !home.as_os_str().is_empty() => {
+            std::path::Path::new("~").join(rest).display().to_string()
+        }
+        _ => path.display().to_string(),
+    }
+}
+
+/// The profile made -- or the one picked, enabled -- and the agent's config written, as
+/// `dexo mcp profile create`, `set`, `allow`, `enable` and `setup` would. What was done
+/// comes back in lines.
+fn set_up_mcp_client(
+    client: dexo_app::mcp::clients::McpClient,
+    profile: crate::screens::mcp_setup::SetupProfile,
+    skill: bool,
+) -> Result<Vec<String>, String> {
+    use crate::screens::mcp_setup::SetupProfile;
+    use dexo_app::mcp::clients::{McpClient, Places, dexo_command};
+    let text = |error: dexo_app::AppError| error.to_string();
+    let paths = AppPaths::discover().map_err(|error| error.to_string())?;
+    let db = Database::open(&paths.database).map_err(|error| error.to_string())?;
+    let repo = dexo_storage::McpProfileRepository::new(db.connection());
+    let (name, connections) = match profile {
+        SetupProfile::New {
+            name,
+            connections,
+            reads,
+        } => {
+            let saved = ConnectionRepository::new(db.connection());
+            for connection in &connections {
+                let found = saved
+                    .get_by_name(connection)
+                    .map_err(|error| error.to_string())?
+                    .ok_or_else(|| format!("{connection} is not a saved connection"))?;
+                dexo_app::mcp::McpConnection::from_profile(&found)
+                    .map_err(|error| format!("{connection}: {error}"))?;
+            }
+            let mut made = dexo_app::mcp::McpProfile::new(&name);
+            made.connections = connections.clone();
+            made.query_mode = if reads {
+                dexo_app::mcp::QueryMode::RawReadSql
+            } else {
+                dexo_app::mcp::QueryMode::StructuredOnly
+            };
+            // The connections are the limit; every object in them may be seen.
+            made.selectors = vec![
+                dexo_app::mcp::SelectorRule::parse(dexo_app::mcp::Effect::Allow, "*")
+                    .map_err(text)?,
+            ];
+            made.enabled = true;
+            made.validate().map_err(text)?;
+            repo.save(&made).map_err(|error| error.to_string())?;
+            (name, connections)
+        }
+        SetupProfile::Existing(name) => {
+            let mut found = repo
+                .get_by_name(&name)
+                .map_err(|error| error.to_string())?
+                .ok_or_else(|| format!("{name} is not a profile any more"))?;
+            if found.connections.is_empty() {
+                return Err(format!(
+                    "{name} uses no connection yet: make a new profile here, or give it one with `dexo mcp profile set --name {name} --connection NAME`."
+                ));
+            }
+            if !found.enabled {
+                found.enabled = true;
+                repo.save(&found).map_err(|error| error.to_string())?;
+            }
+            (name, found.connections)
+        }
+    };
+    let places = Places::discover().map_err(text)?;
+    let command = dexo_command().map_err(|error| error.to_string())?;
+    let done = client
+        .set_up(&places, &command, &name, skill)
+        .map_err(text)?;
+    let shown = |path: &std::path::Path| home_relative(path, &places.home);
+    let mut lines = vec![match &done.backup {
+        Some(backup) => format!(
+            "Wrote {}; the file as it was is {}.",
+            shown(&done.config),
+            shown(backup)
+        ),
+        None => format!("Wrote {}.", shown(&done.config)),
+    }];
+    if let Some(skill) = &done.skill {
+        lines.push(format!("Wrote {}.", shown(skill)));
+    }
+    lines.push(format!(
+        "{name} is enabled: the agent uses {}, read-only.",
+        connections.join(", ")
+    ));
+    lines.push(if client == McpClient::ClaudeCode {
+        "Restart Claude Code here; it asks to approve the project's servers the first time."
+            .to_string()
+    } else {
+        format!("Restart {} to load it.", client.name())
+    });
+    lines.push("A write needs a grant: Profiles, then g.".into());
+    Ok(lines)
+}
+
 fn create_mcp_grant(
     profile: &str,
     request: &dexo_app::mcp::GrantRequest,

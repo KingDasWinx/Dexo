@@ -1,10 +1,9 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
-assertion_line: 36
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   default  no connection  —                                                                           
-[1 Approvals]  2 Activity   3 Profiles                                                                                                                          
+[1 Approvals]  2 Activity   3 Profiles   4 Setup                                                                                                                
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
@@ -52,4 +51,4 @@ expression: "render_to_string(&model, 160, 50)"
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
-Agents  a approve  d deny  Up/Down pick  PgUp/PgDn read  1-3 views  Esc back                                                                          Ctrl+P  F1
+Agents  a approve  d deny  Up/Down pick  PgUp/PgDn read  1-4 views  Esc back                                                                          Ctrl+P  F1

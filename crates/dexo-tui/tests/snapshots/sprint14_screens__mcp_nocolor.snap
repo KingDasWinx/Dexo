@@ -1,10 +1,9 @@
 ---
 source: crates/dexo-tui/tests/sprint14_screens.rs
-assertion_line: 42
 expression: "render_to_string(&model, 100, 30)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   default  no connection  -               
- 1 Approvals   2 Activity  [3 Profiles]                                                             
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                    
 ┌> Profiles (1)──────────────────────────┐┌  assistant─────────────────────────────────────────────┐
 │> assistant  disabled  1 grant          ││assistant is disabled: agents cannot use it yet.        │
 │                                        ││Connections: local                                      │
@@ -32,4 +31,4 @@ expression: "render_to_string(&model, 100, 30)"
 │                                        ││                                                        │
 │                                        ││                                                        │
 └────────────────────────────────────────┘└────────────────────────────────────────────────────────┘
-Agents  e enable  g grant  r revoke  R revoke all  x delete  PgUp/PgDn read  1-3 views    Ctrl+P  F1
+Agents  n new  e enable  g grant  r revoke  R revoke all  x delete  PgUp/PgDn read        Ctrl+P  F1
