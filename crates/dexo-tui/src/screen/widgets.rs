@@ -366,3 +366,55 @@ pub fn empty_with_buttons(
         None,
     );
 }
+
+/// One row of a detail: a labelled value, a section's heading, a line of text, or a gap.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FieldRow {
+    Field(&'static str, String),
+    Section(&'static str),
+    Text(String),
+    Blank,
+}
+
+/// `rows` as lines `width` columns wide: the labels dimmed in one column, a long value
+/// wrapped under itself, a section's heading styled as the connection form's.
+pub fn field_lines(model: &Model, rows: &[FieldRow], width: u16) -> Vec<Line<'static>> {
+    let muted = model.theme.style(Role::Muted, model.capabilities);
+    let heading = muted.add_modifier(Modifier::BOLD);
+    let label_width = rows
+        .iter()
+        .filter_map(|row| match row {
+            FieldRow::Field(label, _) => Some(label.chars().count()),
+            _ => None,
+        })
+        .max()
+        .unwrap_or(0);
+    let indent = 1 + label_width + 2;
+    let room = usize::from(width).saturating_sub(indent).max(8);
+    let mut lines = Vec::new();
+    for row in rows {
+        match row {
+            FieldRow::Field(label, value) => {
+                for (index, part) in crate::model::wrap_words(value, room)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let head = if index == 0 {
+                        format!(" {label:<label_width$}  ")
+                    } else {
+                        " ".repeat(indent)
+                    };
+                    lines.push(Line::from(vec![Span::styled(head, muted), Span::raw(part)]));
+                }
+            }
+            FieldRow::Section(name) => lines.push(Line::styled(format!(" ── {name}"), heading)),
+            FieldRow::Text(text) => lines.extend(
+                crate::model::wrap_words(text, usize::from(width).saturating_sub(1))
+                    .into_iter()
+                    .map(|part| Line::raw(format!(" {part}"))),
+            ),
+            FieldRow::Blank => lines.push(Line::default()),
+        }
+    }
+    lines
+}

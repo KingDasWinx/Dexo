@@ -156,6 +156,6 @@ fn the_list_scrolls_to_the_selection() {
     let mut model = with_connections(&refs);
     model.connections.selected_profile = 37;
     let frame = paint(&mut model, 100, 30);
-    assert!(frame.contains("> db37"), "{frame}");
+    assert!(frame.contains("> ○ db37"), "{frame}");
     assert!(frame.contains("[x Delete]"), "{frame}");
 }

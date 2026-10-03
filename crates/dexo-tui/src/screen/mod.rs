@@ -14,7 +14,7 @@ pub use widgets::Button;
 use ratatui::Frame;
 use ratatui::layout::{Alignment, Constraint, Layout, Rect};
 use ratatui::style::{Modifier, Style};
-use ratatui::text::{Line, Span};
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::{Block, Paragraph};
 
 use crate::model::{Model, Screen};
@@ -390,7 +390,17 @@ pub fn text_pane(
     scroll: usize,
     footer: &[String],
 ) -> (Rect, usize, u16) {
-    detail_pane(frame, area, model, hits, title, &[], lines, scroll, footer)
+    detail_pane(
+        frame,
+        area,
+        model,
+        hits,
+        title,
+        &[],
+        Text::raw(lines.join("\n")),
+        scroll,
+        footer,
+    )
 }
 
 /// [`text_pane`] with the screen's buttons for the picked item on its first rows, where
@@ -403,7 +413,7 @@ pub fn detail_pane(
     hits: &mut HitMap,
     title: &str,
     buttons: &[Button],
-    lines: &[String],
+    text: Text<'_>,
     scroll: usize,
     footer: &[String],
 ) -> (Rect, usize, u16) {
@@ -428,12 +438,12 @@ pub fn detail_pane(
     }
     let footer_rows = (footer.len() as u16).min(inner.height);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - footer_rows);
-    let max_scroll = lines.len().saturating_sub(usize::from(body.height));
+    let max_scroll = text.lines.len().saturating_sub(usize::from(body.height));
     hits.set_scroll_limit(crate::mouse::ScrollArea::ScreenDetail, max_scroll);
     hits.set_page(crate::mouse::ScrollArea::ScreenDetail, body.height);
     let top = scroll.min(max_scroll);
     frame.render_widget(
-        Paragraph::new(lines.join("\n")).scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
+        Paragraph::new(text).scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),
         body,
     );
     let footer_area = Rect::new(inner.x, body.bottom(), inner.width, footer_rows);

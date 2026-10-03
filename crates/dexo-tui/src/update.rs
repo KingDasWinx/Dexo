@@ -15022,10 +15022,8 @@ mod tests {
         update(&mut model, Action::DockerDiscovered(found));
         let screen = crate::render::render_to_string(&model, 100, 30);
         assert!(screen.contains("Found in Docker"), "{screen}");
-        assert!(
-            screen.contains("shop-pg [postgres] 127.0.0.1:5433"),
-            "{screen}"
-        );
+        assert!(screen.contains("+ shop-pg"), "{screen}");
+        assert!(screen.contains("127.0.0.1:5433"), "{screen}");
         assert!(
             update(
                 &mut model,
@@ -15824,8 +15822,8 @@ mod tests {
                 dexo_app::connection_profile::SecretRef::new("ref".into()),
             )]);
         let screen = crate::render::render_to_string(&model, 100, 30);
-        assert!(screen.contains("open-my [mysql]"), "{screen}");
-        assert!(!screen.contains("shop-pg [postgres]"), "{screen}");
+        assert!(screen.contains("+ open-my"), "{screen}");
+        assert!(!screen.contains("+ shop-pg"), "{screen}");
         assert!(
             screen.contains("already saved as connections: shop-pg"),
             "{screen}"

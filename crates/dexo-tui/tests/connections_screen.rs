@@ -248,3 +248,58 @@ fn a_search_shows_the_rows_of_a_folded_group() {
     model.connections.search.input.set_text("shop");
     assert_eq!(shown(&model), ["shop"]);
 }
+
+#[test]
+fn the_list_is_a_table_with_status_driver_env_and_address() {
+    let mut model = four_connections();
+    let frame = paint(&mut model);
+    assert!(frame.contains("NAME"), "{frame}");
+    assert!(frame.contains("ADDRESS"), "{frame}");
+    assert!(frame.contains("○ pg-prod"), "{frame}");
+    assert!(frame.contains("● pg-dev"), "{frame}");
+    assert!(frame.contains("PostgreSQL"), "{frame}");
+    assert!(frame.contains("prod "), "{frame}");
+    assert!(frame.contains("127.0.0.1:5432/qa0"), "{frame}");
+    assert!(
+        !frame.contains("offline"),
+        "a word on every row marks nothing: {frame}"
+    );
+}
+
+#[test]
+fn the_detail_is_fields_not_prose() {
+    let mut model = four_connections();
+    let frame = paint(&mut model);
+    for label in ["Driver", "Address", "Database", "User", "Password"] {
+        assert!(frame.contains(&format!(" {label} ")), "{label}: {frame}");
+    }
+    assert!(!frame.contains("database qa0 · user dexo"), "{frame}");
+    // A connected one has its session's section.
+    while picked(&model).as_deref() != Some("pg-dev") {
+        press(&mut model, KeyCode::Down);
+    }
+    let frame = paint(&mut model);
+    assert!(frame.contains("── Session"), "{frame}");
+    assert!(frame.contains("pg-dev ● connected"), "{frame}");
+}
+
+#[test]
+fn narrow_the_address_goes_first_then_the_driver() {
+    let mut model = four_connections();
+    let frame = |model: &mut Model, width: u16| {
+        model.apply_size(width, 30);
+        let mut terminal =
+            ratatui::Terminal::new(ratatui::backend::TestBackend::new(width, 30)).unwrap();
+        let mut hits = HitMap::default();
+        terminal
+            .draw(|frame| dexo_tui::render::render(frame, model, &mut hits))
+            .unwrap();
+        dexo_tui::render::render_to_string(model, width, 30)
+    };
+    let narrow = frame(&mut model, 100);
+    assert!(!narrow.contains("ADDRESS"), "{narrow}");
+    assert!(narrow.contains("DRIVER"), "{narrow}");
+    let narrower = frame(&mut model, 60);
+    assert!(narrower.contains("NAME"), "{narrower}");
+    assert!(narrower.contains("○ pg-prod"), "{narrower}");
+}

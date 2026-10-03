@@ -2865,7 +2865,7 @@ fn mcp_clients() -> Action {
 }
 
 /// A path as people read it: under the home folder, from `~`.
-fn home_relative(path: &std::path::Path, home: &std::path::Path) -> String {
+pub(crate) fn home_relative(path: &std::path::Path, home: &std::path::Path) -> String {
     match path.strip_prefix(home) {
         Ok(rest) if !home.as_os_str().is_empty() => {
             std::path::Path::new("~").join(rest).display().to_string()

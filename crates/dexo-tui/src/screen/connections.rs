@@ -5,16 +5,17 @@
 use ratatui::Frame;
 use ratatui::layout::Rect;
 use ratatui::style::{Modifier, Style};
-use ratatui::text::Line;
+use ratatui::text::{Line, Span, Text};
 use ratatui::widgets::Paragraph;
 
 use crossterm::event::KeyCode;
 
 use super::Button;
-use super::widgets::{self, Chip};
+use super::widgets::{self, Chip, FieldRow};
 use crate::model::Model;
 use crate::mouse::{HitButton, HitMap, HitTarget};
-use crate::screens::connections::{Item, env_name};
+use crate::screens::connections::{Item, State, driver_name, env_name};
+use crate::theme::Role;
 
 pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let screen = &model.connections;
@@ -52,7 +53,31 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         form(frame, detail, model, hits);
         return;
     }
-    let (title, lines) = if let Some(group) = &screen.picked_group {
+    let (title, rows) = picked_fields(model);
+    let text = Text::from(widgets::field_lines(
+        model,
+        &rows,
+        detail.width.saturating_sub(2),
+    ));
+    let footer: Vec<String> = screen.error.clone().into_iter().collect();
+    super::detail_pane(
+        frame,
+        detail,
+        model,
+        hits,
+        &title,
+        &buttons(model),
+        text,
+        usize::from(super::detail_scroll(model)),
+        &footer,
+    );
+}
+
+/// The pane's title and fields for the pick: a connection with its state, a database
+/// found in Docker, or a group.
+fn picked_fields(model: &Model) -> (String, Vec<FieldRow>) {
+    let screen = &model.connections;
+    if let Some(group) = &screen.picked_group {
         let names: Vec<&str> = screen
             .profiles
             .iter()
@@ -63,44 +88,34 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             .iter()
             .filter(|name| screen.session_for(name).is_some())
             .count();
-        (
+        return (
             group.clone(),
-            vec![format!(
-                "{} connections, {connected} connected: {}",
-                names.len(),
-                names.join(", ")
-            )],
-        )
-    } else if let Some(database) = screen.picked_docker() {
-        (
+            vec![
+                FieldRow::Field("Connections", names.len().to_string()),
+                FieldRow::Field("Connected", connected.to_string()),
+                FieldRow::Blank,
+                FieldRow::Text(names.join(", ")),
+            ],
+        );
+    }
+    if let Some(database) = screen.picked_docker() {
+        return (
             database.container.clone(),
-            screen.detail_lines(model.active_session),
-        )
-    } else if let Some(profile) = screen.picked() {
-        (
-            profile.name.clone(),
-            screen.detail_lines(model.active_session),
-        )
-    } else {
-        (String::new(), Vec::new())
+            screen.detail_fields(model.active_session),
+        );
+    }
+    let Some(profile) = screen.picked() else {
+        return (String::new(), Vec::new());
     };
-    let width = usize::from(detail.width.saturating_sub(2)).max(8);
-    let lines: Vec<String> = lines
-        .iter()
-        .flat_map(|line| crate::model::wrap_words(line, width))
-        .collect();
-    let footer: Vec<String> = screen.error.clone().into_iter().collect();
-    super::detail_pane(
-        frame,
-        detail,
-        model,
-        hits,
-        &title,
-        &buttons(model),
-        &lines,
-        usize::from(super::detail_scroll(model)),
-        &footer,
-    );
+    let state = match screen.session_for(&profile.name) {
+        Some(session) if model.active_session == Some(session.id) => " ◉ in use",
+        Some(_) => " ● connected",
+        None => "",
+    };
+    (
+        format!("{}{state}", profile.name),
+        screen.detail_fields(model.active_session),
+    )
 }
 
 /// What acts on the whole screen rather than the pick.
@@ -167,17 +182,107 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     ]
 }
 
-/// One line of the list: its text, what a click on it picks, whether the pick is on it,
-/// and whether it is a heading.
+/// One line of the list: what it shows, what a click on it picks, whether the pick is on
+/// it, and whether it is a heading.
 struct Entry {
-    text: String,
+    spans: Vec<Span<'static>>,
     target: Option<HitTarget>,
     picked: bool,
     heading: bool,
 }
 
-/// The list as `items` has it: the connections in no group, each group under its
-/// heading, then the databases found in Docker under theirs; the pick kept in sight.
+/// The table's column widths in `width` cells. ADDRESS goes first when they do not fit,
+/// then DRIVER; what a dropped column held is in the detail.
+struct Columns {
+    name: usize,
+    driver: Option<usize>,
+    env: usize,
+    address: bool,
+}
+
+/// The least of an address worth showing.
+const ADDRESS_MIN: usize = 12;
+
+impl Columns {
+    fn new(model: &Model, width: usize) -> Self {
+        use unicode_width::UnicodeWidthStr;
+        let screen = &model.connections;
+        let mut names = Vec::new();
+        let mut drivers = Vec::new();
+        let mut envs = Vec::new();
+        for cells in
+            (0..screen.profiles.len()).filter_map(|index| screen.cells(index, model.active_session))
+        {
+            names.push(cells.name.width());
+            drivers.push(cells.driver.width());
+            envs.push(cells.env.width());
+        }
+        for database in screen.unsaved_docker() {
+            names.push(database.container.width());
+            drivers.push(driver_name(&database.connection.driver).width());
+        }
+        let widest = |widths: &[usize], least: usize, most: usize| {
+            widths.iter().copied().max().unwrap_or(0).clamp(least, most)
+        };
+        let name = widest(&names, 4, 28);
+        let driver = widest(&drivers, 6, 14);
+        let env = widest(&envs, 3, 10);
+        // The marker and the status glyph, then the name and the environment.
+        let fixed = 2 + 2 + name + 2 + env;
+        let driver_fits = fixed + 2 + driver <= width;
+        Self {
+            name,
+            driver: driver_fits.then_some(driver),
+            env,
+            address: driver_fits && fixed + 2 + driver + 2 + ADDRESS_MIN <= width,
+        }
+    }
+
+    /// A row's cells laid out under the header.
+    fn spans(
+        &self,
+        glyph: Span<'static>,
+        name: &str,
+        driver: &str,
+        env: Span<'static>,
+        address: &str,
+    ) -> Vec<Span<'static>> {
+        let mut spans = vec![glyph, Span::raw(format!(" {}  ", cell(name, self.name)))];
+        if let Some(width) = self.driver {
+            spans.push(Span::raw(format!("{}  ", cell(driver, width))));
+        }
+        let env_text = cell(&env.content, self.env);
+        spans.push(Span::styled(env_text, env.style));
+        if self.address {
+            spans.push(Span::raw(format!("  {address}")));
+        }
+        spans
+    }
+
+    fn header(&self) -> String {
+        let mut header = format!("    {}  ", cell("NAME", self.name));
+        if let Some(width) = self.driver {
+            header.push_str(&format!("{}  ", cell("DRIVER", width)));
+        }
+        header.push_str(&cell("ENV", self.env));
+        if self.address {
+            header.push_str("  ADDRESS");
+        }
+        header
+    }
+}
+
+/// `text` in exactly `width` cells: cut, or padded with spaces.
+fn cell(text: &str, width: usize) -> String {
+    use unicode_width::UnicodeWidthStr;
+    let text = crate::model::truncate_cell(text, width);
+    let pad = width.saturating_sub(text.width());
+    format!("{text}{}", " ".repeat(pad))
+}
+
+/// The list as `items` has it, as a table under a pinned header: the connections in no
+/// group, each group under its heading, then the databases found in Docker under theirs;
+/// the pick kept in sight.
 fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, items: &[Item]) {
     if area.width < 2 || area.height < 2 {
         return;
@@ -195,7 +300,7 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
         format!("Connections ({total})")
     };
     let block = crate::render::pane_block(model, &title, focused);
-    let inner = block.inner(area);
+    let mut inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenList, area);
     if items.is_empty() {
@@ -209,20 +314,31 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
         );
         return;
     }
+    let width = usize::from(inner.width);
+    let columns = Columns::new(model, width);
+    let style = |role: Role| model.theme.style(role, model.capabilities);
+    let heading = style(Role::Muted).add_modifier(Modifier::BOLD);
+    if inner.height > 1 {
+        frame.render_widget(
+            Paragraph::new(crate::model::truncate_cell(&columns.header(), width)).style(heading),
+            Rect::new(inner.x, inner.y, inner.width, 1),
+        );
+        inner = Rect::new(inner.x, inner.y + 1, inner.width, inner.height - 1);
+    }
     let cursor = screen.cursor(items);
     let mut entries: Vec<Entry> = Vec::new();
-    let text = |text: String, heading: bool| Entry {
-        text,
+    let line = |text: String, heading: bool| Entry {
+        spans: vec![Span::raw(text)],
         target: None,
         picked: false,
         heading,
     };
     let docker_heading = |entries: &mut Vec<Entry>| {
-        entries.push(text(String::new(), false));
-        entries.push(text("Found in Docker".into(), true));
+        entries.push(line(String::new(), false));
+        entries.push(line("Found in Docker".into(), true));
         let saved = screen.saved_docker();
         if !saved.is_empty() {
-            entries.push(text(
+            entries.push(line(
                 format!("already saved as connections: {}", saved.join(", ")),
                 false,
             ));
@@ -239,19 +355,38 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
                 folded,
             } => {
                 entries.push(Entry {
-                    text: format!("{} {name} ({count})", if *folded { "▸" } else { "▾" }),
+                    spans: vec![Span::raw(format!(
+                        "{} {name} ({count})",
+                        if *folded { "▸" } else { "▾" }
+                    ))],
                     target: Some(HitTarget::ListGroup(groups)),
                     picked,
                     heading: true,
                 });
                 groups += 1;
             }
-            Item::Row(index) if *index < total => entries.push(Entry {
-                text: screen.row_text(*index, model.active_session),
-                target: Some(HitTarget::ListRow(*index)),
-                picked,
-                heading: false,
-            }),
+            Item::Row(index) if *index < total => {
+                let Some(cells) = screen.cells(*index, model.active_session) else {
+                    continue;
+                };
+                let glyph = match cells.state {
+                    State::InUse => Span::styled("◉", style(Role::Focus)),
+                    State::Connected => Span::styled("●", style(Role::Success)),
+                    State::Offline => Span::styled("○", style(Role::Muted)),
+                };
+                entries.push(Entry {
+                    spans: columns.spans(
+                        glyph,
+                        &cells.name,
+                        &cells.driver,
+                        Span::styled(cells.env, style(cells.env_role)),
+                        &cells.address,
+                    ),
+                    target: Some(HitTarget::ListRow(*index)),
+                    picked,
+                    heading: false,
+                });
+            }
             Item::Row(index) => {
                 if !std::mem::replace(&mut docker, true) {
                     docker_heading(&mut entries);
@@ -259,12 +394,16 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
                 if let Some(database) = screen.unsaved_docker().nth(index - total) {
                     let connection = &database.connection;
                     entries.push(Entry {
-                        text: format!(
-                            "+ {} [{}] {}:{}",
-                            database.container,
-                            connection.driver,
-                            connection.host,
-                            connection.port.unwrap_or_default()
+                        spans: columns.spans(
+                            Span::styled("+", style(Role::Success)),
+                            &database.container,
+                            &driver_name(&connection.driver),
+                            Span::raw(""),
+                            &format!(
+                                "{}:{}",
+                                connection.host,
+                                connection.port.unwrap_or_default()
+                            ),
                         ),
                         target: Some(HitTarget::ListRow(*index)),
                         picked,
@@ -281,11 +420,6 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
     let visible = usize::from(inner.height);
     let picked = entries.iter().position(|entry| entry.picked).unwrap_or(0);
     let offset = crate::palette::scroll_to_selection(picked, 0, entries.len(), visible);
-    let width = usize::from(inner.width);
-    let heading = model
-        .theme
-        .style(crate::theme::Role::Muted, model.capabilities)
-        .add_modifier(Modifier::BOLD);
     let lines: Vec<Line> = entries
         .iter()
         .skip(offset)
@@ -293,17 +427,19 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
         .map(|entry| {
             // The pick is marked as well as reversed, so it reads without colour.
             let marker = if entry.picked { "> " } else { "  " };
-            let text = crate::model::truncate_cell(&format!("{marker}{}", entry.text), width);
-            if entry.picked {
-                Line::styled(
-                    format!("{text:<width$}"),
-                    Style::default().add_modifier(Modifier::REVERSED),
-                )
-            } else if entry.heading {
-                Line::styled(text, heading)
-            } else {
-                Line::raw(text)
+            let mut spans = vec![Span::raw(marker)];
+            spans.extend(entry.spans.iter().cloned());
+            let mut line = Line::from(spans);
+            if entry.heading {
+                line = line.style(heading);
             }
+            if entry.picked {
+                let used = line.width();
+                line.spans
+                    .push(Span::raw(" ".repeat(width.saturating_sub(used))));
+                line = line.patch_style(Style::default().add_modifier(Modifier::REVERSED));
+            }
+            line
         })
         .collect();
     for (line, entry) in entries.iter().skip(offset).take(visible).enumerate() {

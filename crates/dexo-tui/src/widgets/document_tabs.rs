@@ -86,7 +86,7 @@ fn connection_prefix(model: &Model, document: &crate::model::EditorDocument) -> 
 /// `name` in at most `width` cells, the middle left out: `mysql-dev` and `mysql-docs` share
 /// their first letters and part in their last, and a name cut at the end told them apart
 /// by neither.
-fn cut_middle(name: &str, width: usize) -> String {
+pub(crate) fn cut_middle(name: &str, width: usize) -> String {
     let chars: Vec<char> = name.chars().collect();
     if UnicodeWidthStr::width(name) <= width || width < 3 {
         return truncate_cell(name, width);

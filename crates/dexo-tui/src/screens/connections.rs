@@ -4,9 +4,10 @@ use dexo_app::{ConnectionProfile, Environment};
 use dexo_driver_api::TransactionState;
 
 use crate::runtime::SessionId;
-use crate::screen::widgets::Search;
+use crate::screen::widgets::{FieldRow, Search};
 use crate::screens::connection::ConnectionForm;
 use crate::screens::secret_prompt::DeleteSecretDecision;
+use crate::theme::Role;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct ConnectionRow {
@@ -254,133 +255,166 @@ impl ConnectionsScreen {
         self.delete_choice = DeleteChoice::Cancel;
     }
 
-    /// The picked row in full: where a saved connection goes and under which rules, or
-    /// what a database found in Docker would be added as.
-    pub fn detail_lines(&self, active: Option<SessionId>) -> Vec<String> {
+    /// The picked row in full, as fields: where a saved connection goes and under which
+    /// rules, or what a database found in Docker would be added as.
+    pub fn detail_fields(&self, active: Option<SessionId>) -> Vec<FieldRow> {
         if let Some(database) = self.selected_docker() {
             let connection = &database.connection;
-            return vec![
-                format!("{} · running in Docker", database.container),
-                format!(
-                    "{} at {}:{}",
-                    connection.driver,
-                    connection.host,
-                    connection.port.unwrap_or_default()
+            let mut rows = vec![
+                FieldRow::Field("Container", database.container.clone()),
+                FieldRow::Field("Driver", driver_name(&connection.driver)),
+                FieldRow::Field(
+                    "Address",
+                    format!(
+                        "{}:{}",
+                        connection.host,
+                        connection.port.unwrap_or_default()
+                    ),
                 ),
-                format!(
-                    "database {} · user {}",
-                    or_dash(&connection.database),
-                    or_dash(&connection.username)
-                ),
-                String::new(),
-                "Enter fills a new connection from it; nothing is saved until you submit.".into(),
             ];
+            push_set(&mut rows, "Database", &connection.database);
+            push_set(&mut rows, "User", &connection.username);
+            rows.push(FieldRow::Blank);
+            rows.push(FieldRow::Text(
+                "Enter fills a new connection from it; nothing is saved until it is.".into(),
+            ));
+            return rows;
         }
         let Some(row) = self.profiles.get(self.selected_profile) else {
             return Vec::new();
         };
         let profile = &row.profile;
         let config = &profile.config;
-        let text = |key: &str| {
-            config
-                .get(key)
-                .map(|value| match value {
-                    serde_json::Value::String(text) => text.clone(),
-                    other => other.to_string(),
-                })
-                .unwrap_or_default()
-        };
-        let driver = dexo_driver_api::DriverDescriptor::for_id(&profile.driver)
-            .map(|descriptor| descriptor.display_name.to_string())
-            .unwrap_or_else(|| profile.driver.clone());
-        let mut lines = vec![profile.name.clone()];
-        let status = match self.session_for(&profile.name) {
-            Some(session) if active == Some(session.id) => "connected, in use",
-            Some(_) => "connected",
-            None if row.temporary => "open for this session only, not saved",
-            None => "offline",
-        };
-        lines.push(format!("{driver} · {} · {status}", profile.environment));
+        let text = |key: &str| config_text(config, key);
+        let mut rows = vec![FieldRow::Field("Driver", driver_name(&profile.driver))];
+        rows.push(FieldRow::Field(
+            "Environment",
+            if profile.environment.is_empty() {
+                "local".into()
+            } else {
+                profile.environment.clone()
+            },
+        ));
         let path = text("path");
         if path.is_empty() {
-            lines.push(format!(
-                "{}:{} · database {} · user {}",
-                or_dash(&text("host")),
-                or_dash(&text("port")),
-                or_dash(&text("database")),
-                or_dash(&text("username"))
+            let port = text("port");
+            let host = text("host");
+            rows.push(FieldRow::Field(
+                "Address",
+                if port.is_empty() {
+                    host
+                } else {
+                    format!("{host}:{port}")
+                },
+            ));
+            push_set(&mut rows, "Database", &text("database"));
+            push_set(&mut rows, "User", &text("username"));
+            let password_command = text("password_command");
+            rows.push(FieldRow::Field(
+                "Password",
+                if password_command.is_empty() {
+                    "in the keychain".into()
+                } else {
+                    format!("from `{}`", shown_path(&password_command, 40))
+                },
             ));
         } else {
-            lines.push(format!("file {path}"));
+            rows.push(FieldRow::Field("File", shown_path(&path, 60)));
         }
-        if let Some(group) = profile
-            .group_path
-            .as_deref()
-            .filter(|group| !group.trim().is_empty())
-        {
-            lines.push(format!("group {group}"));
+        if let Some(group) = group_of(profile) {
+            rows.push(FieldRow::Field("Group", group.to_string()));
         }
-        let password_command = text("password_command");
-        if !password_command.is_empty() {
-            lines.push(format!("password from `{password_command}`"));
-        } else if path.is_empty() {
-            lines.push("password in the keychain".into());
+        if row.temporary {
+            rows.push(FieldRow::Field(
+                "Saved",
+                "no, open for this session only".into(),
+            ));
         }
         let pre_connect = text("pre_connect");
         if !pre_connect.is_empty() {
-            lines.push(format!("before connecting: `{pre_connect}`"));
+            rows.push(FieldRow::Field("Runs first", format!("`{pre_connect}`")));
         }
+        let mut network = Vec::new();
         if let Some(tls) = config.get("tls").and_then(|tls| tls.get("mode")) {
-            lines.push(format!("TLS {}", tls.as_str().unwrap_or("-")));
+            network.push(FieldRow::Field(
+                "TLS",
+                tls.as_str().unwrap_or("-").to_string(),
+            ));
         }
         if let Some(ssh) = config.get("ssh") {
-            let get = |key: &str| {
-                ssh.get(key)
-                    .map(|value| value.to_string().trim_matches('"').to_string())
-            };
-            lines.push(format!(
-                "through SSH {}@{}:{}",
-                get("username").unwrap_or_default(),
-                get("host").unwrap_or_default(),
-                get("port").unwrap_or_default()
+            network.push(FieldRow::Field(
+                "SSH",
+                format!(
+                    "{}@{}:{}",
+                    config_text(ssh, "username"),
+                    config_text(ssh, "host"),
+                    config_text(ssh, "port")
+                ),
             ));
         }
         if let Some(proxy) = config.get("proxy") {
-            let get = |key: &str| {
-                proxy
-                    .get(key)
-                    .map(|value| value.to_string().trim_matches('"').to_string())
-            };
-            lines.push(format!(
-                "through a {} proxy at {}:{}",
-                get("kind")
-                    .filter(|kind| !kind.is_empty())
-                    .unwrap_or_else(|| "http".into()),
-                get("host").unwrap_or_default(),
-                get("port").unwrap_or_default()
+            let kind = config_text(proxy, "kind");
+            network.push(FieldRow::Field(
+                "Proxy",
+                format!(
+                    "{} {}:{}",
+                    if kind.is_empty() {
+                        "http"
+                    } else {
+                        kind.as_str()
+                    },
+                    config_text(proxy, "host"),
+                    config_text(proxy, "port")
+                ),
             ));
+        }
+        if !network.is_empty() {
+            rows.push(FieldRow::Section("Network"));
+            rows.extend(network);
         }
         let policy = &profile.policy;
         let mut rules = Vec::new();
         if policy.read_only == Some(true) {
-            rules.push("read-only".to_string());
+            rules.push(FieldRow::Field("Read-only", "yes".into()));
         }
         if policy.confirm_destructive == Some(true) {
-            rules.push("confirms destructive statements".into());
+            rules.push(FieldRow::Field("Confirms", "destructive statements".into()));
         }
         if policy.require_verified_tls == Some(true) {
-            rules.push("needs verified TLS".into());
+            rules.push(FieldRow::Field("TLS", "verified only".into()));
         }
-        if let Some(rows) = policy.max_rows {
-            rules.push(format!("at most {rows} rows"));
+        if let Some(max_rows) = policy.max_rows {
+            rules.push(FieldRow::Field("Max rows", max_rows.to_string()));
         }
         if let Some(secs) = policy.timeout_secs {
-            rules.push(format!("queries stop after {secs}s"));
+            rules.push(FieldRow::Field("Timeout", format!("{secs}s")));
         }
         if !rules.is_empty() {
-            lines.push(rules.join(" · "));
+            rows.push(FieldRow::Section("Rules"));
+            rows.extend(rules);
         }
-        lines
+        if let Some(session) = self.session_for(&profile.name) {
+            rows.push(FieldRow::Section("Session"));
+            rows.push(FieldRow::Field(
+                "State",
+                if active == Some(session.id) {
+                    "in use".into()
+                } else {
+                    "connected".into()
+                },
+            ));
+            rows.push(FieldRow::Field(
+                "Transaction",
+                match session.transaction {
+                    TransactionState::Active => "open",
+                    TransactionState::Failed => "failed",
+                    TransactionState::Unknown => "unknown",
+                    _ => "none open",
+                }
+                .into(),
+            ));
+        }
+        rows
     }
 
     /// The list as drawn, filtered and in order: the connections in no group, then each
@@ -569,33 +603,37 @@ impl ConnectionsScreen {
         self.picked_group = Some(group);
     }
 
-    /// A saved connection's row: its name, environment, state and rules.
-    pub fn row_text(&self, index: usize, active: Option<SessionId>) -> String {
-        let Some(row) = self.profiles.get(index) else {
-            return String::new();
+    /// A saved connection's row, column by column.
+    pub fn cells(&self, index: usize, active: Option<SessionId>) -> Option<Cells> {
+        let row = self.profiles.get(index)?;
+        let profile = &row.profile;
+        let session = self.session_for(&profile.name);
+        let state = match session {
+            Some(session) if active == Some(session.id) => State::InUse,
+            Some(_) => State::Connected,
+            None => State::Offline,
         };
-        let read_only = if row.profile.policy.read_only == Some(true) {
+        // Idle is the null state, and `Idle` was a Rust name beside a status.
+        let tx = match session.map(|session| session.transaction) {
+            Some(TransactionState::Active) => " (tx open)",
+            Some(TransactionState::Failed) => " (tx failed)",
+            Some(TransactionState::Unknown) => " (tx unknown)",
+            _ => "",
+        };
+        let read_only = if profile.policy.read_only == Some(true) {
             " ro"
         } else {
             ""
         };
-        let session = self.session_for(&row.profile.name);
-        let status = match session {
-            Some(session) if active == Some(session.id) => "active",
-            Some(_) => "connected",
-            None => "offline",
-        };
-        // Idle is the null state, and `Idle` was a Rust name beside a status.
-        let tx = match session.map(|session| session.transaction) {
-            Some(TransactionState::Active) => " (transaction open)",
-            Some(TransactionState::Failed) => " (transaction failed)",
-            Some(TransactionState::Unknown) => " (transaction unknown)",
-            _ => "",
-        };
-        format!(
-            "{} [{}] {status}{tx}{read_only}",
-            row.profile.name, row.profile.environment
-        )
+        let (env, env_role) = env_word(&profile.environment);
+        Some(Cells {
+            state,
+            name: format!("{}{read_only}{tx}", profile.name),
+            driver: driver_name(&profile.driver),
+            env,
+            env_role,
+            address: address(&profile.config),
+        })
     }
 
     /// The containers found in Docker that a saved connection already dials: not offered
@@ -622,8 +660,95 @@ impl ConnectionsScreen {
     }
 }
 
-fn or_dash(text: &str) -> &str {
-    if text.is_empty() { "-" } else { text }
+/// Where a connection stands: in use, connected, or not.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum State {
+    InUse,
+    Connected,
+    Offline,
+}
+
+/// A saved connection's row, column by column.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Cells {
+    pub state: State,
+    pub name: String,
+    pub driver: String,
+    pub env: String,
+    pub env_role: Role,
+    pub address: String,
+}
+
+/// An environment as a short word coloured by its risk. A label Dexo does not know is
+/// shown as it is, coloured as production: the guards read it so too.
+pub fn env_word(environment: &str) -> (String, Role) {
+    match Environment::known(environment) {
+        Some(environment) => (
+            env_name(environment).to_string(),
+            match environment {
+                Environment::Production => Role::Production,
+                Environment::Staging => Role::Staging,
+                Environment::Development => Role::Development,
+                Environment::Local => Role::Muted,
+            },
+        ),
+        None if environment.is_empty() => ("local".into(), Role::Muted),
+        None => (environment.to_string(), Role::Production),
+    }
+}
+
+/// A driver as people name it: `PostgreSQL` for `postgres`.
+pub fn driver_name(driver: &str) -> String {
+    dexo_driver_api::DriverDescriptor::for_id(driver)
+        .map(|descriptor| descriptor.display_name.to_string())
+        .unwrap_or_else(|| driver.to_string())
+}
+
+/// Where a connection points: `host[:port]/database`, or its file from `~`.
+pub fn address(config: &serde_json::Value) -> String {
+    let path = config_text(config, "path");
+    if !path.is_empty() {
+        return shown_path(&path, usize::MAX);
+    }
+    let mut address = config_text(config, "host");
+    let port = config_text(config, "port");
+    if !port.is_empty() {
+        address.push(':');
+        address.push_str(&port);
+    }
+    let database = config_text(config, "database");
+    if !database.is_empty() {
+        address.push('/');
+        address.push_str(&database);
+    }
+    address
+}
+
+/// A config value as text, a number included; empty when unset.
+fn config_text(config: &serde_json::Value, key: &str) -> String {
+    config
+        .get(key)
+        .map(|value| match value {
+            serde_json::Value::String(text) => text.clone(),
+            serde_json::Value::Null => String::new(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default()
+}
+
+/// A path from `~` when under the home folder, its middle cut past `width` columns.
+fn shown_path(path: &str, width: usize) -> String {
+    let path = match std::env::home_dir() {
+        Some(home) => crate::runtime::home_relative(std::path::Path::new(path), &home),
+        None => path.to_string(),
+    };
+    crate::widgets::document_tabs::cut_middle(&path, width)
+}
+
+fn push_set(rows: &mut Vec<FieldRow>, label: &'static str, value: &str) {
+    if !value.is_empty() {
+        rows.push(FieldRow::Field(label, value.to_string()));
+    }
 }
 
 #[cfg(test)]
@@ -669,10 +794,9 @@ mod tests {
             driver: "postgres".into(),
         });
         assert_eq!(screen.sessions.len(), 1);
-        assert_eq!(
-            screen.row_text(0, Some(screen.sessions[0].id)),
-            "prod [local] active"
-        );
+        let cells = screen.cells(0, Some(screen.sessions[0].id)).unwrap();
+        assert_eq!(cells.state, super::State::InUse);
+        assert_eq!((cells.name.as_str(), cells.env.as_str()), ("prod", "local"));
     }
 
     #[test]
