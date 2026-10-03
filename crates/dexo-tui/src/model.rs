@@ -54,6 +54,14 @@ pub enum Focus {
 }
 
 impl Model {
+    /// The table Enter in the Security panel grants on: the one that is open, nothing
+    /// while no table is (the data screen's stand-in is called `tbl`).
+    pub fn security_grant_target(&self) -> Option<String> {
+        let target = &self.data.target;
+        (target.schema().is_some() || target.catalog().is_some() || target.object() != "tbl")
+            .then(|| target.display_unquoted())
+    }
+
     /// The pane the stored focus actually points at. Opening a table document moves the
     /// grid into the editor's slot, and closing one takes the console away -- either way
     /// the focus left behind would highlight a pane that is not on screen.

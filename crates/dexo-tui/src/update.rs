@@ -11353,6 +11353,12 @@ fn open_security_change_preview(model: &mut Model) -> Vec<Effect> {
     else {
         return Vec::new();
     };
+    if model.security_grant_target().is_none() {
+        model
+            .messages
+            .warn("Open a table first: a grant is made on the table that is open.".into());
+        return Vec::new();
+    }
     let Some(session) = model.active_session else {
         return Vec::new();
     };

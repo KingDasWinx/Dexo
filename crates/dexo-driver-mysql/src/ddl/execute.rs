@@ -97,8 +97,18 @@ impl SecurityAdmin for MysqlSession {
         &self,
         principal: Option<&QualifiedName>,
     ) -> Result<Vec<GrantRecord>, DriverError> {
-        let sql = "SELECT GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE
-                   FROM information_schema.TABLE_PRIVILEGES
+        // Grants on a table, on a whole schema and on everything: a user whose rights are
+        // all global (root) had none listed, and the Security panel showed nothing.
+        let sql = "SELECT GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE FROM (
+                     SELECT GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE
+                       FROM information_schema.TABLE_PRIVILEGES
+                     UNION ALL
+                     SELECT GRANTEE, TABLE_SCHEMA, '*', PRIVILEGE_TYPE
+                       FROM information_schema.SCHEMA_PRIVILEGES
+                     UNION ALL
+                     SELECT GRANTEE, '*', '*', PRIVILEGE_TYPE
+                       FROM information_schema.USER_PRIVILEGES
+                   ) g
                    WHERE (? IS NULL OR GRANTEE LIKE ? ESCAPE '|')
                    ORDER BY GRANTEE, TABLE_SCHEMA, TABLE_NAME, PRIVILEGE_TYPE";
         let grantee = principal.map(|principal| grantee_like(principal.object()));
@@ -113,9 +123,8 @@ impl SecurityAdmin for MysqlSession {
                 principal: QualifiedName::new(
                     None::<String>,
                     None::<String>,
-                    grantee
-                        .trim_matches(|ch| ch == '\'' || ch == '`')
-                        .to_string(),
+                    // `'dexo'@'%'` is the account dexo@%.
+                    grantee.replace(['\'', '`'], ""),
                 ),
                 target: QualifiedName::new(Some(schema), None::<String>, table),
                 privileges: vec![privilege],

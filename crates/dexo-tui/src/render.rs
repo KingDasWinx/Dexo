@@ -2038,13 +2038,13 @@ fn render_security(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let width = 84.min(area.width.saturating_sub(2));
     let popup = centered(area, width, 14.min(area.height.saturating_sub(2)));
-    let target = model.data.target.display_unquoted();
+    let target = model.security_grant_target().unwrap_or_default();
     let lines = model
         .security
         .lines(popup_inner(popup).width as usize, &target);
     let rows = popup_inner(popup).height as usize;
     // The hint stays at the bottom, whatever the roles and grants take.
-    let (hint, list) = lines.split_at(lines.len().saturating_sub(1));
+    let (list, hint) = lines.split_at(lines.len().saturating_sub(1));
     let room = rows.saturating_sub(1);
     let offset = scroll_to_selection(
         model.security.selected,
@@ -4062,6 +4062,17 @@ mod tests {
     }
 
     /// A column says its type and nullability, and what it relates to by name, one to a line.
+    #[test]
+    fn the_security_panel_lists_roles_above_its_hint() {
+        let mut model = Model::default();
+        model.security.open = true;
+        model.security.principals = vec!["reporter".into()];
+        let text = render_to_string(&model, 100, 30);
+        let role = text.find("> reporter").expect("the role");
+        let hint = text.find("Esc closes").expect("the hint");
+        assert!(role < hint, "{text}");
+    }
+
     #[test]
     fn sizes_are_said_in_the_unit_a_person_reads() {
         assert_eq!(super::human_bytes(512), "512 B");

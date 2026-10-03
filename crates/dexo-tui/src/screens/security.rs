@@ -59,27 +59,35 @@ impl SecurityScreen {
         }
         if let Some(selected) = self.principals.get(self.selected) {
             lines.push(String::new());
-            let held: Vec<&GrantRecord> = self
+            // One line per place, with everything the role may do there.
+            let mut held: Vec<(String, Vec<&str>)> = Vec::new();
+            for grant in self
                 .grants
                 .iter()
                 .filter(|grant| grant.principal.object() == selected)
-                .collect();
+            {
+                let place = grant.target.display_unquoted();
+                if held.last().is_none_or(|(last, _)| *last != place) {
+                    held.push((place, Vec::new()));
+                }
+                if let Some((_, privileges)) = held.last_mut() {
+                    privileges.extend(grant.privileges.iter().map(String::as_str));
+                }
+            }
             if held.is_empty() {
                 lines.push(fit(format!("{selected} holds no grants here")));
             }
-            for grant in held {
-                lines.push(fit(format!(
-                    "  {} on {}",
-                    grant.privileges.join(", "),
-                    grant.target.display_unquoted()
-                )));
+            for (place, privileges) in held {
+                lines.push(fit(format!("  {place}: {}", privileges.join(", "))));
             }
+        } else {
+            lines.push(fit("No roles or grants to show on this connection.".into()));
         }
         if self.has_password {
             lines.push("password: ***".into());
         }
         lines.push(String::new());
-        let hint = if target.is_empty() {
+        let hint = if target.is_empty() || self.principals.is_empty() {
             "Up/Down pick a role  Esc close".to_string()
         } else {
             format!("Up/Down pick a role  Enter grant SELECT on {target} to it  Esc close")
@@ -105,5 +113,24 @@ mod tests {
         assert!(dump.contains("***"));
         assert!(!dump.to_ascii_lowercase().contains("s3cret"));
         assert!(!dump.to_ascii_lowercase().contains("password="));
+    }
+
+    #[test]
+    fn a_role_is_listed_with_what_it_may_do_where_and_an_empty_panel_says_so() {
+        use dexo_driver_api::{GrantRecord, QualifiedName};
+        let record = |privilege: &str| GrantRecord {
+            principal: QualifiedName::new(None::<String>, None::<String>, "root"),
+            target: QualifiedName::new(Some("*"), None::<String>, "*"),
+            privileges: vec![privilege.into()],
+        };
+        let screen = SecurityScreen {
+            principals: vec!["root".into()],
+            grants: vec![record("SELECT"), record("INSERT")],
+            ..SecurityScreen::default()
+        };
+        let text = screen.lines(80, "qa.orders").join("\n");
+        assert!(text.contains("*.*: SELECT, INSERT"), "{text}");
+        let empty = SecurityScreen::default().lines(80, "").join("\n");
+        assert!(empty.contains("No roles or grants"), "{empty}");
     }
 }
