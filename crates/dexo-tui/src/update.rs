@@ -14580,14 +14580,18 @@ fn save_history_entry(model: &mut Model) -> Vec<Effect> {
 
 /// `x` in History: the statement out of it, with the runs of it the filters show.
 fn delete_history_entry(model: &mut Model) -> Vec<Effect> {
-    let Some(ids) = model
-        .editor
-        .history_lines()
-        .get(model.editor.history_selected)
-        .map(|line| line.ids.clone())
-    else {
+    let Some(row) = crate::screens::editor::picked_history(model) else {
         return Vec::new();
     };
+    // Every run of it on that connection, those the filters hide too: it came back
+    // with them once the filters were off.
+    let ids: Vec<String> = model
+        .editor
+        .history
+        .iter()
+        .filter(|run| run.sql == row.sql && run.connection_id == row.connection_id)
+        .map(|run| run.id.clone())
+        .collect();
     model.editor.history.retain(|row| !ids.contains(&row.id));
     model.editor.clamp_history();
     model.messages.info(format!(

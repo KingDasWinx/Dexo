@@ -428,3 +428,31 @@ fn a_paste_goes_into_the_search_not_the_hidden_document() {
     assert_eq!(model.editor.history.len(), 5, "x deleted a statement");
     assert_eq!(model.active_document().text(), before);
 }
+
+/// Deleted under a filter, a statement goes with every run of it, not only those shown.
+#[test]
+fn delete_takes_the_runs_the_filters_hide() {
+    let mut model = history_with_connections();
+    model.editor.history[3].outcome = HistoryOutcome::Failed;
+    // Failed only: count(*) shows by its one failed run, its ok run hidden.
+    press(&mut model, KeyCode::Char('f'));
+    press(&mut model, KeyCode::Char('f'));
+    let pick = shown(&model)
+        .iter()
+        .position(|sql| sql == "select count(*) from orders")
+        .expect("listed");
+    for _ in 0..pick {
+        press(&mut model, KeyCode::Down);
+    }
+    let effects = press(&mut model, KeyCode::Char('x'));
+    let ids = effects
+        .iter()
+        .find_map(|effect| match effect {
+            Effect::DeleteHistory { ids } => Some(ids.clone()),
+            _ => None,
+        })
+        .expect("deletes");
+    assert_eq!(ids.len(), 2, "{ids:?}");
+    press(&mut model, KeyCode::Esc);
+    assert!(!shown(&model).contains(&"select count(*) from orders".to_string()));
+}
