@@ -1,8 +1,8 @@
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use dexo_driver_api::DbValue;
 use dexo_sql::{
-    CompletionItem, Dialect, FakeCatalog, HighlightSpan, HistoryPolicy, ParserService, Snippet,
-    complete_with, format_sql, named_parameters,
+    CompletionItem, Dialect, FakeCatalog, HighlightSpan, ParserService, Snippet, complete_with,
+    format_sql, named_parameters,
 };
 
 use crate::model::{EditorDocument, Model};
@@ -66,7 +66,6 @@ pub struct EditorState {
     pub history_search: crate::screen::widgets::Search,
     pub history_connection: Option<String>,
     pub history_status: StatusFilter,
-    pub history_policy: HistoryPolicy,
     catalog: FakeCatalog,
     /// The completion catalog, and the catalog and explorer revisions it was built from.
     /// Building it walks and clones every object the connection has loaded, so doing it
@@ -138,7 +137,6 @@ impl Clone for EditorState {
             history_search: self.history_search.clone(),
             history_connection: self.history_connection.clone(),
             history_status: self.history_status,
-            history_policy: self.history_policy,
             catalog: self.catalog.clone(),
             catalog_key: None,
             catalog_snapshot: None,
@@ -209,7 +207,6 @@ impl Default for EditorState {
             history_search: Default::default(),
             history_connection: None,
             history_status: StatusFilter::All,
-            history_policy: HistoryPolicy::SqlOnly,
             catalog: FakeCatalog::default(),
             catalog_key: None,
             catalog_snapshot: None,
