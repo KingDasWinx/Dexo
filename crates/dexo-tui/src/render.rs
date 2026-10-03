@@ -48,12 +48,36 @@ fn asciify(frame: &mut Frame) {
     }
 }
 
+/// The smallest terminal every screen and dialog is laid out for.
+pub const MIN_WIDTH: u16 = 20;
+pub const MIN_HEIGHT: u16 = 8;
+
 fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     hits.clear();
     let area = frame.area();
     frame
         .buffer_mut()
         .set_style(area, model.theme.base(model.capabilities));
+    // Below the size everything was laid out for, a sentence that says so beats panes
+    // and dialogs cut into pieces.
+    if area.width < MIN_WIDTH || area.height < MIN_HEIGHT {
+        let text = format!(
+            "Terminal too small: Dexo needs {MIN_WIDTH}x{MIN_HEIGHT}, this one is {}x{}.",
+            area.width, area.height
+        );
+        let lines = crate::model::wrap_words(&text, usize::from(area.width).max(1));
+        let top = area.y + area.height.saturating_sub(lines.len() as u16) / 2;
+        frame.render_widget(
+            Paragraph::new(lines.join("\n")).alignment(ratatui::layout::Alignment::Center),
+            Rect::new(
+                area.x,
+                top,
+                area.width,
+                area.height.saturating_sub(top - area.y),
+            ),
+        );
+        return;
+    }
     let plan =
         LayoutPlan::for_area_with_document_tabs(frame.area(), Some(&model.effective_panes()), true);
     let header = render_header(
