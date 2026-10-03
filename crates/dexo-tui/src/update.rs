@@ -3746,8 +3746,12 @@ fn mouse_connection_form(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effec
         }
 
         Some(HitTarget::FormField(index)) => {
-            if index < model.connection_form.fields.len() {
-                model.connection_form.focus = index;
+            let form = &mut model.connection_form;
+            // A click away from the URL reads it, as the keys leaving it do.
+            if index < form.fields.len()
+                && !(form.on_url() && index != form.focus && !form.apply_url())
+            {
+                form.focus = index;
             }
             Vec::new()
         }
@@ -6450,6 +6454,18 @@ fn handle_connection_form_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
         KeyCode::BackTab | KeyCode::Up => {
+            // Up from a URL reads it as Down does; one that fills the form lands on
+            // the name, one that is not a URL stays with its reason.
+            let form = &mut model.connection_form;
+            if form.on_url() {
+                let typed = form
+                    .fields
+                    .get(form.focus)
+                    .is_some_and(|field| !field.value.trim().is_empty());
+                if !form.apply_url() || typed {
+                    return Vec::new();
+                }
+            }
             model.connection_form.focus_prev();
             Vec::new()
         }

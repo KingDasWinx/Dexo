@@ -520,3 +520,44 @@ fn deleting_the_last_connection_picks_the_one_before() {
     assert!(model.connections.picked().is_some());
     assert_eq!(model.connections.selected_profile, last - 1);
 }
+
+/// A URL typed by hand shows no password, and is read however the field is left.
+#[test]
+fn a_typed_urls_password_never_shows_and_up_reads_it() {
+    let mut model = four_connections();
+    press(&mut model, KeyCode::Char('u'));
+    for ch in "postgres://ana:s3cret".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    let frame = paint(&mut model);
+    assert!(!frame.contains("s3cret"), "{frame}");
+    for ch in "@db.local/shop".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    let frame = paint(&mut model);
+    assert!(!frame.contains("s3cret"), "{frame}");
+    press(&mut model, KeyCode::Up);
+    assert_eq!(form_value(&model, "host"), "db.local");
+    assert_eq!(form_value(&model, "url"), "");
+}
+
+/// Submitted with a URL still in its field, the URL is read first.
+#[test]
+fn submit_reads_a_url_left_in_its_field() {
+    let mut model = four_connections();
+    press(&mut model, KeyCode::Char('u'));
+    for ch in "nonsense".chars() {
+        press(&mut model, KeyCode::Char(ch));
+    }
+    let effects = update(&mut model, Action::SaveConnection);
+    assert!(effects.is_empty(), "{effects:?}");
+    assert!(
+        model
+            .connection_form
+            .errors
+            .iter()
+            .any(|error| error.contains("not a connection URL")),
+        "{:?}",
+        model.connection_form.errors
+    );
+}

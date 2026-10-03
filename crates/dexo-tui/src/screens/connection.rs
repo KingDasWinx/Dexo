@@ -464,6 +464,10 @@ impl ConnectionForm {
     }
 
     pub fn submit(&mut self) -> Option<(NewConnection, String)> {
+        // A URL still in its field is read first: submitted, it was left out unsaid.
+        if !self.apply_url() {
+            return None;
+        }
         self.clear_status();
         let password = field(&self.fields, "password");
         let missing = self.missing_fields();
@@ -586,6 +590,8 @@ impl ConnectionForm {
             // One mark per character typed, so a slip of the finger shows; the
             // characters themselves never reach the screen.
             "*".repeat(field.value.len())
+        } else if field.label == "url" {
+            masked_url(field.value.as_str())
         } else {
             field.value.as_str().to_string()
         };
@@ -697,6 +703,31 @@ fn shown_label(label: &str) -> String {
         })
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// A URL with its password as one mark a character, as the password field shows one: in
+/// `scheme://user:password@host`, what is between the user's `:` and the last `@`, or
+/// to the end while the `@` is not typed yet -- unless a `/` says the `:` is a port's.
+fn masked_url(url: &str) -> String {
+    let Some((scheme, rest)) = url.split_once("://") else {
+        return url.to_string();
+    };
+    let Some(colon) = rest.find(':') else {
+        return url.to_string();
+    };
+    let end = match rest.rfind('@') {
+        Some(at) if at > colon => at,
+        Some(_) => return url.to_string(),
+        None if rest[colon..].contains('/') => return url.to_string(),
+        None => rest.len(),
+    };
+    let password = &rest[colon + 1..end];
+    format!(
+        "{scheme}://{}:{}{}",
+        &rest[..colon],
+        "*".repeat(password.chars().count()),
+        &rest[end..]
+    )
 }
 
 fn is_basic(label: &str) -> bool {
@@ -1169,6 +1200,27 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
 #[cfg(test)]
 mod tests {
     use super::{ConnectionForm, shown_label};
+
+    #[test]
+    fn a_urls_password_is_masked_as_it_is_typed_and_after() {
+        assert_eq!(
+            super::masked_url("postgres://ana:s3cret@db:5432/x"),
+            "postgres://ana:******@db:5432/x"
+        );
+        assert_eq!(
+            super::masked_url("postgres://ana:s3c"),
+            "postgres://ana:***"
+        );
+        assert_eq!(
+            super::masked_url("postgres://db:5432/x"),
+            "postgres://db:5432/x",
+            "a port is not a password"
+        );
+        assert_eq!(
+            super::masked_url("postgres://ana@db/x"),
+            "postgres://ana@db/x"
+        );
+    }
 
     #[test]
     fn password_field_is_masked_and_kept_until_the_form_closes() {
