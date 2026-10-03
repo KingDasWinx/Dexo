@@ -475,16 +475,6 @@ impl SchemaDiffScreen {
         self.selected = self.selected.min(self.filtered().len().saturating_sub(1));
         self.scroll = 0;
     }
-
-    /// The button the footer's first stop is: it compares while picking and, with a
-    /// result, opens the script in a document.
-    pub fn submit_label(&self) -> &'static str {
-        if self.source_prompt {
-            "Compare"
-        } else {
-            "Open script"
-        }
-    }
 }
 
 /// The keys of the dialog: the rows (or the list), Left and Right on a row, the filters,

@@ -4004,7 +4004,6 @@ fn mouse_schema_diff(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         Some(HitTarget::FooterSubmit) if model.schema_diff.source_prompt => {
             crate::screens::schema_diff::request(model)
         }
-        Some(HitTarget::FooterSubmit) => crate::screens::schema_diff::open_script(model),
         // As the key: back to the result there is, else off the screen.
         Some(HitTarget::FooterCancel) if model.schema_diff.compared => {
             let diff = &mut model.schema_diff;

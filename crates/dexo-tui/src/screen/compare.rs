@@ -237,7 +237,7 @@ fn picking(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     });
     lines.push(String::new());
     let footer_row = lines.len();
-    let footer = crate::widgets::form::footer_line(diff.submit_label(), diff.footer);
+    let footer = crate::widgets::form::footer_line("Compare", diff.footer);
     lines.push(footer.clone());
     let height = (lines.len() as u16 + 2).min(area.height);
     let pane = Rect::new(area.x, area.y, width, height);
@@ -249,7 +249,7 @@ fn picking(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     for index in 0..lines.len().min(usize::from(inner.height)) {
         let rect = crate::mouse::line_rect(inner, index);
         if index == footer_row {
-            crate::widgets::form::register_footer(hits, rect, &footer, diff.submit_label());
+            crate::widgets::form::register_footer(hits, rect, &footer, "Compare");
         } else if Some(index) == file_row {
             hits.register(HitTarget::FormField(2), rect);
             if diff.row == 2 && diff.footer == FooterFocus::Input {
