@@ -11,14 +11,14 @@ expression: "render_to_string(&model, 60, 20)"
 │  ~ db.public.users.age  may lose data, cannot be undone  │
 │                                                          │
 │                                                          │
-└──────────────────────────────────────────────────────────┘
-┌  db.public.orders_new────────────────────────────────────┐
-│ [⏎ Open script]  [w Whole script]  [y Copy]              │
 │                                                          │
-│ Change  added                                            │
-│ Object  table db.public.orders_new                       │
-│ Risk    none                                             │
 │                                                          │
-│ No statement: this difference is left to be made by hand.│
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
+│                                                          │
 └──────────────────────────────────────────────────────────┘
-Compare  Up/Down pick  a/r/c filter  p sources    Ctrl+P  F1
+Compare  Enter details  s swap  e compare         Ctrl+P  F1

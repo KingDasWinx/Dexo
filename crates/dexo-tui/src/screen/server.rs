@@ -310,16 +310,27 @@ fn sessions(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         widgets::empty_with_buttons(frame, area, model, hits, &[line.to_string()], &[button]);
         return;
     }
-    let list_rows = (shown.len() as u16 + 3).clamp(5, (area.height * 3 / 5).max(5));
-    let [list, detail] =
-        Layout::vertical([Constraint::Length(list_rows), Constraint::Min(0)]).areas(area);
+    let (list, detail) = if area.width < super::FOLD_WIDTH {
+        hits.fold();
+        let none = Rect::new(area.x, area.y, 0, 0);
+        if super::section(model) == super::Section::Detail {
+            (none, area)
+        } else {
+            (area, none)
+        }
+    } else {
+        let list_rows = (shown.len() as u16 + 3).clamp(5, (area.height * 3 / 5).max(5));
+        let [list, detail] =
+            Layout::vertical([Constraint::Length(list_rows), Constraint::Min(0)]).areas(area);
+        (list, detail)
+    };
     list_pane(frame, list, model, hits, &shown);
     detail_pane(frame, detail, model, hits);
 }
 
 /// The column names, the sorted one marked; `narrow` drops who and where, which the
-/// detail still says.
-fn header(sort: SessionSort, narrow: bool) -> String {
+/// detail still says. The state's column is `state` wide.
+fn header(sort: SessionSort, narrow: bool, state: usize) -> String {
     let mark = |name: &str, column: SessionSort| {
         if sort == column {
             format!("{name} ▼")
@@ -336,7 +347,7 @@ fn header(sort: SessionSort, narrow: bool) -> String {
         ));
     }
     header.push_str(&format!(
-        "{:<26} {:>8}  QUERY",
+        "{:<state$} {:>8}  QUERY",
         mark("STATE", SessionSort::State),
         mark("TIME", SessionSort::Time)
     ));
@@ -374,10 +385,24 @@ fn list_pane(
     hits.register(HitTarget::ScreenList, area);
     let narrow = inner.width < 100;
     let style = |role: Role| model.theme.style(role, model.capabilities);
+    let state_of = |session: &dexo_driver_api::SessionInfo| {
+        if admin.is_you(session) {
+            format!("{} · you", session.state)
+        } else {
+            session.state.clone()
+        }
+    };
+    // As wide as the widest state, less where room is short: the detail has it whole.
+    let state_width = shown
+        .iter()
+        .map(|session| unicode_width::UnicodeWidthStr::width(state_of(session).as_str()))
+        .max()
+        .unwrap_or(0)
+        .clamp(7, if inner.width < 80 { 12 } else { 26 });
     if inner.height > 1 {
         frame.render_widget(
             ratatui::widgets::Paragraph::new(crate::model::truncate_cell(
-                &header(admin.sort, narrow),
+                &header(admin.sort, narrow, state_width),
                 usize::from(inner.width),
             ))
             .style(style(Role::Muted).add_modifier(ratatui::style::Modifier::BOLD)),
@@ -405,11 +430,7 @@ fn list_pane(
             } else {
                 Span::styled("●", style(Role::Muted))
             };
-            let state = if admin.is_you(session) {
-                format!("{} · you", session.state)
-            } else {
-                session.state.clone()
-            };
+            let state = state_of(session);
             let query = one_line(session.current_query.as_deref().unwrap_or("-"));
             let query = match note {
                 Some(note) => format!("[{note}] {query}"),
@@ -425,7 +446,7 @@ fn list_pane(
             }
             text.push_str(&format!(
                 "{} {:>8}  {query}",
-                cell(&state, 26),
+                cell(&state, state_width),
                 session
                     .duration_ms
                     .map(duration)

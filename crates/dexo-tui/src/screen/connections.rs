@@ -47,7 +47,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         &toolbar_buttons(),
     );
     let items = screen.items();
-    let (list, detail) = super::list_and_detail(area, items.len());
+    let (list, detail) = super::list_and_detail(model, hits, area, items.len());
     list_pane(frame, list, model, hits, &items);
     if model.connection_form.open {
         form(frame, detail, model, hits);

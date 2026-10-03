@@ -177,8 +177,11 @@ pub fn detail_is_form(model: &Model) -> bool {
 }
 
 /// How many sections the screen drew: its list and its detail, one alone, or none on an
-/// empty screen.
+/// empty screen. Folded, it has both, one at a time.
 pub fn section_count(model: &Model) -> usize {
+    if model.hits.folded() {
+        return 2;
+    }
     usize::from(model.hits.has(HitTarget::ScreenList))
         + usize::from(model.hits.has(HitTarget::ScreenDetail))
 }
@@ -299,7 +302,8 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
 }
 
 /// What the status line says on the current screen, after its name.
-pub fn hints(model: &Model) -> String {
+/// `hits` is the frame being drawn: what it shows of the screen, not the last frame's.
+pub fn hints(model: &Model, hits: &HitMap) -> String {
     let hints = match model.shown_screen() {
         Screen::Agents => agents::hints(model),
         Screen::Connections => connections::hints(model),
@@ -308,12 +312,41 @@ pub fn hints(model: &Model) -> String {
         Screen::Server => server::hints(model),
         _ => "Esc back".into(),
     };
+    let free = held(model).is_none() && !detail_is_form(model);
+    // A toolbar's button that did not fit is said here, first: the line is cut at its end.
+    let unseen: Vec<String> = toolbar_buttons(model)
+        .iter()
+        .filter(|button| free && !hits.has(HitTarget::Press(button.key, button.shift)))
+        .map(|button| {
+            format!(
+                "{} {}",
+                widgets::key_label(button.key),
+                button.label.trim_end_matches('…').to_lowercase()
+            )
+        })
+        .collect();
+    let hints = if unseen.is_empty() {
+        hints
+    } else {
+        format!("{}  {hints}", unseen.join("  "))
+    };
+    // Folded to one column, Enter shows the pick's detail and Esc goes back to the list.
+    let folded = hits.folded() && free;
     // On the detail the arrows read it; the letters still act on the pick.
-    if section(model) == Section::Detail && held(model).is_none() && !detail_is_form(model) {
-        match hints.find("Up/Down pick") {
+    if section(model) == Section::Detail && free {
+        let hints = match hints.find("Up/Down pick") {
             Some(_) => hints.replacen("Up/Down pick", "Up/Down read", 1),
             None => format!("Up/Down read  {hints}"),
+        };
+        // Folded, the way back is said first: the line is short there.
+        if folded {
+            let rest = hints.replace("  Esc back", "").replace("Esc back", "");
+            format!("Esc the list  {rest}")
+        } else {
+            hints
         }
+    } else if folded {
+        format!("Enter details  {hints}")
     } else {
         hints
     }
@@ -359,8 +392,26 @@ pub fn views_bar(
     )
 }
 
-/// A list beside its detail on a wide screen, above it on a narrow one.
-pub fn list_and_detail(area: Rect, list_rows: usize) -> (Rect, Rect) {
+/// Under this many columns a screen shows its list or its detail, not both.
+pub const FOLD_WIDTH: u16 = 80;
+
+/// A list beside its detail on a wide screen, above it on a narrower one; under
+/// [`FOLD_WIDTH`] one of them, the one with the keys, and the other an empty rect.
+pub fn list_and_detail(
+    model: &Model,
+    hits: &mut HitMap,
+    area: Rect,
+    list_rows: usize,
+) -> (Rect, Rect) {
+    if area.width < FOLD_WIDTH {
+        hits.fold();
+        let none = Rect::new(area.x, area.y, 0, 0);
+        return if section(model) == Section::Detail {
+            (none, area)
+        } else {
+            (area, none)
+        };
+    }
     if area.width >= 100 {
         let [list, detail] =
             Layout::horizontal([Constraint::Percentage(42), Constraint::Percentage(58)])
@@ -555,20 +606,23 @@ pub fn views_and_toolbar(
         hits,
         views,
     );
-    widgets::toolbar(
-        frame,
-        Rect::new(
-            area.x + views_width,
-            area.y,
-            area.width - views_width,
-            area.height,
-        ),
-        model,
-        hits,
-        search,
-        chips,
-        buttons,
-    );
+    // Too little left beside the views for a search box: the keys say the rest.
+    if area.width - views_width >= 16 {
+        widgets::toolbar(
+            frame,
+            Rect::new(
+                area.x + views_width,
+                area.y,
+                area.width - views_width,
+                area.height,
+            ),
+            model,
+            hits,
+            search,
+            chips,
+            buttons,
+        );
+    }
     let row = 1.min(area.height);
     Rect::new(area.x, area.y + row, area.width, area.height - row)
 }

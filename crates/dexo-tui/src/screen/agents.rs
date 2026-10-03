@@ -104,7 +104,7 @@ fn setup(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         setup_form(frame, area, model, hits);
         return;
     }
-    let (list, detail) = super::list_and_detail(area, setup.clients.len());
+    let (list, detail) = super::list_and_detail(model, hits, area, setup.clients.len());
     setup_list(frame, list, model, hits);
     setup_form(frame, detail, model, hits);
 }
@@ -432,7 +432,7 @@ fn approvals(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         .iter()
         .map(|request| audit.row(request))
         .collect();
-    let (list, detail) = super::list_and_detail(area, rows.len());
+    let (list, detail) = super::list_and_detail(model, hits, area, rows.len());
     super::list_pane(
         frame,
         list,
@@ -757,7 +757,7 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         super::empty_state(frame, area, model, &lines);
         return;
     }
-    let (list, detail) = super::list_and_detail(area, screen.profiles.len());
+    let (list, detail) = super::list_and_detail(model, hits, area, screen.profiles.len());
     profiles_list(frame, list, model, hits);
     if let Some(form) = &screen.grant_form {
         grant_form(frame, detail, model, form, hits);

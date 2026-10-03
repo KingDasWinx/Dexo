@@ -5090,6 +5090,31 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
 /// Keys on a screen other than the workbench: its own first, then Esc back, then the
 /// keymap's global chords -- only those that do not act on the hidden workbench.
 fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+    // Folded to one column, Enter goes from the list into the pick's detail and Esc back
+    // out of it; the detail's own Enter presses its buttons.
+    if model.pending_chord.keys.is_empty()
+        && model.hits.folded()
+        && key.modifiers.is_empty()
+        && crate::screen::held(model).is_none()
+        && !crate::screen::detail_is_form(model)
+        && !(model.shown_screen() == crate::model::Screen::Compare
+            && model.schema_diff.source_prompt)
+    {
+        use crate::screen::Section;
+        let at = model.shown_screen().index();
+        match (crate::screen::section(model), key.code) {
+            (Section::List, KeyCode::Enter) => {
+                model.sections[at] = Section::Detail;
+                model.screen_button = 0;
+                return Vec::new();
+            }
+            (Section::Detail, KeyCode::Esc) => {
+                model.sections[at] = Section::List;
+                return Vec::new();
+            }
+            _ => {}
+        }
+    }
     if model.pending_chord.keys.is_empty() {
         // On the detail Left and Right walk its buttons and Enter presses the one walked
         // to; Up and Down still read it.

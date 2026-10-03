@@ -174,9 +174,20 @@ pub struct HitMap {
     targets: Vec<(HitTarget, Rect)>,
     scroll_limits: Vec<(ScrollArea, u16)>,
     pages: Vec<(ScrollArea, u16)>,
+    /// The screen drew one of its list and its detail, the one with the keys: too narrow
+    /// for both.
+    folded: bool,
 }
 
 impl HitMap {
+    pub fn fold(&mut self) {
+        self.folded = true;
+    }
+
+    pub fn folded(&self) -> bool {
+        self.folded
+    }
+
     /// The furthest a view can scroll, as last drawn. Only the render knows how many lines
     /// a view has and how tall it came out; without the bound, every key past the end kept
     /// counting, and scrolling back took as many presses before anything moved.

@@ -150,7 +150,7 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if on_workbench && plan.mode == crate::layout::LayoutMode::Compact {
         render_pane_switcher(frame, plan.context, model, hits, header);
     }
-    crate::widgets::status::render(frame, plan.status, model);
+    crate::widgets::status::render(frame, plan.status, model, hits);
     if model.onboarding.open {
         render_onboarding(frame, model, hits);
         return;

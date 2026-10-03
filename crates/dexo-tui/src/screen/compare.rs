@@ -44,7 +44,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         }
         return;
     }
-    let (list, detail) = super::list_and_detail(rest, shown.len() + 4);
+    let (list, detail) = super::list_and_detail(model, hits, rest, shown.len() + 4);
     list_pane(frame, list, model, hits);
     detail_pane(frame, detail, model, hits);
 }

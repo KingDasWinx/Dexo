@@ -6,9 +6,9 @@ expression: "render_to_string(&model, 160, 50)"
 [1 Sessions]  2 Locks   3 Sizes   4 Stats   5 Settings  [c Server: local]                                                                 [p Pause]  [r Refresh]
 / search                        [a Idle: hidden]                                                                                                                
 ┌▸ Sessions (2) · 1 blocked · every 2s─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
-│    PID      USER         DATABASE     STATE                        TIME ▼  QUERY                                                                             │
-│> ● 11       dexo         dexo         idle in transaction            4.0s  [blocks 10] lock table items                                                      │
-│  ⊘ 10       dexo         dexo         active                         1.2s  [blocked by 11] select 1                                                          │
+│    PID      USER         DATABASE     STATE                 TIME ▼  QUERY                                                                                    │
+│> ● 11       dexo         dexo         idle in transaction     4.0s  [blocks 10] lock table items                                                             │
+│  ⊘ 10       dexo         dexo         active                  1.2s  [blocked by 11] select 1                                                                 │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌  Session 11──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ [k Cancel query]  [t Terminate…]  [y Copy query]  [o Open in editor]                                                                                         │

@@ -9,7 +9,9 @@ use dexo_driver_api::TransactionState;
 use ratatui::style::Style;
 use ratatui::text::{Line, Span};
 
-pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
+/// The status line; `hits` is what this frame drew above it, which says what the screen's
+/// keys are said for.
+pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &crate::mouse::HitMap) {
     if area.width == 0 || area.height == 0 {
         return;
     }
@@ -123,7 +125,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model) {
         let doors = doors(model);
         let used: usize = spans.iter().map(|span| span.content.chars().count()).sum();
         let room = (area.width as usize).saturating_sub(used + doors.chars().count() + 2);
-        let hint = fit_hint(&crate::screen::hints(model), room);
+        let hint = fit_hint(&crate::screen::hints(model, hits), room);
         let gap = (area.width as usize)
             .saturating_sub(used + hint.chars().count() + doors.chars().count());
         spans.push(Span::raw(hint));

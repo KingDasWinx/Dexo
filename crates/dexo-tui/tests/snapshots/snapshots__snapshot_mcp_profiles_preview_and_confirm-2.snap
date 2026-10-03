@@ -3,18 +3,18 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 60, 20)"
 ---
 [Agents]  demo  local  public                               
- 1 Approvals   2 Activity  [3 Profiles]  4 Setup     [n New]
-┌  Profiles (1)────────────────────────────────────────────┐
-│> ○ assistant  1 conn    browse    1 grant                │
-│                                                          │
-│                                                          │
-└──────────────────────────────────────────────────────────┘
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup            
 ┌▸ assistant───────────────────────────────────────────────┐
 │ [e Enable]  [c Connections…]  [q Read SQL on]  [g Grant…]│
 │ [r Revoke grants]  [x Delete]                            │
 │                                                          │
 │ State        disabled                                    │
 │ Connections  local                                       │
+│ Access       browse and describe only                    │
+│ Sees         db.public.*                                 │
+│ Never        db.public.secrets                           │
+│ Tools        catalog_search, object_describe             │
+│ ── Grants                                                │
 │Enable assistant?                                         │
 │Agents that connect through it can then use what it allows│
 │Connections: local.                                       │

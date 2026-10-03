@@ -207,7 +207,7 @@ fn history(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         return;
     }
     let picked = editor.history_selected.min(lines.len() - 1);
-    let (list, detail) = super::list_and_detail(area, lines.len() + 2);
+    let (list, detail) = super::list_and_detail(model, hits, area, lines.len() + 2);
     list_pane(frame, list, model, hits, &lines, picked);
     let line = &lines[picked];
     let row = line.row;
@@ -454,7 +454,7 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         })
         .collect();
     let picked = picker.selected.min(rows.len() - 1);
-    let (list, detail) = super::list_and_detail(area, rows.len());
+    let (list, detail) = super::list_and_detail(model, hits, area, rows.len());
     super::list_pane(
         frame,
         list,
