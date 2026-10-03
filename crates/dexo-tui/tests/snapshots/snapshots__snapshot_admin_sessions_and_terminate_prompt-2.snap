@@ -1,16 +1,15 @@
 ---
 source: crates/dexo-tui/tests/snapshots.rs
-assertion_line: 275
 expression: "render_to_string(&model, 100, 30)"
 ---
  Workbench  Connections  Agents [Server] Compare  History   demo  local  public                     
 local · 2 sessions · 1 blocked · every 2s                                                           
-┌▸ Sessions (2)────────────────────────────────────────────────────────────────────────────────────┐
+┌  Sessions (2)────────────────────────────────────────────────────────────────────────────────────┐
 │  ID       USER         DATABASE     STATE                  TIME  QUERY                           │
 │  10       dexo         dexo         active                 1.2s  [blocked by 11] select 1        │
 │> 11       dexo         dexo         idle in transaction    4.0s  [blocks 10] lock table items    │
 └──────────────────────────────────────────────────────────────────────────────────────────────────┘
-┌  Session 11──────────────────────────────────────────────────────────────────────────────────────┐
+┌▸ Session 11──────────────────────────────────────────────────────────────────────────────────────┐
 │Session 11 · dexo@dexo · idle in transaction · 4.0s                                               │
 │Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                    │
 │                                                                                                  │

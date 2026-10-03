@@ -2828,6 +2828,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             Vec::new()
         }
         Action::GoToScreen(screen) => go_to_screen(model, screen),
+        Action::FocusScreenSection(index) => focus_section(model, index),
         Action::ScreenBack => {
             let back = if model.previous_screen == model.screen {
                 crate::model::Screen::Workbench
@@ -4172,6 +4173,20 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 /// A click on a screen other than the workbench.
 fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    // A click in a section gives it the keys, unless a form or a question holds them.
+    let clicked = match hit {
+        Some(HitTarget::ScreenList | HitTarget::ListRow(_)) => Some(crate::screen::Section::List),
+        Some(HitTarget::ScreenDetail) => Some(crate::screen::Section::Detail),
+        _ => None,
+    };
+    if let Some(section) = clicked
+        && crate::screen::held(model).is_none()
+    {
+        model.sections[model.shown_screen().index()] = section;
+    }
+    if clicked != Some(crate::screen::Section::Detail) {
+        model.detail_scroll = 0;
+    }
     match model.screen {
         crate::model::Screen::Agents => mouse_agents(model, hit),
         crate::model::Screen::Server => mouse_admin(model, hit),
@@ -4628,6 +4643,23 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         // wrong line.
         crate::screens::editor::close_completion(model);
     }
+    // The wheel over a screen's detail reads it, on every screen; elsewhere it picks.
+    if overlay.is_none()
+        && model.screen != crate::model::Screen::Workbench
+        && crate::screen::held(model).is_none()
+        && matches!(
+            model.hits.at(mouse.column, mouse.row),
+            Some(HitTarget::ScreenDetail)
+        )
+    {
+        let scroll = model.hits.scroll(
+            crate::mouse::ScrollArea::ScreenDetail,
+            crate::screen::detail_scroll(model),
+            delta,
+        );
+        crate::screen::set_detail_scroll(model, scroll);
+        return Vec::new();
+    }
     if overlay.is_none() && model.screen == crate::model::Screen::History {
         match model.history_view {
             crate::screen::history::HistoryView::History => {
@@ -4695,17 +4727,6 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     if overlay.is_none() && model.screen == crate::model::Screen::Compare {
-        if matches!(
-            model.hits.at(mouse.column, mouse.row),
-            Some(HitTarget::ScreenDetail)
-        ) {
-            model.schema_diff.scroll = model.hits.scroll(
-                crate::mouse::ScrollArea::SchemaDiff,
-                model.schema_diff.scroll,
-                delta,
-            );
-            return Vec::new();
-        }
         let count = model.schema_diff.filtered().len();
         if count > 0 {
             if delta < 0 {
@@ -4891,6 +4912,21 @@ fn handle_mouse_horizontal_scroll(model: &mut Model, action: Action) -> Vec<Effe
 /// keymap's global chords -- only those that do not act on the hidden workbench.
 fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.pending_chord.keys.is_empty() {
+        if crate::screen::section(model) == crate::screen::Section::Detail
+            && crate::screen::held(model).is_none()
+            && model.hits.has(HitTarget::ScreenDetail)
+            && key.modifiers.is_empty()
+            && let Some(delta) = reading_delta(model, key.code)
+        {
+            let scroll = model.hits.scroll(
+                crate::mouse::ScrollArea::ScreenDetail,
+                crate::screen::detail_scroll(model),
+                delta,
+            );
+            crate::screen::set_detail_scroll(model, scroll);
+            return Vec::new();
+        }
+        model.detail_scroll = 0;
         let own = match model.screen {
             crate::model::Screen::Agents => agents_key(model, key),
             crate::model::Screen::Server => server_key(model, key),
@@ -4955,6 +4991,86 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             Vec::new()
         }
     }
+}
+
+/// How far a key reads a detail: a line, a page, or to either end.
+fn reading_delta(model: &Model, code: KeyCode) -> Option<i32> {
+    let page = i32::from(model.hits.page(
+        crate::mouse::ScrollArea::ScreenDetail,
+        (model.height / 3).max(1),
+    ));
+    Some(match code {
+        KeyCode::Up => -1,
+        KeyCode::Down => 1,
+        KeyCode::PageUp => -page,
+        KeyCode::PageDown => page,
+        KeyCode::Home => -i32::from(u16::MAX),
+        KeyCode::End => i32::from(u16::MAX),
+        _ => return None,
+    })
+}
+
+/// The section a key goes to on a screen: the workbench's pane keys, Alt+1 the first,
+/// Alt+2 the second, as the keymap has them.
+fn section_key(model: &Model, key: &KeyEvent) -> Option<usize> {
+    let chord = crate::keymap::Chord {
+        keys: vec![crate::keymap::KeySpec {
+            modifiers: key.modifiers,
+            code: key.code,
+        }],
+    };
+    match model
+        .keymap
+        .resolve(&chord, crate::keymap::KeyContext::Global)
+    {
+        Ok(Some("focus.explorer")) => Some(0),
+        Ok(Some("focus.editor")) => Some(1),
+        Ok(Some("focus.results")) => Some(2),
+        _ => None,
+    }
+}
+
+/// Gives the keys to a screen's `index`th section, of those it drew.
+fn focus_section(model: &mut Model, index: usize) -> Vec<Effect> {
+    use crate::screen::Section;
+    let count = crate::screen::section_count(model);
+    if count == 0 {
+        return Vec::new();
+    }
+    let title = model.shown_screen().title();
+    if index >= count {
+        let keys: Vec<String> = ["focus.explorer", "focus.editor"]
+            .iter()
+            .take(count)
+            .filter_map(|command| crate::palette::shortcut_for(model, command, None))
+            .collect();
+        model.messages.info(if count == 1 {
+            format!("{title} has one pane here.")
+        } else {
+            format!("{title} has two panes: {}.", keys.join(" and "))
+        });
+        return Vec::new();
+    }
+    // One section alone is whichever was drawn.
+    let wanted = if count == 1 {
+        if model.hits.has(HitTarget::ScreenList) {
+            Section::List
+        } else {
+            Section::Detail
+        }
+    } else if index == 0 {
+        Section::List
+    } else {
+        Section::Detail
+    };
+    if let Some((holding, how)) = crate::screen::held(model)
+        && holding != wanted
+    {
+        model.messages.info(how.into());
+        return Vec::new();
+    }
+    model.sections[model.shown_screen().index()] = wanted;
+    Vec::new()
 }
 
 /// The Agents screen's keys. None leaves the key to the keymap and Esc to going back.
@@ -5382,6 +5498,14 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     }
     if model.config_transfer.open {
         return handle_config_transfer_key(model, key);
+    }
+    // Alt+1 and Alt+2 go to a screen's list and detail, as they go to the workbench's
+    // panes; the form open in Connections' detail included.
+    if model.shown_screen() != crate::model::Screen::Workbench
+        && model.pending_chord.keys.is_empty()
+        && let Some(index) = section_key(model, &key)
+    {
+        return update(model, Action::FocusScreenSection(index));
     }
     if model.connection_form.open {
         return handle_connection_form_key(model, key);

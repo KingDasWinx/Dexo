@@ -103,6 +103,7 @@ fn sources(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let block = crate::render::pane_block(model, "Sources", true);
     let inner = block.inner(pane);
     frame.render_widget(block, pane);
+    hits.register(HitTarget::ScreenList, pane);
     frame.render_widget(Paragraph::new(lines.join("\n")), inner);
     for index in 0..lines.len().min(usize::from(inner.height)) {
         let rect = crate::mouse::line_rect(inner, index);

@@ -38,6 +38,101 @@ pub fn screen_safe(command: &str) -> bool {
         .any(|prefix| command.starts_with(prefix))
 }
 
+/// Where a screen's keys go: its list, or the detail of the pick beside it.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub enum Section {
+    #[default]
+    List,
+    Detail,
+}
+
+/// A form or a question open in one section keeps the keys there until it is closed,
+/// and what says how.
+pub fn held(model: &Model) -> Option<(Section, &'static str)> {
+    use agents::AgentsView;
+    use history::HistoryView;
+    let question = "Answer the question first, or Esc.";
+    match model.shown_screen() {
+        Screen::Connections if model.connection_form.open => {
+            Some((Section::Detail, "The form has the keys: Esc closes it."))
+        }
+        Screen::Agents => match model.agents_view {
+            AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
+                Some((Section::Detail, question))
+            }
+            AgentsView::Activity if model.mcp_audit.filtering => {
+                Some((Section::List, "Enter keeps the filter, Esc clears it."))
+            }
+            AgentsView::Profiles if model.mcp_profiles.grant_form.is_some() => Some((
+                Section::Detail,
+                "The grant form has the keys: Esc closes it.",
+            )),
+            AgentsView::Profiles if model.mcp_profiles.confirm.is_some() => {
+                Some((Section::Detail, question))
+            }
+            _ => None,
+        },
+        Screen::Server if model.admin.terminate.is_some() => Some((Section::Detail, question)),
+        Screen::History if model.history_view == HistoryView::Saved => {
+            if model.saved_queries.deleting.is_some() {
+                Some((Section::Detail, question))
+            } else if model.saved_queries.renaming.is_some() {
+                Some((Section::List, "Enter renames, Esc keeps the old name."))
+            } else {
+                None
+            }
+        }
+        _ => None,
+    }
+}
+
+/// How many sections the screen drew: its list and its detail, one alone, or none on an
+/// empty screen.
+pub fn section_count(model: &Model) -> usize {
+    usize::from(model.hits.has(HitTarget::ScreenList))
+        + usize::from(model.hits.has(HitTarget::ScreenDetail))
+}
+
+/// The section the keys go to now.
+pub fn section(model: &Model) -> Section {
+    if let Some((section, _)) = held(model) {
+        return section;
+    }
+    // Compare's sources are its one section.
+    if model.shown_screen() == Screen::Compare && model.schema_diff.source_prompt {
+        return Section::List;
+    }
+    model.sections[model.shown_screen().index()]
+}
+
+/// How far the shown detail is read. Most screens keep it beside their pick; the rest
+/// share `detail_scroll`.
+pub fn detail_scroll(model: &Model) -> u16 {
+    use agents::AgentsView;
+    match (model.shown_screen(), model.agents_view) {
+        (Screen::Server, _) => model.admin.detail_scroll,
+        (Screen::Compare, _) => model.schema_diff.scroll,
+        (Screen::Agents, AgentsView::Approvals) => model.mcp_audit.scroll,
+        (Screen::Agents, AgentsView::Profiles) => {
+            u16::try_from(model.mcp_profiles.detail_scroll).unwrap_or(u16::MAX)
+        }
+        _ => model.detail_scroll,
+    }
+}
+
+pub fn set_detail_scroll(model: &mut Model, scroll: u16) {
+    use agents::AgentsView;
+    match (model.shown_screen(), model.agents_view) {
+        (Screen::Server, _) => model.admin.detail_scroll = scroll,
+        (Screen::Compare, _) => model.schema_diff.scroll = scroll,
+        (Screen::Agents, AgentsView::Approvals) => model.mcp_audit.scroll = scroll,
+        (Screen::Agents, AgentsView::Profiles) => {
+            model.mcp_profiles.detail_scroll = usize::from(scroll);
+        }
+        _ => model.detail_scroll = scroll,
+    }
+}
+
 /// One name on the header's strip.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct StripItem {
@@ -115,13 +210,22 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
 
 /// What the status line says on the current screen, after its name.
 pub fn hints(model: &Model) -> String {
-    match model.shown_screen() {
+    let hints = match model.shown_screen() {
         Screen::Agents => agents::hints(model),
         Screen::Connections => connections::hints(model),
         Screen::Compare => compare::hints(model),
         Screen::History => history::hints(model),
         Screen::Server => server::hints(model),
         _ => "Esc back".into(),
+    };
+    // On the detail the arrows read it; the letters still act on the pick.
+    if section(model) == Section::Detail && held(model).is_none() {
+        match hints.find("Up/Down pick") {
+            Some(_) => hints.replacen("Up/Down pick", "Up/Down read", 1),
+            None => format!("Up/Down read  {hints}"),
+        }
+    } else {
+        hints
     }
 }
 
@@ -197,9 +301,10 @@ pub fn list_pane(
     if area.width < 2 || area.height < 2 {
         return;
     }
-    let block = crate::render::pane_block(model, title, true);
+    let block = crate::render::pane_block(model, title, section(model) == Section::List);
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenList, area);
     let width = usize::from(inner.width);
     if let Some(header) = header
         && inner.height > 1
@@ -261,13 +366,15 @@ pub fn text_pane(
     if area.width < 2 || area.height < 2 {
         return (Rect::default(), 0, 0);
     }
-    let block: Block = crate::render::pane_block(model, title, false);
+    let block: Block = crate::render::pane_block(model, title, section(model) == Section::Detail);
     let inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenDetail, area);
     let footer_rows = (footer.len() as u16).min(inner.height);
     let body = Rect::new(inner.x, inner.y, inner.width, inner.height - footer_rows);
     let max_scroll = lines.len().saturating_sub(usize::from(body.height));
+    hits.set_scroll_limit(crate::mouse::ScrollArea::ScreenDetail, max_scroll);
+    hits.set_page(crate::mouse::ScrollArea::ScreenDetail, body.height);
     let top = scroll.min(max_scroll);
     frame.render_widget(
         Paragraph::new(lines.join("\n")).scroll((u16::try_from(top).unwrap_or(u16::MAX), 0)),

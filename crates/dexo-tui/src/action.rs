@@ -547,6 +547,8 @@ pub enum Action {
     GoToScreen(crate::model::Screen),
     /// Back to the screen before this one, the workbench when there is none.
     ScreenBack,
+    /// Gives the keys to a screen's first (its list) or second section (its detail).
+    FocusScreenSection(usize),
     CycleLayout,
     ResetLayout,
     HideExplorer,

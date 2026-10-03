@@ -21,6 +21,8 @@ const COMMAND_IDS: &[&str] = &[
     "screen.compare",
     "screen.history",
     "screen.previous",
+    "screen.list",
+    "screen.detail",
     "focus.explorer",
     "focus.editor",
     "focus.results",
@@ -256,8 +258,8 @@ fn registry_contains_each_command_exactly_once() {
     let specs = dexo_tui::palette::command_specs();
     let actual: std::collections::BTreeSet<_> = specs.iter().map(|s| s.id).collect();
     let expected: std::collections::BTreeSet<_> = COMMAND_IDS.iter().copied().collect();
-    assert_eq!(specs.len(), 185);
-    assert_eq!(actual.len(), 185, "duplicate command id");
+    assert_eq!(specs.len(), 187);
+    assert_eq!(actual.len(), 187, "duplicate command id");
     assert_eq!(actual, expected);
 }
 
@@ -266,7 +268,7 @@ fn registry_contains_each_command_exactly_once() {
 #[test]
 fn palette_shows_only_the_curated_subset() {
     let visible = dexo_tui::palette::palette_entries(&dexo_tui::Model::default());
-    assert_eq!(visible.len(), 157);
+    assert_eq!(visible.len(), 159);
 }
 
 /// A category with no display name falls back to the raw prefix, which looks like a
@@ -526,6 +528,13 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         }
     }
 
+    /// A screen's list and detail are another screen's than the workbench's.
+    fn on_a_screen(id: &str, model: &mut Model) {
+        if matches!(id, "screen.list" | "screen.detail") {
+            model.screen = dexo_tui::model::Screen::History;
+        }
+    }
+
     fn apply_transaction_context(id: &str, model: &mut Model) {
         match id {
             "transaction.savepoint"
@@ -547,6 +556,7 @@ fn every_context_command_has_a_reason_then_becomes_actionable() {
         let mut ready_model = model_satisfying(requirements);
         apply_transaction_context(id, &mut ready_model);
         on_a_table(id, &mut ready_model);
+        on_a_screen(id, &mut ready_model);
         let ready = palette_entries(&ready_model)
             .into_iter()
             .find(|entry| entry.id == id)

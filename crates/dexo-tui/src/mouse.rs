@@ -16,6 +16,8 @@ pub enum HitTarget {
     ScreenTab(crate::model::Screen),
     /// One of a screen's views, on the row under the header.
     ScreenView(usize),
+    /// A screen's list pane, under its rows: a click there gives it the keys.
+    ScreenList,
     /// A screen's detail pane: the wheel over it reads on, elsewhere it moves the pick.
     ScreenDetail,
     ResultTab(usize),
@@ -167,6 +169,8 @@ pub enum ScrollArea {
     McpProfiles,
     Sessions,
     SchemaDiff,
+    /// Whatever detail pane a screen shows.
+    ScreenDetail,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -235,6 +239,13 @@ impl HitMap {
                     && y < rect.y.saturating_add(rect.height)
             })
             .map(|(target, _)| *target)
+    }
+
+    /// Whether the last draw put `target` on screen.
+    pub fn has(&self, target: HitTarget) -> bool {
+        self.targets
+            .iter()
+            .any(|(candidate, _)| *candidate == target)
     }
 
     pub fn center(&self, target: HitTarget) -> (u16, u16) {

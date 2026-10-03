@@ -106,7 +106,16 @@ fn history(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     );
     let width = usize::from(detail.width.saturating_sub(2)).max(8);
     let lines = statement_lines(&matches[picked].sql, width);
-    super::text_pane(frame, detail, model, hits, "Statement", &lines, 0, &[]);
+    super::text_pane(
+        frame,
+        detail,
+        model,
+        hits,
+        "Statement",
+        &lines,
+        usize::from(super::detail_scroll(model)),
+        &[],
+    );
 }
 
 fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
@@ -184,7 +193,7 @@ fn saved(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         hits,
         &filtered[picked].name,
         &lines,
-        0,
+        usize::from(super::detail_scroll(model)),
         &footer,
     );
     if picker.deleting.is_some() {

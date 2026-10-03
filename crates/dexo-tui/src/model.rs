@@ -74,6 +74,14 @@ impl Screen {
         }
     }
 
+    /// Its place in `ALL`.
+    pub fn index(self) -> usize {
+        Screen::ALL
+            .iter()
+            .position(|screen| *screen == self)
+            .unwrap_or(0)
+    }
+
     /// The palette and keymap command that goes there.
     pub fn command(self) -> &'static str {
         match self {
@@ -2006,6 +2014,12 @@ pub struct Model {
     pub previous_screen: Screen,
     pub agents_view: crate::screen::agents::AgentsView,
     pub history_view: crate::screen::history::HistoryView,
+    /// The section of each screen its keys go to -- Alt+1 its list, Alt+2 its detail, as
+    /// on the workbench's panes -- in `Screen::ALL`'s order.
+    pub sections: [crate::screen::Section; 6],
+    /// How far the detail is read on a screen that keeps no scroll of its own; back to
+    /// the top on anything but reading it.
+    pub detail_scroll: u16,
     pub focus: Focus,
     pub width: u16,
     pub height: u16,
@@ -2167,6 +2181,8 @@ impl Default for Model {
             previous_screen: Screen::Workbench,
             agents_view: Default::default(),
             history_view: Default::default(),
+            sections: Default::default(),
+            detail_scroll: 0,
             focus: Focus::Editor,
             width: 160,
             height: 50,

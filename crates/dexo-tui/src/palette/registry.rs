@@ -174,6 +174,22 @@ fn command_spec_list() -> Vec<CommandSpec> {
             invocation: PaletteInvocation::Dispatch(Action::ScreenBack),
         },
         CommandSpec {
+            id: "screen.list",
+            title: "Go to the Screen's List",
+            keywords: &["screen", "pane", "section", "focus", "list"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::FocusScreenSection(0)),
+        },
+        CommandSpec {
+            id: "screen.detail",
+            title: "Go to the Screen's Detail",
+            keywords: &["screen", "pane", "section", "focus", "detail", "read"],
+            shortcut: None,
+            requirements: &[],
+            invocation: PaletteInvocation::Dispatch(Action::FocusScreenSection(1)),
+        },
+        CommandSpec {
             id: "help.open",
             title: "Show Keybindings",
             keywords: &["help", "keys", "cheatsheet", "shortcuts"],
@@ -1798,6 +1814,11 @@ fn contextual_reason(model: &Model, id: &str) -> Option<String> {
         return Some(crate::update::TABLE_ONLY.into());
     }
     match id {
+        "screen.list" | "screen.detail"
+            if model.shown_screen() == crate::model::Screen::Workbench =>
+        {
+            Some("On another screen: the workbench's panes have their own keys.".into())
+        }
         "transaction.begin" if model.transaction != TransactionState::Idle => {
             Some("a transaction is already open: commit or roll it back first".into())
         }

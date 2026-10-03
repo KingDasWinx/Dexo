@@ -54,8 +54,16 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         } else {
             screen.error.clone().into_iter().collect()
         };
-        let (footer, _, _) =
-            super::text_pane(frame, detail, model, hits, &title, &lines, 0, &actions);
+        let (footer, _, _) = super::text_pane(
+            frame,
+            detail,
+            model,
+            hits,
+            &title,
+            &lines,
+            usize::from(super::detail_scroll(model)),
+            &actions,
+        );
         let buttons = [
             HitButton::Connect,
             HitButton::New,
@@ -88,7 +96,7 @@ fn list_pane(
         return;
     }
     let screen = &model.connections;
-    let focused = !model.connection_form.open;
+    let focused = super::section(model) == super::Section::List;
     let block = crate::render::pane_block(
         model,
         &format!("Connections ({})", screen.profiles.len()),
@@ -96,6 +104,7 @@ fn list_pane(
     );
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenList, area);
     let visible = usize::from(inner.height);
     let picked = rows
         .iter()
@@ -137,6 +146,7 @@ fn form(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     let block = crate::render::pane_block(model, form.title(), true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenDetail, area);
     if inner.height == 0 {
         return;
     }

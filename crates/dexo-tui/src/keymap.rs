@@ -223,6 +223,18 @@ impl Keymap {
                 buckets[0].1.push(entry);
                 continue;
             }
+            // The workbench's pane keys go to a screen's list and detail too: the global
+            // ones, as the screens read them.
+            let section = match binding.command.as_str() {
+                "focus.explorer" => Some("screen.list"),
+                "focus.editor" => Some("screen.detail"),
+                _ => None,
+            };
+            if let Some(section) = section
+                && binding.context == KeyContext::Global
+            {
+                buckets[0].1.push((entry.0.clone(), section.to_string()));
+            }
             // Pane sizes are one topic wherever the key is bound: they sat under Editor.
             if binding.command.starts_with("layout.") {
                 buckets[7].1.push(entry);

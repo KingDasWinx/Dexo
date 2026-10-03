@@ -203,7 +203,16 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 if event.rows == 1 { "" } else { "s" }
             ),
         ];
-        super::text_pane(frame, detail, model, hits, "Call", &lines, 0, &[]);
+        super::text_pane(
+            frame,
+            detail,
+            model,
+            hits,
+            "Call",
+            &lines,
+            usize::from(super::detail_scroll(model)),
+            &[],
+        );
     }
 }
 
@@ -278,6 +287,7 @@ fn grant_form(
     let block = crate::render::pane_block(model, "New grant", true);
     let inner = block.inner(area);
     frame.render_widget(block, area);
+    hits.register(HitTarget::ScreenDetail, area);
     frame.render_widget(ratatui::widgets::Paragraph::new(lines.join("\n")), inner);
     // The rows drawn are the fields that are shown, from the second line.
     let shown: Vec<usize> = (0..form.fields.len())
