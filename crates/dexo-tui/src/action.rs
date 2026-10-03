@@ -581,7 +581,7 @@ pub enum Action {
     SubmitParameters,
     SearchHistory,
     ClearHistory,
-    HistoryLoaded(Vec<String>),
+    HistoryLoaded(Vec<dexo_storage::HistoryRow>),
     HistoryPick,
     SnippetsLoaded(Vec<dexo_sql::Snippet>),
     SnippetPick,

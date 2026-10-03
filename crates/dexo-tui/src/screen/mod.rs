@@ -5,6 +5,7 @@
 pub mod agents;
 pub mod compare;
 pub mod connections;
+pub mod history;
 pub mod server;
 
 use ratatui::Frame;
@@ -106,19 +107,9 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         Screen::Agents => agents::render(frame, area, model, hits),
         Screen::Connections => connections::render(frame, area, model, hits),
         Screen::Compare => compare::render(frame, area, model, hits),
+        Screen::History => history::render(frame, area, model, hits),
         Screen::Server => server::render(frame, area, model, hits),
         Screen::Workbench => {}
-        _ => {
-            let muted = model.theme.style(Role::Muted, model.capabilities);
-            let text = format!("{} is on its way.", model.screen.title());
-            let middle = Rect::new(area.x, area.y + area.height / 2, area.width, 1);
-            frame.render_widget(
-                Paragraph::new(text)
-                    .alignment(Alignment::Center)
-                    .style(muted),
-                middle,
-            );
-        }
     }
 }
 
@@ -128,6 +119,7 @@ pub fn hints(model: &Model) -> String {
         Screen::Agents => agents::hints(model),
         Screen::Connections => connections::hints(model),
         Screen::Compare => compare::hints(model),
+        Screen::History => history::hints(model),
         Screen::Server => server::hints(model),
         _ => "Esc back".into(),
     }

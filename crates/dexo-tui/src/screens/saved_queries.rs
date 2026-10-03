@@ -43,7 +43,6 @@ impl SaveQueryPrompt {
 /// Open Saved Query.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct SavedQueriesPicker {
-    pub open: bool,
     /// `None` until the list has been read.
     pub items: Option<Vec<SavedQuery>>,
     pub search: TextInput,

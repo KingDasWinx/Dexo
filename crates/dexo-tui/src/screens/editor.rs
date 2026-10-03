@@ -50,8 +50,8 @@ pub struct EditorState {
     pub snippet_open: bool,
     pub snippet_selected: usize,
     pub snippet_pending: bool,
-    pub history: Vec<String>,
-    pub history_open: bool,
+    /// Newest first, one row per statement.
+    pub history: Vec<dexo_storage::HistoryRow>,
     pub history_selected: usize,
     pub history_confirm_clear: bool,
     /// The focus of the clear confirmation's two buttons.
@@ -123,7 +123,6 @@ impl Clone for EditorState {
             snippet_selected: self.snippet_selected,
             snippet_pending: self.snippet_pending,
             history: self.history.clone(),
-            history_open: self.history_open,
             history_selected: self.history_selected,
             history_confirm_clear: self.history_confirm_clear,
             history_footer: self.history_footer,
@@ -192,7 +191,6 @@ impl Default for EditorState {
             snippet_selected: 0,
             snippet_pending: false,
             history: Vec::new(),
-            history_open: false,
             history_selected: 0,
             history_confirm_clear: false,
             history_footer: crate::widgets::form::FooterFocus::Cancel,
@@ -2034,11 +2032,11 @@ fn cursor_at(text: &str, line: usize, col: usize) -> usize {
 
 impl EditorState {
     /// The history the search leaves, newest first; no search leaves all of it.
-    pub fn history_matches(&self) -> Vec<&String> {
+    pub fn history_matches(&self) -> Vec<&dexo_storage::HistoryRow> {
         let needle = self.history_search.as_str().trim().to_lowercase();
         self.history
             .iter()
-            .filter(|sql| needle.is_empty() || sql.to_lowercase().contains(&needle))
+            .filter(|row| needle.is_empty() || row.sql.to_lowercase().contains(&needle))
             .collect()
     }
 
@@ -2055,10 +2053,13 @@ const HISTORY_PAGE: usize = 8;
 pub fn handle_history_key(model: &mut Model, key: KeyEvent) -> bool {
     let editor = &mut model.editor;
     match key.code {
-        KeyCode::Esc => {
-            editor.history_open = false;
+        // A search is cleared first; with none, Esc leaves the screen.
+        KeyCode::Esc if !editor.history_search.is_empty() => {
+            editor.history_search.clear();
+            editor.history_selected = 0;
             true
         }
+        KeyCode::Esc => false,
         KeyCode::Up => {
             editor.history_selected = editor.history_selected.saturating_sub(1);
             true
@@ -2095,7 +2096,7 @@ pub fn picked_history(model: &Model) -> Option<String> {
         .editor
         .history_matches()
         .get(model.editor.history_selected)
-        .map(|sql| (*sql).clone())
+        .map(|row| row.sql.clone())
 }
 
 pub fn handle_snippet_key(model: &mut Model, key: KeyEvent) -> bool {

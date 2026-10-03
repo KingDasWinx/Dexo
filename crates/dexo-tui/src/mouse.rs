@@ -135,12 +135,11 @@ pub enum OverlayKind {
     FilePicker,
     Completion,
     Parameters,
-    History,
+    ClearHistory,
     Snippets,
     Related,
     SaveQuery,
     TryIndex,
-    SavedQueries,
 }
 
 #[derive(Clone, Debug)]
@@ -271,8 +270,10 @@ pub fn top_overlay(model: &Model) -> Option<OverlayKind> {
         (model.data.related_picker.is_some(), OverlayKind::Related),
         (model.save_query_prompt.is_some(), OverlayKind::SaveQuery),
         (model.try_index.is_some(), OverlayKind::TryIndex),
-        (model.saved_queries.open, OverlayKind::SavedQueries),
-        (model.editor.history_open, OverlayKind::History),
+        (
+            model.editor.history_confirm_clear,
+            OverlayKind::ClearHistory,
+        ),
         (model.editor.parameter_prompt, OverlayKind::Parameters),
         // The preview of a change is above whatever asked for it: the Security panel
         // stayed on top of it, and took its clicks.

@@ -1,5 +1,13 @@
 use rusqlite::{Connection, params};
 
+/// A statement as it was run: on which connection, and when (UTC, `YYYY-MM-DD HH:MM:SS`).
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct HistoryRow {
+    pub sql: String,
+    pub connection_id: Option<String>,
+    pub created_at: String,
+}
+
 pub struct HistoryRepository<'a> {
     conn: &'a Connection,
 }
@@ -60,6 +68,36 @@ impl<'a> HistoryRepository<'a> {
             let rows = stmt.query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?;
             rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
         }
+    }
+
+    /// Newest first, with the connection and the time of each run.
+    pub fn entries(&self, connection_id: Option<&str>) -> anyhow::Result<Vec<HistoryRow>> {
+        let row = |row: &rusqlite::Row<'_>| {
+            Ok(HistoryRow {
+                sql: row.get(0)?,
+                connection_id: row.get(1)?,
+                created_at: row.get(2)?,
+            })
+        };
+        let rows = match connection_id {
+            Some(connection_id) => self
+                .conn
+                .prepare(
+                    "SELECT sql, connection_id, created_at FROM sql_history
+                     WHERE connection_id = ?1 ORDER BY created_at DESC",
+                )?
+                .query_map(params![connection_id], row)?
+                .collect::<Result<Vec<_>, _>>()?,
+            None => self
+                .conn
+                .prepare(
+                    "SELECT sql, connection_id, created_at FROM sql_history
+                     ORDER BY created_at DESC",
+                )?
+                .query_map([], row)?
+                .collect::<Result<Vec<_>, _>>()?,
+        };
+        Ok(rows)
     }
 
     pub fn clear_for_connection(&self, connection_id: &str) -> anyhow::Result<()> {

@@ -256,11 +256,17 @@ fn history_overlay_enter_opens_the_statement_in_a_new_document() {
     let mut model = Model::default();
     model.set_sql("select 1 -- being written");
     update(&mut model, Action::SearchHistory);
-    update(&mut model, Action::HistoryLoaded(vec!["select 9".into()]));
-    assert!(model.editor.history_open);
+    update(
+        &mut model,
+        Action::HistoryLoaded(vec![dexo_storage::HistoryRow {
+            sql: "select 9".into(),
+            ..Default::default()
+        }]),
+    );
+    assert_eq!(model.screen, dexo_tui::model::Screen::History);
     update(&mut model, Action::HistoryPick);
     assert_eq!(model.active_document().text(), "select 9");
-    assert!(!model.editor.history_open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
     // The document that was being written is still there, and nothing ran.
     assert!(
         model
@@ -358,10 +364,10 @@ fn saved_queries_save_search_open_rename_and_delete() {
     assert!(model.save_query_prompt.is_none());
 
     let effects = update(&mut model, Action::OpenSavedQueries);
-    assert!(matches!(
-        effects.as_slice(),
-        [dexo_tui::Effect::LoadSavedQueries { project_id }] if project_id == "project-1"
-    ));
+    assert!(effects.iter().any(|effect| matches!(
+        effect,
+        dexo_tui::Effect::LoadSavedQueries { project_id } if project_id == "project-1"
+    )));
     let saved = |id: &str, name: &str, connection: &str, sql: &str| dexo_storage::SavedQuery {
         id: id.into(),
         connection_id: connection.into(),
@@ -382,7 +388,7 @@ fn saved_queries_save_search_open_rename_and_delete() {
         ])),
     );
     let screen = dexo_tui::render::render_to_string(&model, 110, 30);
-    assert!(screen.contains("Open saved query"), "{screen}");
+    assert!(screen.contains("[2 Saved]"), "{screen}");
     assert!(screen.contains("> Late orders"), "{screen}");
     assert!(
         screen.contains("select * from orders where late"),
@@ -444,7 +450,7 @@ fn saved_queries_save_search_open_rename_and_delete() {
     let documents = model.documents.len();
     update(&mut model, key(KeyCode::Up));
     update(&mut model, key(KeyCode::Enter));
-    assert!(!model.saved_queries.open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
     assert_eq!(model.documents.len(), documents + 1);
     let opened = model.active_document();
     assert_eq!(opened.text(), "select * from users where id = 7;");

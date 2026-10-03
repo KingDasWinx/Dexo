@@ -203,9 +203,6 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.document_name_prompt.open {
         render_document_name_prompt(frame, model, hits);
     }
-    if model.saved_queries.open {
-        render_saved_queries(frame, model, hits);
-    }
     if let Some(prompt) = &model.try_index {
         let popup = centered(frame.area(), 72, 7);
         let lines = prompt.lines(popup_inner(popup).width as usize);
@@ -278,11 +275,11 @@ fn draw_workbench(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     if model.editor.parameter_prompt {
         render_parameters(frame, model, hits);
     }
-    if model.editor.history_open {
-        render_history(frame, model, hits);
-    }
     if model.editor.snippet_open {
         render_snippets(frame, model, hits);
+    }
+    if model.editor.history_confirm_clear {
+        render_clear_history(frame, model, hits);
     }
     if let Some(picker) = &model.data.related_picker {
         render_related_picker(frame, model, picker, hits);
@@ -1288,7 +1285,7 @@ fn for_popup_lines(popup: Rect, lines: &[String], mut map: impl FnMut(usize, &st
 
 /// A selected input's value in reverse video. The popups draw their lines as plain
 /// text, so the selection is painted over the line: `before` is what precedes the value.
-fn paint_selection(
+pub(crate) fn paint_selection(
     frame: &mut Frame,
     line: Rect,
     before: &str,
@@ -2396,138 +2393,6 @@ fn render_transaction_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap
     });
 }
 
-/// Open Saved Query: the search on top, the queries on the left with the highlighted
-/// one's SQL beside them, and what the keys do at the bottom.
-fn render_saved_queries(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
-    use crate::widgets::form::footer_line;
-    let picker = &model.saved_queries;
-    let area = frame.area();
-    let popup = centered(area, 100, area.height.saturating_sub(2).min(22));
-    let inner = popup_inner(popup);
-    let width = inner.width as usize;
-    let list_width = (width * 2 / 5).clamp(16, 40);
-    let rows = (inner.height as usize).saturating_sub(3).max(1);
-    let filtered = picker.filtered();
-    let offset = scroll_to_selection(picker.selected, 0, filtered.len(), rows);
-    // The connection a save from here would use, so the owner marks agree with Save.
-    let current_connection = crate::update::query_connection(model);
-    let preview: Vec<&str> = picker
-        .current()
-        .map(|query| query.sql.lines().collect())
-        .unwrap_or_default();
-    let mut lines =
-        vec![
-            picker
-                .search
-                .inline_line_within("search: ", picker.renaming.is_none(), width),
-        ];
-    // Nothing to list: the message gets the whole width, not the list's column.
-    let note = if picker.items.is_none() {
-        Some("  Reading the saved queries…".to_string())
-    } else if picker.items.as_ref().is_some_and(Vec::is_empty) {
-        Some(
-            match crate::palette::shortcut_for(model, "editor.save_query", None) {
-                Some(key) => format!("  No saved queries yet; {key} saves one from the editor."),
-                None => "  No saved queries yet; Save Query As saves one.".into(),
-            },
-        )
-    } else if filtered.is_empty() {
-        Some("  No saved query matches.".into())
-    } else {
-        None
-    };
-    for row in 0..rows {
-        let left = match filtered.get(offset + row) {
-            Some(query) => {
-                let index = offset + row;
-                let marker = if index == picker.selected { ">" } else { " " };
-                let name = match (&picker.renaming, index == picker.selected) {
-                    (Some(input), true) => {
-                        input.inline_line_within("", true, list_width.saturating_sub(2))
-                    }
-                    _ => query.name.clone(),
-                };
-                // Another connection's query says whose it is.
-                let owner = (current_connection.as_deref() != Some(query.connection_id.as_str()))
-                    .then(|| {
-                        model
-                            .connections
-                            .profiles
-                            .iter()
-                            .find(|row| row.profile.id.0.to_string() == query.connection_id)
-                            .map_or("another connection".to_string(), |row| {
-                                row.profile.name.clone()
-                            })
-                    });
-                match owner {
-                    Some(owner) => format!("{marker} {name} · {owner}"),
-                    None => format!("{marker} {name}"),
-                }
-            }
-            None => {
-                if row == 0
-                    && let Some(note) = &note
-                {
-                    lines.push(crate::model::truncate_cell(note, width));
-                    continue;
-                }
-                String::new()
-            }
-        };
-        let right = preview.get(row).copied().unwrap_or("");
-        lines.push(format!(
-            "{} │ {}",
-            crate::model::fit_cell(&left, list_width),
-            crate::model::truncate_cell(right, width.saturating_sub(list_width + 3)),
-        ));
-    }
-    let footer = match (&picker.deleting, &picker.error) {
-        (Some(focus), _) => {
-            let name = picker.current().map_or("", |query| query.name.as_str());
-            lines.push(format!("Delete {name}?"));
-            footer_line("Delete", *focus)
-        }
-        (None, Some(error)) => error.clone(),
-        (None, None) if picker.renaming.is_some() => "Enter rename  Esc keep the name".into(),
-        (None, None) => "Enter open  F2 rename  Delete delete  Esc close".into(),
-    };
-    lines.push(footer);
-    paint_popup(
-        frame,
-        model,
-        popup,
-        overlay_block(model, "Open saved query"),
-        lines.join("\n"),
-    );
-    register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |i, line, rect| {
-        if i == 0 {
-            paint_selection(
-                frame,
-                rect,
-                "search: ",
-                &picker.search,
-                picker.renaming.is_none(),
-            );
-        }
-        if (1..=rows).contains(&i) && offset + i - 1 < filtered.len() {
-            let list = Rect {
-                width: (list_width as u16).min(rect.width),
-                ..rect
-            };
-            hits.register(HitTarget::ListRow(offset + i - 1), list);
-            if let Some(input) = &picker.renaming
-                && offset + i - 1 == picker.selected
-            {
-                paint_selection(frame, list, "> ", input, true);
-            }
-        }
-        if line.contains("[Cancel]") {
-            crate::widgets::form::register_footer(hits, rect, line, "Delete");
-        }
-    });
-}
-
 fn render_document_name_prompt(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     let area = frame.area();
     let width = 56.min(area.width);
@@ -3235,7 +3100,8 @@ fn render_related_picker(
     }
 }
 
-fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
+/// "Clear the history of pg-dev?", from the palette, over whatever screen asked.
+fn render_clear_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
     use crate::widgets::form::footer_line;
     let editor = &model.editor;
     let area = frame.area();
@@ -3243,88 +3109,29 @@ fn render_history(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         return;
     }
     let name = model.connection.name.as_str();
-    if editor.history_confirm_clear {
-        let popup = centered(area, 60, 7);
-        let question = if name.is_empty() {
-            "Clear all of the history?".to_string()
-        } else {
-            format!("Clear the history of {name}?")
-        };
-        let lines = vec![
-            question,
-            "The statements it holds are removed for good.".into(),
-            String::new(),
-            footer_line("Clear", editor.history_footer),
-        ];
-        paint_popup(
-            frame,
-            model,
-            popup,
-            overlay_block(model, "Clear history"),
-            lines.join("\n"),
-        );
-        register_overlay(hits, popup);
-        for_popup_lines(popup, &lines, |_, line, rect| {
-            if line.contains("[Cancel]") {
-                crate::widgets::form::register_footer(hits, rect, line, "Clear");
-            }
-        });
-        return;
-    }
-    let popup = centered(area, 100, area.height.saturating_sub(2).min(18));
-    let inner = popup_inner(popup);
-    let width = inner.width as usize;
-    let rows = (inner.height as usize).saturating_sub(2).max(1);
-    let matches = editor.history_matches();
-    let offset = scroll_to_selection(editor.history_selected, 0, matches.len(), rows);
-    let mut lines = vec![
-        editor
-            .history_search
-            .inline_line_within("search: ", true, width),
-    ];
-    for row in 0..rows {
-        let index = offset + row;
-        let line = match matches.get(index) {
-            Some(sql) => {
-                let marker = if index == editor.history_selected {
-                    ">"
-                } else {
-                    " "
-                };
-                // One line per statement; its layout is the editor's to show.
-                let flat = sql.split_whitespace().collect::<Vec<_>>().join(" ");
-                format!(
-                    "{marker} {}",
-                    crate::model::truncate_cell(&flat, width.saturating_sub(2))
-                )
-            }
-            None if row == 0 && editor.history.is_empty() => {
-                "  Nothing has run yet on this connection.".into()
-            }
-            None if row == 0 => "  No statement matches.".into(),
-            None => String::new(),
-        };
-        lines.push(line);
-    }
-    lines.push("Enter open in a new document  Esc close".into());
-    let title = if name.is_empty() {
-        "History".to_string()
+    let popup = centered(area, 60, 7);
+    let question = if name.is_empty() {
+        "Clear all of the history?".to_string()
     } else {
-        format!("History · {name}")
+        format!("Clear the history of {name}?")
     };
+    let lines = vec![
+        question,
+        "The statements it holds are removed for good.".into(),
+        String::new(),
+        footer_line("Clear", editor.history_footer),
+    ];
     paint_popup(
         frame,
         model,
         popup,
-        overlay_block(model, &title),
+        overlay_block(model, "Clear history"),
         lines.join("\n"),
     );
     register_overlay(hits, popup);
-    for_popup_lines(popup, &lines, |i, _, rect| {
-        if i == 0 {
-            paint_selection(frame, rect, "search: ", &editor.history_search, true);
-        } else if i <= rows && offset + i - 1 < matches.len() {
-            hits.register(HitTarget::ListRow(offset + i - 1), rect);
+    for_popup_lines(popup, &lines, |_, line, rect| {
+        if line.contains("[Cancel]") {
+            crate::widgets::form::register_footer(hits, rect, line, "Clear");
         }
     });
 }
@@ -3602,8 +3409,11 @@ mod tests {
     #[test]
     fn every_selected_input_is_drawn_in_reverse() {
         use crate::widgets::text_input::TextInput;
-        let mut model = Model::default();
-        model.saved_queries.open = true;
+        let mut model = Model {
+            screen: crate::model::Screen::History,
+            history_view: crate::screen::history::HistoryView::Saved,
+            ..Model::default()
+        };
         model
             .saved_queries
             .set_items(vec![dexo_storage::SavedQuery {

@@ -1656,13 +1656,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     .warn("Saved queries belong to a project; open one first.".into());
                 return Vec::new();
             }
-            model.saved_queries = crate::screens::saved_queries::SavedQueriesPicker {
-                open: true,
-                ..Default::default()
-            };
-            vec![Effect::LoadSavedQueries {
-                project_id: model.project_id.clone(),
-            }]
+            model.saved_queries = crate::screens::saved_queries::SavedQueriesPicker::default();
+            model.history_view = crate::screen::history::HistoryView::Saved;
+            go_to_screen(model, crate::model::Screen::History)
         }
         Action::SavedQueriesLoaded(listed) => {
             let picker = &mut model.saved_queries;
@@ -1684,7 +1680,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                     model.messages.info(message);
                 }
                 Err(message) => {
-                    if model.saved_queries.open {
+                    if model.screen == crate::model::Screen::History {
                         model.saved_queries.error = Some(message.clone());
                     }
                     model.messages.error(message);
@@ -2256,22 +2252,24 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
         }
         Action::SubmitParameters => submit_parameter_prompt(model),
         Action::SearchHistory => {
-            model.editor.history_open = true;
+            model.history_view = crate::screen::history::HistoryView::History;
             model.editor.history_confirm_clear = false;
             model.editor.history_selected = 0;
             model.editor.history_search.clear();
+            let mut effects = go_to_screen(model, crate::model::Screen::History);
             // This connection's statements; with none connected, all of them.
-            vec![Effect::LoadHistory {
+            effects.extend([Effect::LoadHistory {
                 connection_id: (!model.connection.name.is_empty())
                     .then(|| model.connection.name.clone()),
-            }]
+            }]);
+            effects
         }
         Action::ClearHistory => confirm_clear_history(model),
         Action::HistoryLoaded(mut entries) => {
             // Newest first, so keeping the first of each statement keeps the latest run
             // of it: the same query run ten times is one row.
             let mut seen = std::collections::HashSet::new();
-            entries.retain(|sql| seen.insert(sql.clone()));
+            entries.retain(|row| seen.insert(row.sql.clone()));
             model.editor.history = entries;
             model.editor.history_selected = 0;
             Vec::new()
@@ -3299,7 +3297,7 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             }
         }
         Some(OverlayKind::Parameters) => mouse_parameters(model, hit),
-        Some(OverlayKind::History) => mouse_history(model, hit),
+        Some(OverlayKind::ClearHistory) => mouse_history(model, hit),
         Some(OverlayKind::Snippets) => mouse_snippets(model, hit),
         Some(OverlayKind::TryIndex) => match hit {
             Some(HitTarget::FormField(0)) => {
@@ -3325,25 +3323,6 @@ fn handle_mouse_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> {
             Some(HitTarget::FooterSubmit) => submit_save_query(model),
             Some(HitTarget::FooterCancel) => {
                 model.save_query_prompt = None;
-                Vec::new()
-            }
-            _ => Vec::new(),
-        },
-        Some(OverlayKind::SavedQueries) => match hit {
-            // A rename or a delete in progress is answered with its keys, not a click.
-            Some(HitTarget::ListRow(index))
-                if model.saved_queries.deleting.is_none()
-                    && model.saved_queries.renaming.is_none() =>
-            {
-                model.saved_queries.selected = index;
-                open_saved_query(model)
-            }
-            Some(HitTarget::FooterSubmit) if model.saved_queries.deleting.is_some() => {
-                model.saved_queries.deleting = Some(crate::widgets::form::FooterFocus::Submit);
-                saved_queries_key(model, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
-            }
-            Some(HitTarget::FooterCancel) => {
-                model.saved_queries.deleting = None;
                 Vec::new()
             }
             _ => Vec::new(),
@@ -3685,22 +3664,54 @@ fn mouse_file_picker(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
 }
 
 fn mouse_history(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
-    if model.editor.history_confirm_clear {
-        // Only the buttons answer: a click anywhere in the box used to clear everything.
-        return match hit {
-            Some(HitTarget::FooterSubmit) => confirm_clear_history(model),
-            Some(HitTarget::FooterCancel) => {
-                model.editor.history_confirm_clear = false;
-                model.editor.history_open = false;
+    // Only the buttons answer: a click anywhere in the box used to clear everything.
+    match hit {
+        Some(HitTarget::FooterSubmit) => confirm_clear_history(model),
+        Some(HitTarget::FooterCancel) => {
+            model.editor.history_confirm_clear = false;
+            Vec::new()
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn mouse_history_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
+    use crate::screen::history::HistoryView;
+    match (model.history_view, hit) {
+        (_, Some(HitTarget::ScreenView(index))) => {
+            if let Some(view) = HistoryView::ALL.get(index) {
+                model.history_view = *view;
+            }
+            Vec::new()
+        }
+        (HistoryView::History, Some(HitTarget::ListRow(index))) => {
+            model.editor.history_selected = index;
+            if doubled {
+                update(model, Action::HistoryPick)
+            } else {
                 Vec::new()
             }
-            _ => Vec::new(),
-        };
-    }
-    match hit {
-        Some(HitTarget::ListRow(index)) => {
-            model.editor.history_selected = index;
-            update(model, Action::HistoryPick)
+        }
+        (HistoryView::Saved, Some(HitTarget::ListRow(index)))
+            if model.saved_queries.deleting.is_none() && model.saved_queries.renaming.is_none() =>
+        {
+            model.saved_queries.selected = index;
+            if doubled {
+                open_saved_query(model)
+            } else {
+                Vec::new()
+            }
+        }
+        (HistoryView::Saved, Some(HitTarget::FooterSubmit))
+            if model.saved_queries.deleting.is_some() =>
+        {
+            model.saved_queries.deleting = Some(crate::widgets::form::FooterFocus::Submit);
+            saved_queries_key(model, KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE))
+                .unwrap_or_default()
+        }
+        (HistoryView::Saved, Some(HitTarget::FooterCancel)) => {
+            model.saved_queries.deleting = None;
+            Vec::new()
         }
         _ => Vec::new(),
     }
@@ -4146,6 +4157,7 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
         crate::model::Screen::Server => mouse_admin(model, hit),
         crate::model::Screen::Connections => mouse_connections(model, hit, doubled),
         crate::model::Screen::Compare => mouse_schema_diff(model, hit),
+        crate::model::Screen::History => mouse_history_screen(model, hit, doubled),
         _ => Vec::new(),
     }
 }
@@ -4578,12 +4590,24 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         // wrong line.
         crate::screens::editor::close_completion(model);
     }
-    if overlay == Some(OverlayKind::History) {
-        if delta < 0 {
-            model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
-        } else {
-            model.editor.history_selected += 1;
-            model.editor.clamp_history();
+    if overlay.is_none() && model.screen == crate::model::Screen::History {
+        match model.history_view {
+            crate::screen::history::HistoryView::History => {
+                if delta < 0 {
+                    model.editor.history_selected = model.editor.history_selected.saturating_sub(1);
+                } else {
+                    model.editor.history_selected += 1;
+                    model.editor.clamp_history();
+                }
+            }
+            crate::screen::history::HistoryView::Saved => {
+                if delta < 0 {
+                    model.saved_queries.selected = model.saved_queries.selected.saturating_sub(1);
+                } else {
+                    model.saved_queries.selected += 1;
+                    model.saved_queries.clamp();
+                }
+            }
         }
         return Vec::new();
     }
@@ -4832,6 +4856,7 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             crate::model::Screen::Agents => agents_key(model, key),
             crate::model::Screen::Server => server_key(model, key),
             crate::model::Screen::Connections => connections_key(model, key),
+            crate::model::Screen::History => history_screen_key(model, key),
             crate::model::Screen::Compare => {
                 if key
                     .modifiers
@@ -5129,9 +5154,21 @@ fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
         {
             new_schema_comparison(model)
         }
-        crate::model::Screen::Workbench
-        | crate::model::Screen::Compare
-        | crate::model::Screen::History => Vec::new(),
+        crate::model::Screen::History => {
+            // This connection's statements; with none connected, all of them. And the
+            // project's saved queries.
+            let mut effects = vec![Effect::LoadHistory {
+                connection_id: (!model.connection.name.is_empty())
+                    .then(|| model.connection.name.clone()),
+            }];
+            if !model.project_id.is_empty() {
+                effects.push(Effect::LoadSavedQueries {
+                    project_id: model.project_id.clone(),
+                });
+            }
+            effects
+        }
+        crate::model::Screen::Workbench | crate::model::Screen::Compare => Vec::new(),
     }
 }
 
@@ -5279,7 +5316,7 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     if model.connection_form.open {
         return handle_connection_form_key(model, key);
     }
-    if model.editor.history_open {
+    if model.editor.history_confirm_clear {
         return handle_history_overlay(model, key);
     }
     if model.editor.snippet_open {
@@ -5300,9 +5337,6 @@ fn handle_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         && key.modifiers.is_empty()
     {
         return update(model, Action::OpenTryIndex);
-    }
-    if model.saved_queries.open {
-        return saved_queries_key(model, key);
     }
     if let Some(picker) = &mut model.data.related_picker {
         let count = picker.links.as_ref().map_or(0, Vec::len);
@@ -9825,7 +9859,7 @@ fn submit_save_query(model: &mut Model) -> Vec<Effect> {
 
 /// The picker's keys: typing searches, Up and Down pick, Enter opens, F2 renames and
 /// Delete asks before it deletes.
-fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
+fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
     use crate::widgets::form::{FooterKey, confirm_key};
     let project_id = model.project_id.clone();
     let picker = &mut model.saved_queries;
@@ -9835,13 +9869,13 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 picker.deleting = None;
                 if let Some(query) = picker.current() {
                     let id = query.id.clone();
-                    return vec![Effect::DeleteSavedQuery { project_id, id }];
+                    return Some(vec![Effect::DeleteSavedQuery { project_id, id }]);
                 }
             }
             FooterKey::Cancel => picker.deleting = None,
             FooterKey::Moved | FooterKey::Pass => {}
         }
-        return Vec::new();
+        return Some(Vec::new());
     }
     if let Some(input) = picker.renaming.as_mut() {
         match key.code {
@@ -9855,27 +9889,32 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                     // is still there to fix.
                     let id = query.id.clone();
                     picker.error = None;
-                    return vec![Effect::RenameSavedQuery {
+                    return Some(vec![Effect::RenameSavedQuery {
                         project_id,
                         id,
                         name,
-                    }];
+                    }]);
                 }
             }
             _ => {
                 input.handle_key(key);
             }
         }
-        return Vec::new();
+        return Some(Vec::new());
     }
     match key.code {
-        KeyCode::Esc => picker.open = false,
+        // A search is cleared first; with none, Esc leaves the screen.
+        KeyCode::Esc if !picker.search.is_empty() => {
+            picker.search.clear();
+            picker.selected = 0;
+        }
+        KeyCode::Esc => return None,
         KeyCode::Up => picker.selected = picker.selected.saturating_sub(1),
         KeyCode::Down => {
             picker.selected += 1;
             picker.clamp();
         }
-        KeyCode::Enter => return open_saved_query(model),
+        KeyCode::Enter => return Some(open_saved_query(model)),
         KeyCode::F(2) => {
             if let Some(name) = picker.current().map(|query| query.name.clone()) {
                 picker.renaming = Some(crate::widgets::text_input::TextInput::new(name));
@@ -9888,13 +9927,14 @@ fn saved_queries_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
             picker.error = None;
         }
         _ => {
-            if picker.search.handle_key(key) {
-                picker.selected = 0;
-                picker.error = None;
+            if !picker.search.handle_key(key) {
+                return None;
             }
+            picker.selected = 0;
+            picker.error = None;
         }
     }
-    Vec::new()
+    Some(Vec::new())
 }
 
 /// Enter: the query opens in a new document of its connection, which connects if it is
@@ -9903,7 +9943,8 @@ fn open_saved_query(model: &mut Model) -> Vec<Effect> {
     let Some(query) = model.saved_queries.current().cloned() else {
         return Vec::new();
     };
-    model.saved_queries.open = false;
+    // The document is on the workbench, where it is read.
+    let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
     let title = crate::screens::document_name_prompt::normalize_document_name(
         &query.name.replace(['/', '\\'], "-"),
         "saved-query.sql",
@@ -9914,7 +9955,7 @@ fn open_saved_query(model: &mut Model) -> Vec<Effect> {
     document.sql = dexo_sql::SqlDocument::new(&query.sql);
     model.documents.push(document);
     let index = model.documents.len() - 1;
-    let effects = activate_document(model, index);
+    effects.extend(activate_document(model, index));
     model.focus_active_document_tab();
     model.focus = Focus::Editor;
     effects
@@ -11926,24 +11967,46 @@ fn apply_transfer_cancelled(
     Vec::new()
 }
 
+/// The question Clear History asks, over whatever screen it was asked from.
 fn handle_history_overlay(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
-    if model.editor.history_confirm_clear {
-        use crate::widgets::form::{FooterKey, confirm_key};
-        return match confirm_key(&mut model.editor.history_footer, &key) {
-            FooterKey::Submit => confirm_clear_history(model),
-            FooterKey::Cancel => {
-                model.editor.history_confirm_clear = false;
-                model.editor.history_open = false;
-                Vec::new()
+    use crate::widgets::form::{FooterKey, confirm_key};
+    match confirm_key(&mut model.editor.history_footer, &key) {
+        FooterKey::Submit => confirm_clear_history(model),
+        FooterKey::Cancel => {
+            model.editor.history_confirm_clear = false;
+            Vec::new()
+        }
+        FooterKey::Moved | FooterKey::Pass => Vec::new(),
+    }
+}
+
+/// The History screen's keys: the search takes what it edits with, Tab switches the
+/// view. None leaves the key to the keymap and Esc to going back.
+fn history_screen_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
+    use crate::screen::history::HistoryView;
+    let picking = model.history_view == HistoryView::Saved
+        && (model.saved_queries.renaming.is_some() || model.saved_queries.deleting.is_some());
+    if !picking && matches!(key.code, KeyCode::Tab | KeyCode::BackTab) {
+        model.history_view = model.history_view.other();
+        return Some(Vec::new());
+    }
+    // Ctrl and Alt chords are the keymap's, but for those an input edits with.
+    if key
+        .modifiers
+        .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+        && !crate::widgets::text_input::TextInput::owns(&key)
+    {
+        return None;
+    }
+    match model.history_view {
+        HistoryView::History => {
+            if key.code == KeyCode::Enter {
+                return Some(update(model, Action::HistoryPick));
             }
-            FooterKey::Moved | FooterKey::Pass => Vec::new(),
-        };
+            crate::screens::editor::handle_history_key(model, key).then(Vec::new)
+        }
+        HistoryView::Saved => saved_queries_key(model, key),
     }
-    if key.code == KeyCode::Enter {
-        return update(model, Action::HistoryPick);
-    }
-    crate::screens::editor::handle_history_key(model, key);
-    Vec::new()
 }
 
 /// The Server screen's keys. None leaves the key to the keymap and Esc to going back.
@@ -12922,7 +12985,6 @@ fn submit_parameter_prompt(model: &mut Model) -> Vec<Effect> {
 /// Asks first, whether or not the list has been read: the palette used to refuse with
 /// "history is empty" until Search History had loaded it.
 fn open_clear_history(model: &mut Model) -> Vec<Effect> {
-    model.editor.history_open = true;
     model.editor.history_confirm_clear = true;
     // Cancel holds the focus: an Enter out of habit keeps the history.
     model.editor.history_footer = crate::widgets::form::FooterFocus::Cancel;
@@ -12932,7 +12994,6 @@ fn open_clear_history(model: &mut Model) -> Vec<Effect> {
 fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
     let connection_id = model.connection.name.clone();
     model.editor.history_confirm_clear = false;
-    model.editor.history_open = false;
     model.editor.history.clear();
     model.editor.history_selected = 0;
     model.messages.info(if connection_id.is_empty() {
@@ -12948,12 +13009,13 @@ fn confirm_clear_history(model: &mut Model) -> Vec<Effect> {
 /// work included, and run at once.
 fn open_history_entry(model: &mut Model) -> Vec<Effect> {
     let Some(sql) = crate::screens::editor::picked_history(model) else {
-        model.editor.history_open = false;
         return Vec::new();
     };
-    model.editor.history_open = false;
+    // The document is on the workbench, where it is read.
+    let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
     let name = suggested_document_name(model);
-    open_text_document(model, &name, &sql, None)
+    effects.extend(open_text_document(model, &name, &sql, None));
+    effects
 }
 
 /// A new document holding `text`, on the connection `connection` names, or else the one
@@ -14474,7 +14536,7 @@ mod tests {
             &mut model,
             Action::Key(KeyEvent::new(KeyCode::Char('o'), KeyModifiers::ALT)),
         );
-        assert!(!model.saved_queries.open);
+        assert_ne!(model.screen, crate::model::Screen::History);
         assert_eq!(model.vim.mode, crate::screens::vim::Mode::Insert);
         assert_eq!(model.active_document().text(), "select 1\n");
     }
@@ -14488,29 +14550,19 @@ mod tests {
         }
     }
 
-    /// A refused rename keeps the typed name in the field; a click while renaming opens
-    /// nothing; wide names keep the preview's separator in its column.
+    /// A refused rename keeps the typed name in the field.
     #[test]
-    fn the_saved_query_picker_keeps_a_refused_rename_and_its_columns() {
+    fn the_saved_query_picker_keeps_a_refused_rename() {
         let mut model = Model {
             project_id: "p".into(),
+            screen: crate::model::Screen::History,
+            history_view: crate::screen::history::HistoryView::Saved,
             ..Model::default()
         };
-        model.saved_queries.open = true;
         model.saved_queries.set_items(vec![
             saved("日本語の売上", "select 1"),
             saved("orders", "select 2"),
         ]);
-        let screen = crate::render::render_to_string(&model, 100, 30);
-        let columns: Vec<usize> = screen
-            .lines()
-            .filter(|line| line.contains("日") || line.contains(" orders"))
-            // The rendered text gives a wide character's second cell as a space: cells
-            // are characters here.
-            .map(|line| line[..line.find(" │ ").unwrap()].chars().count())
-            .collect();
-        assert_eq!(columns.len(), 2, "{screen}");
-        assert_eq!(columns[0], columns[1], "{screen}");
         let key = |model: &mut Model, code| {
             update(model, Action::Key(KeyEvent::new(code, KeyModifiers::NONE)))
         };

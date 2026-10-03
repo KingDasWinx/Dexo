@@ -27,7 +27,7 @@ pub use connection::{
 pub use database::{AppPaths, Database};
 pub use document::{DocumentRepository, FileFingerprint, StoredDocument, has_external_conflict};
 pub use explain_plan::{ExplainPlanRepository, SavedExplainPlan};
-pub use history::HistoryRepository;
+pub use history::{HistoryRepository, HistoryRow};
 pub use layout::{LAYOUT_VERSION, LayoutRepository, Preferences, WorkbenchLayout};
 pub use mcp::{SqliteGrantLedger, waiting_approvals};
 pub use mcp_profile::McpProfileRepository;

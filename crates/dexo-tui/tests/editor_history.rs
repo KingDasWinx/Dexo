@@ -13,6 +13,14 @@ fn type_text(model: &mut Model, text: &str) {
     }
 }
 
+fn row(sql: &str) -> dexo_storage::HistoryRow {
+    dexo_storage::HistoryRow {
+        sql: sql.into(),
+        connection_id: Some("pg-dev".into()),
+        created_at: "2026-10-03 12:00:00".into(),
+    }
+}
+
 fn with_history() -> Model {
     let mut model = Model {
         focus: Focus::Editor,
@@ -31,10 +39,10 @@ fn with_history() -> Model {
     update(
         &mut model,
         Action::HistoryLoaded(vec![
-            "select count(*) from customers".into(),
-            "update orders set note = 'x'".into(),
-            "select count(*) from customers".into(),
-            "select 1".into(),
+            row("select count(*) from customers"),
+            row("update orders set note = 'x'"),
+            row("select count(*) from customers"),
+            row("select 1"),
         ]),
     );
     model
@@ -45,14 +53,14 @@ fn the_history_lists_each_statement_once_and_searches_as_you_type() {
     let mut model = with_history();
     assert_eq!(model.editor.history_matches().len(), 3);
     let screen = dexo_tui::render::render_to_string(&model, 120, 30);
-    assert!(screen.contains("History · pg-dev"), "{screen}");
-    assert!(screen.contains("search:"), "{screen}");
-    assert!(screen.contains("Enter open in a new document"), "{screen}");
+    assert!(screen.contains("[1 History]"), "{screen}");
+    assert!(screen.contains("Search:"), "{screen}");
+    assert!(screen.contains("Enter open"), "{screen}");
 
     type_text(&mut model, "COUNT");
     let found = model.editor.history_matches();
     assert_eq!(found.len(), 1);
-    assert_eq!(found[0].as_str(), "select count(*) from customers");
+    assert_eq!(found[0].sql.as_str(), "select count(*) from customers");
     type_text(&mut model, "zzz");
     assert!(model.editor.history_matches().is_empty());
     let screen = dexo_tui::render::render_to_string(&model, 120, 30);
@@ -68,7 +76,7 @@ fn picking_opens_a_new_document_and_runs_nothing() {
     let active_title = model.active_document().title.clone();
     type_text(&mut model, "update");
     let effects = press(&mut model, KeyCode::Enter);
-    assert!(!model.editor.history_open);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Workbench);
     assert!(
         !effects
             .iter()
@@ -118,7 +126,7 @@ fn clear_history_asks_first_and_only_its_buttons_answer() {
 
     // Enter out of habit keeps it.
     let kept = press(&mut model, KeyCode::Enter);
-    assert!(kept.is_empty() && !model.editor.history_open);
+    assert!(kept.is_empty() && !model.editor.history_confirm_clear);
 
     update(&mut model, Action::OpenPalette);
     update(&mut model, Action::PaletteQuery("Clear History".into()));
@@ -132,5 +140,5 @@ fn clear_history_asks_first_and_only_its_buttons_answer() {
         )),
         "{effects:?}"
     );
-    assert!(!model.editor.history_confirm_clear && !model.editor.history_open);
+    assert!(!model.editor.history_confirm_clear);
 }

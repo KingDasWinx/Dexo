@@ -43,7 +43,7 @@ pub enum StorageCommand {
     },
     ListHistory {
         connection_id: Option<String>,
-        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<String>>>,
+        reply: tokio::sync::oneshot::Sender<anyhow::Result<Vec<dexo_storage::HistoryRow>>>,
     },
     ClearHistory {
         connection_id: String,
@@ -198,10 +198,7 @@ impl StorageWorker {
                             reply,
                         } => {
                             let repo = HistoryRepository::new(db.connection());
-                            let result = repo
-                                .list(connection_id.as_deref())
-                                .map(|rows| rows.into_iter().map(|(_, sql)| sql).collect());
-                            let _ = reply.send(result);
+                            let _ = reply.send(repo.entries(connection_id.as_deref()));
                         }
                         StorageCommand::ClearHistory { connection_id } => {
                             let repo = HistoryRepository::new(db.connection());
@@ -422,7 +419,10 @@ impl StorageWorker {
         Ok(())
     }
 
-    pub async fn list_history(&self, connection_id: Option<String>) -> anyhow::Result<Vec<String>> {
+    pub async fn list_history(
+        &self,
+        connection_id: Option<String>,
+    ) -> anyhow::Result<Vec<dexo_storage::HistoryRow>> {
         let (reply, receive) = tokio::sync::oneshot::channel();
         self.tx.send(StorageCommand::ListHistory {
             connection_id,

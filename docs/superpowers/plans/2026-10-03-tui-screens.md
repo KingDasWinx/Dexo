@@ -50,7 +50,7 @@ Status marks: `[ ]` to do, `[x]` done (with commit), `[~]` in progress.
 
 ## 6. History
 
-- [ ] H1 History and Saved as one screen with two views, search, preview pane; Enter opens a new
+- [x] H1 History and Saved as one screen with two views, search, preview pane; Enter opens a new
       document and returns to the workbench.
 
 ## 7. Object views
