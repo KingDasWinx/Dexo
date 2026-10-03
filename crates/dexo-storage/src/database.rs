@@ -93,6 +93,12 @@ impl Database {
 
 fn prepare_connection(conn: &Connection) -> anyhow::Result<()> {
     conn.execute_batch("PRAGMA foreign_keys = ON;")?;
+    // Readers do not wait for a writer: the MCP server writing its audit, a catalog
+    // snapshot being saved, another Dexo. With the rollback journal each read waited out
+    // the write, up to the five-second busy timeout.
+    conn.query_row("PRAGMA journal_mode = WAL", [], |row| {
+        row.get::<_, String>(0)
+    })?;
     Ok(())
 }
 
@@ -189,7 +195,13 @@ fn backup_before_destructive_migration(path: &Path) -> anyhow::Result<()> {
     if version < LATEST_SCHEMA_VERSION {
         // ponytail: copy the whole file before any pending migration; skip when already current.
         // Ceiling: no per-migration destructive flag. Add one when a later sprint ships a breaking schema.
-        fs::copy(path, backup_path(path))?;
+        // Copied by SQLite, the write-ahead log included: a write another process has
+        // open -- the MCP server -- is in the log, not yet in the file a plain copy took.
+        let backup = backup_path(path);
+        if backup.exists() {
+            fs::remove_file(&backup)?;
+        }
+        Connection::open(path)?.execute("VACUUM INTO ?1", [backup.to_string_lossy().as_ref()])?;
     }
     Ok(())
 }
@@ -258,10 +270,11 @@ mod tests {
         );
         drop(db);
 
+        // A writer holding the database is not waited for: in WAL a reader reads past it.
         let writer = rusqlite::Connection::open(&path).unwrap();
         writer.execute_batch("BEGIN EXCLUSIVE").unwrap();
         let started = std::time::Instant::now();
-        assert!(Database::open_read_only(&path).is_err());
+        let _ = Database::open_read_only(&path);
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
         writer.execute_batch("ROLLBACK").unwrap();
 
@@ -274,6 +287,30 @@ mod tests {
         assert!(Database::open_read_only(&path).is_err());
         assert!(path.exists());
         assert!(!unsupported_archive_path(&path, 23).exists());
+    }
+
+    /// A reader is not held up by a write in progress on another connection.
+    #[test]
+    fn a_read_does_not_wait_for_a_write() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        Database::open(&path).unwrap();
+        let writer = Database::open(&path).unwrap();
+        writer
+            .connection()
+            .execute_batch("BEGIN EXCLUSIVE; DELETE FROM sql_history;")
+            .unwrap();
+        let reader = Database::open(&path).unwrap();
+        let started = std::time::Instant::now();
+        let count: i64 = reader
+            .connection()
+            .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert!(count > 0);
+        assert!(started.elapsed() < std::time::Duration::from_millis(500));
+        writer.connection().execute_batch("COMMIT;").unwrap();
     }
 
     #[test]
@@ -294,6 +331,34 @@ mod tests {
         let db = Database::open(&path).unwrap();
         assert_eq!(db.schema_version().unwrap(), 17);
         assert!(backup_path(&path).exists());
+    }
+
+    /// The backup holds what is still in the write-ahead log: another process has the
+    /// database open, so nothing was checkpointed into the file.
+    #[test]
+    fn the_backup_before_a_migration_has_what_the_log_holds() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("dexo.db");
+        let keeper = rusqlite::Connection::open(&path).unwrap();
+        keeper
+            .execute_batch(crate::migrations::MIGRATION_1)
+            .unwrap();
+        keeper
+            .query_row("PRAGMA journal_mode = WAL", [], |row| {
+                row.get::<_, String>(0)
+            })
+            .unwrap();
+        keeper
+            .execute_batch("CREATE TABLE marker(x INTEGER); INSERT INTO marker VALUES(42);")
+            .unwrap();
+
+        Database::open(&path).unwrap();
+
+        let backup = rusqlite::Connection::open(backup_path(&path)).unwrap();
+        let kept: i64 = backup
+            .query_row("SELECT x FROM marker", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(kept, 42);
     }
 
     #[test]

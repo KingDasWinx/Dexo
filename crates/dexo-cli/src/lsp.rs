@@ -21,8 +21,11 @@ struct Schema {
 }
 
 /// A connection's schema as last read, and the state of Dexo's database file then.
+/// When and how big the database file and its write-ahead log were.
+type Stamp = Option<(std::time::SystemTime, u64)>;
+
 struct Cached {
-    stamp: Option<(std::time::SystemTime, u64)>,
+    stamp: Option<(Stamp, Stamp)>,
     schema: Option<Schema>,
 }
 
@@ -149,11 +152,18 @@ impl Server {
     /// while the editor runs -- or a first one after none -- is seen without a restart.
     fn schema(&mut self, connection: Option<&str>) -> Option<&Schema> {
         let connection = connection?;
-        let stamp = self
-            .database
-            .as_ref()
-            .and_then(|path| std::fs::metadata(path).ok())
-            .and_then(|meta| Some((meta.modified().ok()?, meta.len())));
+        // The write-ahead log too: a write lands there, and reaches the file itself only
+        // when the log is checkpointed.
+        let stamp = self.database.as_ref().map(|path| {
+            let of = |path: &std::path::Path| {
+                std::fs::metadata(path)
+                    .ok()
+                    .and_then(|meta| Some((meta.modified().ok()?, meta.len())))
+            };
+            let mut log = path.as_os_str().to_owned();
+            log.push("-wal");
+            (of(path), of(std::path::Path::new(&log)))
+        });
         if self
             .schemas
             .get(connection)
