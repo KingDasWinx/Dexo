@@ -8,7 +8,37 @@ demo  local  public
 │[n]ew [e]dit [a]ctions    │┌▸ SQL · scratch.sql───────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │  ● local▾                ││   1▸select 1                                                                                                                     │
 │>   ▸ public              ││                                                                                                                                  │
+<<<<<<< HEAD
 │      mysql.u… [no access]││                                                                                                                                  │
+=======
+│      mysql.users [no acc…││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││               ┌MCP profiles──────────────────────────────────────────────────────────┐                                           │
+│                          ││               │mcp profile=assistant enabled=false confirm=false                     │                                           │
+│                          ││               │scope allow db.public.*                                               │                                           │
+│                          ││               │scope deny db.public.secrets                                          │                                           │
+│                          ││               │tool catalog_search                                                   │                                           │
+│                          ││               │tool object_describe                                                  │                                           │
+│                          ││               │resource db.public.items                                              │                                           │
+│                          ││               │grant data_write data_insert 900s                                     │                                           │
+│                          ││               │diff profile db.public.* -> grant db.public.items                     │                                           │
+│                          ││               │enable requires local confirmation                                    │                                           │
+│                          ││               │e enable/disable  g new grant  r revoke  R revoke all  esc close      │                                           │
+│                          ││               │                                                                      │                                           │
+│                          ││               │                                                                      │                                           │
+│                          ││               └──────────────────────────────────────────────────────────────────────┘                                           │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+│                          ││                                                                                                                                  │
+>>>>>>> 7b545587 (fix(explorer): a label wider than the pane ends in an ellipsis instead of being cut at the border)
 │                          ││                                                                                                                                  │
 │                          ││                                                                                                                                  │
 │                          ││ ┌MCP profiles──────────────────────────────────────────────────────────────────────────────────────┐                             │

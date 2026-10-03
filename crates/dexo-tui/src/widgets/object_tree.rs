@@ -119,7 +119,11 @@ pub fn render_sidebar(
         });
     }
     lines.extend(body);
+    // A label wider than the pane ends in an ellipsis rather than at the border.
     lines
+        .into_iter()
+        .map(|line| crate::model::truncate_cell(&line, width))
+        .collect()
 }
 
 /// A row too long for the sidebar gives up the end of its name, not its badge: `[temporary]`
@@ -496,6 +500,25 @@ mod tests {
         assert!(text.contains("○ prod"), "{text}");
         assert!(text.contains('▸'), "{text}");
         assert!(!text.contains("Catalog"), "{text}");
+    }
+
+    #[test]
+    fn a_label_wider_than_the_pane_ends_in_an_ellipsis() {
+        let mut explorer = ExplorerState::default();
+        explorer.sync_connection_roots(&[connection_row("a-very-long-connection-name", 0)], "");
+        let lines = super::render_sidebar(
+            &explorer,
+            &[connection_row("a-very-long-connection-name", 0)],
+            "",
+            true,
+            8,
+            12,
+        );
+        assert!(lines[1].ends_with('…'), "{lines:?}");
+        assert!(
+            lines.iter().all(|line| line.chars().count() <= 12),
+            "{lines:?}"
+        );
     }
 
     #[test]
