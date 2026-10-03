@@ -648,6 +648,8 @@ pub enum Action {
     /// A view's rows, and what the server would not show of it; or why it could not be
     /// read.
     AdminViewLoaded {
+        /// The session the view was read through: the server's it is.
+        session: SessionId,
         view: crate::screens::admin::ServerView,
         result: Result<(crate::screens::admin::ViewRows, Option<String>), String>,
     },

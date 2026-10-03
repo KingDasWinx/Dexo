@@ -91,6 +91,7 @@ pub async fn load_live(
 /// Reads `view` -- locks, sizes, statistics or settings -- off `session`.
 pub async fn load_view(
     session: std::sync::Arc<dyn dexo_driver_api::Session>,
+    through: crate::runtime::SessionId,
     view: crate::screens::admin::ServerView,
 ) -> crate::action::Action {
     use crate::screens::admin::{ServerView, ViewRows};
@@ -126,7 +127,11 @@ pub async fn load_view(
             }
         }
     };
-    crate::action::Action::AdminViewLoaded { view, result }
+    crate::action::Action::AdminViewLoaded {
+        session: through,
+        view,
+        result,
+    }
 }
 
 /// Runs `act` -- a cancel or a terminate -- and says how it went.

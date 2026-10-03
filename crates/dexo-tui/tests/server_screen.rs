@@ -210,6 +210,7 @@ fn the_views_load_their_own_rows_and_draw_a_table() {
     update(
         &mut model,
         Action::AdminViewLoaded {
+            session: dexo_tui::runtime::SessionId(uuid::Uuid::nil()),
             view: ServerView::Locks,
             result: Ok((
                 ViewRows::Locks(vec![dexo_driver_api::LockInfo {
@@ -248,6 +249,7 @@ fn settings_are_searched_and_a_refusal_says_why() {
     update(
         &mut model,
         Action::AdminViewLoaded {
+            session: dexo_tui::runtime::SessionId(uuid::Uuid::nil()),
             view: ServerView::Settings,
             result: Ok((
                 ViewRows::Settings(vec![
@@ -273,6 +275,7 @@ fn settings_are_searched_and_a_refusal_says_why() {
     update(
         &mut model,
         Action::AdminViewLoaded {
+            session: dexo_tui::runtime::SessionId(uuid::Uuid::nil()),
             view: ServerView::Sizes,
             result: Ok((
                 ViewRows::Sizes(Vec::new()),
@@ -282,4 +285,23 @@ fn settings_are_searched_and_a_refusal_says_why() {
     );
     let frame = paint(&mut model);
     assert!(frame.contains("permission denied for pg_class"), "{frame}");
+}
+
+/// A view read from the server shown before is not drawn under the new one's name.
+#[test]
+fn another_servers_view_is_not_drawn() {
+    use dexo_tui::screens::admin::{ServerView, ViewRows};
+    let mut model = server();
+    press(&mut model, KeyCode::Char('3'));
+    update(
+        &mut model,
+        Action::AdminViewLoaded {
+            session: dexo_tui::runtime::SessionId(uuid::Uuid::from_u128(99)),
+            view: ServerView::Sizes,
+            result: Ok((ViewRows::Sizes(Vec::new()), Some("not this one".into()))),
+        },
+    );
+    assert!(model.admin.rows.is_none());
+    let frame = paint(&mut model);
+    assert!(!frame.contains("not this one"), "{frame}");
 }

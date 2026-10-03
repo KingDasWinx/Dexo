@@ -1981,10 +1981,17 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.admin.notice = None;
             go_to_screen(model, crate::model::Screen::Server)
         }
-        Action::AdminViewLoaded { view, result } => {
+        Action::AdminViewLoaded {
+            session,
+            view,
+            result,
+        } => {
             let admin = &mut model.admin;
-            // A view left while it was read is not drawn over the one now shown.
-            if admin.view != view {
+            // A view left while it was read, or another server's, is not drawn over the
+            // one now shown.
+            if admin.view != view
+                || admin.server.as_ref().map(|server| server.session) != Some(session)
+            {
                 return Vec::new();
             }
             admin.loading = false;
@@ -13499,8 +13506,13 @@ fn show_server(
         model.admin.selected = 0;
         model.admin.detail_scroll = 0;
         model.admin.terminate = None;
+        model.admin.cancel = None;
         model.admin.last_error = None;
         model.admin.notice = None;
+        // The view stays; what it held was the other server's.
+        model.admin.rows = None;
+        model.admin.restriction = None;
+        model.admin.view_selected = 0;
     }
     model.admin.read_only = server.as_ref().is_some_and(|server| server.read_only);
     model.admin.server = server;

@@ -878,6 +878,7 @@ impl WorkbenchRuntime {
                     Err(message) => {
                         return self
                             .emit(Action::AdminViewLoaded {
+                                session,
                                 view,
                                 result: Err(message),
                             })
@@ -887,8 +888,9 @@ impl WorkbenchRuntime {
                 let action_tx = self.action_tx.clone();
                 tokio::spawn(async move {
                     let action = match dial.open().await {
-                        Ok(side) => admin_manager::load_view(Arc::from(side), view).await,
+                        Ok(side) => admin_manager::load_view(Arc::from(side), session, view).await,
                         Err(message) => Action::AdminViewLoaded {
+                            session,
                             view,
                             result: Err(message),
                         },
