@@ -158,3 +158,37 @@ fn a_question_or_the_checklist_has_the_pane_without_the_buttons() {
     assert!(model.mcp_profiles.confirm.is_some());
     assert!(!frame.contains("[e Disable]"), "{frame}");
 }
+
+/// The list read again under the checklist -- a profile renamed at a shell -- does not
+/// move what is saved onto another profile.
+#[test]
+fn the_checklist_saves_to_the_profile_it_was_opened_on() {
+    let mut model = profiles();
+    press(&mut model, KeyCode::Char('c'));
+    let effects = update(&mut model, Action::ScreenTick);
+    assert!(
+        !effects
+            .iter()
+            .any(|effect| matches!(effect, Effect::LoadMcpProfiles)),
+        "read again under the checklist: {effects:?}"
+    );
+    update(
+        &mut model,
+        Action::McpProfilesLoaded {
+            profiles: vec![McpProfileSummary {
+                name: "other".into(),
+                enabled: true,
+                connections: vec!["pg-dev".into()],
+                ..McpProfileSummary::default()
+            }],
+        },
+    );
+    let effects = press(&mut model, KeyCode::Enter);
+    assert!(
+        effects.iter().any(|effect| matches!(
+            effect,
+            Effect::SaveMcpProfileAccess { name, .. } if name == "assistant"
+        )),
+        "{effects:?}"
+    );
+}

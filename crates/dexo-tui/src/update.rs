@@ -2600,6 +2600,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 && model.agents_view == crate::screen::agents::AgentsView::Profiles
                 && profiles.grant_form.is_none()
                 && profiles.confirm.is_none()
+                && profiles.checklist.is_none()
             {
                 effects.push(Effect::LoadMcpProfiles);
             }
@@ -5576,6 +5577,7 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                     let available = mcp_connections(model);
                     let screen = &mut model.mcp_profiles;
                     screen.checklist = Some(crate::screens::mcp_profiles::Checklist::new(
+                        &screen.name,
                         available,
                         &screen.connections,
                     ));
@@ -5682,9 +5684,11 @@ fn mcp_checklist_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
                 screen.status = "Check at least one connection for the agent to use.".into();
                 return Vec::new();
             }
+            // Saved to the profile it was opened on, whatever the list moved to since.
+            let name = checklist.profile.clone();
             screen.checklist = None;
             return vec![Effect::SaveMcpProfileAccess {
-                name: screen.name.clone(),
+                name,
                 connections: Some(connections),
                 reads: None,
             }];

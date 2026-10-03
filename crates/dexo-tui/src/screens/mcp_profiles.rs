@@ -518,6 +518,8 @@ pub struct McpProfilesScreen {
 /// Connections to check, and the row the focus is on.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct Checklist {
+    /// The profile the connections are for.
+    pub profile: String,
     pub items: Vec<(String, bool)>,
     pub row: usize,
 }
@@ -525,7 +527,7 @@ pub struct Checklist {
 impl Checklist {
     /// `available` with the profile's `checked`; one it lists that is not available any
     /// more stays, checked, so saving does not drop it unseen.
-    pub fn new(available: Vec<String>, checked: &[String]) -> Self {
+    pub fn new(profile: &str, available: Vec<String>, checked: &[String]) -> Self {
         let mut items: Vec<(String, bool)> = available
             .into_iter()
             .map(|name| {
@@ -538,7 +540,11 @@ impl Checklist {
                 items.push((name.clone(), true));
             }
         }
-        Self { items, row: 0 }
+        Self {
+            profile: profile.to_string(),
+            items,
+            row: 0,
+        }
     }
 
     pub fn checked(&self) -> Vec<String> {
