@@ -304,21 +304,6 @@ impl McpAuditScreen {
         let last = self.visible_events().len().saturating_sub(1);
         self.event_selected = self.event_selected.saturating_add_signed(delta).min(last);
     }
-
-    pub fn summary(&self, request: &Approval) -> String {
-        let gone = if request.seems_gone(self.now) {
-            " (the agent has stopped answering)"
-        } else {
-            ""
-        };
-        format!(
-            "{} on {} · {} · {} left{gone}",
-            request.tool,
-            request.connection,
-            request.targets.join(", "),
-            crate::screens::mcp_profiles::duration_words(request.seconds_left(self.now))
-        )
-    }
 }
 
 /// Unix seconds as the local time of day.
