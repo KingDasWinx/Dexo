@@ -5560,12 +5560,14 @@ fn agents_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
                     };
                     screen.event_selected = 0;
                 }
-                // Esc clears the search, then the filters, then goes back.
-                KeyCode::Esc if !screen.search.input.is_empty() => {
+                // Esc clears the search, then the filters, then goes back; with nothing
+                // shown, both at once: the Clear filters button under the empty list.
+                KeyCode::Esc if !screen.search.input.is_empty() && shown > 0 => {
                     screen.search = Default::default();
                     screen.event_selected = 0;
                 }
                 KeyCode::Esc if screen.filtered() => {
+                    screen.search = Default::default();
                     screen.profile = None;
                     screen.outcome = None;
                     screen.event_selected = 0;

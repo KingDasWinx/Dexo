@@ -151,3 +151,17 @@ fn activity_searches_after_slash() {
     press(&mut model, KeyCode::Esc);
     assert_eq!(tools(&model).len(), 4);
 }
+
+/// Nothing shown, the Clear filters button clears the search and the filters at once.
+#[test]
+fn clear_filters_clears_everything_when_nothing_is_shown() {
+    let mut model = activity();
+    press(&mut model, KeyCode::Char('p'));
+    model.mcp_audit.search.input.set_text("nothing like it");
+    assert!(tools(&model).is_empty());
+    let frame = paint(&mut model);
+    assert!(frame.contains("[Esc Clear filters]"), "{frame}");
+    press(&mut model, KeyCode::Esc);
+    assert_eq!(tools(&model).len(), 4);
+    assert_eq!(model.screen, dexo_tui::model::Screen::Agents);
+}
