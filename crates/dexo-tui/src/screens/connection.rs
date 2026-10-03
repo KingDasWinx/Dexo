@@ -434,15 +434,16 @@ impl ConnectionForm {
             let name = DriverDescriptor::for_id(field.value.as_str())
                 .map(|item| item.display_name)
                 .unwrap_or(field.value.as_str());
-            return format!("{marker} driver: < {name} >  left/right");
+            return format!("{marker} driver: < {name} >  Left/Right");
         }
+        let label = shown_label(&field.label);
         if is_choice(&field.label) {
             let shown = choice_label(&field.label, field.value.as_str());
-            return format!("{marker} {}: < {shown} >  left/right", field.label);
+            return format!("{marker} {label}: < {shown} >  Left/Right");
         }
         // An edit leaves the saved password alone unless a new one is typed.
         if field.secret && self.editing.is_some() && field.value.as_str().is_empty() {
-            return format!("{marker} {}: (unchanged; type to replace it)", field.label);
+            return format!("{marker} {label}: (unchanged; type to replace it)");
         }
         // One mark per character typed, so a slip of the finger shows; the characters
         // themselves never reach the screen.
@@ -451,7 +452,7 @@ impl ConnectionForm {
         } else {
             field.value.as_str().to_string()
         };
-        format!("{marker} {}: {value}", field.label)
+        format!("{marker} {label}: {value}")
     }
 
     fn footer(&self) -> String {
@@ -469,7 +470,16 @@ impl ConnectionForm {
     /// message shows wherever the fields are scrolled to and the buttons stay put.
     fn status_rows(&self, width: usize) -> Vec<String> {
         let text = match (self.errors.first(), &self.notice) {
-            (Some(error), _) => format!("error: {error}"),
+            // The message names fields by their keys, as the app checks them.
+            (Some(error), _) => format!(
+                "error: {}",
+                self.fields
+                    .iter()
+                    .filter(|field| field.label.contains('_'))
+                    .fold(error.clone(), |text, field| {
+                        text.replace(field.label.as_str(), &shown_label(&field.label))
+                    })
+            ),
             (None, Some(notice)) => notice.clone(),
             _ => self
                 .focused_label()
@@ -530,6 +540,25 @@ impl ConnectionForm {
             .map(|(_, line)| line)
             .collect()
     }
+}
+
+/// How a field is named on screen: `ssh_host` reads as "SSH host", next to "name".
+fn shown_label(label: &str) -> String {
+    if label == "pre_connect" {
+        return "pre-connect command".into();
+    }
+    label
+        .split('_')
+        .map(|word| match word {
+            "tls" => "TLS",
+            "ssh" => "SSH",
+            "ca" => "CA",
+            "cert" => "certificate",
+            "secs" => "seconds",
+            other => other,
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
 }
 
 fn is_basic(label: &str) -> bool {
@@ -993,7 +1022,7 @@ fn to_input(fields: &[FormField]) -> Result<NewConnection, String> {
 
 #[cfg(test)]
 mod tests {
-    use super::ConnectionForm;
+    use super::{ConnectionForm, shown_label};
 
     #[test]
     fn password_field_is_masked_and_kept_until_the_form_closes() {
@@ -1019,9 +1048,9 @@ mod tests {
         assert!(dump.contains(&masked), "one mark per character:\n{dump}");
         assert!(!dump.contains("SUPER_SECRET_SENTINEL"));
         assert!(dump.contains("Advanced options"));
-        assert!(!dump.contains("tls_mode"));
+        assert!(!dump.contains("TLS mode"));
         form.toggle_advanced();
-        assert!(form.lines().join("\n").contains("tls_mode"));
+        assert!(form.lines().join("\n").contains("TLS mode"));
         let (input, password) = form.submit().unwrap();
         assert_eq!(input.name, "local-pg");
         assert_eq!(password, "SUPER_SECRET_SENTINEL");
@@ -1071,7 +1100,7 @@ mod tests {
         );
         let dump = form.lines().join("\n");
         assert!(dump.contains("< MySQL >"));
-        assert!(dump.contains("left/right"));
+        assert!(dump.contains("Left/Right"));
         form.cycle_choice(1);
         assert_eq!(
             form.fields
@@ -1194,14 +1223,23 @@ mod tests {
         }
         assert!(basic.contains("[>] Advanced options"));
         assert!(!basic.contains("environment:"));
-        assert!(!basic.contains("ssh_host:"));
+        assert!(!basic.contains("SSH host:"));
 
         form.focus = form.advanced_focus_index();
         form.toggle_advanced();
         let advanced = form.lines().join("\n");
         assert!(advanced.contains("[v] Advanced options"));
         assert!(advanced.contains("environment:"));
-        assert!(advanced.contains("ssh_host:"));
+        // Named as words, like the basic fields; the keys stay the app's.
+        for label in [
+            "SSH host:",
+            "TLS mode:",
+            "pre-connect command:",
+            "password command:",
+        ] {
+            assert!(advanced.contains(label), "{advanced}");
+        }
+        assert!(!advanced.contains("ssh_host"), "{advanced}");
     }
 
     #[test]
@@ -1322,7 +1360,7 @@ mod tests {
         assert!(
             form.lines()
                 .join("\n")
-                .contains("tls_mode: < verify_full >")
+                .contains("TLS mode: < verify_full >")
         );
     }
 
@@ -1379,7 +1417,7 @@ mod tests {
         assert!(form.fields.len() > 8);
         form.set_advanced(true);
         form.focus = form.fields.len() - 1;
-        let last = form.fields.last().unwrap().label.clone();
+        let last = shown_label(&form.fields.last().unwrap().label);
         let lines = form.visible_lines(9, 70);
         assert!(lines.iter().any(|line| line.contains(&last)));
         assert!(lines.iter().any(|line| line.contains("[Submit]")));

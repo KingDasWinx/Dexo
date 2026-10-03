@@ -242,7 +242,7 @@ fn connection_advanced_options_expand_with_the_mouse() {
             .connection_form
             .lines()
             .join("\n")
-            .contains("tls_mode:")
+            .contains("TLS mode:")
     );
 
     paint(&mut model);
@@ -253,7 +253,7 @@ fn connection_advanced_options_expand_with_the_mouse() {
             .connection_form
             .lines()
             .join("\n")
-            .contains("tls_mode:")
+            .contains("TLS mode:")
     );
 
     paint(&mut model);
