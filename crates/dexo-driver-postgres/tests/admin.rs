@@ -242,6 +242,26 @@ async fn the_server_sees_dexo_as_the_application_behind_its_sessions() {
         }
     }
     assert_eq!(name, Some(dexo_driver_api::DbValue::Text("dexo".into())));
+    // Another session lists it with that name, and where it comes from.
+    let watcher = PostgresFactory
+        .connect(ConnectRequest::new(
+            pair.postgres_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
+    let listed = watcher.admin().unwrap().list_sessions().await.unwrap();
+    assert!(
+        listed
+            .items
+            .iter()
+            .any(|info| info.application.as_deref() == Some("dexo") && info.client.is_some()),
+        "{:?}",
+        listed.items
+    );
 }
 
 async fn drain(mut stream: dexo_driver_api::QueryStream) {

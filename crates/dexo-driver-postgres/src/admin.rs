@@ -83,7 +83,8 @@ impl AdministrationProvider for PostgresSession {
             .query(
                 "SELECT pid::text, usename::text, datname::text, COALESCE(state, 'unknown'),
                         (EXTRACT(EPOCH FROM (now() - COALESCE(query_start, backend_start))) * 1000)::bigint,
-                        NULLIF(btrim(query), '')
+                        NULLIF(btrim(query), ''), NULLIF(application_name, '')::text,
+                        client_addr::text
                  FROM pg_stat_activity
                  WHERE pid <> pg_backend_pid() AND backend_type = 'client backend'
                  ORDER BY pg_stat_activity.pid",
@@ -104,6 +105,8 @@ impl AdministrationProvider for PostgresSession {
                     state: row.get(3),
                     duration_ms: duration_ms(row),
                     current_query: row.get(5),
+                    application: row.get(6),
+                    client: row.get(7),
                 })
                 .collect(),
             restriction,

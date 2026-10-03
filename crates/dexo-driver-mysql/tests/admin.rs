@@ -52,8 +52,24 @@ async fn sessions_sizes_stats_variables_and_restricted_role() {
         ))
         .await
         .unwrap();
+    // The list leaves out the session that reads it: another one is there to show.
+    let _other = MysqlFactory
+        .connect(ConnectRequest::new(
+            pair.mysql_endpoint().to_string(),
+            Some("dexo".into()),
+            "dexo".into(),
+            SecretString::from("dexo_test_only"),
+            false,
+        ))
+        .await
+        .unwrap();
     let admin = session.admin().unwrap();
     let sessions = admin.list_sessions().await.unwrap();
+    assert!(
+        sessions.items.iter().any(|info| info.client.is_some()),
+        "a session says where it comes from: {:?}",
+        sessions.items
+    );
     assert!(!sessions.captured_at.is_empty());
     let sizes = admin.sizes(Page::new(0, 20).unwrap()).await.unwrap();
     assert!(

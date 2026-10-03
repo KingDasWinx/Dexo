@@ -869,7 +869,12 @@ impl WorkbenchRuntime {
                 self.admin_on_side_connection(session, None).await
             }
             crate::Effect::AdminTerminate { session, target } => {
-                self.admin_on_side_connection(session, Some(target)).await
+                let action = dexo_driver_api::AdminAction::TerminateSession { session_id: target };
+                self.admin_on_side_connection(session, Some(action)).await
+            }
+            crate::Effect::AdminCancel { session, target } => {
+                let action = dexo_driver_api::AdminAction::CancelQuery { session_id: target };
+                self.admin_on_side_connection(session, Some(action)).await
             }
             crate::Effect::LoadMcpProfiles => self.load_mcp_profiles().await,
             crate::Effect::LoadMcpClients => {
@@ -1447,31 +1452,31 @@ impl WorkbenchRuntime {
     /// that session, and the loop that draws the screen cannot wait on either. A
     /// connection of its own also reads outside the session's open transaction, whose
     /// snapshot of the server's activity does not move until it ends.
-    async fn admin_on_side_connection(&self, session: SessionId, terminate: Option<String>) {
-        let failed = |message: String, terminate: &Option<String>| match terminate {
-            Some(_) => Action::AdminTerminated {
-                result: Err(message),
-            },
+    async fn admin_on_side_connection(
+        &self,
+        session: SessionId,
+        act: Option<dexo_driver_api::AdminAction>,
+    ) {
+        let failed = |message: String, act: &Option<dexo_driver_api::AdminAction>| match act {
+            Some(act) => admin_manager::acted(act, Err(message)),
             None => Action::AdminFailed { message },
         };
         let dial = match self.side_dial(session) {
             Ok(dial) => dial,
-            Err(message) => return self.emit(failed(message, &terminate)).await,
+            Err(message) => return self.emit(failed(message, &act)).await,
         };
         let action_tx = self.action_tx.clone();
         tokio::spawn(async move {
             match dial.open().await {
                 Ok(side) => {
                     let side: Arc<dyn dexo_driver_api::Session> = Arc::from(side);
-                    match terminate {
-                        Some(target) => {
-                            admin_manager::terminate_live(side, target, action_tx).await
-                        }
+                    match act {
+                        Some(act) => admin_manager::act_live(side, act, action_tx).await,
                         None => admin_manager::load_live(side, action_tx).await,
                     }
                 }
                 Err(message) => {
-                    let _ = action_tx.send(failed(message, &terminate)).await;
+                    let _ = action_tx.send(failed(message, &act)).await;
                 }
             }
         });

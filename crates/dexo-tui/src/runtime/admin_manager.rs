@@ -88,22 +88,34 @@ pub async fn load_live(
         .await;
 }
 
-pub async fn terminate_live(
+/// Runs `act` -- a cancel or a terminate -- and says how it went.
+pub async fn act_live(
     session: std::sync::Arc<dyn dexo_driver_api::Session>,
-    target: String,
+    act: dexo_driver_api::AdminAction,
     tx: tokio::sync::mpsc::Sender<crate::action::Action>,
 ) {
     let result = match session.admin() {
         Some(admin) => admin
-            .execute_action(dexo_driver_api::AdminAction::TerminateSession { session_id: target })
+            .execute_action(act.clone())
             .await
             .map(|outcome| outcome.message)
             .map_err(|error| error.to_string()),
         None => Err("this connection has no administration".into()),
     };
-    let _ = tx
-        .send(crate::action::Action::AdminTerminated { result })
-        .await;
+    let _ = tx.send(acted(&act, result)).await;
+}
+
+/// What became of `act`, as the screen hears it.
+pub fn acted(
+    act: &dexo_driver_api::AdminAction,
+    result: Result<String, String>,
+) -> crate::action::Action {
+    match act {
+        dexo_driver_api::AdminAction::CancelQuery { .. } => {
+            crate::action::Action::AdminCancelled { result }
+        }
+        _ => crate::action::Action::AdminTerminated { result },
+    }
 }
 
 pub fn session_info(id: &str) -> SessionInfo {
@@ -114,6 +126,8 @@ pub fn session_info(id: &str) -> SessionInfo {
         state: "idle".into(),
         duration_ms: None,
         current_query: None,
+        application: None,
+        client: None,
     }
 }
 

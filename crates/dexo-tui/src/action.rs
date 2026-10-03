@@ -642,6 +642,9 @@ pub enum Action {
         message: String,
     },
     /// What the server said to ending a session, or why it would not.
+    AdminCancelled {
+        result: Result<String, String>,
+    },
     AdminTerminated {
         result: Result<String, String>,
     },
@@ -1091,6 +1094,11 @@ pub enum Effect {
     LoadAdminSessions {
         session: SessionId,
         generation: u64,
+    },
+    /// Stops the query session `target` runs on the server, leaving the session.
+    AdminCancel {
+        session: SessionId,
+        target: String,
     },
     AdminTerminate {
         session: SessionId,

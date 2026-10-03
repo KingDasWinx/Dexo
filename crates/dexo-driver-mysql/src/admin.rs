@@ -105,9 +105,10 @@ impl AdministrationProvider for MysqlSession {
             String,
             i64,
             Option<String>,
+            Option<String>,
         )> = match conn
             .query(
-                "SELECT ID, USER, DB, COMMAND, TIME, INFO FROM information_schema.PROCESSLIST
+                "SELECT ID, USER, DB, COMMAND, TIME, INFO, HOST FROM information_schema.PROCESSLIST
                  WHERE ID <> CONNECTION_ID() ORDER BY ID",
             )
             .await
@@ -125,14 +126,19 @@ impl AdministrationProvider for MysqlSession {
         Ok(AdminList {
             items: rows
                 .into_iter()
-                .map(|(id, user, database, state, time_s, query)| SessionInfo {
-                    id: id.to_string(),
-                    user,
-                    database,
-                    state: session_state(&state),
-                    duration_ms: Some((time_s.max(0) as u64).saturating_mul(1000)),
-                    current_query: query,
-                })
+                .map(
+                    |(id, user, database, state, time_s, query, host)| SessionInfo {
+                        id: id.to_string(),
+                        user,
+                        database,
+                        state: session_state(&state),
+                        duration_ms: Some((time_s.max(0) as u64).saturating_mul(1000)),
+                        current_query: query,
+                        // MySQL keeps no program name in the process list.
+                        application: None,
+                        client: host.filter(|host| !host.is_empty()),
+                    },
+                )
                 .collect(),
             restriction,
             captured_at: captured_at(),

@@ -35,6 +35,7 @@ pub fn buttons(model: &Model) -> Vec<Button> {
         Screen::Agents if model.agents_view == agents::AgentsView::Approvals => {
             agents::approval_buttons(model)
         }
+        Screen::Server => server::buttons(model),
         _ => Vec::new(),
     }
 }
@@ -45,6 +46,7 @@ pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
         Screen::Connections if !model.connection_form.open => connections::toolbar_buttons(),
         Screen::History => history::toolbar_buttons(model),
         Screen::Agents => agents::toolbar_buttons(model),
+        Screen::Server => server::toolbar_buttons(model),
         _ => Vec::new(),
     }
 }
@@ -119,7 +121,9 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
             )),
             _ => None,
         },
-        Screen::Server if model.admin.terminate.is_some() => Some((Section::Detail, question)),
+        Screen::Server if model.admin.terminate.is_some() || model.admin.cancel.is_some() => {
+            Some((Section::Detail, question))
+        }
         Screen::History if model.history_view == HistoryView::Saved => {
             if model.saved_queries.deleting.is_some() {
                 Some((Section::Detail, question))
@@ -144,6 +148,7 @@ pub fn search(model: &Model) -> Option<&widgets::Search> {
         Screen::Agents if model.agents_view == agents::AgentsView::Activity => {
             Some(&model.mcp_audit.search)
         }
+        Screen::Server => Some(&model.admin.search),
         _ => None,
     }
 }
@@ -158,6 +163,7 @@ pub fn stop_typing(model: &mut Model) {
             model.saved_queries.search.typing = false;
         }
         Screen::Agents => model.mcp_audit.search.typing = false,
+        Screen::Server => model.admin.search.typing = false,
         _ => {}
     }
 }

@@ -1971,6 +1971,21 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.admin.notice = None;
             go_to_screen(model, crate::model::Screen::Server)
         }
+        Action::AdminCancelled { result } => {
+            match result {
+                Ok(message) => {
+                    model.admin.last_error = None;
+                    model.admin.notice = Some(message.clone());
+                    model.messages.info(message);
+                }
+                Err(message) => {
+                    model.admin.notice = None;
+                    model.admin.last_error = Some(format!("Not cancelled: {message}"));
+                    model.messages.error(message);
+                }
+            }
+            load_admin_sessions(model)
+        }
         Action::AdminTerminated { result } => {
             match result {
                 Ok(message) => {
@@ -2455,19 +2470,13 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             model.admin.sessions = sessions;
             model.admin.captured_at = captured_at;
             model.admin.blocking = blocking;
-            if let Some(index) = picked.and_then(|id| {
-                model
-                    .admin
-                    .sessions
-                    .iter()
-                    .position(|session| session.id == id)
-            }) {
+            let shown = model.admin.visible();
+            let at = picked.and_then(|id| shown.iter().position(|session| session.id == id));
+            let count = shown.len();
+            if let Some(index) = at {
                 model.admin.selected = index;
             }
-            model.admin.selected = model
-                .admin
-                .selected
-                .min(model.admin.sessions.len().saturating_sub(1));
+            model.admin.selected = model.admin.selected.min(count.saturating_sub(1));
             Vec::new()
         }
         Action::DiagnosticsReady { preview } => {
@@ -3848,6 +3857,16 @@ fn mouse_parameters(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 }
 
 fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
+    if model.admin.cancel.is_some() {
+        return match hit {
+            Some(HitTarget::FooterSubmit) => submit_cancel(model),
+            Some(HitTarget::FooterCancel) => {
+                model.admin.cancel = None;
+                Vec::new()
+            }
+            _ => Vec::new(),
+        };
+    }
     if let Some(prompt) = model.admin.terminate.as_mut() {
         return match hit {
             Some(HitTarget::FooterSubmit) => submit_terminate(model),
@@ -3863,7 +3882,7 @@ fn mouse_admin(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
         };
     }
     if let Some(HitTarget::ListRow(index)) = hit
-        && index < model.admin.sessions.len()
+        && index < model.admin.visible().len()
     {
         model
             .admin
@@ -13105,7 +13124,7 @@ fn history_list_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
 
 /// The Server screen's keys. None leaves the key to the keymap and Esc to going back.
 fn server_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
-    use crate::widgets::form::{FooterKey, footer_key};
+    use crate::widgets::form::{FooterKey, confirm_key, footer_key};
     if let Some(prompt) = model.admin.terminate.as_mut() {
         return Some(match footer_key(&mut prompt.footer, &key) {
             FooterKey::Submit => submit_terminate(model),
@@ -13123,6 +13142,21 @@ fn server_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
             }
         });
     }
+    if let Some(prompt) = model.admin.cancel.as_mut() {
+        return Some(match confirm_key(&mut prompt.focus, &key) {
+            FooterKey::Submit => submit_cancel(model),
+            FooterKey::Cancel => {
+                model.admin.cancel = None;
+                Vec::new()
+            }
+            FooterKey::Moved | FooterKey::Pass => Vec::new(),
+        });
+    }
+    let admin = &mut model.admin;
+    if admin.search.typing && admin.search.key(key) {
+        admin.reset_pick();
+        return Some(Vec::new());
+    }
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
@@ -13130,24 +13164,120 @@ fn server_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
         return None;
     }
     let page = (model.height / 3).max(1) as isize;
-    let admin = &mut model.admin;
     match key.code {
-        KeyCode::Up | KeyCode::Char('k') => admin.move_selection(false),
-        KeyCode::Down | KeyCode::Char('j') => admin.move_selection(true),
+        KeyCode::Up => admin.move_selection(false),
+        KeyCode::Down => admin.move_selection(true),
         KeyCode::Home => admin.select_first(),
         KeyCode::End => admin.select_last(),
         KeyCode::PageUp => admin.move_by(-page),
         KeyCode::PageDown => admin.move_by(page),
+        KeyCode::Char('/') => admin.search.typing = true,
+        KeyCode::Char('a') => {
+            admin.show_idle = !admin.show_idle;
+            admin.reset_pick();
+        }
+        KeyCode::Char('s') => {
+            admin.sort = admin.sort.next();
+            admin.reset_pick();
+        }
+        // The search goes first, then the idle ones, then the screen.
+        KeyCode::Esc if !admin.search.input.is_empty() => {
+            admin.search = Default::default();
+            admin.reset_pick();
+        }
+        KeyCode::Esc if admin.show_idle => {
+            admin.show_idle = false;
+            admin.reset_pick();
+        }
         KeyCode::Char('p') => {
             admin.paused = !admin.paused;
             admin.ticks = 0;
         }
         KeyCode::Char('r') => return Some(load_admin_sessions(model)),
         KeyCode::Char('t') => return Some(open_terminate(model)),
+        KeyCode::Char('k') => return Some(open_cancel(model)),
         KeyCode::Char('c') => return Some(next_server(model)),
+        KeyCode::Char('y') => {
+            let query = admin
+                .picked()
+                .and_then(|session| session.current_query.clone());
+            return Some(copy_sql(model, query));
+        }
+        KeyCode::Char('o') => return Some(open_session_query(model)),
         _ => return None,
     }
     Some(Vec::new())
+}
+
+/// `k`: asks before the picked session's query is stopped. A read-only connection is not
+/// asked to: stopping another's work is a write on the server.
+fn open_cancel(model: &mut Model) -> Vec<Effect> {
+    let (Some(session), Some(server)) = (model.admin.picked().cloned(), model.admin.server.clone())
+    else {
+        return Vec::new();
+    };
+    let action = dexo_driver_api::AdminAction::CancelQuery {
+        session_id: session.id.clone(),
+    };
+    let policy = dexo_app::admin_service::AdminPolicy {
+        production: dexo_app::Environment::parse_strict(&server.environment)
+            == dexo_app::Environment::Production,
+        read_only: server.read_only,
+    };
+    if !dexo_app::admin_service::evaluate(&action, "", &policy).allowed {
+        model.admin.last_error = Some(format!(
+            "Not cancelled: {} is read-only.",
+            server.connection
+        ));
+        return Vec::new();
+    }
+    model.admin.cancel = Some(crate::screens::admin::CancelPrompt {
+        session,
+        connection: server.connection,
+        // Cancel holds the focus: an Enter out of habit stops nothing.
+        focus: crate::widgets::form::FooterFocus::Cancel,
+    });
+    Vec::new()
+}
+
+fn submit_cancel(model: &mut Model) -> Vec<Effect> {
+    let Some(prompt) = model.admin.cancel.take() else {
+        return Vec::new();
+    };
+    // What was confirmed for one connection is never sent to another.
+    match &model.admin.server {
+        Some(server) if prompt.connection == server.connection => vec![Effect::AdminCancel {
+            session: server.session,
+            target: prompt.session.id,
+        }],
+        _ => {
+            model.admin.last_error =
+                Some("The connection changed under the question; nothing was done.".into());
+            Vec::new()
+        }
+    }
+}
+
+/// `o`: the picked session's query in a new document on the server's connection.
+fn open_session_query(model: &mut Model) -> Vec<Effect> {
+    let (Some(query), Some(server)) = (
+        model
+            .admin
+            .picked()
+            .and_then(|session| session.current_query.clone()),
+        model.admin.server.clone(),
+    ) else {
+        return Vec::new();
+    };
+    let mut effects = go_to_screen(model, crate::model::Screen::Workbench);
+    let name = suggested_document_name(model);
+    effects.extend(open_text_document(
+        model,
+        &name,
+        &query,
+        Some(&server.connection),
+    ));
+    effects
 }
 
 /// The connections whose server's sessions can be listed: open, and with a driver that
@@ -13164,12 +13294,29 @@ fn servers(model: &Model) -> Vec<crate::screens::admin::ServerTarget> {
                     .any(|(capability, _)| *capability == dexo_driver_api::Capability::Admin)
             })
         })
-        .map(|row| crate::screens::admin::ServerTarget {
-            session: row.id,
-            generation: row.generation,
-            connection: row.connection.clone(),
-            environment: row.environment.clone(),
-            read_only: row.read_only,
+        .map(|row| {
+            let config = model
+                .connections
+                .profiles
+                .iter()
+                .find(|profile| profile.profile.name == row.connection)
+                .map(|profile| &profile.profile.config);
+            let text = |key: &str| {
+                config
+                    .and_then(|config| config.get(key))
+                    .and_then(serde_json::Value::as_str)
+                    .filter(|value| !value.is_empty())
+                    .map(str::to_string)
+            };
+            crate::screens::admin::ServerTarget {
+                session: row.id,
+                generation: row.generation,
+                connection: row.connection.clone(),
+                environment: row.environment.clone(),
+                read_only: row.read_only,
+                user: text("username"),
+                database: text("database"),
+            }
         })
         .collect()
 }

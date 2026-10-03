@@ -105,14 +105,17 @@ fn terminates(effects: &[dexo_tui::Effect]) -> Option<String> {
 }
 
 /// Enter used to end the first session listed, whoever owned it. Now only the session
-/// picked with the arrows is ended, after its id is typed, and an id that does not
-/// match does nothing.
+/// picked is ended, after its id is typed, and an id that does not match does nothing.
 #[test]
 fn only_the_picked_session_ends_once_its_id_is_typed() {
     use crossterm::event::KeyCode;
     let mut model = sessions_model(false);
     assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
-    press_key(&mut model, KeyCode::Down);
+    // The longest running is listed first: 11.
+    assert_eq!(
+        model.admin.picked().map(|session| session.id.as_str()),
+        Some("11")
+    );
     press_key(&mut model, KeyCode::Char('t'));
     assert_eq!(terminates(&press_key(&mut model, KeyCode::Enter)), None);
     assert!(model.admin.terminate.as_ref().unwrap().error.is_some());
@@ -135,11 +138,9 @@ fn a_read_only_connection_ends_no_session() {
     assert!(model.admin.terminate.is_none());
     assert!(
         model
-            .admin
-            .last_error
-            .as_deref()
-            .unwrap()
-            .contains("read-only")
+            .messages
+            .iter()
+            .any(|message| message.message.contains("read-only")),
     );
 }
 
@@ -301,6 +302,8 @@ fn the_sessions_list_moves_by_key() {
     model.height = 20;
     model.admin.sessions = (1..=17).map(|n| session_info(&n.to_string())).collect();
     model.admin.blocking.clear();
+    // They are idle: listed only when asked for.
+    model.admin.show_idle = true;
 
     press_key(&mut model, KeyCode::End);
     assert_eq!(model.admin.selected, 16);
@@ -311,7 +314,7 @@ fn the_sessions_list_moves_by_key() {
     assert!(page > 0);
     let shown = dexo_tui::render::render_to_string(&model, 80, 20);
     assert!(
-        shown.contains(&format!("> {:<7}", model.admin.sessions[page].id)),
+        shown.contains(&format!("> ● {:<8}", model.admin.sessions[page].id)),
         "{shown}"
     );
     press_key(&mut model, KeyCode::PageUp);
