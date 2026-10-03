@@ -3,12 +3,15 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections  Agents [Server] Compare  History   demo  local  public                                                                                 
-[1 Sessions]  2 Locks   3 Sizes   4 Stats   5 Settings  [c Server: local]                                                                 [p Pause]  [r Refresh]
+[1 Sessions]  2 Locks   3 Sizes   4 Stats   5 Settings  [c Server: local]                                                                                       
 / search                        [a Idle: hidden]                                                                                                                
 ┌▸ Sessions (2) · 1 blocked · every 2s─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
+│ [p Pause]  [r Refresh]                                                                                                                                       │
 │    PID      USER         DATABASE     STATE                 TIME ▼  QUERY                                                                                    │
 │> ● 11       dexo         dexo         idle in transaction     4.0s  [blocks 10] lock table items                                                             │
 │  ⊘ 10       dexo         dexo         active                  1.2s  [blocked by 11] select 1                                                                 │
+│                                                                                                                                                              │
+│                                                                                                                                                              │
 └──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┘
 ┌  Session 11──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────┐
 │ [k Cancel query]  [t Terminate…]  [y Copy query]  [o Open in editor]                                                                                         │
@@ -22,9 +25,6 @@ expression: "render_to_string(&model, 160, 50)"
 │ Running   4.0s                                                                                                                                               │
 │ ── Blocking                                                                                                                                                  │
 │ Session 11 blocks 10: it waits for a lock on public.items. Ending 11 frees it.                                                                               │
-│                                                                                                                                                              │
-│                                                                                                                                                              │
-│                                                                                                                                                              │
 │                                                                                                                                                              │
 │                                                                                                                                                              │
 │                                                                                                                                                              │

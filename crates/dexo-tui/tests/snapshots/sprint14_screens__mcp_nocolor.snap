@@ -3,11 +3,11 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 100, 30)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   default  no connection  -               
- 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                             [n New]
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                    
 ┌> Profiles (1)──────────────────────────┐┌  assistant─────────────────────────────────────────────┐
-│> ○ assistant  1 conn    browse    1 gra││ [e Enable]  [c Connections.]  [q Read SQL on]          │
+│ [n New]                                ││ [e Enable]  [c Connections.]  [q Read SQL on]          │
 │                                        ││ [g Grant.]  [r Revoke grants]  [x Delete]              │
-│                                        ││                                                        │
+│> ○ assistant  1 conn    browse    1 gra││                                                        │
 │                                        ││ State        disabled                                  │
 │                                        ││ Connections  local                                     │
 │                                        ││ Access       browse and describe only                  │

@@ -147,6 +147,31 @@ pub fn action_bar(
     used.min(area.height)
 }
 
+/// The buttons that act on a whole list on its pane's first rows, and the rest of `inner`
+/// under them: at the far end of the toolbar they sat over the detail, and read as its.
+/// A pane too short for them and a row of the list leaves them to the status line.
+pub fn list_actions(
+    frame: &mut Frame,
+    inner: Rect,
+    model: &Model,
+    hits: &mut HitMap,
+    buttons: &[Button],
+) -> Rect {
+    let rows = action_bar_rows(buttons, inner.width);
+    if rows == 0 || inner.height < rows + 2 {
+        return inner;
+    }
+    let used = action_bar(frame, inner, model, hits, buttons, None);
+    // A blank row under them when the pane has room for it, as over a detail.
+    let gap = u16::from(inner.height > used + 6);
+    Rect::new(
+        inner.x,
+        inner.y + used + gap,
+        inner.width,
+        inner.height - used - gap,
+    )
+}
+
 /// How wide `buttons` are on one row, as `action_bar` lays them: a marker column before
 /// each and a space between.
 fn bar_width(buttons: &[Button]) -> u16 {

@@ -56,7 +56,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         &views,
         Some(search),
         &chips(model),
-        &toolbar_buttons(model),
+        &[],
     );
     draw_view(frame, rest, model, hits);
 }
@@ -103,7 +103,7 @@ fn chips(model: &Model) -> Vec<Chip> {
 }
 
 /// What acts on all History shows: clearing it.
-pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+pub fn list_buttons(model: &Model) -> Vec<Button> {
     match model.history_view {
         HistoryView::History => vec![Button::new(KeyCode::Char('C'), "Clear…").enabled_if(
             !model.editor.history_lines().is_empty(),
@@ -272,6 +272,7 @@ fn list_pane(
     let inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenList, area);
+    let inner = widgets::list_actions(frame, inner, model, hits, &list_buttons(model));
     let style = |role: Role| model.theme.style(role, model.capabilities);
     // The rows column goes first when the pane is narrow; the statement takes the rest.
     let with_rows = inner.width >= 70;

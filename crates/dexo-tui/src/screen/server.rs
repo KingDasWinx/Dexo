@@ -49,7 +49,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             label: format!("Server: {}", server.connection),
             active: false,
         }],
-        &toolbar_buttons(model),
+        &[],
     );
     let on_sessions = admin.view == ServerView::Sessions;
     let chips = if on_sessions {
@@ -86,7 +86,7 @@ fn view_table(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             None => format!("Reading the server's {}...", view.title().to_lowercase()),
         }];
         lines.extend(admin.last_error.clone());
-        super::empty_state(frame, area, model, &lines);
+        widgets::empty_with_buttons(frame, area, model, hits, &lines, &list_buttons(model));
         return;
     };
     let cells = admin.view_cells();
@@ -94,7 +94,7 @@ fn view_table(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         if admin.search.input.is_empty() {
             let mut lines = vec![format!("No {} to show.", view.title().to_lowercase())];
             lines.extend(admin.restriction.clone());
-            super::empty_state(frame, area, model, &lines);
+            widgets::empty_with_buttons(frame, area, model, hits, &lines, &list_buttons(model));
         } else {
             widgets::empty_with_buttons(
                 frame,
@@ -123,6 +123,7 @@ fn view_table(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         let mut inner = block.inner(table);
         frame.render_widget(block, table);
         hits.register(HitTarget::ScreenList, table);
+        inner = widgets::list_actions(frame, inner, model, hits, &list_buttons(model));
         // Each column as wide as its widest cell, up to forty; the last takes the rest.
         let widths: Vec<usize> = (0..columns.len())
             .map(|column| {
@@ -223,8 +224,8 @@ fn label(column: &str) -> &'static str {
     }
 }
 
-/// Pause or resume the reading, and read now.
-pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+/// Pause or resume the reading, and read now: over the list they keep fresh.
+pub fn list_buttons(model: &Model) -> Vec<Button> {
     if model.admin.server.is_none() {
         return Vec::new();
     }
@@ -289,7 +290,7 @@ fn sessions(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             "No sessions.".to_string()
         }];
         lines.extend(admin.last_error.clone());
-        super::empty_state(frame, area, model, &lines);
+        widgets::empty_with_buttons(frame, area, model, hits, &lines, &list_buttons(model));
         return;
     }
     let shown = admin.visible();
@@ -317,7 +318,8 @@ fn sessions(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             (area, none)
         }
     } else {
-        let list_rows = (shown.len() as u16 + 3).clamp(5, (area.height * 3 / 5).max(5));
+        // The rows, their header, the buttons over them and the borders.
+        let list_rows = (shown.len() as u16 + 6).clamp(5, (area.height * 3 / 5).max(5));
         let [list, detail] =
             Layout::vertical([Constraint::Length(list_rows), Constraint::Min(0)]).areas(area);
         (list, detail)
@@ -381,6 +383,7 @@ fn list_pane(
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenList, area);
+    inner = widgets::list_actions(frame, inner, model, hits, &list_buttons(model));
     let narrow = inner.width < 100;
     let style = |role: Role| model.theme.style(role, model.capabilities);
     let state_of = |session: &dexo_driver_api::SessionInfo| {

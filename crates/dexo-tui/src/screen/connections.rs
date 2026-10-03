@@ -26,9 +26,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         }
         let mut lines = vec!["No connections yet.".to_string()];
         lines.extend(screen.error.clone());
-        let mut buttons = toolbar_buttons();
-        buttons.push(Button::new(KeyCode::Char('r'), "Look in Docker"));
-        widgets::empty_with_buttons(frame, area, model, hits, &lines, &buttons);
+        widgets::empty_with_buttons(frame, area, model, hits, &lines, &list_buttons());
         return;
     }
     // On a narrow screen the form takes it whole: under the list it scrolled twenty
@@ -44,7 +42,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         hits,
         Some(&screen.search),
         &chips(model),
-        &toolbar_buttons(),
+        &[],
     );
     let items = screen.items();
     let (list, detail) = super::list_and_detail(model, hits, area, items.len());
@@ -118,11 +116,13 @@ fn picked_fields(model: &Model) -> (String, Vec<FieldRow>) {
     )
 }
 
-/// What acts on the whole screen rather than the pick.
-pub fn toolbar_buttons() -> Vec<Button> {
+/// What acts on the list rather than the pick: a new connection, one from a URL, and
+/// the databases running in Docker looked for again.
+pub fn list_buttons() -> Vec<Button> {
     vec![
-        Button::new(KeyCode::Char('u'), "From URL"),
         Button::new(KeyCode::Char('n'), "New"),
+        Button::new(KeyCode::Char('u'), "From URL"),
+        Button::new(KeyCode::Char('r'), "Find in Docker"),
     ]
 }
 
@@ -309,6 +309,7 @@ fn list_pane(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap, it
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenList, area);
+    inner = widgets::list_actions(frame, inner, model, hits, &list_buttons());
     if items.is_empty() {
         widgets::empty_with_buttons(
             frame,

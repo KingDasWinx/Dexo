@@ -77,7 +77,7 @@ pub fn render(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
         } else {
             Vec::new()
         },
-        &toolbar_buttons(model),
+        &[],
     );
     match model.agents_view {
         AgentsView::Approvals => approvals(frame, body, model, hits),
@@ -440,7 +440,7 @@ fn approvals(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
                 .to_string(),
         ];
         lines.extend(audit.notice.clone());
-        super::empty_state(frame, area, model, &lines);
+        widgets::empty_with_buttons(frame, area, model, hits, &lines, &list_buttons(model));
         return;
     }
     let rows: Vec<String> = audit
@@ -710,8 +710,9 @@ fn activity(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
     }
 }
 
-/// What acts on the view as a whole: every grant taken back; a new profile.
-pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+/// What acts on the view's list as a whole, over it: every grant taken back; a new
+/// profile.
+pub fn list_buttons(model: &Model) -> Vec<Button> {
     match model.agents_view {
         AgentsView::Approvals => vec![Button::new(KeyCode::Char('R'), "Revoke all grants")],
         AgentsView::Profiles => vec![Button::new(KeyCode::Char('n'), "New")],
@@ -768,7 +769,7 @@ fn profiles(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap) {
             lines.push(String::new());
             lines.push(screen.status.clone());
         }
-        super::empty_state(frame, area, model, &lines);
+        widgets::empty_with_buttons(frame, area, model, hits, &lines, &list_buttons(model));
         return;
     }
     let (list, detail) = super::list_and_detail(model, hits, area, screen.profiles.len());
@@ -838,6 +839,7 @@ fn profiles_list(frame: &mut Frame, area: Rect, model: &Model, hits: &mut HitMap
     let inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenList, area);
+    let inner = widgets::list_actions(frame, inner, model, hits, &list_buttons(model));
     let style = |role: Role| model.theme.style(role, model.capabilities);
     let name_width = screen
         .profiles

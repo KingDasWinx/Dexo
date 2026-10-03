@@ -3,8 +3,7 @@ source: crates/dexo-tui/tests/sprint14_screens.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   default  no connection  —                                                                           
-[1 Approvals]  2 Activity   3 Profiles   4 Setup                                                                                           [R Revoke all grants]
-                                                                                                                                                                
+[1 Approvals]  2 Activity   3 Profiles   4 Setup                                                                                                                
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 
@@ -22,6 +21,7 @@ expression: "render_to_string(&model, 160, 50)"
                                                             No agent's write is waiting for approval.                                                           
                                            An agent writing under a grant that asks first waits here for your answer.                                           
                                                                                                                                                                 
+                                                                      [R Revoke all grants]                                                                     
                                                                                                                                                                 
                                                                                                                                                                 
                                                                                                                                                                 

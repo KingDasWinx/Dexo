@@ -5208,7 +5208,7 @@ fn screen_press(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
         && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
         && let Some(button) = crate::screen::buttons(model)
             .into_iter()
-            .chain(crate::screen::toolbar_buttons(model))
+            .chain(crate::screen::screen_buttons(model))
             .find(|button| button.answers(key.code, shift))
         && let Err(why) = button.enabled
     {

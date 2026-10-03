@@ -41,13 +41,14 @@ pub fn buttons(model: &Model) -> Vec<Button> {
     }
 }
 
-/// The buttons on the shown screen's toolbar, which act on all of it.
-pub fn toolbar_buttons(model: &Model) -> Vec<Button> {
+/// The buttons that act on all the shown screen: over its list, or -- Compare's -- beside
+/// its sources.
+pub fn screen_buttons(model: &Model) -> Vec<Button> {
     match model.shown_screen() {
-        Screen::Connections if !model.connection_form.open => connections::toolbar_buttons(),
-        Screen::History => history::toolbar_buttons(model),
-        Screen::Agents => agents::toolbar_buttons(model),
-        Screen::Server => server::toolbar_buttons(model),
+        Screen::Connections if !model.connection_form.open => connections::list_buttons(),
+        Screen::History => history::list_buttons(model),
+        Screen::Agents => agents::list_buttons(model),
+        Screen::Server => server::list_buttons(model),
         Screen::Compare => compare::toolbar_buttons(model),
         _ => Vec::new(),
     }
@@ -346,8 +347,9 @@ pub fn hints(model: &Model, hits: &HitMap) -> String {
         _ => "Esc back".into(),
     };
     let free = held(model).is_none() && !detail_is_form(model);
-    // A toolbar's button that did not fit is said here, first: the line is cut at its end.
-    let unseen: Vec<String> = toolbar_buttons(model)
+    // A button for all the screen that is not drawn -- no room, or its list is folded
+    // away -- is said here, first: the line is cut at its end.
+    let unseen: Vec<String> = screen_buttons(model)
         .iter()
         .filter(|button| free && !hits.has(HitTarget::Press(button.key, button.shift)))
         .map(|button| {
@@ -456,8 +458,9 @@ pub fn list_and_detail(
                 .areas(area);
         (list, detail)
     } else {
-        // Its rows and borders, at most half the height, at least three rows of list.
-        let wanted = (list_rows as u16 + 2).clamp(5, (area.height / 2).max(5));
+        // Its rows and borders, with room for its buttons and its header, at most half
+        // the height, at least three rows of list.
+        let wanted = (list_rows as u16 + 5).clamp(5, (area.height / 2).max(5));
         let [list, detail] =
             Layout::vertical([Constraint::Length(wanted), Constraint::Min(0)]).areas(area);
         (list, detail)
@@ -511,6 +514,7 @@ pub fn list_pane(
     let mut inner = block.inner(area);
     frame.render_widget(block, area);
     hits.register(HitTarget::ScreenList, area);
+    inner = widgets::list_actions(frame, inner, model, hits, &screen_buttons(model));
     let width = usize::from(inner.width);
     if let Some(header) = header
         && inner.height > 1

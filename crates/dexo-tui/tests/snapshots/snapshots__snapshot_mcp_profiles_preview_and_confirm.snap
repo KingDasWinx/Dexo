@@ -3,11 +3,11 @@ source: crates/dexo-tui/tests/snapshots.rs
 expression: "render_to_string(&model, 160, 50)"
 ---
  Workbench  Connections [Agents] Server  Compare  History   demo  local  public                                                                                 
- 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                                                                         [n New]
+ 1 Approvals   2 Activity  [3 Profiles]  4 Setup                                                                                                                
 ┌▸ Profiles (1)───────────────────────────────────────────────────┐┌  assistant────────────────────────────────────────────────────────────────────────────────┐
-│> ○ assistant  1 conn    browse    1 grant                       ││ [e Enable]  [c Connections…]  [q Read SQL on]  [g Grant…]  [r Revoke grants]  [x Delete]  │
+│ [n New]                                                         ││ [e Enable]  [c Connections…]  [q Read SQL on]  [g Grant…]  [r Revoke grants]  [x Delete]  │
 │                                                                 ││                                                                                           │
-│                                                                 ││ State        disabled                                                                     │
+│> ○ assistant  1 conn    browse    1 grant                       ││ State        disabled                                                                     │
 │                                                                 ││ Connections  local                                                                        │
 │                                                                 ││ Access       browse and describe only                                                     │
 │                                                                 ││ Sees         db.public.*                                                                  │
