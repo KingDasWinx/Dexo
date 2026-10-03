@@ -317,9 +317,19 @@ fn render_close_prompt(
         })
         .collect::<Vec<_>>()
         .join(" ");
+    // Short enough for a narrow terminal: the sentence was cut mid-word at 40 columns.
+    let narrow = area.width < 48;
     let lines = [
-        format!("{name} has changes that are not saved."),
-        "Closing it without saving loses them.".to_string(),
+        if narrow {
+            format!("{name} is not saved.")
+        } else {
+            format!("{name} has changes that are not saved.")
+        },
+        if narrow {
+            "Closing loses the changes.".to_string()
+        } else {
+            "Closing it without saving loses them.".to_string()
+        },
         String::new(),
         footer.clone(),
     ];
@@ -1278,8 +1288,13 @@ fn render_palette(frame: &mut Frame, model: &Model, hits: &mut HitMap) {
         };
         // The shortcut sits against the right edge so the keys read as one column
         // instead of trailing each title at a different offset.
-        let shortcut = entry.shortcut.as_deref().unwrap_or_default();
         let used = 2 + category.chars().count() + title.chars().count();
+        // A key that does not fit whole is left off: `Ctrl+Sh` teaches nothing.
+        let shortcut = entry
+            .shortcut
+            .as_deref()
+            .filter(|key| used + key.chars().count() < inner_width)
+            .unwrap_or_default();
         let gap = inner_width
             .saturating_sub(used + shortcut.chars().count())
             .max(1);

@@ -376,5 +376,5 @@ Mark `[x]` when fixed, with the commit; `[=]` when another fix resolved it (name
 - [x] **SL-15** `COSMETIC` Right click: grid and tree respond, editor, tabs and status bar do not
 - [x] **SL-25** `COSMETIC` Button rows differ between dialogs
 - [x] **SL-26** `COSMETIC` Muted text and Light-mode accents have low contrast
-- [ ] **SL-27** `COSMETIC` Compact status bar, 40x12 cut-offs
+- [x] **SL-27** `COSMETIC` Compact status bar, 40x12 cut-offs
 - [x] **SL-28** `COSMETIC` F10 cycles four unnamed layouts and one of them leaves 3 inner rows for results

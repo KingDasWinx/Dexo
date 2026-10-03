@@ -204,3 +204,37 @@ fn a_dialog_clears_the_status_bar_hints() {
         "{behind}"
     );
 }
+
+/// At 40x12 the palette cut a key mid-token and the close prompt cut a sentence.
+#[test]
+fn nothing_is_cut_mid_word_at_40_columns() {
+    let mut model = Model::default();
+    update(
+        &mut model,
+        Action::Resize {
+            width: 40,
+            height: 12,
+        },
+    );
+    update(&mut model, Action::OpenPalette);
+    update(&mut model, Action::PaletteQuery("execute".into()));
+    let frame = dexo_tui::render::render_to_string(&model, 40, 12);
+    assert!(
+        !frame.contains("Ctrl+Sh│") && !frame.contains("Ctrl+S│"),
+        "{frame}"
+    );
+
+    let mut model = Model::default();
+    update(
+        &mut model,
+        Action::Resize {
+            width: 40,
+            height: 12,
+        },
+    );
+    model.documents[0].title = "query-1.sql".into();
+    model.documents[0].sql.insert(0, "select 1").unwrap();
+    update(&mut model, Action::CloseDocument);
+    let frame = dexo_tui::render::render_to_string(&model, 40, 12);
+    assert!(frame.contains("not saved."), "{frame}");
+}
