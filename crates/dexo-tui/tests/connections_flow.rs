@@ -373,7 +373,7 @@ fn custom_environment_policy_is_visible_on_the_row() {
     model
         .connections
         .load_profiles(vec![custom_policy_profile()]);
-    let lines = model.connections.lines(None).join("\n");
+    let lines = model.connections.row_text(0, None);
     assert!(lines.contains("pci-lab"));
     assert!(lines.contains(" ro"));
 }

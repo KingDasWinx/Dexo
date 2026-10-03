@@ -478,8 +478,9 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
             let screen = &mut model.connections;
             screen.docker = found;
             if screen.selected_profile >= screen.row_count() {
-                screen.selected_profile = 0;
+                screen.pick(0);
             }
+            screen.keep_pick_shown();
             Vec::new()
         }
         Action::ConnectSelected => connect_selected(model),
@@ -488,7 +489,7 @@ fn dispatch(model: &mut Model, action: Action) -> Vec<Effect> {
                 && model.focus == Focus::Explorer
                 && let Some(index) = selected_connection_profile_index(model)
             {
-                model.connections.selected_profile = index;
+                model.connections.pick(index);
             }
             match model.connections.selected().cloned() {
                 // Nothing saved to edit: editing a temporary connection is saving it.
@@ -3632,13 +3633,32 @@ fn mouse_connections(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -
     match hit {
         Some(HitTarget::ListRow(index)) => {
             if index < model.connections.row_count() {
-                model.connections.selected_profile = index;
+                model.connections.pick(index);
             }
             if doubled {
                 choose_connection_intent(model)
             } else {
                 Vec::new()
             }
+        }
+        // A click on a group's heading folds or unfolds it.
+        Some(HitTarget::ListGroup(ordinal)) => {
+            let group = model
+                .connections
+                .items()
+                .into_iter()
+                .filter_map(|item| match item {
+                    crate::screens::connections::Item::Group { name, folded, .. } => {
+                        Some((name, folded))
+                    }
+                    crate::screens::connections::Item::Row(_) => None,
+                })
+                .nth(ordinal);
+            if let Some((name, folded)) = group {
+                model.connections.picked_group = Some(name);
+                model.connections.fold(!folded);
+            }
+            Vec::new()
         }
         _ => Vec::new(),
     }
@@ -4202,8 +4222,15 @@ fn mouse_inspector(model: &mut Model, hit: Option<HitTarget>) -> Vec<Effect> {
 
 /// A click on a screen other than the workbench.
 fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec<Effect> {
-    // A button: its key, pressed.
+    // A button: its key, pressed. A search being typed into ends first; a form or a
+    // question holding the keys keeps them.
     if let Some(HitTarget::Press(code, shift)) = hit {
+        if model.shown_screen() == crate::model::Screen::Connections {
+            model.connections.search.typing = false;
+        }
+        if crate::screen::held(model).is_some() {
+            return Vec::new();
+        }
         let modifiers = if shift {
             KeyModifiers::SHIFT
         } else {
@@ -4213,7 +4240,9 @@ fn mouse_screen(model: &mut Model, hit: Option<HitTarget>, doubled: bool) -> Vec
     }
     // A click in a section gives it the keys, unless a form or a question holds them.
     let clicked = match hit {
-        Some(HitTarget::ScreenList | HitTarget::ListRow(_)) => Some(crate::screen::Section::List),
+        Some(HitTarget::ScreenList | HitTarget::ListRow(_) | HitTarget::ListGroup(_)) => {
+            Some(crate::screen::Section::List)
+        }
         Some(HitTarget::ScreenDetail) => Some(crate::screen::Section::Detail),
         _ => None,
     };
@@ -4386,7 +4415,7 @@ fn mouse_workbench(
             if index < model.explorer.visible_ids().len() {
                 model.explorer.select_visible(index);
                 if let Some(profile_index) = selected_connection_profile_index(model) {
-                    model.connections.selected_profile = profile_index;
+                    model.connections.pick(profile_index);
                 }
             }
             // One rule for every row: a click selects, a double click opens (the arrow in
@@ -4406,7 +4435,7 @@ fn mouse_workbench(
             if index < model.explorer.visible_ids().len() {
                 model.explorer.select_visible(index);
                 if let Some(profile_index) = selected_connection_profile_index(model) {
-                    model.connections.selected_profile = profile_index;
+                    model.connections.pick(profile_index);
                 }
             }
             expand_or_open_selected(model)
@@ -4418,7 +4447,7 @@ fn mouse_workbench(
             model.explorer.sidebar_focus = crate::screens::explorer::SidebarFocus::Catalog;
             if index < model.connections.profiles.len() {
                 let name = model.connections.profiles[index].profile.name.clone();
-                model.connections.selected_profile = index;
+                model.connections.pick(index);
                 model
                     .explorer
                     .select(crate::screens::explorer::connection_id(&name));
@@ -4558,7 +4587,7 @@ fn handle_mouse_right_down(model: &mut Model, mouse: MouseEvent) -> Vec<Effect> 
             if index < model.explorer.visible_ids().len() {
                 model.explorer.select_visible(index);
                 if let Some(profile_index) = selected_connection_profile_index(model) {
-                    model.connections.selected_profile = profile_index;
+                    model.connections.pick(profile_index);
                 }
             }
             update(model, Action::OpenNodeMenu)
@@ -4884,12 +4913,7 @@ fn handle_mouse_scroll(model: &mut Model, mouse: MouseEvent, delta: i32) -> Vec<
         return Vec::new();
     }
     if overlay.is_none() && model.screen == crate::model::Screen::Connections {
-        if delta < 0 {
-            model.connections.selected_profile =
-                model.connections.selected_profile.saturating_sub(1);
-        } else if model.connections.selected_profile + 1 < model.connections.row_count() {
-            model.connections.selected_profile += 1;
-        }
+        model.connections.step(if delta < 0 { -1 } else { 1 });
         return Vec::new();
     }
     if overlay == Some(OverlayKind::Projects) {
@@ -5032,7 +5056,8 @@ fn handle_screen_key(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
 /// detail -- does what the key does, unless the button cannot act now: then it says why.
 fn screen_press(model: &mut Model, key: KeyEvent) -> Vec<Effect> {
     let shift = key.modifiers.contains(KeyModifiers::SHIFT);
-    if key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
+    if crate::screen::held(model).is_none()
+        && key.modifiers.difference(KeyModifiers::SHIFT).is_empty()
         && let Some(button) = crate::screen::buttons(model)
             .into_iter()
             .find(|button| button.answers(key.code, shift))
@@ -6353,40 +6378,100 @@ fn resolve_delete_connection(
 
 /// The Connections screen's keys. None leaves the key to the keymap and Esc to going back.
 fn connections_key(model: &mut Model, key: KeyEvent) -> Option<Vec<Effect>> {
+    let screen = &mut model.connections;
+    // What is typed into the search is text: `x` there deletes nothing.
+    if screen.search.typing {
+        if key
+            .modifiers
+            .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
+            && !crate::widgets::text_input::TextInput::owns(&key)
+        {
+            return None;
+        }
+        if screen.search.key(key) {
+            screen.keep_pick_shown();
+            return Some(Vec::new());
+        }
+    }
     if key
         .modifiers
         .intersects(KeyModifiers::CONTROL | KeyModifiers::ALT)
     {
         return None;
     }
+    let on_row = screen.picked().is_some() || screen.picked_docker().is_some();
+    let on_group = screen.picked_group.is_some();
     Some(match key.code {
+        // The search goes first, then the filters, then the screen. With nothing shown,
+        // both at once: that is the Clear filters button under the empty list.
         KeyCode::Esc => {
-            model.connections.error = None;
-            return None;
-        }
-        KeyCode::Enter => choose_connection_intent(model),
-        KeyCode::Home => {
-            model.connections.selected_profile = 0;
-            Vec::new()
-        }
-        KeyCode::End => {
-            model.connections.selected_profile = model.connections.row_count().saturating_sub(1);
-            Vec::new()
-        }
-        KeyCode::Up => {
-            if model.connections.selected_profile > 0 {
-                model.connections.selected_profile -= 1;
+            screen.error = None;
+            if screen.filtered() && screen.items().is_empty() {
+                screen.clear_filters();
+            } else if !screen.search.input.is_empty() {
+                screen.search.input.clear();
+                screen.keep_pick_shown();
+            } else if screen.filtered() {
+                screen.clear_filters();
+            } else {
+                return None;
             }
             Vec::new()
         }
-        KeyCode::Down => {
-            if model.connections.selected_profile + 1 < model.connections.row_count() {
-                model.connections.selected_profile += 1;
-            }
+        KeyCode::Char('/') => {
+            screen.search.typing = true;
+            Vec::new()
+        }
+        KeyCode::Char('o') => {
+            screen.connected_only = !screen.connected_only;
+            screen.keep_pick_shown();
+            Vec::new()
+        }
+        KeyCode::Char('v') => {
+            use crate::screens::connections::ENVIRONMENTS;
+            screen.env = match screen.env {
+                None => Some(ENVIRONMENTS[0]),
+                Some(env) => ENVIRONMENTS
+                    .iter()
+                    .position(|other| *other == env)
+                    .and_then(|at| ENVIRONMENTS.get(at + 1))
+                    .copied(),
+            };
+            screen.keep_pick_shown();
+            Vec::new()
+        }
+        KeyCode::Home | KeyCode::End => {
+            screen.pick_end(key.code == KeyCode::End);
+            Vec::new()
+        }
+        KeyCode::Up | KeyCode::Down => {
+            screen.step(if key.code == KeyCode::Up { -1 } else { 1 });
+            Vec::new()
+        }
+        KeyCode::Left => {
+            screen.fold(true);
+            Vec::new()
+        }
+        KeyCode::Right if on_group => {
+            screen.fold(false);
+            Vec::new()
+        }
+        KeyCode::Enter if on_group => {
+            let folded = crate::screen::connections::buttons(model)
+                .first()
+                .is_some_and(|button| button.label == "Unfold");
+            model.connections.fold(!folded);
             Vec::new()
         }
         KeyCode::Char('r') => vec![Effect::DiscoverDocker],
         KeyCode::Char('n') => update(model, Action::OpenConnectionForm),
+        // The rest act on a connection: on a heading, or with nothing shown, on none.
+        KeyCode::Enter | KeyCode::Char('e' | 'd' | 't' | 'x' | 'c') | KeyCode::Delete
+            if !on_row =>
+        {
+            Vec::new()
+        }
+        KeyCode::Enter => choose_connection_intent(model),
         KeyCode::Char('e') => update(model, Action::EditSelectedConnection),
         KeyCode::Char('d') => update(model, Action::DuplicateConnection),
         KeyCode::Char('t') => update(model, Action::TestConnection),
@@ -6509,7 +6594,7 @@ fn close_selected_session(model: &mut Model) -> Vec<Effect> {
         .iter()
         .position(|row| row.profile.name == connection_name)
     {
-        model.connections.selected_profile = index;
+        model.connections.pick(index);
     }
 
     let Some(session) = model
@@ -6542,7 +6627,7 @@ fn activate_connection_node(model: &mut Model) -> Vec<Effect> {
     let Some(index) = selected_connection_profile_index(model) else {
         return Vec::new();
     };
-    model.connections.selected_profile = index;
+    model.connections.pick(index);
     let name = model.connections.profiles[index].profile.name.clone();
     let profile = model.connections.profiles[index].profile.clone();
     let connection = crate::screens::explorer::connection_id(&name);
@@ -6675,7 +6760,7 @@ fn open_temporary_connection(
         .iter()
         .position(|row| row.profile.id == profile.id)
     {
-        model.connections.selected_profile = index;
+        model.connections.pick(index);
     }
     connect_to(model, profile)
 }
@@ -6698,7 +6783,7 @@ fn move_sidebar_selection(model: &mut Model, delta: i32) {
     model.explorer.move_selection(delta);
     model.explorer.sync_scroll(explorer_visible_rows(model));
     if let Some(index) = selected_connection_profile_index(model) {
-        model.connections.selected_profile = index;
+        model.connections.pick(index);
     }
 }
 
@@ -14936,7 +15021,7 @@ mod tests {
         );
         update(&mut model, Action::DockerDiscovered(found));
         let screen = crate::render::render_to_string(&model, 100, 30);
-        assert!(screen.contains("Running in Docker"), "{screen}");
+        assert!(screen.contains("Found in Docker"), "{screen}");
         assert!(
             screen.contains("shop-pg [postgres] 127.0.0.1:5433"),
             "{screen}"
@@ -15425,7 +15510,7 @@ mod tests {
         };
         model.connections.temporary = vec![profile("pg (copy)")];
         model.connections.load_profiles(vec![profile("pg")]);
-        model.connections.selected_profile = 0;
+        model.connections.pick(0);
         let effects = update(&mut model, Action::DuplicateConnection);
         assert!(
             matches!(effects.as_slice(), [Effect::DuplicateProfile { taken, .. }] if taken == &["pg (copy)".to_string()]),
@@ -15746,7 +15831,7 @@ mod tests {
             "{screen}"
         );
         assert_eq!(model.connections.row_count(), 2);
-        model.connections.selected_profile = 1;
+        model.connections.pick(1);
         update(
             &mut model,
             Action::Key(KeyEvent::new(KeyCode::Enter, KeyModifiers::NONE)),

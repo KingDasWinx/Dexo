@@ -1,7 +1,10 @@
-use dexo_app::ConnectionProfile;
+use std::collections::{BTreeMap, BTreeSet};
+
+use dexo_app::{ConnectionProfile, Environment};
 use dexo_driver_api::TransactionState;
 
 use crate::runtime::SessionId;
+use crate::screen::widgets::Search;
 use crate::screens::connection::ConnectionForm;
 use crate::screens::secret_prompt::DeleteSecretDecision;
 
@@ -48,6 +51,57 @@ pub struct ConnectionsScreen {
     /// Databases running in Docker, listed after the saved connections; a selection
     /// past the saved ones is one of these.
     pub docker: Vec<dexo_app::docker::DockerDatabase>,
+    /// The list's search, over name, host, database, group and driver.
+    pub search: Search,
+    /// Only the connections with a session open.
+    pub connected_only: bool,
+    /// Only the connections of one environment.
+    pub env: Option<Environment>,
+    /// The groups folded under their heading.
+    pub folded: BTreeSet<String>,
+    /// The group heading the pick is on, rather than a row.
+    pub picked_group: Option<String>,
+}
+
+/// One row of the list a pick can be on.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum Item {
+    /// A group's heading, with how many of its connections pass the filters.
+    Group {
+        name: String,
+        count: usize,
+        folded: bool,
+    },
+    /// A saved connection, or past them a database found in Docker: what
+    /// `selected_profile` holds.
+    Row(usize),
+}
+
+/// The environments `v` walks through after all of them.
+pub const ENVIRONMENTS: [Environment; 4] = [
+    Environment::Production,
+    Environment::Staging,
+    Environment::Development,
+    Environment::Local,
+];
+
+/// How an environment is said in a chip or a column.
+pub fn env_name(environment: Environment) -> &'static str {
+    match environment {
+        Environment::Production => "prod",
+        Environment::Staging => "staging",
+        Environment::Development => "dev",
+        Environment::Local => "local",
+    }
+}
+
+/// The group a connection is filed under, if any.
+fn group_of(profile: &ConnectionProfile) -> Option<&str> {
+    profile
+        .group_path
+        .as_deref()
+        .map(str::trim)
+        .filter(|group| !group.is_empty())
 }
 
 /// The buttons of the "Delete connection" dialog. Cancel comes first in the focus, so
@@ -200,12 +254,6 @@ impl ConnectionsScreen {
         self.delete_choice = DeleteChoice::Cancel;
     }
 
-    pub fn lines(&self, active: Option<SessionId>) -> Vec<String> {
-        let mut lines = self.profile_lines(active);
-        lines.extend(self.error.clone());
-        lines
-    }
-
     /// The picked row in full: where a saved connection goes and under which rules, or
     /// what a database found in Docker would be added as.
     pub fn detail_lines(&self, active: Option<SessionId>) -> Vec<String> {
@@ -335,29 +383,225 @@ impl ConnectionsScreen {
         lines
     }
 
-    pub fn profile_lines(&self, active: Option<SessionId>) -> Vec<String> {
-        self.rows(active)
-            .into_iter()
-            .map(|(_, line)| line)
-            .collect()
+    /// The list as drawn, filtered and in order: the connections in no group, then each
+    /// group under its heading, then the databases found in Docker -- those only while no
+    /// filter but the search is on, as they have no session and no environment.
+    pub fn items(&self) -> Vec<Item> {
+        let mut ungrouped = Vec::new();
+        let mut groups: BTreeMap<&str, Vec<usize>> = BTreeMap::new();
+        for (index, row) in self.profiles.iter().enumerate() {
+            if !self.shows(row) {
+                continue;
+            }
+            match group_of(&row.profile) {
+                Some(group) => groups.entry(group).or_default().push(index),
+                None => ungrouped.push(index),
+            }
+        }
+        let mut items: Vec<Item> = ungrouped.into_iter().map(Item::Row).collect();
+        // A search opens the folded groups: what it found is shown.
+        let searching = !self.search.input.trim().is_empty();
+        for (name, rows) in groups {
+            let folded = !searching && self.folded.contains(name);
+            items.push(Item::Group {
+                name: name.to_string(),
+                count: rows.len(),
+                folded,
+            });
+            if !folded {
+                items.extend(rows.into_iter().map(Item::Row));
+            }
+        }
+        if !self.connected_only && self.env.is_none() {
+            let saved = self.profiles.len();
+            items.extend(
+                self.unsaved_docker()
+                    .enumerate()
+                    .filter(|(_, database)| {
+                        let connection = &database.connection;
+                        self.search.matches([
+                            database.container.as_str(),
+                            connection.driver.as_str(),
+                            connection.host.as_str(),
+                            connection.database.as_str(),
+                        ])
+                    })
+                    .map(|(offset, _)| Item::Row(saved + offset)),
+            );
+        }
+        items
     }
 
-    /// Each line with the selectable row it shows, if any: the saved connections, then a
-    /// heading and the databases running in Docker.
-    pub fn rows(&self, active: Option<SessionId>) -> Vec<(Option<usize>, String)> {
-        let mut rows: Vec<(Option<usize>, String)> = if self.profiles.is_empty() {
-            vec![(None, "  No connections yet. n adds one.".into())]
-        } else {
-            self.saved_lines(active)
-                .into_iter()
-                .enumerate()
-                .map(|(index, line)| (Some(index), line))
-                .collect()
+    /// Whether the search and the filters let `row` through.
+    fn shows(&self, row: &ConnectionRow) -> bool {
+        let profile = &row.profile;
+        if self.connected_only && self.session_for(&profile.name).is_none() {
+            return false;
+        }
+        if self
+            .env
+            .is_some_and(|env| Environment::parse_strict(&profile.environment) != env)
+        {
+            return false;
+        }
+        let text = |key: &str| {
+            profile
+                .config
+                .get(key)
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
         };
-        // A container that already has a saved connection is not offered again; without
-        // a word, a user looking for theirs thought Dexo could not see it.
-        let hidden: Vec<&str> = self
-            .docker
+        let driver = dexo_driver_api::DriverDescriptor::for_id(&profile.driver)
+            .map(|descriptor| descriptor.display_name)
+            .unwrap_or_default();
+        self.search.matches([
+            profile.name.as_str(),
+            text("host"),
+            text("database"),
+            text("path"),
+            group_of(profile).unwrap_or_default(),
+            profile.driver.as_str(),
+            driver,
+        ])
+    }
+
+    /// Whether a filter is on: the search or one of the chips.
+    pub fn filtered(&self) -> bool {
+        !self.search.input.is_empty() || self.connected_only || self.env.is_some()
+    }
+
+    /// The search and the filters off.
+    pub fn clear_filters(&mut self) {
+        self.search.input.clear();
+        self.search.typing = false;
+        self.connected_only = false;
+        self.env = None;
+        self.keep_pick_shown();
+    }
+
+    /// Where the pick is among `items`.
+    pub fn cursor(&self, items: &[Item]) -> Option<usize> {
+        items
+            .iter()
+            .position(|item| match (item, &self.picked_group) {
+                (Item::Group { name, .. }, Some(picked)) => name == picked,
+                (Item::Row(index), None) => *index == self.selected_profile,
+                _ => false,
+            })
+    }
+
+    fn pick_item(&mut self, item: &Item) {
+        match item {
+            Item::Group { name, .. } => self.picked_group = Some(name.clone()),
+            Item::Row(index) => self.pick(*index),
+        }
+    }
+
+    /// The pick on row `index` of the saved connections and the Docker ones.
+    pub fn pick(&mut self, index: usize) {
+        self.picked_group = None;
+        self.selected_profile = index;
+    }
+
+    /// Moves the pick `delta` rows of the list, staying in it.
+    pub fn step(&mut self, delta: isize) {
+        let items = self.items();
+        let Some(last) = items.len().checked_sub(1) else {
+            return;
+        };
+        let at = match self.cursor(&items) {
+            Some(at) => at.saturating_add_signed(delta).min(last),
+            None => 0,
+        };
+        self.pick_item(&items[at]);
+    }
+
+    /// The pick on the first row, or the last.
+    pub fn pick_end(&mut self, last: bool) {
+        let items = self.items();
+        let item = if last { items.last() } else { items.first() };
+        if let Some(item) = item {
+            self.pick_item(item);
+        }
+    }
+
+    /// The pick back on the list when a filter hid it: on its first row.
+    pub fn keep_pick_shown(&mut self) {
+        let items = self.items();
+        if self.cursor(&items).is_none()
+            && let Some(first) = items.first()
+        {
+            self.pick_item(first);
+        }
+    }
+
+    /// The saved connection the pick is on, when the list shows it.
+    pub fn picked(&self) -> Option<&ConnectionProfile> {
+        self.picked_row()
+            .and_then(|index| self.profiles.get(index))
+            .map(|row| &row.profile)
+    }
+
+    /// The database found in Docker the pick is on, when the list shows it.
+    pub fn picked_docker(&self) -> Option<&dexo_app::docker::DockerDatabase> {
+        self.picked_row().and_then(|_| self.selected_docker())
+    }
+
+    fn picked_row(&self) -> Option<usize> {
+        (self.picked_group.is_none() && self.items().contains(&Item::Row(self.selected_profile)))
+            .then_some(self.selected_profile)
+    }
+
+    /// Folds or unfolds the group the pick is on or in, and puts the pick on its heading.
+    pub fn fold(&mut self, fold: bool) {
+        let Some(group) = self
+            .picked_group
+            .clone()
+            .or_else(|| self.picked().and_then(group_of).map(str::to_string))
+        else {
+            return;
+        };
+        if fold {
+            self.folded.insert(group.clone());
+        } else {
+            self.folded.remove(&group);
+        }
+        self.picked_group = Some(group);
+    }
+
+    /// A saved connection's row: its name, environment, state and rules.
+    pub fn row_text(&self, index: usize, active: Option<SessionId>) -> String {
+        let Some(row) = self.profiles.get(index) else {
+            return String::new();
+        };
+        let read_only = if row.profile.policy.read_only == Some(true) {
+            " ro"
+        } else {
+            ""
+        };
+        let session = self.session_for(&row.profile.name);
+        let status = match session {
+            Some(session) if active == Some(session.id) => "active",
+            Some(_) => "connected",
+            None => "offline",
+        };
+        // Idle is the null state, and `Idle` was a Rust name beside a status.
+        let tx = match session.map(|session| session.transaction) {
+            Some(TransactionState::Active) => " (transaction open)",
+            Some(TransactionState::Failed) => " (transaction failed)",
+            Some(TransactionState::Unknown) => " (transaction unknown)",
+            _ => "",
+        };
+        format!(
+            "{} [{}] {status}{tx}{read_only}",
+            row.profile.name, row.profile.environment
+        )
+    }
+
+    /// The containers found in Docker that a saved connection already dials: not offered
+    /// again, but named, or a user looking for theirs thinks Dexo cannot see it.
+    pub fn saved_docker(&self) -> Vec<&str> {
+        self.docker
             .iter()
             .filter(|database| {
                 !self
@@ -365,82 +609,7 @@ impl ConnectionsScreen {
                     .any(|shown| std::ptr::eq(shown, *database))
             })
             .map(|database| database.container.as_str())
-            .collect();
-        if self.unsaved_docker().next().is_some() || !hidden.is_empty() {
-            rows.push((None, String::new()));
-            rows.push((None, "  Running in Docker".into()));
-            if !hidden.is_empty() {
-                rows.push((
-                    None,
-                    format!("  already saved as connections: {}", hidden.join(", ")),
-                ));
-            }
-            for (offset, database) in self.unsaved_docker().enumerate() {
-                let index = self.profiles.len() + offset;
-                let marker = if index == self.selected_profile {
-                    ">"
-                } else {
-                    " "
-                };
-                let connection = &database.connection;
-                rows.push((
-                    Some(index),
-                    format!(
-                        "{marker} {} [{}] {}:{}",
-                        database.container,
-                        connection.driver,
-                        connection.host,
-                        connection.port.unwrap_or_default()
-                    ),
-                ));
-            }
-        }
-        rows
-    }
-
-    fn saved_lines(&self, active: Option<SessionId>) -> Vec<String> {
-        let mut lines = Vec::new();
-        for (index, row) in self.profiles.iter().enumerate() {
-            let marker = if index == self.selected_profile {
-                ">"
-            } else {
-                " "
-            };
-            let name = match row
-                .profile
-                .group_path
-                .as_deref()
-                .map(str::trim)
-                .filter(|group| !group.is_empty())
-            {
-                Some(group) => format!("{group}/{}", row.profile.name),
-                None => row.profile.name.clone(),
-            };
-            let read_only = if row.profile.policy.read_only == Some(true) {
-                " ro"
-            } else {
-                ""
-            };
-            let session = self.session_for(&row.profile.name);
-            let status = match session {
-                Some(session) if active == Some(session.id) => "active",
-                Some(_) => "connected",
-                None => "offline",
-            };
-            // Idle is the null state, and `Idle` was a Rust name beside a status.
-            let tx = match session.map(|session| session.transaction) {
-                Some(TransactionState::Active) => " (transaction open)",
-                Some(TransactionState::Failed) => " (transaction failed)",
-                Some(TransactionState::Unknown) => " (transaction unknown)",
-                _ => "",
-            }
-            .to_string();
-            lines.push(format!(
-                "{marker} {name} [{}] {status}{tx}{read_only}",
-                row.profile.environment
-            ));
-        }
-        lines
+            .collect()
     }
 
     pub fn delete_decision(
@@ -500,26 +669,28 @@ mod tests {
             driver: "postgres".into(),
         });
         assert_eq!(screen.sessions.len(), 1);
-        let dump = screen.lines(Some(screen.sessions[0].id)).join("\n");
-        assert!(dump.contains("active"));
-        assert!(dump.contains("> prod [local] active"));
-        assert!(!dump.contains("/ prod"));
-        assert!(!dump.contains("sessions:"));
-        for line in dump.lines() {
-            assert!(
-                line.chars().count() <= 70,
-                "connections popup inner width is 70; line too long: {line:?}"
-            );
-        }
+        assert_eq!(
+            screen.row_text(0, Some(screen.sessions[0].id)),
+            "prod [local] active"
+        );
     }
 
     #[test]
-    fn grouped_profiles_show_path_prefix() {
+    fn grouped_profiles_are_listed_under_their_group() {
         let mut screen = ConnectionsScreen::default();
         let mut row = profile("db");
         row.group_path = Some("lab/pg".into());
         screen.load_profiles(vec![row]);
-        let dump = screen.lines(None).join("\n");
-        assert!(dump.contains("> lab/pg/db [local] offline"));
+        assert_eq!(
+            screen.items(),
+            [
+                super::Item::Group {
+                    name: "lab/pg".into(),
+                    count: 1,
+                    folded: false
+                },
+                super::Item::Row(0)
+            ]
+        );
     }
 }

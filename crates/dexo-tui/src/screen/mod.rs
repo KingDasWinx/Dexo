@@ -74,6 +74,9 @@ pub fn held(model: &Model) -> Option<(Section, &'static str)> {
         Screen::Connections if model.connection_form.open => {
             Some((Section::Detail, "The form has the keys: Esc closes it."))
         }
+        Screen::Connections if model.connections.search.typing => {
+            Some((Section::List, "Enter keeps the search, Esc clears it."))
+        }
         Screen::Agents => match model.agents_view {
             AgentsView::Approvals if model.mcp_audit.deciding.is_some() => {
                 Some((Section::Detail, question))

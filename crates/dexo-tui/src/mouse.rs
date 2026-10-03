@@ -18,6 +18,8 @@ pub enum HitTarget {
     ScreenView(usize),
     /// A button on a screen: a click presses its key, Shift with it when set.
     Press(crossterm::event::KeyCode, bool),
+    /// A group's heading in a screen's list, by its place among the headings.
+    ListGroup(usize),
     /// A screen's list pane, under its rows: a click there gives it the keys.
     ScreenList,
     /// A screen's detail pane: the wheel over it reads on, elsewhere it moves the pick.
