@@ -5164,7 +5164,12 @@ fn go_to_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> 
 /// data under it is read again.
 fn enter_screen(model: &mut Model, screen: crate::model::Screen) -> Vec<Effect> {
     match screen {
-        crate::model::Screen::Agents => vec![Effect::LoadMcpAudit, Effect::LoadMcpProfiles],
+        crate::model::Screen::Agents => {
+            // The toast that announced a waiting write said what the screen now shows,
+            // and lay over the request it announced.
+            model.messages.dismiss();
+            vec![Effect::LoadMcpAudit, Effect::LoadMcpProfiles]
+        }
         crate::model::Screen::Server => {
             // The server shown before, while its session is still open; else the
             // connection in use.
@@ -14153,6 +14158,8 @@ mod tests {
                 .iter()
                 .any(|effect| matches!(effect, Effect::LoadMcpAudit))
         );
+        // The toast that announced it does not lie over the request it announced.
+        assert!(model.messages.toast.is_none());
         update(
             &mut model,
             Action::McpAuditLoaded {
