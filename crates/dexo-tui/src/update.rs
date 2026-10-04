@@ -15664,7 +15664,7 @@ mod tests {
         assert!(screen.contains("[Save]"), "{screen}");
     }
 
-    /// Agent Activity lists a waiting write with its SQL; approving takes a deliberate
+    /// Approvals lists a waiting write with its SQL; approving takes a deliberate
     /// second step (Cancel holds the focus), denying one Enter; a request waiting while
     /// the screen is closed is announced once.
     #[test]

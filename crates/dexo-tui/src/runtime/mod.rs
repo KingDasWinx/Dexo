@@ -3276,7 +3276,7 @@ mod dial_tests {
 
 #[cfg(test)]
 mod audit_tests {
-    use super::describe_audit;
+    use super::{audit_line, describe_audit};
     use dexo_app::mcp::AuditEvent;
 
     fn event(request: &str, decision: &str, target: &str, status: &str) -> AuditEvent {
@@ -3321,5 +3321,23 @@ mod audit_tests {
         ));
         assert!(asking.ends_with("waiting for approval"), "{asking}");
         assert!(!refused.contains("  "), "{refused}");
+    }
+
+    /// A grant's write that went through is marked so in Activity, not as a failure; one
+    /// that did not is a failure.
+    #[test]
+    fn a_committed_grant_write_is_ok_and_a_rolled_back_one_failed() {
+        use crate::screens::mcp_audit::CallOutcome;
+        let line = |status| {
+            audit_line(&event(
+                "grant data_update",
+                "allow",
+                "public.orders",
+                status,
+            ))
+            .kind()
+        };
+        assert_eq!(line("done, committed: applied"), CallOutcome::Ok);
+        assert_eq!(line("failed, rolled back: revoked"), CallOutcome::Failed);
     }
 }
