@@ -165,8 +165,10 @@ mod tests {
     /// that would prompt fails rather than reading Dexo's keys, and says why.
     #[test]
     fn the_workbench_gives_the_command_no_terminal() {
+        // macOS's ps has no `sid`: there the session's own group, which setsid makes the
+        // shell lead as well, stands for it.
         let session = super::run_without_terminal(
-            "[ \"$(ps -o sid= -p $$ | tr -d ' ')\" = \"$$\" ] && echo detached",
+            "s=$(ps -o sid= -p $$ 2>/dev/null); s=${s:-$(ps -o pgid= -p $$)}; [ \"$(echo $s | tr -d ' ')\" = \"$$\" ] && echo detached",
             Duration::from_secs(5),
         )
         .unwrap();
