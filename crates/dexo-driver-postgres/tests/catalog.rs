@@ -464,13 +464,26 @@ async fn comments_come_with_tables_and_columns() {
         Some(serde_json::json!("Gross, in cents"))
     );
     assert_eq!(comment("noted.id"), None);
-    // Found by its id, as the inspector finds it, the table is what the list gave.
+    // Found by its id, as the inspector finds it, the table is what the list gave, with
+    // its owner and size besides.
     let listed = found
         .iter()
         .find(|object| object.qualified_name.object() == "noted")
         .unwrap();
     let by_id = catalog.object(&listed.id).await.unwrap().unwrap();
-    assert_eq!(by_id.attributes, listed.attributes);
+    for (key, value) in &listed.attributes {
+        assert_eq!(by_id.attributes.get(key), Some(value), "{key}");
+    }
+    assert_eq!(
+        by_id.attributes.get("owner"),
+        Some(&serde_json::json!("dexo"))
+    );
+    assert!(
+        by_id
+            .attributes
+            .get("size_bytes")
+            .is_some_and(|size| size.is_u64())
+    );
     assert_eq!(by_id.parent, listed.parent);
     assert_eq!(by_id.kind, listed.kind);
 }
