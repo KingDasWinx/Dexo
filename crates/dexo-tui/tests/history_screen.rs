@@ -13,6 +13,21 @@ fn utc(ago: chrono::Duration) -> String {
         .to_string()
 }
 
+/// How long ago yesterday's noon was, here: a run then is under Yesterday whatever the
+/// hour now. Twenty-five hours ago was the day before when the tests ran after midnight.
+fn since_yesterday_noon() -> chrono::Duration {
+    let noon = chrono::Local::now()
+        .date_naive()
+        .pred_opt()
+        .unwrap()
+        .and_hms_opt(12, 0, 0)
+        .unwrap()
+        .and_local_timezone(chrono::Local)
+        .earliest()
+        .unwrap();
+    chrono::Local::now() - noon
+}
+
 fn row(connection: &str, sql: &str, outcome: HistoryOutcome, ago: chrono::Duration) -> HistoryRow {
     HistoryRow {
         id: format!("{connection}-{sql}"),
@@ -40,34 +55,30 @@ fn history() -> Model {
         )),
         "every connection's: {effects:?}"
     );
-    let minute = chrono::Duration::minutes(1);
+    // Seconds apart, so today's runs stay today but in the first seconds of a day.
+    let step = chrono::Duration::seconds(1);
     update(
         &mut model,
         Action::HistoryLoaded(vec![
-            row(
-                "pg-dev",
-                "select * from nope",
-                HistoryOutcome::Failed,
-                minute,
-            ),
+            row("pg-dev", "select * from nope", HistoryOutcome::Failed, step),
             row(
                 "pg-dev",
                 "select count(*) from orders",
                 HistoryOutcome::Ok,
-                minute * 2,
+                step * 2,
             ),
-            row("my-dev", "select now()", HistoryOutcome::Ok, minute * 3),
+            row("my-dev", "select now()", HistoryOutcome::Ok, step * 3),
             row(
                 "pg-dev",
                 "select count(*) from orders",
                 HistoryOutcome::Ok,
-                minute * 4,
+                step * 4,
             ),
             row(
                 "shop",
                 "select * from t",
                 HistoryOutcome::Ok,
-                chrono::Duration::hours(25),
+                since_yesterday_noon(),
             ),
         ]),
     );
