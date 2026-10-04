@@ -974,11 +974,17 @@ async fn analyze_runs_only_queries_and_row_changes() {
 }
 
 /// DuckDB reads `[`, `*` and `?` in a file name as a glob: `s[1].csv` opened `s1.csv`.
+/// Windows allows no `?` or `*` in a file name.
 #[tokio::test(flavor = "multi_thread")]
 async fn a_data_file_is_the_file_its_path_names() {
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("s1.csv"), "n\n99\n").unwrap();
-    for name in ["s[1].csv", "s?.csv", "s*.csv"] {
+    let names: &[&str] = if cfg!(windows) {
+        &["s[1].csv"]
+    } else {
+        &["s[1].csv", "s?.csv", "s*.csv"]
+    };
+    for &name in names {
         let path = dir.path().join(name);
         std::fs::write(&path, "n\n1\n").unwrap();
         let session = open(&path, false).await;
