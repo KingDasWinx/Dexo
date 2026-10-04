@@ -392,11 +392,20 @@ mod tests {
         );
     }
 
+    /// The path as this platform makes it absolute: on Windows `/data` is on the
+    /// current drive.
+    fn absolute(path: &str) -> String {
+        std::path::absolute(path).unwrap().display().to_string()
+    }
+
     #[test]
     fn file_urls_name_the_file() {
         let duckdb = parse("duckdb:///data/sales.parquet?mode=ro").unwrap();
         assert_eq!(duckdb.profile.driver, "duckdb");
-        assert_eq!(duckdb.profile.config["path"], "/data/sales.parquet");
+        assert_eq!(
+            duckdb.profile.config["path"],
+            absolute("/data/sales.parquet")
+        );
         assert_eq!(duckdb.profile.policy.read_only, Some(true));
         let memory = parse("duckdb://:memory:").unwrap();
         assert_eq!(memory.profile.config["path"], ":memory:");
@@ -407,7 +416,7 @@ mod tests {
 
         let parsed = parse("sqlite:///tmp/shop%20copy.db").unwrap();
         assert_eq!(parsed.profile.driver, "sqlite");
-        assert_eq!(parsed.profile.config["path"], "/tmp/shop copy.db");
+        assert_eq!(parsed.profile.config["path"], absolute("/tmp/shop copy.db"));
         assert_eq!(parsed.profile.name, "shop copy.db");
         let relative = parse("sqlite://shop.db").unwrap();
         assert!(
@@ -426,7 +435,7 @@ mod tests {
         assert_eq!(parsed.profile.config["tls"]["mode"], "required");
         let parsed = parse("sqlite:///tmp/x.db?mode=ro").unwrap();
         assert_eq!(parsed.profile.policy.read_only, Some(true));
-        assert_eq!(parsed.profile.config["path"], "/tmp/x.db");
+        assert_eq!(parsed.profile.config["path"], absolute("/tmp/x.db"));
     }
 
     /// A password with `?`, `/`, `#` or `@` in it, unencoded, is the password: split at
@@ -470,7 +479,7 @@ mod tests {
         assert!(parse("sqlite:///data/sales#2.db").is_err());
         assert_eq!(
             parse("sqlite:///data/sales%232.db").unwrap().profile.config["path"],
-            "/data/sales#2.db"
+            absolute("/data/sales#2.db")
         );
         // A fragment after a file that exists is only a fragment, parameters and all.
         let dir = tempfile::tempdir().unwrap();
