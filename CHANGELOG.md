@@ -1,5 +1,486 @@
 # Changelog
 
+## 1.4.2
+
+### Features
+
+- Compare searches its differences with /, as every screen's list
+- Compare keeps its sources in view, swaps them, and lists differences by kind with counts
+- Server shows its locks, sizes, statistics and settings
+- Server hides idle sessions, searches, sorts, cancels a query and marks Dexo's own
+- Approvals answers by button and Activity filters by profile and outcome
+- A profile's connections and read SQL are changed on Agents
+- Agents' Setup shows a client as fields, says which are installed, and copies the command
+- History opens, runs again, copies, saves, deletes and clears what it shows
+- History shows every connection's statements, filtered by connection, status and text, by day
+- Every statement run is kept with its outcome, time, rows, error and database
+- Connections opens SQL on a connection, browses it, copies its URL and shows its test as it runs
+- A connection is added from a URL pasted on Connections or into the form
+- Connections lists a table and shows a connection as fields
+- Connections searches and filters its list, by environment and by connection, and folds its groups
+- A screen's actions are buttons, pressed by a click, their key, or Left/Right and Enter from the detail
+- Agents' Setup view points Claude Code, Codex, Cursor and the rest at Dexo, making and enabling the profile in the same step
+- Setup writes Gemini CLI, Windsurf and VS Code configs too, and lives in dexo-app with each client's state
+- New document picks its connection among the saved ones, with Left and Right on its row
+- Alt+1 and Alt+2 go to every screen's list and detail, where the arrows read the detail
+- A table's document shows its structure, its DDL and its privileges beside its rows
+- History is a screen: statements run and queries saved, searched, each one whole beside the list
+- Compare is a screen: the differences beside the statement for each, or the whole script
+- Connections is a screen: the list beside where each one goes, and the form in place
+- Server is a screen: a server's sessions at full width, read again every two seconds
+- Agents is a screen: approvals, activity and profiles with room to read them
+- Below 20x8 Dexo says the terminal is too small instead of drawing pieces
+- Screens beside the workbench, a strip that names them, and Ctrl+G to go
+- Alter Table, New View, New Index, New Function and New Trigger open a document on the object's connection with a template for its driver
+- Left, Right, Space, Home, End, PageUp and PageDown walk the tree and a click on the arrow opens the node
+- Make MCP grants from MCP Profiles, asking before each write if you want
+- Open DuckDB files, CSV, Parquet and JSON, with catalog, rows and plans
+- DuckDB's SQL is read as DuckDB writes it
+- Dexo lsp brings completion, diagnostics and formatting to any editor
+- Try an index before building it, on Postgres with hypopg
+- Notes on tables and columns, for people and agents
+- An agent's write can wait for a person to approve it
+- Dexo mcp setup wires Dexo into Claude Code, Codex, Cursor and Claude Desktop
+- Themes, five presets and a keymap overlay of your own
+- A command can open the way before Dexo connects
+- Databases running in Docker are listed, ready to connect
+- Saved queries
+- Open the rows a row points at, or that point at it
+- Row counts say whether they are exact, estimated or open
+- Sort by clicking a column header
+- WHERE and ORDER BY bars over the grid
+- Errors are underlined as you type
+- A modal Vim mode
+- Psql's \d commands, answered from the catalog
+- Edit the document in $EDITOR
+- Toggle comments, duplicate and move lines
+- Find and replace
+- Connections can take their password from a command
+- Dexo --demo opens a seeded store to try every screen
+- A SQLite connection is a file path, with no password to ask for
+- SQLite: queries, catalog, row editing, EXPLAIN QUERY PLAN, import and export
+- The editor reads, splits and guards SQLite statements
+- Dexo <url> opens a temporary connection
+- Connections can take their password from a command
+- MariaDB is supported
+- One rule for what the editor may run on a connection
+- Tell plain reads from writes and destructive statements
+- F7 explains the statement, Shift+F7 runs it with ANALYZE
+
+### Fixes
+
+- Activity marks an approved write that committed as done, where it showed it failed
+- Mcp grant create --ask names the Agents screen's Approvals, not the Agent Activity screen that is gone
+- MySQL 9's JSON plan is read from its query_plan, where it came out empty
+- The clients' tests import Places only where a Unix test uses it, which failed clippy on Windows
+- A password command runs in a process group of its own that the terminal reads for, where Dexo froze its own group to stop it
+- An import reads its file a batch at a time, from the TUI and dexo import alike, where both read it whole into memory
+- Import --mapping sends each file column to the one named after its =, by name, where it took the targets in the order given
+- The header lists Compare only while it is on screen; the palette and Ctrl+G d open it
+- A screen's buttons for its whole list sit over the list, not at the far end of the toolbar
+- Activity and Server's other views fold to one column under 80, as the screens' lists do
+- Connections' Browse waits for a connection, dimmed and saying why
+- Server tells this Dexo's own sessions by the id the server gave them, not by a shared login
+- Saved's rename ends the typing into the search under it
+- Activity's Clear filters clears the search and the filters at once, as the other screens' does
+- History's Delete takes every run of the statement, those the filters hide too
+- Server forgets a view's rows when it moves to another server, and draws no other server's
+- The connection form's URL shows no password, and is read however its field is left
+- Connections keeps its pick on a row the list shows when one leaves it
+- Profiles' connections checklist saves to the profile it was opened on
+- A paste off the workbench goes into the field being typed in, not the hidden document
+- A letter typed into a field is text, not the key of a dimmed button
+- History and Saved run nothing whose connection is gone, where it ran on the one in use
+- A click on Compare's [Cancel] goes back to the result, as Esc does
+- Compare's result keeps its own sources and script while it is compared again
+- What Set up did is a line per thing done, a long path cut in its middle
+- Compare's second side starts on another connection, not on a file whose path is to be typed
+- Compare's Compare button compares from the source pickers too
+- Setup's paths keep to one line, their middle left out
+- Server's locks leave out the ones its own reading takes
+- Folded to one column, the list's status line says Enter once, for the detail
+- A screen's buttons give way to the question or checklist its detail asks
+- Every screen keeps its list, detail and buttons at 80x24 and folds to one column under 80
+- A file opened from Open file comes up coloured, not uncoloured until it is edited
+- Open file lists SQL files and finds them as it is typed into, here and below, with its keys on the status line instead of a row of its own
+- The system clipboard is read and written off the loop, where a paste waited up to four seconds for its owner on X11
+- Agents' audit and profiles, favorites, the offline catalog and agent setup read and write Dexo's database off the loop, which waited out other processes' locks
+- A catalog node, a table's page, an object's details, a value, privileges and a DDL preview are read off the loop, in order, so a far server no longer freezes the screen
+- Dexo's database keeps a write-ahead log, so a read no longer waits for another process's write, and the backup and the editor's language server read the log too
+- The check for waiting agent writes, and the other reads the storage worker answers, no longer freeze the screen while the database is busy
+- Setup's form fills a narrow screen and scrolls to what has the focus, where its buttons were cut off
+- Setup's form is entered from its first row, not from the one it was left on
+- A grant that asks sends its writes to Approvals on the Agents screen, not to Agent Activity, which is gone
+- The skill file sends a waiting write to the Agents screen's Approvals, not a dialog that is gone
+- The connection form's advanced options come in titled sections, aligned, without fields that mean nothing yet, and the form fills a narrow screen
+- Enter on Advanced options opens them and goes on into the first one
+- Enter in the connection form goes to the next field, and only a button's Enter submits, tests or cancels
+- The key after an Esc is read at once, not when a timer next wakes the loop
+- Go To Definition finds a table named with its schema, which it took for an alias
+- Go To Definition and a table's Structure look in the tree of the connection in use, not the first one listing the name
+- Go To Definition selects the table itself, not the database whose name prefixes it
+- A change from the schema form reads its schema again on the connection it was made on, even when the schema was read before
+- What a connection's catalog lists lands under that connection, not also under another's object of the same id
+- Right on a node of a connection not in use brings that connection up instead of asking another session, or none, for it
+- On a table's structure, a plan or the log, the grid's keys say they work on the grid view
+- Edit cell on a query's result says why instead of renaming the document, and F2 belongs to the pane
+- The toast that announced a waiting write goes when Agents opens, off the request it lay over
+- On a short terminal Connections keeps its rows for the details, and Compare's first line fits 40 columns
+- A label wider than the pane ends in an ellipsis instead of being cut at the border
+- A document restored from an autosave keeps its connection, so its tab names it before anything connects
+- A plan compared with the last one says what a node replaced and when nothing changed, and DuckDB's own key names read as words
+- Settings fits its key hint to the width it has, not cut to `Esc cl`
+- Every action of a connection's menu has a key, and Refresh Catalog is in the menu
+- A row the account may not read is named for what it is, says "no access", and Inspect gives the reason
+- A click selects a connection row like every other row and a double click connects it
+- Editing where a connected connection goes closes its session and says so, instead of leaving it on the old database
+- Show Favorites Only lists a starred object in a schema that was never opened, filling the tree from the catalog snapshot
+- On MySQL the Security panel lists the accounts and their global and schema grants, says when there is nothing to show, and grants only on a table that is open
+- Inspect lists all seven table privileges, the owner and the size, and names a Postgres constraint instead of showing its catalog id
+- The Schema form and Apply Raw DDL open on the document's connection, and a read-only connection refuses them up front instead of leaving a preview open
+- Every dialog spells its keys the same way
+- The connection form names its advanced fields in words
+- Every dialog starts on the same row
+- At 40 columns the palette leaves off a key that does not fit, and the close prompt's sentence is short enough
+- The close prompt spaces its buttons like every other dialog
+- The status bar drops the editor's hints behind a dialog
+- Muted text in the presets and the accent in Light mode reach a readable contrast
+- A right click on the editor or a tab moves the focus or opens the tab
+- With Unicode off, every glyph beyond box drawing falls back to ASCII
+- The model starts on the colour depth the terminal reports, not on 24-bit
+- The diagnostics export suggests a zip name, previews in words with valid TOML, and says where it saved
+- Home and End walk the document strip
+- The welcome's last hint fits a 60 column terminal
+- The merged sessions, transfer and transaction work keeps every guard: production asks last on import and restore without asking twice, Emacs keeps its word keys, and the status bar says Running from the moment a run is sent
+- Transactions, import, backup and restore have hotkeys, so the palette and help list them
+- Sessions, transfers and transactions run beside the screen and say what they did
+- The session list is numeric, leaves out the reader and says what ending a session did
+- Tab prefixes cut the middle of a connection name
+- Typing after Select All in an empty document keeps the first letter
+- The backup message for a file database covers restore too
+- Constraint and type errors say what happened
+- A void result shows empty, not as \x
+- A WHERE that is always true is confirmed like no WHERE
+- Backup and restore agree on a format, and say what the tool said
+- Agent Activity says in the screen when a request it was asking about is gone, and its popup clears the tab bar
+- A refusal in New MCP Grant puts the cursor on its field, wraps instead of cutting, and clears when the field changes
+- A request whose agent died is audited as withdrawn, so Recent activity does not leave it waiting for ever
+- A wrong argument is told in words and catalog_search returns names, not catalog ids
+- The SSH tunnel authenticates with the connection's key file, asking for its passphrase at connect time when it has one
+- A dialog over another is drawn alone, Browse Connections says connected not a Rust name, new connections sort in place and a rename keeps the pick
+- Exporting the config over a file is asked about once, by the file picker
+- The tree's own movement keys stay out of the palette, the production test previews what it applies, and the merged editor and inspector tests read the screens as they now are
+- A command named for what was typed comes before one that only has it as a keyword
+- Leaving the welcome with nothing open puts the keys in the explorer
+- A :name parameter is answered before the server is asked, and Try an index is refused up front where hypopg cannot exist
+- Inspect shows a column's type, nullability and default, and lists what it relates to one name to a line
+- An index or a constraint is named under its table, in the tree, in Copy Object Name and in Inspect
+- The object actions menu shows a key for every action: f, y, Shift+C, Shift+I and t
+- The tree header says in words what filters are on, and toggling system objects or favorites says what it did
+- A copy says what it copied when that is a name or a short value
+- The Security panel is wide enough for a grant, lists the selected role's grants, covers what is behind it and says what Enter does
+- Inspect describes the node it was picked on when the catalog has no object for it, and dependencies are listed by kind and name instead of catalog ids
+- Refresh Catalog and r on a connection or folder read the whole open tree again and say so; Edit Object Note has Shift+N in the explorer
+- A schema and a database are copied and shown under their own name, once
+- The editor completes, finds, pastes, keeps history and reads parameters as a person expects, and the schema form, the DDL preview, Raw DDL and Compare Schema say what they do
+- A table's DDL carries its keys, NOT NULL, defaults, uniques, foreign keys, checks, indexes and comments
+- A write comes back as a result set with its row count, so the grid and the messages say how many rows it changed
+- A toast carries four lines before its ellipsis, so a failed connect says what to do to its end; the sidebar snapshots show the badges kept
+- Layout details of the connection screens: wide toasts wrap, tags keep their ends, the compact hint reads Ctrl+P
+- A waiting agent write stays on the status line, a grant says where and for how long, and the palette lists no key that works only inside MCP Profiles
+- The object inspector names what an object depends on instead of listing catalog ids
+- A write's result reads in words -- done, committed, 1 row affected -- not as the names of its types
+- The tool list offers no write for a connection that cannot take one, as list_connections says
+- Dexo mcp names profiles safely, deletes them, and prints in words, with a message when there is nothing
+- Agent Activity reads in words with times, shows what every request would do, scrolls and takes the mouse; a destructive DDL without its confirm target is refused before a person is asked
+- An agent whose write waited on a revoked grant is told so, not that a person denied it
+- MCP Profiles is a readable, scrolling screen with confirmation dialogs, and New MCP Grant picks its profile, connection and capability
+- A sidebar row too long for the pane gives up its name, not its badge, and a URL it cannot read says what to type
+- Find Databases in Docker says which containers already have a saved connection
+- A connection's group shows in the sidebar and the delete dialog counts the open documents that lose it
+- A grant's time is written with units and every refusal says what is accepted
+- Projects switch with a real unsaved prompt, delete and rename the open project, restore documents as they were left; config transfer reads in words and asks before replacing; the sidebar marks only the snapshot offline
+- The connection form picks its choices, shows its errors above the buttons, tests before saving and keeps passwords; connect-time secrets are asked and tried before they are kept
+- An unreachable server is named with its reason, a proxy or tunnel with its hop, and verify modes refuse a server without TLS
+- Ctrl+s on a table with nothing pending says so while a sql document's grid still saves the file, and closing a document reads its state once
+- A long palette query scrolls so its end stays in view
+- Help spells keys like the palette, lists one row per command, and keeps the layout keys in their own section
+- The empty-editor hint follows the keymap, and panes keep a readable minimum size
+- Recovered documents keep their connection and their unsaved mark, are announced, and Session Recovery speaks in words with Keep and Discard
+- Layout changes say what they did, both border cells drag a divider, Help keeps clicks inside it, and the Explain placeholder is not cut
+- The unreadable-statement confirmation is named and styled for what it is, a document with no connection says what to do, and Ctrl+S in the grid saves when nothing is pending
+- The picker scrolls by the rows its layout draws
+- A failure without a position still moves the cursor to its statement, the underline stops before the semicolon, and SQLite's code is not called a SQLSTATE
+- Cancelling a query is reported as cancelled, and a timeout names its limit
+- The status bar says a query is running, a second run is refused instead of queued, and the commands that do nothing say why
+- A transaction begun with SQL is tracked, and quitting asks about it and about a statement still running
+- A new document belongs to the connection under the explorer cursor, and switching or closing a document brings its session along
+- Clicking an option in Settings chooses it, and the footer names the theme key
+- The explorer resizes with Alt+, and Alt+., and Alt+= and Alt+- always mean the results pane
+- The palette ranks by title, finds typos, pages with PageUp and PageDown, and lists the layout, settings and focus commands
+- Toasts age out, wrap inside the screen and end in an ellipsis instead of running off its edge
+- A small terminal no longer rewrites the saved layout, and compact mode has a pane switch you can click
+- Ctrl+Shift+Tab goes to the previous document
+- The file picker keeps its name and buttons in view, shows the end of the path, and pages with PageUp, PageDown, Home and End
+- A file that is not text opens nothing, says why, and is never left to be saved over
+- The save picker asks before it replaces a file
+- The results grid and table data read, copy, scroll and edit like a data client, and a table belongs to the connection it was opened from
+- A query that calls a function dexo does not take for a read names the function on production
+- Every write that skips the editor -- grid edits, ddl from the form, import, restore, explain analyze of a write -- asks for the connection's name on production
+- Other tools see dexo by name on its postgres, mysql and mariadb sessions
+- Server variables show the values the server runs with, not compiled-in defaults, with their units
+- The blocking graph and lock list name the sessions KILL takes, and work on mariadb
+- Ctrl+J runs the statement on terminals that send Ctrl+Enter as Enter, and the hints name it there
+- A :name parameter reaches the server as the database's own placeholder, bound by name, and each statement gets only its values, in the editor and on the command line
+- Quitting with an open transaction or unapplied grid edits says what would be lost and asks first
+- Csv and tsv output quote what needs quoting and keep null apart, and the table lines its columns up
+- Sessions cancel and terminate refuse a read-only connection, as the tui and the mcp server do
+- A session ends only when it is picked and its id typed, never on a read-only connection; Enter no longer ends the first one listed
+- A copy that fails drops the clipboard handle and is tried once more on a fresh one
+- Moving left past the edge scrolls one column, as moving right does, and a line that fits shows from its start
+- The schema form scrolls to the focused field on a short terminal, and only drawn fields take a click
+- Apply Raw DDL shows no fields to type in, and neither schema form opens with old errors
+- Ctrl+A and Ctrl+W reach the file picker's name field
+- The transfer path, project names, a query parameter and the project delete confirmation edit like any input
+- The DDL preview has Apply and Cancel like every dialog, and shows the name typed to confirm
+- Form fields edit like any input, with Ctrl+A, a cursor and the word keys
+- The secret prompt edits like any input under its marks, with Ctrl+A, a cursor and the word keys
+- The savepoint name edits like any input, with Ctrl+A, a cursor and the word keys
+- Ctrl+A selects the keybindings search instead of typing an a, and the search edits like any input
+- The keybindings search stays above the list as it pages
+- The palette's query edits like any input: Ctrl+A selects it, the cursor moves and the word keys work
+- Text selected with Ctrl+A shows in the saved-queries search and rename and on Vim's : and / lines
+- The WHERE and ORDER BY bars take Ctrl+A, Ctrl+W and the word keys before the keymap
+- Ctrl+Backspace, Alt+Backspace and Ctrl+W delete a word in single-line inputs, and Ctrl+Delete the next
+- An accent typed as a combining mark stays in its word in single-line inputs
+- The grid edits and deletes rows whose columns have no equality, json, xml, point and polygon among them
+- A range's bounds are quoted as Postgres quotes them
+- Refcursor, tsquery, multiranges, snapshots, hstore and pgvector's halfvec and sparsevec read as text, not hex
+- Floats read as psql prints them, alone and in geometric types and vectors
+- Reg* values show the names psql prints, not their OIDs
+- A row with an xid, xid8, cid or reg* column is deleted from the grid
+- A composite type named like an extension's type reads as itself, not as that type
+- The inspector counts global and schema grants, in the table's own schema, for the exact account
+- Privileges are shown for a mixed-case table, as the role the session acts as, and only for relations
+- Only a syntax error at a `?` reads as a parameters refusal, and a `?` is found without preparing
+- EXPLAIN ANALYZE refuses a write to a table no rollback undoes
+- EXPLAIN ANALYZE inside a transaction the user typed rolls back only what it ran
+- A plan asked of a statement with parameters leaves the open transaction usable
+- A statement with parameters is refused a plan, not shown one its values never take
+- The analyze dialog colours its production line, not whichever line comes third
+- The analyze confirmation says a sequence or auto-increment counter keeps its advance
+- A write that returns no rows says how many it changed, in the pane and its title
+- Completion prints a script each shell loads, with every subcommand and flag
+- Config path prints the settings file dexo reads, not a config.toml nothing uses
+- An sql export inserts into the table its file is named after, or the one --table names, not into dest
+- Import reads only data files, and says to run an sql file instead of claiming to import it
+- Query, run, export, import and explain --analyze hold the sql to the connection's policy, as the editor does
+- Running a statement or its plan closes the completion list
+- A long line deleted back to a short one shows from its start again
+- Finding out whether a transaction is open no longer aborts the user's
+- DuckDB's catalog views are not underlined as unknown tables
+- A foreign key points at its table whatever case it was written in, both ways
+- A missing file a query names is the query's error, and an HTTP failure the network's
+- A transaction Dexo opens is closed for sure, and a refused commit leaves the session idle
+- A CREATE reports no rows changed, a RETURNING keeps its rows, and a DROP says nothing in a column
+- A data file whose name has [, * or ? opens that file, not the ones it would match
+- Only a driver behind a cargo feature is said to need one
+- A connection to a driver this build left out keeps its own form when edited
+- An object is found by its last name parts in any database and schema, its own case first
+- DuckDB's side-effect functions are refused on DuckDB alone, checkpoint() among them, and SUMMARIZE's query is checked like any other
+- Every value reads as DuckDB writes it, and an edit finds its row by them
+- A cancel stops a script between statements, and work its caller abandons stops too
+- Sessions on one file share its database, and no extension is fetched by itself
+- DuckDB's own parser decides what only reads and how many statements a text holds
+- A carriage return ends a -- comment on Postgres and DuckDB, as it does on the server
+- A new document is offered a name no open document has
+- Ctrl+A selects a single-line input's text, and a suggested name starts selected
+- Words keep their accented letters in single-line inputs and in the palette's matching
+- The keybindings list pages with PageUp and PageDown, and Home and End jump to its ends
+- The schema form takes typing and has Submit and Cancel like every dialog
+- Citext, ltree, jsonpath, vectors, geometry and other native types read as text, not hex
+- A copy that failed no longer stops the ones after it, and the clipboard test waits for Wayland
+- The welcome logo shows in the theme's colours
+- Notes get a palette action, clickable Save/Cancel, and show only once saved
+- The inspector's note editor opens in view under a long DDL
+- Try index plans the statement on screen, wherever the cursor went
+- A toast that goes up after an idle spell stays its full time
+- Agent Activity shows the whole statement it asks you to approve, and keeps its buttons on screen
+- Agent Activity keeps the pick and its confirmation on the request they were made for
+- Checking for waiting agent writes no longer opens the database and writes to it every two seconds
+- An approval request goes with the call that made it, and old ones are deleted
+- Writes waiting for approval no longer hold the profile's call slots
+- A write the agent cancels while it waits for approval can no longer be approved or run
+- An unreadable approval stops the wait as denied, and the wait is 1s to an hour
+- The inspector shows the connected user's privileges, not a role named like the object
+- A hidden table's indexes and constraints stay hidden with it
+- Postgres plans a statement with parameters for any value, from 16 on
+- Inspect --refresh on its own caches the catalog and succeeds
+- Formatting indents with the editor's tab size, or with tabs
+- The language server only reads Dexo's database
+- A catalog cached while the editor runs is seen without a restart
+- A broken message gets a parse error, and exit without shutdown fails
+- A Postgres table found by id carries its comment
+- Try index takes a trailing semicolon and one inside a literal
+- Trying an index keeps the user's own hypothetical indexes
+- A hypothetical index no longer outlives a failed try in a transaction
+- Setup names the dexo on PATH, not Homebrew's versioned Cellar path
+- The skill file no longer promises a two-minute wait
+- The probe finds a bare command on PATH and keeps --json to JSON
+- Setup leaves a config it cannot read alone, and reads past a BOM
+- Setup run again never overwrites the first backup
+- Setup writes through a symlinked config and keeps its permissions
+- Setup leaves a JSON config's keys in the order they were
+- Setup keeps the other keys of an existing dexo entry
+- Setup for codex parses the config instead of matching a line
+- A statement with parameters gets its plan, or says it needs their values
+- A profiled file scan reads its quoted keys and is not named twice
+- An object is found by its schema and name, without the database
+- A function called in FROM is refused like one called anywhere
+- A count goes when its rows are read again or changed
+- Text from the bars, re-runs and counts run where they cannot write
+- A result run again with the bars is a page, and n and p turn it
+- A table's count names the table as its page does
+- Offline, Related rows dials the document's connection and opens once it is up
+- Row labels read right at their edges
+- A table's row estimate is asked for once, on its first page
+- Every statement's rows stop at the grid's limit, whatever it is taken for
+- --password-prompt without a terminal says it needs one
+- A password command stopped at its deadline leaves nothing running
+- Only an error near the cursor waits for the typing to finish, and it shows once the cursor leaves
+- Typing a CREATE TABLE's name no longer throws the kept diagnostics away
+- Constructs the parser lacks excuse an error only as code of their own dialect
+- The columns every row has are each dialect's own
+- A missing table named like a keyword is reported
+- An aliased CTE named like a table is not checked against the table
+- Postgres block comments nest when statements are split
+- A CREATE is a routine only when that is what it makes
+- Only a Postgres SELECT INTO creates a table, a CTE before it or not
+- A foreign table is told apart from a table where it differs
+- `\d name` describes the table the server would read
+- Row estimates follow the search_path and add up a partitioned table's partitions
+- A partitioned table's foreign key is listed once
+- A foreign key names its tables the way the sidebar does
+- EXPLAIN in MySQL's second JSON format draws its plan
+- Plans keep the tables of subqueries, derived tables and CTEs
+- A SQLite URL's fragment is dropped after a file that exists
+- A pasted password with `@` and then `/` or `?` stays whole
+- Text after the bars' clauses stays out of their comments, and a WHERE cannot close its wrapper
+- Sorted names are quoted unless bare is safe everywhere, and match by each dialect's case rules
+- A refused bar clause says why in words
+- A quoted SQLite PRAGMA name is still the pragma it names
+- MariaDB's executable comments are code to the read check
+- MySQL string literals escape backslashes as well as quotes
+- A result cut at the row limit is read to its end and says so
+- A count belongs to its rows and its document, and is never cut short or left running
+- A query that times out is stopped on the server too
+- The key hints say the keys of the keymap in use
+- The row's Actions menu says each key and has the sort, the count and Back
+- Alt+click or a right click on a header adds its column to the sort
+- A duplicate or an import never takes an open temporary connection's name
+- In the workbench a password command gets no terminal to share Dexo's keys with
+- A DDL run reads the open nodes again and leaves the tree open
+- A URL's warning waits for its connection under the name it was opened as
+- Tables a run created stay with their session and go when dropped
+- The find bar lays its fields out in display columns
+- Shortcuts show the key that works everywhere, and bare letters as typed
+- The external editor's Ctrl+C shield comes down when the editor closes
+- Words, repeats, text objects and modes behave as in Vim
+- A saved query belongs to a saved connection, and the picker keeps its columns and edits
+- A question with nothing to type keeps its focus on its two buttons
+- Each related hop is a document of its own, and Back closes it
+- The WHERE and ORDER BY bars keep their cursor, their focus and pastes in place
+- A failed re-run puts the rows back in its own document
+- A sort or a WHERE waits for the running statement and the pending edits
+- Left and Right move the current column, which the header marks and s sorts
+- A re-run's filter values are bound with the dialect's own placeholders
+- Importing a shared config says the commands its connections run
+- Theme files say their own line, Settings reads them again, and the theme gets a key and a command
+- Keymap.toml problems name their own line, and a chord that could never fire is refused
+- Discovery stays bounded and remote-aware, and every found database can be saved
+- One dial path for the TUI, CLI and MCP, and MCP keeps a command line to itself
+- A pre-connect command stays in its own process group and never outlives Dexo
+- Rows a foreign key narrowed say so, in the title and the log
+- An empty saved query list says how to save one
+- A startup warning is said when its own connection connects
+- --password-prompt uses what is typed and says when the URL had a password
+- UNION, window function and subquery plans show their tables
+- Explain, the statement marker and the run preview split by dialect
+- 'connect again to enter the password' only when there is one to enter
+- A # in a SQLite URL's path is refused instead of opening another file
+- A URL password with ?, /, # or @ in it stays whole and out of errors
+- A comment no longer changes whether a SQLite PRAGMA reads
+- Dexo export --format sql writes the connection's dialect
+- A password command that prompts on the terminal is not stopped
+- A keyless table with its own rowid column can be edited again
+- A saved connection cannot be renamed to an open temporary one's name
+- A trigger body without BEGIN stays with its CREATE
+- A failed statement written twice points at the one that ran
+- A run that changes the schema reads the catalog again
+- Valid SQL the parser lacks is not underlined, nor what follows the cursor
+- Tables a document creates are learned from its words, not its parse
+- An alias reused in a subquery, or a CTE named like a table, is not checked
+- System columns such as rowid and ctid are not underlined
+- Partitions, foreign tables and sequences are known tables
+- Psql commands find unqualified names, list every database, and take \x on/off
+- A backslash line inside parentheses stays in its statement, and \dt; is a command
+- The find bar fits small panes, and comments leave the indent alone
+- The palette shows each command's key in the keymap in use
+- Ctrl+C while the external editor runs no longer ends Dexo
+- Vim motions and counts behave as Vim's
+- Vim's state stays with its document, and :wq waits for the save
+- Vim's Visual mode acts on what it shows
+- Vim's Normal mode edits only through its own commands
+- A temporary connection leaves nothing behind, and the demo is not saved
+- Backup and Restore say up front when a driver cannot do them
+- A SQLite cancel stops the query it names, and nothing else
+- SQLite names with a slash, and keyless tables with a rowid column
+- Options of connections add that cannot go together are refused
+- A password in the URL is warned about where it can be seen
+- A connection URL says what it cannot use instead of dropping it
+- A password command that times out is stopped, all of it
+- SQLite pragmas that only report are reads
+- A password the server turns down can be typed again
+- An SQL export writes the connection's own dialect
+- Copy as SQL quotes for the session you switched back to
+- A trigger's body stays one statement with its CREATE
+- Import, backup and restore work on a temporary connection
+- A saved connection never takes over an open temporary one
+- MariaDB plans with ORDER BY or GROUP BY show their tables
+- MySQL results sort, filter and copy as SQL in MySQL's dialect
+- TABLE reads, and known maintenance no longer prompts as unreadable
+- MySQL # comments and backslash escapes split like MySQL
+- EXPLAIN ANALYZE of a write is refused on a read-only connection
+- A connection labelled prod shows the production marker
+- A read-only connection refuses import and restore
+- Sorting a result never runs a statement that is not a read again
+- A confirmed run never goes to a connection that changed under the dialog
+- Apply Changes on production opens the review instead of applying
+- A SHOW that carries a second statement is not a read
+- DROP and TRUNCATE after a MySQL # comment still ask first
+- EXPLAIN (ANALYSE) of a write is not a read
+- EXPLAIN ANALYZE rolls back a statement that ends in a comment
+- The welcome says how to add a connection
+- A read-only connection refuses writes on the server
+- Grid edits on production wait for confirmation again
+- The editor asks before it writes on production or destroys data
+- Plans read as a tree with aligned figures
+- Each document keeps its own plan
+- Explain Analyze asks before it runs the statement
+- EXPLAIN runs in the background and Ctrl+F2 cancels it
+- Explain says when it was given more than one statement
+- EXPLAIN ANALYZE shows actual rows, time and loops on every node
+- EXPLAIN ANALYZE rolls back what it ran
+- Update russh to 0.63.3 and pageant to 0.2.3
+
+### Performance
+
+- An import writes each batch as one INSERT of many rows, a round trip for the batch where it took one for every row
+- An import writes each batch as one INSERT of many rows, a round trip for the batch where it took one for every row
+- SQL in a detail is coloured span by span, not every span tried on every character
+- An import goes through DuckDB's appender, whole or not at all
+- Diagnostics re-check only the statement that changed
+
 ## 1.4.1
 
 ### Features
