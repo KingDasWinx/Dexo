@@ -165,14 +165,27 @@ mod tests {
     /// that would prompt fails rather than reading Dexo's keys, and says why.
     #[test]
     fn the_workbench_gives_the_command_no_terminal() {
-        // macOS's ps has no `sid`: there the session's own group, which setsid makes the
-        // shell lead as well, stands for it.
-        let session = super::run_without_terminal(
-            "s=$(ps -o sid= -p $$ 2>/dev/null); s=${s:-$(ps -o pgid= -p $$)}; [ \"$(echo $s | tr -d ' ')\" = \"$$\" ] && echo detached",
-            Duration::from_secs(5),
-        )
-        .unwrap();
-        assert_eq!(session.expose_secret(), "detached");
+        // The command says its pid and waits; meanwhile its session is asked of the
+        // system, which `ps` on macOS cannot be relied on to say.
+        let dir = tempfile::tempdir().unwrap();
+        let said = dir.path().join("pid");
+        let command = format!("echo $$ > '{}'; sleep 1; echo detached", said.display());
+        let run = std::thread::spawn(move || {
+            super::run_without_terminal(&command, Duration::from_secs(5))
+        });
+        let started = std::time::Instant::now();
+        let pid = loop {
+            if let Ok(text) = std::fs::read_to_string(&said)
+                && text.ends_with('\n')
+            {
+                break text.trim().parse::<libc::pid_t>().unwrap();
+            }
+            assert!(started.elapsed() < Duration::from_secs(5), "no pid said");
+            std::thread::sleep(Duration::from_millis(10));
+        };
+        // SAFETY: getsid only reads.
+        assert_eq!(unsafe { libc::getsid(pid) }, pid, "a session of its own");
+        assert_eq!(run.join().unwrap().unwrap().expose_secret(), "detached");
         let error = super::run_without_terminal("exec < /dev/tty; read x", Duration::from_secs(5))
             .unwrap_err()
             .to_string();
