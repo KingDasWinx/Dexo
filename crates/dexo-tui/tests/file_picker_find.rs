@@ -68,10 +68,13 @@ fn typing_finds_below_the_folder_and_enter_opens_it() {
     typed(&mut model, "month");
 
     let listed = names(&model);
-    assert!(
-        listed.contains(&"sql/reports/monthly.sql".to_string()),
-        "{listed:?}"
-    );
+    // As the platform writes a path: `sql\reports\monthly.sql` on Windows.
+    let found = std::path::Path::new("sql")
+        .join("reports")
+        .join("monthly.sql")
+        .display()
+        .to_string();
+    assert!(listed.contains(&found), "{listed:?}");
     assert!(
         !listed.iter().any(|name| name.contains("node_modules")),
         "a package's folder is not looked into: {listed:?}"
