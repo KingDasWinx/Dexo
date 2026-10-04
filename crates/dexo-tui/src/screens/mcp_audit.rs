@@ -65,6 +65,8 @@ impl AuditLine {
     pub fn kind(&self) -> CallOutcome {
         match self.outcome.as_str() {
             "ok" | "approved by a person" => CallOutcome::Ok,
+            // A grant's write as it ended: `done, committed: applied`.
+            outcome if outcome.starts_with("done,") => CallOutcome::Ok,
             "waiting for approval" => CallOutcome::Waiting,
             outcome if outcome.starts_with("refused") => CallOutcome::Denied,
             _ => CallOutcome::Failed,
