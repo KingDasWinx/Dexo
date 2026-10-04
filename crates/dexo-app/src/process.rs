@@ -69,6 +69,67 @@ pub(crate) fn without_terminal(command: &mut Command) {
     }
 }
 
+/// The terminal lent to a command run by [`foreground`], given back to Dexo when this
+/// goes.
+pub(crate) struct Foreground {
+    #[cfg(unix)]
+    tty: Option<std::fs::File>,
+}
+
+/// A command that may ask on the terminal -- a password command -- in a process group
+/// of its own, which the terminal reads for while it runs when it was reading for Dexo,
+/// as a shell runs a job. It is stopped whole, what it started included, by one signal
+/// to its group: nothing in Dexo's own group is stopped or frozen for it.
+pub(crate) fn foreground(command: &mut Command) -> Foreground {
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+        let tty = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .open("/dev/tty")
+            .ok()
+            // SAFETY: tcgetpgrp and getpgrp only read.
+            .filter(|tty| unsafe { libc::tcgetpgrp(tty.as_raw_fd()) == libc::getpgrp() });
+        if let Some(fd) = tty.as_ref().map(AsRawFd::as_raw_fd) {
+            // SAFETY: signal, tcsetpgrp and getpid are async-signal-safe, the only kind
+            // of call allowed between fork and exec. A group not the terminal's own is
+            // stopped by SIGTTOU for setting it, unless that is ignored meanwhile.
+            unsafe {
+                command.pre_exec(move || {
+                    let previous = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+                    libc::tcsetpgrp(fd, libc::getpid());
+                    libc::signal(libc::SIGTTOU, previous);
+                    Ok(())
+                });
+            }
+        }
+        Foreground { tty }
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = command;
+        Foreground {}
+    }
+}
+
+impl Drop for Foreground {
+    fn drop(&mut self) {
+        #[cfg(unix)]
+        if let Some(tty) = &self.tty {
+            use std::os::fd::AsRawFd;
+            // SAFETY: as in `foreground`; Dexo takes its terminal back.
+            unsafe {
+                let previous = libc::signal(libc::SIGTTOU, libc::SIG_IGN);
+                libc::tcsetpgrp(tty.as_raw_fd(), libc::getpgrp());
+                libc::signal(libc::SIGTTOU, previous);
+            }
+        }
+    }
+}
+
 /// The detached commands running now, by process id -- the group's id on Unix -- so a
 /// Dexo leaving on a signal, or quitting with one still starting, stops them.
 static RUNNING: [AtomicI64; 64] = [const { AtomicI64::new(0) }; 64];
@@ -92,20 +153,29 @@ fn unregister(id: u32) {
     }
 }
 
-/// Stops a detached command and everything in its group.
+/// Stops a command in a group of its own and everything in its group.
 pub(crate) fn stop_group(child: &mut Child) {
     unregister(child.id());
+    let group = child.id();
     #[cfg(unix)]
-    {
-        // SAFETY: killpg only sends a signal; a group that has gone already is ESRCH.
-        unsafe {
-            libc::killpg(child.id() as libc::pid_t, libc::SIGKILL);
-        }
+    // SAFETY: killpg only sends a signal; a group that has gone already is ESRCH.
+    unsafe {
+        libc::killpg(group as libc::pid_t, libc::SIGKILL);
     }
     #[cfg(windows)]
-    taskkill(child.id());
+    taskkill(group);
     let _ = child.kill();
     let _ = child.wait();
+    // A process forked as the signal went round the group can miss it: the group is
+    // signalled until it is empty, for a moment at most.
+    #[cfg(unix)]
+    for _ in 0..50 {
+        // SAFETY: as above.
+        if unsafe { libc::killpg(group as libc::pid_t, libc::SIGKILL) } == -1 {
+            break;
+        }
+        std::thread::sleep(Duration::from_millis(2));
+    }
 }
 
 #[cfg(windows)]
@@ -260,81 +330,6 @@ pub(crate) fn run_until(
         .recv_timeout(deadline.saturating_duration_since(Instant::now()))
         .ok();
     Ok(Ran::Exited(status, output))
-}
-
-/// Stops a command left in the terminal's process group -- a password command, which
-/// may prompt there -- and what it started, found by parent. Each process is frozen
-/// before its children are listed, so none can start another between the listing and
-/// the kill, nor leave and have its children re-parented; then the frozen tree is
-/// killed whole.
-pub(crate) fn stop_tree(child: &mut Child) {
-    unregister(child.id());
-    #[cfg(unix)]
-    {
-        let mut tree = vec![child.id()];
-        let mut at = 0;
-        while let Some(&parent) = tree.get(at) {
-            // SAFETY: kill only sends a signal; a process that has gone already is ESRCH.
-            unsafe {
-                libc::kill(parent as libc::pid_t, libc::SIGSTOP);
-            }
-            tree.extend(children_of(parent));
-            at += 1;
-        }
-        for pid in tree {
-            // SAFETY: as above.
-            unsafe {
-                libc::kill(pid as libc::pid_t, libc::SIGKILL);
-            }
-        }
-    }
-    #[cfg(windows)]
-    taskkill(child.id());
-    let _ = child.kill();
-    let _ = child.wait();
-}
-
-/// The processes whose parent is `pid`, read from /proc: nothing to install, unlike
-/// the `pgrep` the cleanup needed before.
-#[cfg(target_os = "linux")]
-fn children_of(pid: u32) -> Vec<u32> {
-    let Ok(entries) = std::fs::read_dir("/proc") else {
-        return Vec::new();
-    };
-    entries
-        .filter_map(|entry| {
-            let child: u32 = entry.ok()?.file_name().to_str()?.parse().ok()?;
-            let stat = std::fs::read_to_string(format!("/proc/{child}/stat")).ok()?;
-            // `pid (name) state ppid …`: the name may hold spaces and parentheses, so the
-            // fields are counted from its last `)`.
-            let parent: u32 = stat
-                .rsplit_once(')')?
-                .1
-                .split_whitespace()
-                .nth(1)?
-                .parse()
-                .ok()?;
-            (parent == pid).then_some(child)
-        })
-        .collect()
-}
-
-/// The processes whose parent is `pid`, as `pgrep -P` lists them: macOS and the BSDs
-/// have no /proc to read.
-#[cfg(all(unix, not(target_os = "linux")))]
-fn children_of(pid: u32) -> Vec<u32> {
-    Command::new("pgrep")
-        .args(["-P", &pid.to_string()])
-        .stdin(Stdio::null())
-        .stderr(Stdio::null())
-        .output()
-        .map(|output| {
-            String::from_utf8_lossy(&output.stdout)
-                .split_whitespace()
-                .filter_map(|pid| pid.parse().ok())
-                .collect()
-        })
-        .unwrap_or_default()
 }
 
 #[cfg(all(test, unix))]

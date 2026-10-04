@@ -37,15 +37,15 @@ fn run_with(command: &str, timeout: Duration, detached: bool) -> Result<SecretSt
     };
     let mut shell = crate::process::shell(command);
     shell.stdin(Stdio::null()).stderr(Stdio::null());
-    let stop = if detached {
+    // In the terminal's foreground otherwise: a command that prompts there can read it.
+    let _terminal = if detached {
         crate::process::without_terminal(&mut shell);
-        crate::process::stop_group
+        None
     } else {
-        // Left in the terminal's process group: a command that prompts there can read it.
-        crate::process::stop_tree
+        Some(crate::process::foreground(&mut shell))
     };
     let deadline = Instant::now() + timeout;
-    let ran = crate::process::run_until(shell, deadline, stop)
+    let ran = crate::process::run_until(shell, deadline, crate::process::stop_group)
         .map_err(|error| fail(format!("could not start: {error}")))?;
     let (status, output) = match ran {
         crate::process::Ran::TimedOut => {
@@ -125,8 +125,8 @@ mod tests {
         );
     }
 
-    /// A command still starting processes when it is stopped leaves none behind: each
-    /// one is frozen before its children are listed.
+    /// A command still starting processes when it is stopped leaves none behind: its
+    /// group is signalled whole.
     #[test]
     fn a_command_that_keeps_starting_processes_leaves_none() {
         let error = run(
@@ -149,14 +149,16 @@ mod tests {
         );
     }
 
-    /// The command shares the terminal's process group, so one that reads the terminal
-    /// is not stopped for it.
+    /// The command runs in a process group of its own, stopped whole by one signal and
+    /// leaving Dexo's own group alone.
     #[test]
-    fn the_command_runs_in_dexos_process_group() {
-        let group = run("ps -o pgid= -p $$", Duration::from_secs(5)).unwrap();
+    fn the_command_runs_in_a_process_group_of_its_own() {
+        let group = run("echo $$ $(ps -o pgid= -p $$)", Duration::from_secs(5)).unwrap();
+        let (shell, group) = group.expose_secret().split_once(' ').unwrap();
+        assert_eq!(shell, group.trim());
         // SAFETY: getpgrp has no preconditions.
         let ours = unsafe { libc::getpgrp() };
-        assert_eq!(group.expose_secret().trim(), ours.to_string());
+        assert_ne!(group.trim(), ours.to_string());
     }
 
     /// From the workbench the command has no terminal: a session of its own, so one
