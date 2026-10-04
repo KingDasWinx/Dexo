@@ -436,10 +436,11 @@ async fn privileges_count_every_level_for_the_exact_account() {
         .list_grants(Some(&ident("dex")))
         .await
         .unwrap();
+    // The account as MySQL names it, unquoted: dex@%, never dexo@%.
     assert!(
         grants
             .iter()
-            .all(|grant| grant.principal.object().starts_with("dex'")),
+            .all(|grant| grant.principal.object() == "dex@%"),
         "{grants:?}"
     );
 }
