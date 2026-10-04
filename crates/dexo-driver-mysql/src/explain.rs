@@ -87,7 +87,12 @@ pub fn parse_json(raw: &str) -> Result<ExplainPlan, DriverError> {
         )
     })?;
     // MySQL's `explain_json_format_version = 2` has no query block: read as the first
-    // format, its plan came out empty.
+    // format, its plan came out empty. MySQL 9, which answers in it by default, puts its
+    // steps under `query_plan`, beside the query and the format's version.
+    let value = match value.get("query_plan") {
+        Some(plan) if value.get("query_block").is_none() => plan.clone(),
+        _ => value,
+    };
     let iterators = value.get("query_block").is_none() && value.get("operation").is_some();
     let root = if iterators {
         parse_iterator(&value)
@@ -1004,6 +1009,25 @@ mod tests {
         assert_eq!(join.estimates.cost, Some(476.0));
         assert_eq!(join.actual.rows, Some(3000.0));
         assert_eq!(join.actual.time_ms, Some(1.03));
+    }
+
+    #[test]
+    fn mysql_9_second_format_reads_its_query_plan() {
+        let plan = parse_json(
+            r#"{"query": "select ...", "json_schema_version": "2.0", "query_type": "select",
+                "query_plan": {"operation": "Covering index scan on c using PRIMARY",
+                  "table_name": "c", "estimated_rows": 3.0,
+                  "inputs_from_select_list": [{"operation": "Aggregate: count(0)",
+                    "inputs": [{"operation": "Covering index lookup on o using customer_id",
+                                "table_name": "o", "estimated_rows": 1.3}]}]}}"#,
+        )
+        .unwrap();
+        assert_eq!(plan.root.relation.as_deref(), Some("c"));
+        assert_eq!(plan.root.estimates.rows, Some(3.0));
+        assert_eq!(
+            plan.root.children[0].children[0].relation.as_deref(),
+            Some("o")
+        );
     }
 
     #[test]
