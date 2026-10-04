@@ -658,7 +658,7 @@ a different statement to get around the decision; ask the person instead.
 
 #[cfg(test)]
 mod tests {
-    use super::{McpClient, Places};
+    use super::McpClient;
 
     #[cfg(unix)]
     #[test]
@@ -669,7 +669,7 @@ mod tests {
         let program = bin.path().join("codex");
         std::fs::write(&program, "#!/bin/sh\n").unwrap();
         std::fs::set_permissions(&program, std::fs::Permissions::from_mode(0o755)).unwrap();
-        let places = Places {
+        let places = super::Places {
             project: home.path().join("project"),
             home: home.path().to_path_buf(),
             config: home.path().join(".config"),
